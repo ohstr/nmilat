@@ -1,0 +1,612 @@
+// Package nip57 implements NIP-57 (Lightning Zaps) in two flavors:
+//
+//   - The spec-compliant request/receipt/LNURL flow (kinds 9734/9735):
+//     NewZapRequest, ParseZapRequest, ValidateZapRequest, NewZapReceipt,
+//     ParseZapReceipt, ValidateZapReceipt. See nip57.go.
+//   - AltZap, an SDK extension of the same flow for zapping across L1
+//     chains beyond Bitcoin. It adds a mandatory "chain" tag for
+//     cross-chain replay safety and its own event kinds (5520-5523), so it
+//     is not wire-compatible with vanilla NIP-57 and does not claim to be:
+//     NewAltZapRequest, ParseAltZapRequest, ValidateAltZapRequest,
+//     NewAltZapReceipt, ParseAltZapReceipt, ValidateAltZapReceipt. See this
+//     file.
+package nip57
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"net/url"
+	"strconv"
+	"time"
+
+	"github.com/ohstr/nmilat/nip01"
+	"github.com/ohstr/nmilat/utils"
+)
+
+const (
+	// AltZap kinds — not the standard NIP-57 9734/9735 pair; see the
+	// package doc comment for why.
+	KindAltZapRequest         = 5520
+	KindAltZapReceipt         = 5521
+	KindAltZapDirectPayment   = 5522
+	KindAltZapOnBehalfRequest = 5523
+)
+
+// AltZapRequest is a parsed and validated AltZap request event (kinds 5520,
+// 5522, or 5523).
+type AltZapRequest struct {
+	*nip01.Event
+	Relays         []string
+	Amount         int64
+	Lnurl          string
+	Bolt11         string // for kind 5522 direct payments
+	Chain          string // required, to prevent cross-chain replay
+	EventID        string // e tag
+	ATag           string // a tag coordinate
+	KTag           string // k tag kind limit
+	Author         string // p tag (recipient pubkey or hash)
+	Provider       string // p tag (recipient lidp name)
+	Sender         string // P tag (sender pubkey or hash)
+	SenderProvider string // P tag (sender lidp name)
+}
+
+// ParseAltZapRequest parses and validates an AltZap request event (kinds
+// 5520, 5522, or 5523).
+func ParseAltZapRequest(event *nip01.Event) (*AltZapRequest, error) {
+	if event.Kind != KindAltZapRequest && event.Kind != KindAltZapOnBehalfRequest && event.Kind != KindAltZapDirectPayment {
+		return nil, fmt.Errorf("%w: got %d, want 5520, 5522, or 5523", ErrWrongKind, event.Kind)
+	}
+
+	zr := &AltZapRequest{Event: event}
+	var pTagCount, eTagCount, PTagCount int
+
+	for _, tag := range event.Tags {
+		if len(tag) < 2 {
+			continue
+		}
+		switch tag[0] {
+		case "relays":
+			// Validate relays
+			for _, r := range tag[1:] {
+				u, err := url.ParseRequestURI(r)
+				if err != nil {
+					return nil, fmt.Errorf("%w %q: %w", ErrInvalidRelayURL, r, err)
+				}
+				if u.Scheme != "wss" && u.Scheme != "ws" {
+					return nil, fmt.Errorf("%w: %q", ErrInvalidRelayScheme, u.Scheme)
+				}
+				zr.Relays = append(zr.Relays, r)
+			}
+		case "amount":
+			// Validate amount
+			var a int64
+			n, err := fmt.Sscanf(tag[1], "%d", &a)
+			if err != nil || n != 1 {
+				return nil, fmt.Errorf("%w: %q", ErrInvalidAmount, tag[1])
+			}
+			if a <= 0 {
+				return nil, fmt.Errorf("%w: %d", ErrInvalidAmountValue, a)
+			}
+			zr.Amount = a
+		case "lnurl":
+			if err := utils.ValidateLNURL(tag[1]); err != nil {
+				return nil, fmt.Errorf("%w %q: %w", ErrInvalidLNURL, tag[1], err)
+			}
+			zr.Lnurl = tag[1]
+		case "e":
+			if err := utils.Validate32Key(tag[1]); err != nil {
+				return nil, fmt.Errorf("%w %q: %w", ErrInvalidEventTag, tag[1], err)
+			}
+			zr.EventID = tag[1]
+			eTagCount++
+		case "bolt11":
+			zr.Bolt11 = tag[1]
+		case "chain":
+			zr.Chain = tag[1]
+		case "a":
+			zr.ATag = tag[1]
+		case "k":
+			zr.KTag = tag[1]
+		case "p":
+			zr.Author = tag[1]
+			if len(tag) > 2 && tag[2] != "" {
+				zr.Provider = tag[2]
+			} else {
+				zr.Provider = "nostr" // Default per Zap Protocol spec
+			}
+			pTagCount++
+		case "P":
+			zr.Sender = tag[1]
+			if len(tag) > 2 && tag[2] != "" {
+				zr.SenderProvider = tag[2]
+			} else {
+				zr.SenderProvider = "nostr" // Default per Zap Protocol spec
+			}
+			PTagCount++
+		case "zap":
+			if len(tag) < 3 {
+				return nil, ErrInvalidZapTag
+			}
+			if err := utils.Validate32Key(tag[1]); err != nil {
+				return nil, fmt.Errorf("%w: pubkey %q: %w", ErrInvalidZapTag, tag[1], err)
+			}
+			u, err := url.ParseRequestURI(tag[2])
+			if err != nil {
+				return nil, fmt.Errorf("%w: relay url %q: %w", ErrInvalidZapTag, tag[2], err)
+			}
+			if u.Scheme != "wss" && u.Scheme != "ws" {
+				return nil, fmt.Errorf("%w: relay scheme %q", ErrInvalidZapTag, u.Scheme)
+			}
+			if len(tag) > 3 {
+				if _, err := strconv.Atoi(tag[3]); err != nil {
+					return nil, fmt.Errorf("%w: weight %q: %w", ErrInvalidZapTag, tag[3], err)
+				}
+			}
+		}
+	}
+
+	// Protocol enforcements
+	if zr.Chain == "" {
+		return nil, ErrMissingChainTag
+	}
+
+	if event.Kind == KindAltZapDirectPayment { // 5522
+		if pTagCount > 0 {
+			return nil, ErrDirectPaymentHasRecipient
+		}
+		if zr.Bolt11 == "" {
+			return nil, ErrMissingBolt11Tag
+		}
+	} else { // 5520, 5523
+		if pTagCount != 1 {
+			return nil, fmt.Errorf("%w: kind %d", ErrRecipientTagCount, event.Kind)
+		}
+		if zr.Lnurl == "" {
+			return nil, fmt.Errorf("%w: kind %d", ErrMissingLNURLTag, event.Kind)
+		}
+	}
+
+	if event.Kind == KindAltZapOnBehalfRequest && PTagCount == 0 {
+		return nil, ErrMissingSenderTag
+	}
+
+	// e tag is optional (0 or 1)
+	if eTagCount > 1 {
+		return nil, ErrTooManyEventTags
+	}
+
+	// Relays tag required
+	if len(zr.Relays) == 0 {
+		return nil, ErrMissingRelaysTag
+	}
+
+	return zr, nil
+}
+
+// ValidateAltZapRequest checks if the event is a valid AltZap request and
+// optionally enforces the amount.
+func ValidateAltZapRequest(event *nip01.Event, expectedAmountMloki int64) error {
+	// 1. Signature check
+	if err := event.Verify(); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidSignature, err)
+	}
+
+	// 2. Parse and structure check
+	zr, err := ParseAltZapRequest(event)
+	if err != nil {
+		return err
+	}
+
+	// 3. Amount check
+	if zr.Amount <= 0 {
+		return ErrInvalidAmountValue
+	}
+
+	if expectedAmountMloki > 0 && zr.Amount != expectedAmountMloki {
+		return fmt.Errorf("%w: expected %d mloki, got %d mloki", ErrAmountMismatch, expectedAmountMloki, zr.Amount)
+	}
+
+	// 4. Kind 5522 specific cryptographic hash lock Rule
+	if event.Kind == KindAltZapDirectPayment {
+		inv, err := DecodeBolt11(zr.Bolt11)
+		if err != nil {
+			return fmt.Errorf("%w: 5522 request: %w", ErrBolt11DecodeFailed, err)
+		}
+
+		eventJSON, err := json.Marshal(event)
+		if err != nil {
+			return fmt.Errorf("nip57: failed to marshal 5522 event for hash validation: %w", err)
+		}
+
+		descHash := sha256.Sum256(eventJSON)
+		descHashHex := hex.EncodeToString(descHash[:])
+
+		if inv.DescriptionHash != descHashHex {
+			return fmt.Errorf("%w: bolt11 description hash %s does not match event hash %s", ErrHashLockMismatch, inv.DescriptionHash, descHashHex)
+		}
+	}
+
+	return nil
+}
+
+// AltZapReceipt is a parsed and validated AltZap receipt event (kind 5521).
+type AltZapReceipt struct {
+	*nip01.Event
+	Recipient            string // p tag
+	RecipientProvider    string
+	Sender               string // P tag
+	SenderProvider       string
+	ResolvedPubkey       string // r tag
+	ResolvedSenderPubkey string // R tag
+	Bolt11               string
+	Chain                string
+	Preimage             string
+	Description          string
+	Request              *AltZapRequest
+}
+
+// ParseAltZapReceipt parses and validates an AltZap receipt event (kind 5521).
+func ParseAltZapReceipt(event *nip01.Event) (*AltZapReceipt, error) {
+	if event.Kind != KindAltZapReceipt {
+		return nil, fmt.Errorf("%w: got %d, want %d", ErrWrongKind, event.Kind, KindAltZapReceipt)
+	}
+
+	zr := &AltZapReceipt{Event: event}
+
+	for _, tag := range event.Tags {
+		if len(tag) < 2 {
+			continue
+		}
+		switch tag[0] {
+		case "p":
+			zr.Recipient = tag[1]
+			if len(tag) > 2 && tag[2] != "" {
+				zr.RecipientProvider = tag[2]
+			} else {
+				zr.RecipientProvider = "nostr"
+			}
+		case "P":
+			zr.Sender = tag[1]
+			if len(tag) > 2 && tag[2] != "" {
+				zr.SenderProvider = tag[2]
+			} else {
+				zr.SenderProvider = "nostr"
+			}
+		case "r":
+			zr.ResolvedPubkey = tag[1]
+		case "R":
+			zr.ResolvedSenderPubkey = tag[1]
+		case "bolt11":
+			zr.Bolt11 = tag[1]
+		case "chain":
+			zr.Chain = tag[1]
+		case "preimage":
+			zr.Preimage = tag[1]
+		case "description":
+			zr.Description = tag[1]
+		case "zap":
+			if len(tag) < 3 {
+				return nil, ErrInvalidZapTag
+			}
+			if err := utils.Validate32Key(tag[1]); err != nil {
+				return nil, fmt.Errorf("%w: pubkey %q: %w", ErrInvalidZapTag, tag[1], err)
+			}
+			u, err := url.ParseRequestURI(tag[2])
+			if err != nil {
+				return nil, fmt.Errorf("%w: relay url %q: %w", ErrInvalidZapTag, tag[2], err)
+			}
+			if u.Scheme != "wss" && u.Scheme != "ws" {
+				return nil, fmt.Errorf("%w: relay scheme %q", ErrInvalidZapTag, u.Scheme)
+			}
+			if len(tag) > 3 {
+				if _, err := strconv.Atoi(tag[3]); err != nil {
+					return nil, fmt.Errorf("%w: weight %q: %w", ErrInvalidZapTag, tag[3], err)
+				}
+			}
+		}
+	}
+
+	if zr.Chain == "" {
+		return nil, ErrMissingChainTag
+	}
+	if zr.Preimage == "" {
+		return nil, ErrMissingPreimageTag
+	}
+	if zr.Recipient == "" && zr.Description != "" {
+		// Only 5522 can have no p tag, and 5522 has no description.
+		// If description exists, it must have a p tag.
+		return nil, ErrMissingRecipientTag
+	}
+	if zr.Bolt11 == "" {
+		return nil, ErrMissingBolt11Tag
+	}
+
+	// Parse embedded request if description is present
+	if zr.Description != "" {
+		var reqEvent nip01.Event
+		if err := json.Unmarshal([]byte(zr.Description), &reqEvent); err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrInvalidDescriptionJSON, err)
+		}
+
+		// Verify signature of the embedded zap request (sender identity)
+		if err := reqEvent.Verify(); err != nil {
+			return nil, fmt.Errorf("%w: embedded request signature invalid: %w", ErrInvalidEmbeddedRequest, err)
+		}
+
+		req, err := ParseAltZapRequest(&reqEvent)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrInvalidEmbeddedRequest, err)
+		}
+		zr.Request = req
+	}
+
+	return zr, nil
+}
+
+// ValidateAltZapReceipt checks if the receipt is valid against the request
+// and invoice.
+func ValidateAltZapReceipt(receipt *nip01.Event) error {
+	// 1. Signature
+	if err := receipt.Verify(); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidSignature, err)
+	}
+
+	// 2. Parse
+	zr, err := ParseAltZapReceipt(receipt)
+	if err != nil {
+		return err
+	}
+
+	// 3. Verify Invoice
+	invoice, err := DecodeBolt11(zr.Bolt11)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrBolt11DecodeFailed, err)
+	}
+
+	// 4. Validate Logic (Strict for Zaps, relaxed for Direct Payments)
+	if zr.Description != "" {
+		if zr.Request == nil {
+			return ErrInvalidEmbeddedRequest
+		}
+
+		// A. Verify description hash (CRITICAL)
+		// SHA256(description) == invoice.DescriptionHash
+		descHash := sha256.Sum256([]byte(zr.Description))
+		descHashHex := hex.EncodeToString(descHash[:])
+
+		if invoice.DescriptionHash != descHashHex {
+			return fmt.Errorf("%w: have=%s want=%s", ErrDescriptionHashMismatch, descHashHex, invoice.DescriptionHash)
+		}
+
+		// B. Verify amounts match
+		// Invoice amount mloki == Request amount mloki
+		if invoice.AmountMloki != zr.Request.Amount {
+			return fmt.Errorf("%w: invoice=%d request=%d", ErrAmountMismatch, invoice.AmountMloki, zr.Request.Amount)
+		}
+
+		// C. Verify Recipients match
+		if zr.Recipient != zr.Request.Author {
+			return fmt.Errorf("%w: receipt=%s request_author=%s", ErrRecipientMismatch, zr.Recipient, zr.Request.Author)
+		}
+	} else {
+		// Direct Payment (no Zap Request description)
+		if invoice.AmountMloki <= 0 {
+			return ErrInvalidInvoiceAmount
+		}
+	}
+
+	return nil
+}
+
+// Invoice represents decoded bolt11 data
+type Invoice struct {
+	AmountMloki     int64
+	DescriptionHash string
+	PaymentHash     string
+}
+
+// DecodeBolt11 decodes a bolt11 invoice string into the amount, payment
+// hash, and description hash NIP-57 needs to cross-check a zap receipt.
+// The default implementation is a minimal, dependency-free BOLT11 parser
+// (see bolt11.go) — swap this var for your own decoder (e.g. one backed by
+// a full Lightning node library) if you need routing hints, the payee node
+// ID, or node-signature verification beyond what nip57 itself requires.
+var DecodeBolt11 = decodeBolt11
+
+// AltZapRequestParams describes an AltZap request (kind 5520, or 5523 when
+// built via NewAltZapOnBehalfRequest). Chain, Recipient, Lnurl, AmountMloki,
+// and Relays are required; the rest are optional.
+type AltZapRequestParams struct {
+	Chain             string   // e.g. "flokicoin" — prevents cross-chain replay
+	Recipient         string   // recipient pubkey ("p" tag)
+	RecipientProvider string   // optional lidp name for the recipient, e.g. "nostr"
+	Lnurl             string   // recipient's LNURL-pay endpoint
+	AmountMloki       int64    // amount in mloki (milli-loki)
+	Relays            []string // relays the zap receipt should be published to
+	Sender            string   // optional sender pubkey ("P" tag)
+	SenderProvider    string   // optional lidp name for the sender
+	EventID           *string  // optional zapped event ID ("e" tag)
+}
+
+// NewAltZapRequest creates a new AltZap request event (kind 5520).
+func NewAltZapRequest(p AltZapRequestParams) *nip01.Event {
+	pTag := []string{"p", p.Recipient}
+	if p.RecipientProvider != "" {
+		pTag = append(pTag, p.RecipientProvider)
+	}
+
+	tags := [][]string{
+		pTag,
+		{"amount", fmt.Sprintf("%d", p.AmountMloki)},
+		{"lnurl", p.Lnurl},
+		{"chain", p.Chain},
+	}
+
+	if p.Sender != "" {
+		PTag := []string{"P", p.Sender}
+		if p.SenderProvider != "" {
+			PTag = append(PTag, p.SenderProvider)
+		}
+		tags = append(tags, PTag)
+	}
+
+	if len(p.Relays) > 0 {
+		relayTag := []string{"relays"}
+		relayTag = append(relayTag, p.Relays...)
+		tags = append(tags, relayTag)
+	}
+
+	if p.EventID != nil {
+		tags = append(tags, []string{"e", *p.EventID})
+	}
+
+	return &nip01.Event{
+		PubKey:    p.Sender,
+		CreatedAt: uint64(time.Now().Unix()),
+		Kind:      KindAltZapRequest,
+		Tags:      tags,
+		Content:   "",
+	}
+}
+
+// NewAltZapOnBehalfRequest creates a new proxy AltZap request event (kind
+// 5523) — used when a service is zapping on behalf of another identified
+// sender (set via AltZapRequestParams.Sender).
+func NewAltZapOnBehalfRequest(p AltZapRequestParams) *nip01.Event {
+	event := NewAltZapRequest(p)
+	event.Kind = KindAltZapOnBehalfRequest
+	return event
+}
+
+// AltZapDirectPaymentParams describes a direct-payment AltZap request (kind
+// 5522) — a bolt11 invoice paid directly, bypassing the LNURL/zap-request
+// flow. Chain, Bolt11, AmountMloki, and Relays are required.
+type AltZapDirectPaymentParams struct {
+	Chain          string
+	Bolt11         string
+	AmountMloki    int64
+	Relays         []string
+	Sender         string // optional sender pubkey ("P" tag)
+	SenderProvider string // optional lidp name for the sender
+}
+
+// NewAltZapDirectPaymentRequest creates a new direct-payment AltZap request
+// event (kind 5522).
+func NewAltZapDirectPaymentRequest(p AltZapDirectPaymentParams) *nip01.Event {
+	tags := [][]string{
+		{"amount", fmt.Sprintf("%d", p.AmountMloki)},
+		{"bolt11", p.Bolt11},
+		{"chain", p.Chain},
+	}
+
+	if p.Sender != "" {
+		PTag := []string{"P", p.Sender}
+		if p.SenderProvider != "" {
+			PTag = append(PTag, p.SenderProvider)
+		}
+		tags = append(tags, PTag)
+	}
+
+	if len(p.Relays) > 0 {
+		relayTag := []string{"relays"}
+		relayTag = append(relayTag, p.Relays...)
+		tags = append(tags, relayTag)
+	}
+
+	return &nip01.Event{
+		PubKey:    p.Sender,
+		CreatedAt: uint64(time.Now().Unix()),
+		Kind:      KindAltZapDirectPayment,
+		Tags:      tags,
+		Content:   "",
+	}
+}
+
+// AltZapReceiptParams describes an AltZap receipt (kind 5521), issued by the
+// LNURL provider once the invoice is paid. ProviderPubkey and Bolt11 are
+// required; RecipientPubkey is omitted for anonymous kind-5522 receipts.
+type AltZapReceiptParams struct {
+	Chain           string
+	ProviderPubkey  string
+	RecipientPubkey string
+	SenderPubkey    string
+	Bolt11          string
+	Description     string // JSON of the embedded AltZap request, if any
+	Preimage        *string
+}
+
+// NewAltZapReceipt creates a new AltZap receipt event (kind 5521).
+func NewAltZapReceipt(p AltZapReceiptParams) (*nip01.Event, error) {
+	tags := [][]string{
+		{"bolt11", p.Bolt11},
+		{"chain", p.Chain},
+	}
+
+	if p.RecipientPubkey != "" {
+		tags = append(tags, []string{"p", p.RecipientPubkey})
+	}
+
+	if p.Description != "" {
+		tags = append(tags, []string{"description", p.Description})
+	}
+
+	// Decode bolt11 and add the amount tag.
+	inv, err := DecodeBolt11(p.Bolt11)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrBolt11DecodeFailed, err)
+	}
+	tags = append(tags, []string{"amount", fmt.Sprintf("%d", inv.AmountMloki)})
+
+	if p.SenderPubkey != "" {
+		tags = append(tags, []string{"P", p.SenderPubkey})
+	}
+
+	if p.Preimage != nil {
+		tags = append(tags, []string{"preimage", *p.Preimage})
+	}
+
+	// Extract tags from the description request if possible
+	var req nip01.Event
+	if err := json.Unmarshal([]byte(p.Description), &req); err == nil {
+		for _, tag := range req.Tags {
+			if len(tag) < 2 {
+				continue
+			}
+			key := tag[0]
+			if key == "e" || key == "a" || key == "tbd" || key == "r" || key == "p" || key == "P" {
+				// We overwrite our default basic 'p' and 'P' tags with the detailed ones from the request
+				if key == "p" || key == "P" {
+					for i, existingTag := range tags {
+						if len(existingTag) > 0 && existingTag[0] == key {
+							tags[i] = tag // Replace basic tag with the fully detailed tag (containing provider)
+							break
+						}
+					}
+					// If it wasn't there at all, append it
+					found := false
+					for _, existingTag := range tags {
+						if len(existingTag) > 0 && existingTag[0] == key {
+							found = true
+							break
+						}
+					}
+					if !found {
+						tags = append(tags, tag)
+					}
+					continue
+				}
+				tags = append(tags, tag)
+			}
+		}
+	}
+
+	return &nip01.Event{
+		PubKey:    p.ProviderPubkey,
+		CreatedAt: uint64(time.Now().Unix()),
+		Kind:      KindAltZapReceipt,
+		Tags:      tags,
+		Content:   "",
+	}, nil
+}

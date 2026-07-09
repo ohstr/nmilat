@@ -1,0 +1,30 @@
+search:
+  scoring:
+    # Profile completeness bonuses
+    identity_base: 10        # has name or display_name
+    about_bonus: 10          # about > min_about_length chars
+    picture_bonus: 30        # has http picture URL
+
+    # Penalties
+    hex_name_penalty: -100   # name is exactly 64 hex chars (lazy bot)
+    gibberish_penalty: -200  # name > min_gibberish_length with no vowels
+    ghost_penalty: -500      # no name, about, or picture
+
+    # Thresholds
+    min_about_length: 15     # minimum about length to earn about_bonus
+    min_gibberish_length: 6  # minimum name length for gibberish check
+
+  verification:
+    nip05_score: 50          # base score for verified NIP-05
+    lud16_score: 20          # base score for verified LUD-16
+    lud16_chain_limit: 40    # maximum score for multiple chains (e.g. 2x lud16_score)
+    default_predefined_bonus: 100  # fallback bonus for predefined domains with score 0
+
+  engine:
+    max_total_hits: 10000
+    typo_one_min_word_size: 5
+    typo_two_min_word_size: 9
+    about_max_length: 1024   # truncation limit for about field
+
+  cache:
+    verification_ttl_hours: 336  # 2 weeks default
