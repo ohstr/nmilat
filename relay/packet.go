@@ -230,6 +230,20 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 		return nil
 	}
 
+	// NIP-43: reject impersonation of relay-authored kinds (role
+	// definitions, membership lists, add/remove-user, invite responses)
+	// before spending any Validate/Verify/PoW CPU on them -- ev.Kind and
+	// ev.PubKey are both readable straight off the wire struct, no crypto
+	// needed to make this determination.
+	if ok, msg := CheckSelfAuthored(ep.Event, s.selfPubkey); !ok {
+		s.reply(&wire.OkSubscriptionResponse{
+			EventID:  ep.Event.ID,
+			Accepted: false,
+			Message:  msg,
+		})
+		return nil
+	}
+
 	if err := ep.Event.Validate(); err != nil {
 
 		s.config.Logger.Error().Err(err).Msgf("failed to validate, ID=%s", ep.Event.ID)

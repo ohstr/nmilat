@@ -78,6 +78,26 @@ type Metadata struct {
 	// "relay" tag on incoming NIP-42 AUTH events. Not part of the NIP-11
 	// document (json:"-").
 	URL string `mapstructure:"url" json:"-"`
+
+	// Self is this relay's own signing identity, per NIP-11's "self"
+	// field: "A relay MAY maintain an identity independent from its
+	// administrator using the self field... This allows relays to respond
+	// to requests with events published either in advance or on demand by
+	// their own key." NIP-43's relay-authored events (role definitions,
+	// membership lists, add/remove-user, invite responses) MUST be signed
+	// by this pubkey.
+	//
+	// mapstructure:"-": not independently settable. This codebase's
+	// initConfig already enforces PubKey == DerivePubKey(PrivKey) whenever
+	// PrivKey is set, so there is only ever one operational signing
+	// identity -- Self simply mirrors PubKey rather than adding a second,
+	// potentially-divergent signing key. The embedder populates it only
+	// when PrivKey is actually set (see ncli's initConfig), so a relay
+	// that can't sign anything doesn't advertise a self identity nothing
+	// can produce valid signatures for. json:"self,omitempty": omitted
+	// from the NIP-11 document entirely when unset, matching the field's
+	// own MAY/optional status.
+	Self string `mapstructure:"-" json:"self,omitempty"`
 }
 
 type DelegationConfig struct {
@@ -109,6 +129,13 @@ type Limitation struct {
 	// AuthRequired, if true, requires NIP-42 AUTH before the relay will
 	// process REQ or EVENT from a connection.
 	AuthRequired bool `mapstructure:"auth_required" json:"auth_required"`
+
+	// MembershipRequired, if true, requires the connection to hold NIP-43
+	// membership -- in addition to NIP-42 AUTH -- before the relay will
+	// process REQ or EVENT. Directly config-settable, like AuthRequired:
+	// unlike MinPowDifficulty/StrictPow below, there's no separate
+	// advisory/strict split protecting a second source of truth here.
+	MembershipRequired bool `mapstructure:"membership_required" json:"membership_required"`
 
 	// MinPowDifficulty is the minimum NIP-13 leading-zero-bit difficulty
 	// the relay wants, advertised so clients can mine ahead of time.

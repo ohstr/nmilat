@@ -57,6 +57,9 @@ func (sh *SessionHandler) SupportedNIPs() nip11.NIPSet {
 	if sh.relayMetadata != nil && sh.relayMetadata.Limitation.AuthRequired {
 		nips = append(nips, 42) // NIP-42: Authentication
 	}
+	if sh.relayMetadata != nil && sh.relayMetadata.Self != "" {
+		nips = append(nips, 43) // NIP-43: Relay Access Metadata and Requests
+	}
 	if sh.config != nil && sh.config.Delegation != nil {
 		nips = append(nips, 26) // NIP-26: Delegated Event Signing
 	}
