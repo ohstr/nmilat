@@ -55,6 +55,25 @@ type SessionConfig struct {
 	// a corresponding advertised event.
 	MembershipPublishAddRemove bool
 
+	// AgentAuthEnabled turns on NIP-AA: a non-member AUTH event carrying a
+	// valid NIP-OA "auth" tag grants virtual membership when the named
+	// owner is an active NIP-43 member. Off by default -- requires NIP-43
+	// membership to already be meaningful (a relay with no membership
+	// concept has nothing for NIP-AA to derive access from).
+	AgentAuthEnabled bool
+
+	// AgentAuthFreshnessWindow bounds how far an AUTH event's created_at
+	// may drift from now before NIP-AA rejects it (on top of NIP-42's own,
+	// wider window). <= 0 falls back to nipAA.DefaultFreshnessWindow
+	// (spec-recommended ±120s).
+	AgentAuthFreshnessWindow time.Duration
+
+	// AgentKindEnforcement, if true, additionally checks a virtual
+	// member's retained credential's kind= clauses against every EVENT it
+	// submits. Off by default -- per spec, kind= clauses are advisory only
+	// unless a relay opts into this.
+	AgentKindEnforcement bool
+
 	// NIP-26 Delegation
 	PrivKey    string
 	Delegation *DelegationConfig
@@ -166,6 +185,18 @@ func WithSessionMembership(inviteTTL time.Duration, inviteMaxUses int, publishAd
 		target.MembershipInviteTTL = inviteTTL
 		target.MembershipInviteMaxUses = inviteMaxUses
 		target.MembershipPublishAddRemove = publishAddRemove
+	}
+}
+
+// WithSessionAgentAuth configures NIP-AA: whether it's enabled, the AUTH
+// freshness window (<= 0 for the spec-recommended default), and whether
+// per-event kind= enforcement is active. Setting this alone, unlike
+// WithSessionConfig, does not discard any other configured defaults.
+func WithSessionAgentAuth(enabled bool, freshnessWindow time.Duration, kindEnforcement bool) SessionOption {
+	return func(target *SessionConfig) {
+		target.AgentAuthEnabled = enabled
+		target.AgentAuthFreshnessWindow = freshnessWindow
+		target.AgentKindEnforcement = kindEnforcement
 	}
 }
 

@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip13"
 	"github.com/ohstr/nmilat/nip42"
 	"github.com/ohstr/nmilat/nip43"
 	"github.com/ohstr/nmilat/nip77"
+	"github.com/ohstr/nmilat/nipAA"
 	"github.com/ohstr/nmilat/search"
 	"github.com/ohstr/nmilat/wire"
 )
@@ -129,45 +131,98 @@ func (s *Session) processAuth(parent context.Context, ap *wire.AuthPacket) error
 		return nil
 	}
 
-	// Check against the relay's own configured URL, not a value read off
-	// the client's own tag -- otherwise the check is a tautology.
-	err := nip42.ValidateAuthEvent(ap.Event.Kind, ap.Event.Tags, ap.Event.CreatedAt, s.challenge, s.relayURL)
-	if err != nil {
-		s.reply(&wire.OkSubscriptionResponse{
-			EventID:  ap.Event.ID,
-			Accepted: false,
-			Message:  fmt.Sprintf("auth-error: %s", err.Error()),
-		})
-		return nil
+	// Step 1 (NIP-42): check against the relay's own configured URL, not a
+	// value read off the client's own tag -- otherwise the check is a
+	// tautology.
+	if err := nip42.ValidateAuthEvent(ap.Event.Kind, ap.Event.Tags, ap.Event.CreatedAt, s.challenge, s.relayURL); err != nil {
+		return s.rejectAuth(ap.Event.ID, fmt.Sprintf("auth-error: %s", err.Error()))
 	}
 
-	// Verify signature
 	if err := ap.Event.Verify(); err != nil {
-		s.reply(&wire.OkSubscriptionResponse{
-			EventID:  ap.Event.ID,
-			Accepted: false,
-			Message:  "auth-error: invalid signature",
-		})
-		return nil
+		return s.rejectAuth(ap.Event.ID, "auth-error: invalid signature")
 	}
 
-	// Success. Membership status is resolved once, here, and never
-	// re-checked for the rest of this connection's life (see AuthedIdentity's
-	// doc comment) -- s.membership is nil-safe, so this is correct whether
-	// or not NIP-43 is configured on this relay at all.
-	membership := MembershipNone
+	// Step 1 (NIP-AA addendum): an additional, narrower freshness window
+	// on top of (not instead of) NIP-42's own ValidateAuthEvent check
+	// above -- only enforced when NIP-AA is actually in play, since a
+	// tighter window than NIP-42's own ±600s is specific to NIP-AA's
+	// concerns (bounding how long a credential's created_at< condition can
+	// be satisfied by backdating), not a general NIP-42 requirement.
+	if s.config.AgentAuthEnabled {
+		window := s.config.AgentAuthFreshnessWindow
+		if window <= 0 {
+			window = nipAA.DefaultFreshnessWindow
+		}
+		if err := nipAA.ValidateFreshness(ap.Event.CreatedAt, time.Now(), window); err != nil {
+			return s.rejectAuth(ap.Event.ID, fmt.Sprintf("auth-error: %s", err.Error()))
+		}
+	}
+
+	// Step 2: the fast path. If event.pubkey is already a direct/active
+	// NIP-43 member, grant access immediately -- no NIP-OA parsing or
+	// Schnorr verification ever runs for this, the overwhelmingly common
+	// case (any direct member, including every reconnect). This is the
+	// single biggest performance property of the whole NIP-43/NIP-AA
+	// design: Steps 3-6's extra crypto work is paid only for pubkeys that
+	// are NOT already direct members.
 	if s.membership.IsMember(ap.Event.PubKey) {
-		membership = MembershipActive
+		s.addIdentity(AuthedIdentity{Pubkey: ap.Event.PubKey, Membership: MembershipActive})
+		return s.acceptAuth(ap.Event.ID, ap.Event.PubKey)
 	}
-	s.addIdentity(AuthedIdentity{Pubkey: ap.Event.PubKey, Membership: membership})
-	s.reply(&wire.OkSubscriptionResponse{
-		EventID:  ap.Event.ID,
-		Accepted: true,
-		Message:  "auth-success",
+
+	if !s.config.AgentAuthEnabled {
+		// Plain NIP-43 (NIP-AA off): AUTH always succeeds regardless of
+		// membership -- access decisions are deferred to the
+		// MembershipRequired gate at REQ/EVENT time, matching NIP-42's own
+		// "AUTH proves identity, doesn't itself grant access" philosophy
+		// and this relay's existing behavior before NIP-AA existed.
+		s.addIdentity(AuthedIdentity{Pubkey: ap.Event.PubKey, Membership: MembershipNone})
+		return s.acceptAuth(ap.Event.ID, ap.Event.PubKey)
+	}
+
+	// Steps 3-4: find and verify the auth tag's signature and conditions'
+	// created_at clauses (kind= clauses deliberately not evaluated here --
+	// see nipAA.EvaluateCredential's doc comment).
+	cred, err := nipAA.EvaluateCredential(ap.Event.PubKey, ap.Event.Tags, ap.Event.CreatedAt)
+	if err != nil {
+		return s.rejectAuth(ap.Event.ID, "restricted: "+err.Error())
+	}
+	if cred == nil {
+		// Step 3's "no credential offered, and not a direct member"
+		// case.
+		return s.rejectAuth(ap.Event.ID, "restricted: not a member")
+	}
+
+	// Step 5: the owner named in the credential must itself be an active
+	// member.
+	if !s.membership.IsMember(cred.OwnerPubkey) {
+		return s.rejectAuth(ap.Event.ID, "restricted: owner is not a member")
+	}
+
+	// Step 6: grant virtual membership, scoped to event.pubkey
+	// specifically -- never persisted, never the connection as a whole.
+	// addIdentity overwrites in place if this pubkey already has an
+	// identity on this connection, per spec: "If the same agent pubkey
+	// completes NIP-AA authentication again on the same connection... the
+	// relay MUST replace the previously stored credential with the new
+	// one... MUST NOT combine credentials."
+	s.addIdentity(AuthedIdentity{
+		Pubkey:     ap.Event.PubKey,
+		Membership: MembershipVirtual,
+		Owner:      cred.OwnerPubkey,
+		Conditions: &cred.Conditions,
 	})
+	return s.acceptAuth(ap.Event.ID, ap.Event.PubKey)
+}
 
-	s.config.Logger.Info().Str("pubkey", ap.Event.PubKey).Msg("client authenticated")
+func (s *Session) acceptAuth(eventID, pubkey string) error {
+	s.reply(&wire.OkSubscriptionResponse{EventID: eventID, Accepted: true, Message: "auth-success"})
+	s.config.Logger.Info().Str("pubkey", pubkey).Msg("client authenticated")
+	return nil
+}
 
+func (s *Session) rejectAuth(eventID, message string) error {
+	s.reply(&wire.OkSubscriptionResponse{EventID: eventID, Accepted: false, Message: message})
 	return nil
 }
 
@@ -258,6 +313,27 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 			Message:  "restricted: valid NIP-42 authentication required",
 		})
 		return nil
+	}
+
+	// NIP-AA: optional per-event kind= enforcement for virtual members.
+	// Off by default. ep.Event.Kind and ep.Event.PubKey are both readable
+	// straight off the wire struct with no crypto, so this runs before
+	// Validate/Verify/PoW -- rejecting a disallowed kind before paying any
+	// signature-verification cost on an event that's going to be thrown
+	// away anyway. No signature re-verification here either:
+	// id.Conditions is the credential already verified once, at AUTH time
+	// (see AuthedIdentity) -- this is a pure, cheap clause comparison.
+	if s.config.AgentAuthEnabled && s.config.AgentKindEnforcement {
+		if id, ok := s.IdentityMembership(ep.Event.PubKey); ok && id.Membership == MembershipVirtual && id.Conditions != nil {
+			if !id.Conditions.EvaluateKind(ep.Event.Kind) {
+				s.reply(&wire.OkSubscriptionResponse{
+					EventID:  ep.Event.ID,
+					Accepted: false,
+					Message:  "restricted: kind not authorized by credential",
+				})
+				return nil
+			}
+		}
 	}
 
 	// NIP-43: reject impersonation of relay-authored kinds (role
