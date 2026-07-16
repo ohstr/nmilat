@@ -107,6 +107,30 @@ func (s *EventStore) ListMembers() ([]string, error) {
 	return pubkeys, err
 }
 
+// ListMemberRecords returns every member's full persisted record. Used by
+// `ncli relay members list`, not the request hot path -- unlike ListMembers
+// (pubkeys only, for cache warm-up), callers here need Roles/JoinedAt too,
+// so this reads each record directly in one pass rather than making callers
+// pair it with a GetMember per pubkey.
+func (s *EventStore) ListMemberRecords() ([]*MemberRecord, error) {
+	var records []*MemberRecord
+	err := s.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(indexMembers)
+		if b == nil {
+			return nil
+		}
+		return b.ForEach(func(_, v []byte) error {
+			var rec MemberRecord
+			if err := json.Unmarshal(v, &rec); err != nil {
+				return err
+			}
+			records = append(records, &rec)
+			return nil
+		})
+	})
+	return records, err
+}
+
 // InviteClaim is the persisted state for one NIP-43 invite code.
 type InviteClaim struct {
 	Code      string   `json:"code"`
@@ -155,6 +179,40 @@ func (s *EventStore) PutInviteClaim(claim *InviteClaim) error {
 			return err
 		}
 		return b.Put([]byte(claim.Code), data)
+	})
+}
+
+// ListInviteClaims returns every currently-stored invite claim. Used for
+// `ncli relay invites list`, not the request hot path.
+func (s *EventStore) ListInviteClaims() ([]*InviteClaim, error) {
+	var claims []*InviteClaim
+	err := s.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(indexInviteClaims)
+		if b == nil {
+			return nil
+		}
+		return b.ForEach(func(_, v []byte) error {
+			var claim InviteClaim
+			if err := json.Unmarshal(v, &claim); err != nil {
+				return err
+			}
+			claims = append(claims, &claim)
+			return nil
+		})
+	})
+	return claims, err
+}
+
+// DeleteInviteClaim removes code outright (distinct from ConsumeInviteClaim,
+// which increments Uses on a valid claim) -- used for `ncli relay invites
+// revoke`. A no-op, not an error, if code doesn't exist.
+func (s *EventStore) DeleteInviteClaim(code string) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(indexInviteClaims)
+		if b == nil {
+			return nil
+		}
+		return b.Delete([]byte(code))
 	})
 }
 

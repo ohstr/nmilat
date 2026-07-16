@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 const (
@@ -157,6 +158,87 @@ func TestMembershipService_DelegatesToCache(t *testing.T) {
 	}
 	if svc.IsMember(memberB) {
 		t.Fatal("IsMember(memberB) = true, want false")
+	}
+}
+
+func TestMembershipService_NilList(t *testing.T) {
+	var svc *MembershipService
+	got, err := svc.List()
+	if err != nil || got != nil {
+		t.Fatalf("nil *MembershipService.List() = (%v, %v), want (nil, nil)", got, err)
+	}
+}
+
+func TestMembershipService_List(t *testing.T) {
+	svc := NewMembershipService(newStore(t))
+
+	got, err := svc.List()
+	if err != nil {
+		t.Fatalf("List() on empty service: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("List() on empty service = %+v, want empty", got)
+	}
+
+	if err := svc.Join(memberA, []string{"r1"}); err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	if err := svc.Join(memberB, nil); err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+
+	got, err = svc.List()
+	if err != nil {
+		t.Fatalf("List(): %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("List() = %d records, want 2", len(got))
+	}
+}
+
+func TestMembershipService_NilIssueInvite(t *testing.T) {
+	var svc *MembershipService
+	got, err := svc.IssueInvite(0, 0, nil)
+	if err != nil || got != nil {
+		t.Fatalf("nil *MembershipService.IssueInvite() = (%v, %v), want (nil, nil)", got, err)
+	}
+}
+
+func TestMembershipService_IssueInvite(t *testing.T) {
+	store := newStore(t)
+	svc := NewMembershipService(store)
+
+	rec, err := svc.IssueInvite(0, 3, []string{"r1", "r2"})
+	if err != nil {
+		t.Fatalf("IssueInvite: %v", err)
+	}
+	if rec.Code == "" {
+		t.Fatal("IssueInvite() returned an empty claim code")
+	}
+	if rec.MaxUses != 3 || len(rec.Roles) != 2 {
+		t.Fatalf("IssueInvite() = %+v, want MaxUses=3 Roles=[r1 r2]", rec)
+	}
+	wantExpiry := time.Now().Add(defaultMembershipInviteTTL).Unix()
+	if rec.ExpiresAt < wantExpiry-5 || rec.ExpiresAt > wantExpiry+5 {
+		t.Fatalf("IssueInvite() with ttl<=0 ExpiresAt = %d, want ~%d (defaultMembershipInviteTTL)", rec.ExpiresAt, wantExpiry)
+	}
+
+	// Persisted, and retrievable by the code that was returned.
+	got, err := store.GetInviteClaim(rec.Code)
+	if err != nil {
+		t.Fatalf("GetInviteClaim: %v", err)
+	}
+	if got == nil || got.Code != rec.Code {
+		t.Fatalf("GetInviteClaim(%s) = %+v, want the issued claim", rec.Code, got)
+	}
+
+	// Two invites never collide on their generated code.
+	rec2, err := svc.IssueInvite(time.Hour, 1, nil)
+	if err != nil {
+		t.Fatalf("IssueInvite (second): %v", err)
+	}
+	if rec2.Code == rec.Code {
+		t.Fatal("IssueInvite() generated the same code twice")
 	}
 }
 

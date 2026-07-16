@@ -703,6 +703,12 @@ func (sh *SessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Msg("session ended")
 }
 
+// Membership returns this handler's NIP-43 MembershipService, shared by
+// every Session it serves. Never nil.
+func (sh *SessionHandler) Membership() *MembershipService {
+	return sh.membership
+}
+
 // SessionCount returns the number of currently connected sessions.
 func (sh *SessionHandler) SessionCount() int {
 	count := 0

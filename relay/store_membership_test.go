@@ -70,6 +70,45 @@ func TestEventStore_ListMembers_Multiple(t *testing.T) {
 	}
 }
 
+func TestEventStore_ListMemberRecords(t *testing.T) {
+	store := newStore(t)
+
+	got, err := store.ListMemberRecords()
+	if err != nil {
+		t.Fatalf("ListMemberRecords() on empty store: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("ListMemberRecords() on empty store = %+v, want empty", got)
+	}
+
+	want := map[string]*MemberRecord{
+		memberA: {Pubkey: memberA, Roles: []string{"r1"}, JoinedAt: 100},
+		memberB: {Pubkey: memberB, JoinedAt: 200},
+	}
+	for _, rec := range want {
+		if err := store.PutMember(rec); err != nil {
+			t.Fatalf("PutMember(%s): %v", rec.Pubkey, err)
+		}
+	}
+
+	got, err = store.ListMemberRecords()
+	if err != nil {
+		t.Fatalf("ListMemberRecords(): %v", err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("ListMemberRecords() = %d records, want %d", len(got), len(want))
+	}
+	for _, rec := range got {
+		w, ok := want[rec.Pubkey]
+		if !ok {
+			t.Fatalf("ListMemberRecords() returned unexpected pubkey %s", rec.Pubkey)
+		}
+		if rec.JoinedAt != w.JoinedAt || len(rec.Roles) != len(w.Roles) {
+			t.Fatalf("ListMemberRecords() record for %s = %+v, want %+v", rec.Pubkey, rec, w)
+		}
+	}
+}
+
 func TestEventStore_InviteClaim_CRUD(t *testing.T) {
 	store := newStore(t)
 
@@ -92,6 +131,56 @@ func TestEventStore_InviteClaim_CRUD(t *testing.T) {
 	}
 	if got == nil || got.Code != "abc123" || got.MaxUses != 2 || got.Uses != 0 {
 		t.Fatalf("GetInviteClaim() = %+v, want Code=abc123 MaxUses=2 Uses=0", got)
+	}
+}
+
+func TestEventStore_ListInviteClaims(t *testing.T) {
+	store := newStore(t)
+
+	got, err := store.ListInviteClaims()
+	if err != nil {
+		t.Fatalf("ListInviteClaims() on empty store: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("ListInviteClaims() on empty store = %+v, want empty", got)
+	}
+
+	for _, code := range []string{"code-a", "code-b", "code-c"} {
+		if err := store.PutInviteClaim(&InviteClaim{Code: code}); err != nil {
+			t.Fatalf("PutInviteClaim(%s): %v", code, err)
+		}
+	}
+
+	got, err = store.ListInviteClaims()
+	if err != nil {
+		t.Fatalf("ListInviteClaims(): %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("ListInviteClaims() = %v, want 3 entries", got)
+	}
+}
+
+func TestEventStore_DeleteInviteClaim(t *testing.T) {
+	store := newStore(t)
+
+	// Deleting an unknown code is a no-op, not an error.
+	if err := store.DeleteInviteClaim("unknown-code"); err != nil {
+		t.Fatalf("DeleteInviteClaim() on unknown code: %v", err)
+	}
+
+	if err := store.PutInviteClaim(&InviteClaim{Code: "abc123"}); err != nil {
+		t.Fatalf("PutInviteClaim: %v", err)
+	}
+	if err := store.DeleteInviteClaim("abc123"); err != nil {
+		t.Fatalf("DeleteInviteClaim: %v", err)
+	}
+
+	got, err := store.GetInviteClaim("abc123")
+	if err != nil {
+		t.Fatalf("GetInviteClaim() after delete: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("GetInviteClaim() after delete = %+v, want nil", got)
 	}
 }
 

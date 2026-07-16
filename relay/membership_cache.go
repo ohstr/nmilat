@@ -208,6 +208,52 @@ func (m *MembershipService) Leave(pubkey string) error {
 	return nil
 }
 
+// Get returns pubkey's persisted member record, or (nil, nil) if pubkey is
+// not currently a member. Used by `ncli relay members show`, not the
+// request hot path.
+func (m *MembershipService) Get(pubkey string) (*MemberRecord, error) {
+	if m == nil {
+		return nil, nil
+	}
+	return m.store.GetMember(pubkey)
+}
+
+// List returns every currently-enrolled member's full persisted record.
+// Used by `ncli relay members list` (admin HTTP path), not the request hot
+// path.
+func (m *MembershipService) List() ([]*MemberRecord, error) {
+	if m == nil {
+		return nil, nil
+	}
+	return m.store.ListMemberRecords()
+}
+
+// IssueInvite generates a fresh invite claim, persists it, and returns it.
+// Shared by the client-facing REQ kind:28935 path
+// (MembershipRequestHandler.Handle) and the admin "invites create" HTTP
+// endpoint, so both produce claims the exact same way. ttl <= 0 falls back
+// to defaultMembershipInviteTTL; maxUses <= 0 means unlimited uses.
+func (m *MembershipService) IssueInvite(ttl time.Duration, maxUses int, roles []string) (*InviteClaim, error) {
+	if m == nil {
+		return nil, nil
+	}
+	if ttl <= 0 {
+		ttl = defaultMembershipInviteTTL
+	}
+	now := time.Now()
+	rec := &InviteClaim{
+		Code:      nip43.NewClaim(),
+		CreatedAt: now.Unix(),
+		ExpiresAt: now.Add(ttl).Unix(),
+		MaxUses:   maxUses,
+		Roles:     roles,
+	}
+	if err := m.store.PutInviteClaim(rec); err != nil {
+		return nil, err
+	}
+	return rec, nil
+}
+
 // ReplaceFromEvent re-derives the authoritative member set from a
 // manually-published kind:13534 event's member tags -- the
 // belt-and-suspenders resync for an operator who publishes a raw

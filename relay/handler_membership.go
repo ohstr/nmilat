@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
-	"time"
 
 	"github.com/ohstr/nmilat/nip43"
 	"github.com/ohstr/nmilat/wire"
@@ -40,23 +39,12 @@ func (h *MembershipRequestHandler) Handle(ctx context.Context, s *Session, rp *w
 		return true, fmt.Errorf("relay private key missing, cannot serve signed invite response")
 	}
 
-	claim := nip43.NewClaim()
-	ttl := s.config.MembershipInviteTTL
-	if ttl <= 0 {
-		ttl = defaultMembershipInviteTTL
-	}
-	now := time.Now()
-	rec := &InviteClaim{
-		Code:      claim,
-		CreatedAt: now.Unix(),
-		ExpiresAt: now.Add(ttl).Unix(),
-		MaxUses:   s.config.MembershipInviteMaxUses,
-	}
-	if err := s.store.PutInviteClaim(rec); err != nil {
+	rec, err := s.membership.IssueInvite(s.config.MembershipInviteTTL, s.config.MembershipInviteMaxUses, nil)
+	if err != nil {
 		return true, fmt.Errorf("failed to store invite claim: %w", err)
 	}
 
-	event := nip43.NewInviteResponse(s.selfPubkey, claim)
+	event := nip43.NewInviteResponse(s.selfPubkey, rec.Code)
 	if err := event.Sign(s.config.PrivKey); err != nil {
 		return true, fmt.Errorf("failed to sign invite response: %w", err)
 	}
