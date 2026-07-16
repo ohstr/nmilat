@@ -17,6 +17,7 @@ func getRequestHandlers() []RequestHandler {
 		_handlers = []RequestHandler{
 			&NIP50Handler{},
 			&CacheHandler{},
+			&MembershipRequestHandler{},
 			&StandardRequestHandler{},
 		}
 	})

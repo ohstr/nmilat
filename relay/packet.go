@@ -9,6 +9,7 @@ import (
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip13"
 	"github.com/ohstr/nmilat/nip42"
+	"github.com/ohstr/nmilat/nip43"
 	"github.com/ohstr/nmilat/nip77"
 	"github.com/ohstr/nmilat/search"
 	"github.com/ohstr/nmilat/wire"
@@ -53,6 +54,21 @@ func (s *Session) processRequest(ctx context.Context, rp *wire.RequestPacket) er
 		s.reply(&wire.ClosedSubscriptionResponse{
 			SubscriptionID: rp.SubscriptionID,
 			Message:        "restricted: valid NIP-42 authentication required",
+		})
+		return nil
+	}
+
+	// NIP-43: REQ/COUNT pass "if at least one authenticated pubkey on the
+	// connection holds active or virtual membership" (matches NIP-AA's own
+	// later wording) -- a connection-level check, unlike the per-event
+	// gate in processEvent.
+	if s.limitation.MembershipRequired && !s.HasMembership() {
+		s.reply(&wire.NoticeSubscriptionResponse{
+			Message: "restricted: valid NIP-43 membership required",
+		})
+		s.reply(&wire.ClosedSubscriptionResponse{
+			SubscriptionID: rp.SubscriptionID,
+			Message:        "restricted: valid NIP-43 membership required",
 		})
 		return nil
 	}
@@ -135,8 +151,15 @@ func (s *Session) processAuth(parent context.Context, ap *wire.AuthPacket) error
 		return nil
 	}
 
-	// Success
-	s.addIdentity(AuthedIdentity{Pubkey: ap.Event.PubKey, Membership: MembershipNone})
+	// Success. Membership status is resolved once, here, and never
+	// re-checked for the rest of this connection's life (see AuthedIdentity's
+	// doc comment) -- s.membership is nil-safe, so this is correct whether
+	// or not NIP-43 is configured on this relay at all.
+	membership := MembershipNone
+	if s.membership.IsMember(ap.Event.PubKey) {
+		membership = MembershipActive
+	}
+	s.addIdentity(AuthedIdentity{Pubkey: ap.Event.PubKey, Membership: membership})
 	s.reply(&wire.OkSubscriptionResponse{
 		EventID:  ap.Event.ID,
 		Accepted: true,
@@ -153,6 +176,13 @@ func (s *Session) processAuth(parent context.Context, ap *wire.AuthPacket) error
 /////////////////////////////////////////////////////////////////////
 
 func (s *Session) processCount(parent context.Context, cp *wire.CountPacket) error {
+
+	if s.limitation.MembershipRequired && !s.HasMembership() {
+		s.reply(&wire.NoticeSubscriptionResponse{
+			Message: "restricted: valid NIP-43 membership required",
+		})
+		return nil
+	}
 
 	// We calculate count immediately and return
 	count, err := s.store.CountEvents(parent, cp.Filters)
@@ -303,6 +333,38 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 		return nil
 	}
 
+	// NIP-43: Join/Leave requests are fully owned by MembershipService from
+	// here -- structural/freshness validation already passed above
+	// (runEventValidators), and the event's signature is already verified,
+	// so ep.Event.PubKey can be trusted for the membership mutation this
+	// performs. These kinds never reach the generic store-and-OK path
+	// below: they're commands, not content to persist/broadcast (and, per
+	// NIP-16, ephemeral kinds like these wouldn't be persisted through it
+	// anyway).
+	if ep.Event.Kind == nip43.KindJoinRequest || ep.Event.Kind == nip43.KindLeaveRequest {
+		s.membership.HandleEvent(ctx, s, ep.Event)
+		return nil
+	}
+
+	// NIP-43: relay-authored kinds already passed the stricter
+	// self-authored check above; everything else needs active-or-virtual
+	// membership on the specific pubkey that signed this event, when
+	// membership is required. Per NIP-AA's later wording: "relay MUST
+	// verify event.pubkey is authenticated on the connection AND holds
+	// active or virtual membership" -- a specific-signer check, not merely
+	// "is anything authenticated on this connection" (a real tightening
+	// versus AuthRequired's own connection-level-only semantics above).
+	if s.limitation.MembershipRequired && !nip43.IsRelayAuthoredKind(ep.Event.Kind) {
+		if id, ok := s.IdentityMembership(ep.Event.PubKey); !ok || id.Membership == MembershipNone {
+			s.reply(&wire.OkSubscriptionResponse{
+				EventID:  ep.Event.ID,
+				Accepted: false,
+				Message:  "restricted: valid NIP-43 membership required",
+			})
+			return nil
+		}
+	}
+
 	task := NewEventInsertTask([]*nip01.Event{ep.Event})
 	go func() {
 		select {
@@ -313,6 +375,21 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 				EventID:  ep.Event.ID,
 				Accepted: true,
 			})
+
+			// Belt-and-suspenders resync: an operator who manually
+			// publishes a raw kind:13534 event directly (bypassing
+			// MembershipService.Join/Leave) still gets the authoritative
+			// store and in-memory cache brought in line with it. This
+			// extends the *existing* single consumer of task.done/.errors
+			// rather than adding a second reader -- task.errors is a
+			// buffered channel of capacity 1 with exactly one send, so a
+			// second concurrent reader would race this goroutine for that
+			// one value and whichever loses would block forever.
+			if ep.Event.Kind == nip43.KindMembershipList && s.membership != nil {
+				if err := s.membership.ReplaceFromEvent(ep.Event); err != nil {
+					s.config.Logger.Error().Err(err).Msg("failed to resync NIP-43 membership from published kind:13534 event")
+				}
+			}
 
 		case err := <-task.errors:
 

@@ -12,6 +12,10 @@ const (
 
 	defaultMaxConcurrentStoreTasks = 2048
 	defaultCloseGracePeriod        = 2 * time.Second
+
+	// defaultMembershipInviteTTL is used whenever MembershipInviteTTL is
+	// unset (<= 0).
+	defaultMembershipInviteTTL = 24 * time.Hour
 )
 
 // SessionConfig holds runtime behaviour for websocket sessions.
@@ -34,6 +38,22 @@ type SessionConfig struct {
 	// PrivKey, so it must be turned on deliberately rather than activating
 	// itself just because a PrivKey happens to be configured.
 	EnableTopZapped bool
+
+	// MembershipInviteTTL bounds how long a NIP-43 invite claim (kind
+	// 28935) remains valid after being issued. <= 0 falls back to
+	// defaultMembershipInviteTTL.
+	MembershipInviteTTL time.Duration
+
+	// MembershipInviteMaxUses caps how many times a single invite claim
+	// may be consumed via a Join Request (kind 28934). 0 means unlimited.
+	MembershipInviteMaxUses int
+
+	// MembershipPublishAddRemove, if true, makes the relay also publish a
+	// signed kind:8000/8001 event whenever NIP-43 membership changes via
+	// Join/Leave Request. Off by default -- the authoritative state lives
+	// in the store either way; this only affects whether other clients see
+	// a corresponding advertised event.
+	MembershipPublishAddRemove bool
 
 	// NIP-26 Delegation
 	PrivKey    string
@@ -134,6 +154,18 @@ func WithSessionPrivKey(key string) SessionOption {
 func WithSessionTopZapped(enabled bool) SessionOption {
 	return func(target *SessionConfig) {
 		target.EnableTopZapped = enabled
+	}
+}
+
+// WithSessionMembership configures NIP-43's invite-claim TTL/max-uses and
+// whether the relay also publishes kind:8000/8001 add/remove events on
+// membership changes. Setting this alone, unlike WithSessionConfig, does
+// not discard any other configured defaults.
+func WithSessionMembership(inviteTTL time.Duration, inviteMaxUses int, publishAddRemove bool) SessionOption {
+	return func(target *SessionConfig) {
+		target.MembershipInviteTTL = inviteTTL
+		target.MembershipInviteMaxUses = inviteMaxUses
+		target.MembershipPublishAddRemove = publishAddRemove
 	}
 }
 

@@ -4,6 +4,10 @@ import (
 	"encoding/hex"
 	"sync"
 	"sync/atomic"
+	"time"
+
+	"github.com/ohstr/nmilat/nip01"
+	"github.com/ohstr/nmilat/nip43"
 )
 
 // membershipSnapshot is an immutable point-in-time view of the NIP-43
@@ -132,20 +136,37 @@ func (c *membershipCache) remove(pubkeyHex string) {
 	c.snap.Store(next)
 }
 
-// MembershipService resolves NIP-43 membership status for a pubkey. A nil
-// *MembershipService is a valid, common case -- NIP-43 not configured on
-// this relay -- and every method reports the "not a member" answer
-// unconditionally, so call sites never need their own nil check.
+// MembershipService resolves NIP-43 membership status for a pubkey and
+// owns keeping the in-memory cache in sync with the authoritative store.
+// A nil *MembershipService is a valid, common case -- NIP-43 not
+// configured on this relay -- and every method reports the "not a
+// member"/no-op answer unconditionally, so call sites never need their
+// own nil check.
 type MembershipService struct {
+	store *EventStore
 	cache membershipCache
 }
 
-// NewMembershipService constructs an empty MembershipService. A later
-// phase adds the loader that pre-populates it from the authoritative
-// store at relay construction, and the Join/Leave/Admin methods that keep
-// it in sync afterward.
-func NewMembershipService() *MembershipService {
-	return &MembershipService{}
+// NewMembershipService constructs a MembershipService backed by store.
+// Call LoadFromStore once, at relay construction, to pre-populate the
+// in-memory cache before serving traffic.
+func NewMembershipService(store *EventStore) *MembershipService {
+	return &MembershipService{store: store}
+}
+
+// LoadFromStore populates the in-memory cache from the authoritative
+// store -- called once at relay construction (cold start), not on any
+// request path.
+func (m *MembershipService) LoadFromStore() error {
+	if m == nil {
+		return nil
+	}
+	pubkeys, err := m.store.ListMembers()
+	if err != nil {
+		return err
+	}
+	m.cache.replace(pubkeys)
+	return nil
 }
 
 // IsMember reports whether pubkey is a current, direct/active NIP-43
@@ -155,4 +176,58 @@ func (m *MembershipService) IsMember(pubkey string) bool {
 		return false
 	}
 	return m.cache.IsMember(pubkey)
+}
+
+// Join enrolls pubkey as a member with the given roles, persisting it to
+// the authoritative store and updating the in-memory cache.
+func (m *MembershipService) Join(pubkey string, roles []string) error {
+	if m == nil {
+		return nil
+	}
+	if err := m.store.PutMember(&MemberRecord{
+		Pubkey:   pubkey,
+		Roles:    roles,
+		JoinedAt: time.Now().Unix(),
+	}); err != nil {
+		return err
+	}
+	m.cache.add(pubkey)
+	return nil
+}
+
+// Leave removes pubkey's membership from the authoritative store and the
+// in-memory cache.
+func (m *MembershipService) Leave(pubkey string) error {
+	if m == nil {
+		return nil
+	}
+	if err := m.store.RemoveMember(pubkey); err != nil {
+		return err
+	}
+	m.cache.remove(pubkey)
+	return nil
+}
+
+// ReplaceFromEvent re-derives the authoritative member set from a
+// manually-published kind:13534 event's member tags -- the
+// belt-and-suspenders resync for an operator who publishes a raw
+// membership-list event directly instead of going through Join/Leave.
+func (m *MembershipService) ReplaceFromEvent(ev *nip01.Event) error {
+	if m == nil {
+		return nil
+	}
+	list, err := nip43.ParseMembershipList(ev)
+	if err != nil {
+		return err
+	}
+	pubkeys := make([]string, 0, len(list.Members))
+	now := time.Now().Unix()
+	for _, mem := range list.Members {
+		pubkeys = append(pubkeys, mem.Pubkey)
+		if err := m.store.PutMember(&MemberRecord{Pubkey: mem.Pubkey, Roles: mem.Roles, JoinedAt: now}); err != nil {
+			return err
+		}
+	}
+	m.cache.replace(pubkeys)
+	return nil
 }

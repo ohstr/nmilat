@@ -603,6 +603,15 @@ type SessionHandler struct {
 	// VerificationWorker.Start(n) yourself before serving traffic, or use
 	// relay.New, which starts it with a default worker count automatically.
 	VerificationWorker *ProfileVerificationWorker
+
+	// membership resolves NIP-43 membership status, shared across every
+	// Session this handler serves (each Session's own SessionContext.membership
+	// points at this same instance -- see ServeHTTP). Always non-nil;
+	// whether NIP-43 is actually "on" is governed separately by
+	// relayMetadata.Self (relay-authored-kind enforcement,
+	// see capabilities.go) and relayMetadata.Limitation.MembershipRequired
+	// (the REQ/EVENT access gate).
+	membership *MembershipService
 }
 
 // NewSessionHandler constructs a SessionHandler ready to be used as an
@@ -615,6 +624,15 @@ func NewSessionHandler(store *EventStore, relayMetadata *nip11.Metadata, searchS
 	for _, opt := range opts {
 		opt(cfg)
 	}
+
+	membership := NewMembershipService(store)
+	if err := membership.LoadFromStore(); err != nil {
+		// Non-fatal: worst case the cache starts empty and catches up via
+		// Join/Leave/ReplaceFromEvent as traffic arrives, rather than
+		// failing relay startup over a membership-cache warm-up hiccup.
+		cfg.Logger.Error().Err(err).Msg("failed to load NIP-43 membership cache at startup")
+	}
+
 	return &SessionHandler{
 		store:              store,
 		sessions:           sync.Map{},
@@ -622,6 +640,7 @@ func NewSessionHandler(store *EventStore, relayMetadata *nip11.Metadata, searchS
 		config:             cfg,
 		searchService:      searchService,
 		VerificationWorker: NewProfileVerificationWorker(store, searchService),
+		membership:         membership,
 	}
 }
 
@@ -663,6 +682,7 @@ func (sh *SessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	sessID := atomic.AddInt64(&sh.nextSessID, 1)
 
 	sc := NewSessionContext(sh.store, info, sh.relayMetadata, sh.searchService, sh.VerificationWorker, sh.config)
+	sc.membership = sh.membership
 	session := NewSession(sessID, ws, sc, sh.relayMetadata.Limitation.MaxMessageLength)
 	sh.sessions.Store(sessID, session)
 	defer sh.sessions.Delete(sessID)

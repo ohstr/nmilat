@@ -149,7 +149,7 @@ func TestMembershipService_NilIsSafeAndReportsNotAMember(t *testing.T) {
 }
 
 func TestMembershipService_DelegatesToCache(t *testing.T) {
-	svc := NewMembershipService()
+	svc := NewMembershipService(newStore(t))
 	svc.cache.replace([]string{memberA})
 
 	if !svc.IsMember(memberA) {
