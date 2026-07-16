@@ -48,19 +48,25 @@ func (h *NIP50Handler) Handle(ctx context.Context, s *Session, rp *wire.RequestP
 	}
 
 	if searchQuery != "" {
-		var pubkeys []string
-		var err error
+		if s.SearchService == nil {
+			// NIP-11 already omits 50 from supported_nips when search is
+			// disabled; this is the defense for clients that send it anyway
+			// instead of silently returning zero results via ImpossibleID.
+			s.reply(&wire.ClosedSubscriptionResponse{
+				SubscriptionID: rp.SubscriptionID,
+				Message:        "unsupported: search is not enabled on this relay",
+			})
+			return true, nil
+		}
 
-		if s.SearchService != nil {
-			limit := s.config.DefaultSearchLimit
-			if limit <= 0 {
-				limit = 100 // fallback
-			}
-			pubkeys, err = s.SearchService.FindProfiles(ctx, searchQuery, limit)
-			if err != nil {
-				s.config.Logger.Error().Err(err).Msg("search failed")
-				// Treat error as empty results
-			}
+		limit := s.config.DefaultSearchLimit
+		if limit <= 0 {
+			limit = 100 // fallback
+		}
+		pubkeys, err := s.SearchService.FindProfiles(ctx, searchQuery, limit)
+		if err != nil {
+			s.config.Logger.Error().Err(err).Msg("search failed")
+			// Treat error as empty results
 		}
 
 		// Rewrite Filter

@@ -62,6 +62,7 @@ type SessionContext struct {
 	info               *ClientInfo
 	config             *SessionConfig
 	limitation         *nip11.Limitation
+	relayURL           string
 	storeLimiter       chan struct{}
 	SearchService      search.Service
 	VerificationWorker *ProfileVerificationWorker
@@ -85,6 +86,7 @@ func NewSessionContext(store *EventStore, info *ClientInfo, cfg *nip11.Metadata,
 		info:               info,
 		config:             sessCfg,
 		limitation:         &cfg.Limitation,
+		relayURL:           cfg.URL,
 		storeLimiter:       make(chan struct{}, sessCfg.MaxConcurrentStoreTasks),
 		SearchService:      searchService,
 		VerificationWorker: vWorker,

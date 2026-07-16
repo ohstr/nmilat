@@ -154,6 +154,23 @@ func TestEventVerify(t *testing.T) {
 
 }
 
+func TestEventVerifyWithoutPowCheck(t *testing.T) {
+
+	// Declares difficulty 20 -- essentially certain not to be met by an
+	// event that wasn't actually mined for it.
+	ev := CreateEvent(t, 1, []string{"nonce", "1", "20"})
+
+	if err := ev.Verify(); err == nil {
+		t.Fatal("expected pow check to fail for an unmined nonce tag")
+	} else if !strings.Contains(err.Error(), "pow check failed") {
+		t.Fatalf("expected a pow check failure, got: %v", err)
+	}
+
+	if err := ev.Verify(WithoutPowCheck()); err != nil {
+		t.Fatalf("WithoutPowCheck should have skipped the invalid nonce tag, got: %v", err)
+	}
+}
+
 func TestEventID(t *testing.T) {
 
 	sampleEvents := readSampleEvents(t)

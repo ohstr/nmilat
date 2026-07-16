@@ -51,13 +51,7 @@ func (msg *Message) ToBytes() ([]byte, error) {
 			}
 			buf.Write(r.Payload)
 		case 2: // IdList
-			// Payload in struct is raw bytes? Or we should have a better struct?
-			// Let's assume Payload holds the raw bytes of IdList content (excluding length prefix? No, let's say Payload IS the content)
-			// Wait, for Mode 2, we probably want to construct it properly.
-			// Re-reading Negentropy.go struct: Payload []byte.
-			// For Mode 2, let's assume Payload includes the Varint Length + IDs?
-			// Or better, let's make `Range` struct smarter?
-			// For now, let's assume Payload is pre-encoded for Mode 2.
+			// Payload is pre-encoded: <length (Varint)> <ids (Id)>*, written as-is.
 			buf.Write(r.Payload)
 		default:
 			return nil, fmt.Errorf("unknown mode: %d", r.Mode)
@@ -78,10 +72,9 @@ func FromBytes(data []byte) (*Message, error) {
 	}
 
 	if msg.ProtocolVersion != ProtocolVersion1 {
-		// Spec says: "If a server receives a message with a protocol version that it cannot handle, it should reply with a single byte containing the highest protocol version it supports"
-		// We are implementing server/relay side logic mostly, but also client logic for tests.
-		// For now, allow it, but caller checks.
-		// actually, return error
+		// Per spec, a peer that can't handle the given version should
+		// reply with a single byte containing its own highest supported
+		// version instead of erroring. Not implemented — rejects instead.
 		return nil, fmt.Errorf("unsupported protocol version: %x", msg.ProtocolVersion)
 	}
 
@@ -132,28 +125,10 @@ func FromBytes(data []byte) (*Message, error) {
 				return nil, fmt.Errorf("failed to read fingerprint: %w", err)
 			}
 		case 2: // IdList
-			// Read Length (Varint)
-			// Then Read Length * 32 bytes
-			// But we need to peek/buffer?
-			// Wait, logic says: IdList := <length (Varint)> <ids (Id)>*
-			// We can decode the varint to know how many IDs, then read them.
-			// But we want to store them in Payload or parsed?
-			// Let's parse them if we can, but `Range` struct has `Payload []byte`.
-			// Let's store the raw bytes of IdList (Length+IDs) in Payload for now,
-			// or change Range struct.
-			// To keep it simple, let's decode the length, then read the bytes, and put everything in Payload.
-
-			// We need to read the Varint again *without consuming*? No, we consume it.
-			// But `Payload` field should probably be `IDs []string` or something?
-			// `negentropy.go` defined `Payload []byte`.
-
-			// Let's decode the length to know how much to read.
-			// The length varint is part of the payload.
-
-			// Hack: Read varint bytes.
-			// io.ByteScanner?
-
-			lengthVal, n, err := readVarintBytes(buf) // Custom helper needed
+			// IdList := <length (Varint)> <ids (Id)>*, 32 bytes per id.
+			// Payload stores the whole thing, length prefix included, to
+			// mirror ToBytes writing Payload verbatim for this mode.
+			lengthVal, n, err := readVarintBytes(buf)
 			if err != nil {
 				return nil, err
 			}
@@ -164,10 +139,7 @@ func FromBytes(data []byte) (*Message, error) {
 				return nil, err
 			}
 
-			// Reconstruct payload
 			r.Payload = make([]byte, 0, int(n)+int(idsLen))
-			// We need the bytes of the varint we just read.
-			// Since readVarintBytes return val and bytes count 'n', we can re-encode 'val'
 			r.Payload = append(r.Payload, encodeVarint(lengthVal)...)
 			r.Payload = append(r.Payload, idsBytes...)
 

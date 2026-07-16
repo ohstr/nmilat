@@ -378,3 +378,43 @@ func TestProcessRequest_SearchFilter(t *testing.T) {
 		t.Fatal("FindProfiles was not called (timeout)")
 	}
 }
+
+func TestProcessRequest_SearchFilter_NoSearchService(t *testing.T) {
+	store := newStoreWithEvents(t, []*nip01.Event{})
+
+	// No search service wired up (search disabled in config) — nil is a
+	// valid Service, unlike the mock in TestProcessRequest_SearchFilter.
+	session := NewSessionContext(store, &ClientInfo{}, &nip11.Metadata{}, nil, nil, nil)
+	sess := &Session{SessionContext: session}
+	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), sessionContextKey{}, sess))
+	defer cancel()
+
+	filters := nip01.NewSubscriptionFilterGroup()
+	filters.Add(&nip01.SubscriptionFilter{
+		Kinds:  []int{0},
+		Search: "alice",
+	})
+
+	req := &wire.RequestPacket{
+		SubscriptionID: "sub1",
+		Filters:        filters,
+	}
+
+	go sess.ProcessPacket(ctx, req)
+
+	select {
+	case packet := <-session.incoming:
+		closed, ok := packet.(*wire.ClosedSubscriptionResponse)
+		if !ok {
+			t.Fatalf("expected ClosedSubscriptionResponse, got %T", packet)
+		}
+		if closed.SubscriptionID != req.SubscriptionID {
+			t.Errorf("expected subscription id=%q, got=%q", req.SubscriptionID, closed.SubscriptionID)
+		}
+		if closed.Message != "unsupported: search is not enabled on this relay" {
+			t.Errorf("unexpected CLOSED message: %q", closed.Message)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("expected a CLOSED response (timeout)")
+	}
+}

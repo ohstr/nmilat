@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/ohstr/nmilat/nip01"
+	"github.com/ohstr/nmilat/nip13"
 	"github.com/ohstr/nmilat/nip42"
 	"github.com/ohstr/nmilat/nip77"
 	"github.com/ohstr/nmilat/search"
@@ -112,16 +113,9 @@ func (s *Session) processAuth(parent context.Context, ap *wire.AuthPacket) error
 		return nil
 	}
 
-	relayURL := ""
-	for _, t := range ap.Event.Tags {
-		if len(t) >= 2 && t[0] == "relay" {
-			relayURL = t[1]
-			break
-		}
-	}
-
-	// Check challenge
-	err := nip42.ValidateAuthEvent(ap.Event.Kind, ap.Event.Tags, ap.Event.CreatedAt, s.challenge, relayURL)
+	// Check against the relay's own configured URL, not a value read off
+	// the client's own tag -- otherwise the check is a tautology.
+	err := nip42.ValidateAuthEvent(ap.Event.Kind, ap.Event.Tags, ap.Event.CreatedAt, s.challenge, s.relayURL)
 	if err != nil {
 		s.reply(&wire.OkSubscriptionResponse{
 			EventID:  ap.Event.ID,
@@ -260,6 +254,27 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 		})
 
 		return nil
+	}
+
+	if s.limitation.StrictPow && s.limitation.MinPowDifficulty > 0 {
+		// ep.Event.ID is already a validated 32-byte hex string at this
+		// point (Validate, above, via Verify) -- Difficulty cannot fail.
+		difficulty, _ := nip13.Difficulty(ep.Event.ID)
+		if difficulty < s.limitation.MinPowDifficulty {
+			s.config.Logger.Info().
+				Str("id", ep.Event.ID).
+				Int("difficulty", difficulty).
+				Int("required", s.limitation.MinPowDifficulty).
+				Msg("event rejected: insufficient proof of work")
+
+			s.reply(&wire.OkSubscriptionResponse{
+				EventID:  ep.Event.ID,
+				Accepted: false,
+				Message:  fmt.Sprintf("pow: difficulty %d is less than %d", difficulty, s.limitation.MinPowDifficulty),
+			})
+
+			return nil
+		}
 	}
 
 	if err := runEventValidators(ctx, ep.Event); err != nil {

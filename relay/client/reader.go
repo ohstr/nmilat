@@ -74,6 +74,15 @@ func ReadEventsFromRelay(parent context.Context, relayURL *url.URL, filters *nip
 
 		case err := <-conn.errors:
 			return nil, err
+
+		case <-ctx.Done():
+			// Without this case, a relay that accepts the REQ but never
+			// sends EOSE or an error hangs this call forever: parent's
+			// cancellation only reached here indirectly before, via
+			// Connection.handle's write goroutine closing the socket and
+			// turning that into a conn.errors send -- a round trip through
+			// a forced disconnect instead of an immediate return.
+			return nil, ctx.Err()
 		}
 	}
 }

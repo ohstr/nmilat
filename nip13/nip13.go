@@ -39,6 +39,17 @@ type Fields struct {
 	Sig       string
 }
 
+// Difficulty returns the number of leading zero bits in a 32-byte hex event
+// ID -- the event's actual NIP-13 proof-of-work difficulty, independent of
+// whatever a nonce tag claims. Unlike ValidatePow (which checks a nonce
+// tag's declared difficulty against reality and requires one to be
+// present), Difficulty works for any event ID, nonce tag or not, which is
+// what a relay needs to enforce a minimum difficulty across all incoming
+// events rather than just validate self-reported ones.
+func Difficulty(id string) (int, error) {
+	return countZerosFromHex(id)
+}
+
 func countZerosFromHex(hexStr string) (count int, err error) {
 	if len(hexStr) != 64 {
 		err = fmt.Errorf("invalid key, bad size: %d", len(hexStr))

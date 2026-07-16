@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -114,6 +115,81 @@ func TestReadRemote(t *testing.T) {
 	}
 	if events[0].ID != event.ID {
 		t.Fatalf("expected event ID %s, got %s", event.ID, events[0].ID)
+	}
+}
+
+// newFakeSilentRelayServer starts an in-process WebSocket server that reads
+// the client's REQ and then sends nothing back at all -- no EVENT, no EOSE,
+// no CLOSED, no error -- reproducing a relay that accepts a subscription and
+// never finishes it (e.g. a search filter it silently can't satisfy). This
+// is the exact shape of hang ReadEventsFromRelay's ctx.Done() case exists to
+// escape.
+func newFakeSilentRelayServer(t *testing.T) *httptest.Server {
+	upgrader := websocket.Upgrader{}
+	stopCh := make(chan struct{})
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		<-stopCh
+	})
+
+	server := httptest.NewServer(mux)
+	// Registered after t.Cleanup(server.Close) below, so cleanup's LIFO
+	// order closes stopCh (unblocking the handler) before server.Close()
+	// runs -- otherwise Close(), which waits for outstanding requests to
+	// finish, would itself hang.
+	t.Cleanup(server.Close)
+	t.Cleanup(func() { close(stopCh) })
+	return server
+}
+
+// TestReadRemote_NoEOSE_RespectsContextDeadline locks in the fix for a real
+// hang: ReadEventsFromRelay's select used to have no ctx.Done() case at all,
+// so a relay that accepted a REQ and never sent EOSE (or an error) blocked
+// the call forever -- ctx cancellation only unblocked it indirectly, via
+// Connection.handle's write goroutine closing the socket and turning that
+// into a conn.errors send. A real search query against a relay that never
+// closed the subscription is what surfaced the bug.
+func TestReadRemote_NoEOSE_RespectsContextDeadline(t *testing.T) {
+	server := newFakeSilentRelayServer(t)
+
+	relayURL, err := url.Parse(strings.Replace(server.URL, "http", "ws", 1))
+	if err != nil {
+		t.Fatalf("failed to parse relay URL: %v", err)
+	}
+
+	filters := nip01.NewSubscriptionFilterGroup()
+	filters.Add(&nip01.SubscriptionFilter{Kinds: []int{1}, Limit: 5})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	done := make(chan struct{})
+	var events []*nip01.Event
+	go func() {
+		defer close(done)
+		events, err = ReadEventsFromRelay(ctx, relayURL, filters)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("ReadEventsFromRelay did not return within 3s of a 300ms context deadline -- it's hanging instead of honoring ctx cancellation")
+	}
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("ReadEventsFromRelay error = %v, want context.DeadlineExceeded", err)
+	}
+	if events != nil {
+		t.Fatalf("events = %v, want nil on a timed-out read", events)
 	}
 }
 

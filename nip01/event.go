@@ -105,20 +105,44 @@ func (ev *Event) HashID() ([]byte, error) {
 	return hsh[:], nil
 }
 
+// VerifyOption configures Verify's strictness. The zero value of every
+// option is "off" -- Verify with no options performs its original check,
+// unchanged: format, signature, ID, and (if a nonce tag is present) NIP-13
+// proof-of-work.
+type VerifyOption func(*verifyConfig)
+
+type verifyConfig struct {
+	skipPow bool
+}
+
+// WithoutPowCheck skips NIP-13 proof-of-work validation: an event carrying
+// a nonce tag whose declared difficulty doesn't match its actual ID is
+// accepted instead of rejected. Format/signature/ID checks are unaffected.
+func WithoutPowCheck() VerifyOption {
+	return func(c *verifyConfig) { c.skipPow = true }
+}
+
 // Verify fully verifies an untrusted event: format (via Validate) plus
 // cryptographic signature/ID/PoW. Use Validate alone only when you
 // deliberately want a cheap format-only pre-check ahead of a separate,
 // more expensive verification pass.
-func (ev *Event) Verify() error {
+func (ev *Event) Verify(opts ...VerifyOption) error {
 
 	if err := ev.Validate(); err != nil {
 		return err
 	}
 
-	if _, ok := utils.LookupEventTag(ev.Tags, nip13.POWTagName); ok {
-		fields := nip13.Fields{ID: ev.ID, PubKey: ev.PubKey, CreatedAt: ev.CreatedAt, Kind: ev.Kind, Tags: ev.Tags, Content: ev.Content}
-		if _, _, err := nip13.ValidatePow(fields); err != nil {
-			return fmt.Errorf("pow check failed: %w", err)
+	var cfg verifyConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
+	if !cfg.skipPow {
+		if _, ok := utils.LookupEventTag(ev.Tags, nip13.POWTagName); ok {
+			fields := nip13.Fields{ID: ev.ID, PubKey: ev.PubKey, CreatedAt: ev.CreatedAt, Kind: ev.Kind, Tags: ev.Tags, Content: ev.Content}
+			if _, _, err := nip13.ValidatePow(fields); err != nil {
+				return fmt.Errorf("pow check failed: %w", err)
+			}
 		}
 	}
 

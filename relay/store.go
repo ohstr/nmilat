@@ -245,27 +245,19 @@ func (s *EventStore) Name() string {
 	return s.db.Path()
 }
 
-// Db returns the underlying bbolt handle, for callers that need to store
-// their own application-specific data alongside this store in the same
-// file (e.g. an embedder's own metadata bucket). Do not create, read, or
-// modify this package's own buckets directly through it — always go
-// through Execute/Task for event writes, since that's what enforces
-// dedup, replaceable-event handling, and index consistency; touching
-// those buckets directly can corrupt the index. The returned handle
-// becomes unusable once Close has been called.
+// Db returns the underlying bbolt handle, for an embedder's own buckets
+// sharing this file. Never touch this package's own buckets through it —
+// go through Execute/Task instead, which enforces dedup, replaceable-event
+// handling, and index consistency. Unusable once Close has been called.
 func (s *EventStore) Db() *bolt.DB {
 	return s.db
 }
 
-// Close stops accepting new tasks and shuts down the store. It waits for
-// every handleTasks/housekeeper goroutine to actually exit before closing
-// db: those goroutines call db.Update/db.View from a select racing against
-// closeCh, so without this wait, db.Close() could run concurrently with a
-// goroutine that's already past its closeCh check and about to (or already
-// starting to) touch db -- calling Execute on a mid-close or just-closed
-// bbolt handle can hang rather than return an error, which left Execute's
-// caller (and whichever writeOne-style caller was waiting on that task's
-// Done()) blocked forever.
+// Close stops accepting new tasks and shuts down the store, waiting for
+// every handleTasks/housekeeper goroutine to exit before closing db. Those
+// goroutines race db.Update/db.View against closeCh, so closing db early
+// can hit one already past that check — Execute on a mid-close bbolt
+// handle hangs instead of erroring, blocking its caller forever.
 func (s *EventStore) Close() {
 	s.closer.Do(func() {
 		close(s.closeCh)
@@ -334,15 +326,12 @@ func (s *EventStore) ExecuteBatch(tasks []Task) {
 func (s *EventStore) handleTasks() {
 	batch := make([]Task, 0, s.batchSize)
 
-	// timer is armed only once the batch holds its first task (rather than
-	// ticking on a fixed schedule from startup), so a solo/low-concurrency
-	// write waits batchInterval from its own arrival instead of from an
-	// arbitrary external clock. With a fixed-period ticker, a synchronous
-	// caller that submits its next task right as a tick fires -- the common
-	// case for a client waiting on each ack before sending the next event --
-	// always lands just after that tick and pays a full extra period for
-	// every single write, rather than the average half-period a random
-	// arrival would see.
+	// timer arms on the batch's first task, not a fixed schedule from
+	// startup, so a solo write waits batchInterval from its own arrival, not
+	// an arbitrary clock. A fixed-period ticker would instead make a
+	// synchronous caller (waiting on each ack before its next write, a
+	// common case) consistently land just after each tick and pay a full
+	// extra period, instead of the average half-period random arrival gives.
 	var timer *time.Timer
 	defer func() {
 		if timer != nil {

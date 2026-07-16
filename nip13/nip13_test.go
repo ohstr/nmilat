@@ -38,6 +38,44 @@ func TestNip13Zeros(t *testing.T) {
 	}
 }
 
+// TestDifficulty covers the exported Difficulty wrapper -- both that it
+// matches countZerosFromHex exactly and that it works on a genuinely mined
+// ID, since a relay enforcing a minimum difficulty calls this on real event
+// IDs rather than the fixture hex strings above.
+func TestDifficulty(t *testing.T) {
+	for eventID, expCount := range map[string]int{
+		"0000ed29b31e087cc6953e593adc6805968e5b426692eb7117ede1d9cec353fe": 16,
+		"FFFF0373361CB87966CC0EE880D462AE71C0035EF160830B660DB4C04043E02E": 0,
+	} {
+		got, err := Difficulty(eventID)
+		if err != nil {
+			t.Fatalf("Difficulty(%s): unexpected error: %v", eventID, err)
+		}
+		if got != expCount {
+			t.Fatalf("Difficulty(%s) = %d, want %d", eventID, got, expCount)
+		}
+	}
+
+	if _, err := Difficulty("too-short"); err == nil {
+		t.Fatal("expected an error for a malformed event ID, got nil")
+	}
+
+	ev := Fields{PubKey: publicKey, CreatedAt: 1, Kind: 1, Content: "pow test"}
+	const targetDifficulty = 8
+	id, _, err := Mine(context.Background(), ev, targetDifficulty)
+	if err != nil {
+		t.Fatalf("Mine: unexpected error: %v", err)
+	}
+
+	got, err := Difficulty(id)
+	if err != nil {
+		t.Fatalf("Difficulty(%s): unexpected error: %v", id, err)
+	}
+	if got < targetDifficulty {
+		t.Fatalf("Difficulty(%s) = %d, want >= %d", id, got, targetDifficulty)
+	}
+}
+
 func newFields(kind int, pubkey, content string, tags ...[]string) Fields {
 	return Fields{
 		Kind:      kind,

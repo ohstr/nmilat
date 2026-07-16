@@ -73,6 +73,11 @@ type Metadata struct {
 	// them first (see NewHandler, which used to do exactly that).
 	PrivKey    string            `mapstructure:"privkey" json:"-"`
 	Delegation *DelegationConfig `mapstructure:"delegation" json:"-"`
+
+	// URL is this relay's own canonical address, used to validate the
+	// "relay" tag on incoming NIP-42 AUTH events. Not part of the NIP-11
+	// document (json:"-").
+	URL string `mapstructure:"url" json:"-"`
 }
 
 type DelegationConfig struct {
@@ -104,6 +109,23 @@ type Limitation struct {
 	// AuthRequired, if true, requires NIP-42 AUTH before the relay will
 	// process REQ or EVENT from a connection.
 	AuthRequired bool `mapstructure:"auth_required" json:"auth_required"`
+
+	// MinPowDifficulty is the minimum NIP-13 leading-zero-bit difficulty
+	// the relay wants, advertised so clients can mine ahead of time.
+	// mapstructure:"-": not settable via nip11.limitation directly, so the
+	// embedder's own config stays the single source of truth and copies its
+	// value in here. Enforcement is StrictPow's job, not this field's.
+	MinPowDifficulty int `mapstructure:"-" json:"min_pow_difficulty"`
+
+	// StrictPow, if true, makes the relay reject (OK false, "pow: ...")
+	// any event whose real difficulty (leading zero bits of its ID) falls
+	// below MinPowDifficulty. If false, MinPowDifficulty is advisory only:
+	// still advertised in the NIP-11 document, but under-difficulty events
+	// are accepted anyway -- lets an operator announce a future
+	// requirement before turning on rejection. json:"-": relay behavior,
+	// not client-facing metadata. mapstructure:"-" for the same
+	// single-source-of-truth reason as MinPowDifficulty.
+	StrictPow bool `mapstructure:"-" json:"-"`
 }
 
 func NewHandler(md *Metadata, supported NIPSet) http.Handler {
