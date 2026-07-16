@@ -18,6 +18,7 @@ import (
 	"github.com/ohstr/nmilat/nip11"
 	"github.com/ohstr/nmilat/nip42"
 	"github.com/ohstr/nmilat/nip77"
+	"github.com/ohstr/nmilat/nipOA"
 	"github.com/ohstr/nmilat/search"
 	"github.com/ohstr/nmilat/utils"
 	"github.com/ohstr/nmilat/wire"
@@ -39,6 +40,62 @@ var (
 
 type sessionContextKey struct{}
 
+// MembershipStatus records a single authenticated identity's NIP-43
+// standing on a connection.
+type MembershipStatus uint8
+
+const (
+	// MembershipNone means the pubkey authenticated (NIP-42) but holds no
+	// NIP-43 membership -- the common case on a relay that hasn't enabled
+	// membership enforcement, or for a non-member on one that has.
+	MembershipNone MembershipStatus = iota
+	// MembershipActive means the pubkey is a direct, explicitly-enrolled
+	// NIP-43 member.
+	MembershipActive
+	// MembershipVirtual means access was derived from an owner's active
+	// membership (NIP-AA), not from the pubkey's own enrollment.
+	MembershipVirtual
+)
+
+func (m MembershipStatus) String() string {
+	switch m {
+	case MembershipActive:
+		return "active"
+	case MembershipVirtual:
+		return "virtual"
+	default:
+		return "none"
+	}
+}
+
+// AuthedIdentity records one pubkey authenticated on this connection via
+// NIP-42, plus the membership status resolved for it at AUTH time.
+//
+// Membership status is resolved once, when the identity is added, and
+// never re-checked for the rest of the connection's life -- this follows
+// NIP-AA's own revocation wording ("virtual membership is checked on each
+// new connection, not cached across reconnects... the relay does not
+// proactively expire mid-session"), and is also this design's main
+// performance property: every REQ/EVENT membership check thereafter is a
+// read of this connection's own (at most a handful of entries) identity
+// list, never a lookup against the shared, cross-connection membership
+// cache.
+type AuthedIdentity struct {
+	Pubkey     string
+	Membership MembershipStatus
+
+	// Owner and Conditions are populated only when Membership ==
+	// MembershipVirtual. Owner is the NIP-43-member pubkey this virtual
+	// membership was derived from. Conditions is the already-verified
+	// NIP-OA credential's parsed conditions, retained so optional per-event
+	// kind enforcement (a later phase) never has to re-verify a signature
+	// -- it's a nil pointer, not a zero-value struct, so plain NIP-43
+	// active members and non-AA connections carry no incremental memory
+	// for this field at all.
+	Owner      string
+	Conditions *nipOA.Conditions
+}
+
 type Session struct {
 	id   int64
 	conn *websocket.Conn
@@ -50,8 +107,24 @@ type Session struct {
 	negMu              sync.Mutex
 	negentropySessions map[string]*nip77.Negentropy
 
-	challenge    string
-	authedPubkey string
+	challenge string
+
+	// identityMu protects primary/extra. A connection's own packet
+	// processing is single-goroutine (see receiveMessages), so nothing
+	// internal to normal packet handling actually contends on this lock;
+	// it exists for cross-goroutine readers added by a later phase (e.g.
+	// owner-scoped session enumeration/termination, which reads another
+	// connection's Session from outside that connection's own goroutine).
+	identityMu sync.RWMutex
+
+	// primary is the first pubkey authenticated on this connection, stored
+	// by value so the overwhelmingly common case -- zero or one identity,
+	// no NIP-AA -- costs no heap allocation beyond Session's own. extra
+	// holds any additional identities (a second, third, ... AUTH on the
+	// same connection, e.g. a human's own key plus one or more agent keys)
+	// and stays nil until that actually happens.
+	primary AuthedIdentity
+	extra   []AuthedIdentity
 
 	*SessionContext
 }
@@ -66,6 +139,13 @@ type SessionContext struct {
 	storeLimiter       chan struct{}
 	SearchService      search.Service
 	VerificationWorker *ProfileVerificationWorker
+
+	// membership resolves NIP-43 active-member status. nil means NIP-43 is
+	// not configured on this relay -- every method on *MembershipService is
+	// nil-safe and reports "not a member" unconditionally, so call sites
+	// never need their own nil check before calling it. Populated for real
+	// by a later phase.
+	membership *MembershipService
 
 	*replyer
 }
@@ -159,10 +239,115 @@ func (s *Session) ID() int64 {
 	return s.id
 }
 
-// AuthedPubkey returns the pubkey this session authenticated as via NIP-42,
-// or "" if it has not authenticated.
+// AuthedPubkey returns the first pubkey this session authenticated as via
+// NIP-42, or "" if it has not authenticated. A connection may hold more
+// than one authenticated identity (see addIdentity) -- this returns only
+// the first, which is all plain NIP-42 (no NIP-43/NIP-AA) ever produces.
+// Callers that need a specific pubkey's own status should use
+// IdentityMembership; callers that need "does anything on this connection
+// hold membership" should use HasMembership.
 func (s *Session) AuthedPubkey() string {
-	return s.authedPubkey
+	s.identityMu.RLock()
+	defer s.identityMu.RUnlock()
+	return s.primary.Pubkey
+}
+
+// addIdentity records or updates id's status on this connection. If id's
+// pubkey already has an identity here (a second AUTH for the same pubkey
+// on the same connection -- e.g. NIP-AA's "replace the stored credential,
+// never combine" rule for an agent re-authenticating with a different
+// auth tag), it is overwritten in place, never appended as a duplicate.
+func (s *Session) addIdentity(id AuthedIdentity) {
+	s.identityMu.Lock()
+	defer s.identityMu.Unlock()
+
+	if s.primary.Pubkey == "" || s.primary.Pubkey == id.Pubkey {
+		s.primary = id
+		return
+	}
+	for i := range s.extra {
+		if s.extra[i].Pubkey == id.Pubkey {
+			s.extra[i] = id
+			return
+		}
+	}
+	s.extra = append(s.extra, id)
+}
+
+// HasMembership reports whether any authenticated identity on this
+// connection holds active or virtual NIP-43 membership. This is the
+// REQ/COUNT gate: per NIP-AA, such requests pass "if at least one
+// authenticated pubkey on the connection holds active or virtual
+// membership."
+func (s *Session) HasMembership() bool {
+	s.identityMu.RLock()
+	defer s.identityMu.RUnlock()
+
+	if s.primary.Membership != MembershipNone {
+		return true
+	}
+	for _, id := range s.extra {
+		if id.Membership != MembershipNone {
+			return true
+		}
+	}
+	return false
+}
+
+// IdentityMembership looks up pubkey's own status among this connection's
+// authenticated identities. This is the EVENT gate: per NIP-AA, the relay
+// "MUST verify event.pubkey is authenticated on the connection AND holds
+// active or virtual membership" -- never falling back to another
+// identity's status. An event signed by a pubkey that never itself
+// authenticated on this connection reports ok=false, even if some other
+// pubkey on the same connection is a member.
+func (s *Session) IdentityMembership(pubkey string) (AuthedIdentity, bool) {
+	s.identityMu.RLock()
+	defer s.identityMu.RUnlock()
+
+	if s.primary.Pubkey == pubkey {
+		return s.primary, true
+	}
+	for _, id := range s.extra {
+		if id.Pubkey == pubkey {
+			return id, true
+		}
+	}
+	return AuthedIdentity{}, false
+}
+
+// HasOwnerIdentity reports whether any virtual identity on this connection
+// was derived from owner. Used by owner-scoped session enumeration (a
+// later phase), not the request/event hot path.
+func (s *Session) HasOwnerIdentity(owner string) bool {
+	s.identityMu.RLock()
+	defer s.identityMu.RUnlock()
+
+	if s.primary.Membership == MembershipVirtual && s.primary.Owner == owner {
+		return true
+	}
+	for _, id := range s.extra {
+		if id.Membership == MembershipVirtual && id.Owner == owner {
+			return true
+		}
+	}
+	return false
+}
+
+// Identities returns a defensive copy of every identity authenticated on
+// this connection (at most a handful of entries in practice) -- for
+// admin/audit use, not the hot path.
+func (s *Session) Identities() []AuthedIdentity {
+	s.identityMu.RLock()
+	defer s.identityMu.RUnlock()
+
+	if s.primary.Pubkey == "" {
+		return nil
+	}
+	out := make([]AuthedIdentity, 0, 1+len(s.extra))
+	out = append(out, s.primary)
+	out = append(out, s.extra...)
+	return out
 }
 
 // Info returns the client metadata (remote address, User-Agent, Origin,

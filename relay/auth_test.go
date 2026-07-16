@@ -39,8 +39,8 @@ func TestProcessAuth_Success(t *testing.T) {
 		t.Fatalf("processAuth: %v", err)
 	}
 
-	if sess.authedPubkey != authTestPubKey {
-		t.Fatalf("authedPubkey = %q, want %q", sess.authedPubkey, authTestPubKey)
+	if sess.AuthedPubkey() != authTestPubKey {
+		t.Fatalf("AuthedPubkey() = %q, want %q", sess.AuthedPubkey(), authTestPubKey)
 	}
 
 	reply := <-sess.SessionContext.incoming
@@ -67,8 +67,8 @@ func TestProcessAuth_RejectsRelayTagForAnotherRelay(t *testing.T) {
 		t.Fatalf("processAuth: %v", err)
 	}
 
-	if sess.authedPubkey != "" {
-		t.Fatalf("authedPubkey = %q, want empty -- event's relay tag did not match this relay", sess.authedPubkey)
+	if sess.AuthedPubkey() != "" {
+		t.Fatalf("AuthedPubkey() = %q, want empty -- event's relay tag did not match this relay", sess.AuthedPubkey())
 	}
 
 	reply := <-sess.SessionContext.incoming
@@ -93,8 +93,8 @@ func TestProcessAuth_NoChallengeSent(t *testing.T) {
 		t.Fatalf("processAuth: %v", err)
 	}
 
-	if sess.authedPubkey != "" {
-		t.Fatalf("authedPubkey = %q, want empty", sess.authedPubkey)
+	if sess.AuthedPubkey() != "" {
+		t.Fatalf("AuthedPubkey() = %q, want empty", sess.AuthedPubkey())
 	}
 
 	reply := <-sess.SessionContext.incoming
@@ -121,8 +121,8 @@ func TestProcessAuth_InvalidSignature(t *testing.T) {
 		t.Fatalf("processAuth: %v", err)
 	}
 
-	if sess.authedPubkey != "" {
-		t.Fatalf("authedPubkey = %q, want empty", sess.authedPubkey)
+	if sess.AuthedPubkey() != "" {
+		t.Fatalf("AuthedPubkey() = %q, want empty", sess.AuthedPubkey())
 	}
 
 	reply := <-sess.SessionContext.incoming

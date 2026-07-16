@@ -46,7 +46,7 @@ func (s *Session) ProcessPacket(ctx context.Context, p wire.Packet) error {
 
 func (s *Session) processRequest(ctx context.Context, rp *wire.RequestPacket) error {
 
-	if s.limitation.AuthRequired && s.authedPubkey == "" {
+	if s.limitation.AuthRequired && s.AuthedPubkey() == "" {
 		s.reply(&wire.NoticeSubscriptionResponse{
 			Message: "restricted: valid NIP-42 authentication required",
 		})
@@ -136,14 +136,14 @@ func (s *Session) processAuth(parent context.Context, ap *wire.AuthPacket) error
 	}
 
 	// Success
-	s.authedPubkey = ap.Event.PubKey
+	s.addIdentity(AuthedIdentity{Pubkey: ap.Event.PubKey, Membership: MembershipNone})
 	s.reply(&wire.OkSubscriptionResponse{
 		EventID:  ap.Event.ID,
 		Accepted: true,
 		Message:  "auth-success",
 	})
 
-	s.config.Logger.Info().Str("pubkey", s.authedPubkey).Msg("client authenticated")
+	s.config.Logger.Info().Str("pubkey", ap.Event.PubKey).Msg("client authenticated")
 
 	return nil
 }
@@ -221,7 +221,7 @@ func runEventValidators(ctx context.Context, ev *nip01.Event) error {
 
 func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error {
 
-	if s.limitation.AuthRequired && s.authedPubkey == "" {
+	if s.limitation.AuthRequired && s.AuthedPubkey() == "" {
 		s.reply(&wire.OkSubscriptionResponse{
 			EventID:  ep.Event.ID,
 			Accepted: false,
