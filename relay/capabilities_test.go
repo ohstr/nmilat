@@ -7,9 +7,9 @@ import (
 	"github.com/ohstr/nmilat/testlogger"
 )
 
-func hasNIP(nips []int, n int) bool {
+func hasNIP(nips []nip11.NIPID, n int) bool {
 	for _, v := range nips {
-		if v == n {
+		if v == nip11.NIP(n) {
 			return true
 		}
 	}

@@ -18,7 +18,7 @@ import (
 )
 
 func init() {
-	relay.RegisterNIP(0xB7)
+	relay.RegisterLetteredNIP("B7")
 
 	relay.RegisterEventValidator(nipB7.KindBlossomServerList, func(_ context.Context, event *nip01.Event) error {
 		return nipB7.ValidateBlossomServerList(event)

@@ -17,7 +17,7 @@ import (
 )
 
 func init() {
-	relay.RegisterNIP(0xB0)
+	relay.RegisterLetteredNIP("B0")
 
 	relay.RegisterEventValidator(nipB0.KindWebBookmark, func(_ context.Context, event *nip01.Event) error {
 		return nipB0.ValidateWebBookmark(event)

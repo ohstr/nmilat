@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 
 	"github.com/flokiorg/go-flokicoin/crypto"
 	"github.com/rs/zerolog/log"
@@ -18,32 +19,95 @@ const (
 	ContentTypeHeader = "application/nostr+json"
 )
 
-// NIPSet is an immutable, deduplicated, sorted collection of NIP numbers.
-// It exists so the list served in a NIP-11 document can only ever be built
-// through NewNIPSet/With, never assigned directly from caller-supplied config.
-type NIPSet struct {
-	nips []int
+// NIPID identifies a single NIP. Most NIPs are numbered (1, 9, 42) and are
+// built with NIP; NIPs numbered past 99 that ran out of digits and continued
+// with a letter suffix (NIP-B0, NIP-B7, NIP-C7, ...) are built with
+// NIPLetter and carry their literal string ID rather than being coerced into
+// a number. NIP-11 defines supported_nips as "an array of the integer
+// identifiers of NIPs" but says nothing about the lettered ones, so those
+// are serialized as JSON strings instead of being hex-decoded into an int
+// that no other implementation would recognize.
+type NIPID struct {
+	n      int
+	s      string
+	letter bool
 }
 
-// NewNIPSet builds a NIPSet from the given NIP numbers, removing duplicates
-// and sorting the result.
-func NewNIPSet(nips ...int) NIPSet {
-	seen := make(map[int]struct{}, len(nips))
-	unique := make([]int, 0, len(nips))
-	for _, n := range nips {
-		if _, ok := seen[n]; ok {
+// NIP builds the ID for a plain numbered NIP (e.g. NIP(42) for NIP-42).
+func NIP(n int) NIPID { return NIPID{n: n} }
+
+// NIPLetter builds the ID for a letter-suffixed NIP (e.g. NIPLetter("B7")
+// for NIP-B7).
+func NIPLetter(s string) NIPID { return NIPID{s: s, letter: true} }
+
+// String returns the NIP's canonical ID: a decimal number for a plain NIP,
+// or the literal letter suffix (e.g. "B7") for a lettered one.
+func (id NIPID) String() string {
+	if id.letter {
+		return id.s
+	}
+	return strconv.Itoa(id.n)
+}
+
+func (id NIPID) MarshalJSON() ([]byte, error) {
+	if id.letter {
+		return json.Marshal(id.s)
+	}
+	return json.Marshal(id.n)
+}
+
+func (id *NIPID) UnmarshalJSON(b []byte) error {
+	var n int
+	if err := json.Unmarshal(b, &n); err == nil {
+		*id = NIPID{n: n}
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return fmt.Errorf("nip11: NIP id must be a number or a string: %w", err)
+	}
+	*id = NIPID{s: s, letter: true}
+	return nil
+}
+
+// NIPSet is an immutable, deduplicated, sorted collection of NIP IDs. It
+// exists so the list served in a NIP-11 document can only ever be built
+// through NewNIPSet/With, never assigned directly from caller-supplied
+// config.
+type NIPSet struct {
+	nips []NIPID
+}
+
+// NewNIPSet builds a NIPSet from the given NIP IDs, removing duplicates and
+// sorting the result: numbered NIPs first in ascending order, followed by
+// lettered NIPs in alphabetical order.
+func NewNIPSet(nips ...NIPID) NIPSet {
+	seen := make(map[string]struct{}, len(nips))
+	unique := make([]NIPID, 0, len(nips))
+	for _, id := range nips {
+		key := id.String()
+		if _, ok := seen[key]; ok {
 			continue
 		}
-		seen[n] = struct{}{}
-		unique = append(unique, n)
+		seen[key] = struct{}{}
+		unique = append(unique, id)
 	}
-	sort.Ints(unique)
+	sort.Slice(unique, func(i, j int) bool {
+		a, b := unique[i], unique[j]
+		if a.letter != b.letter {
+			return !a.letter
+		}
+		if a.letter {
+			return a.s < b.s
+		}
+		return a.n < b.n
+	})
 	return NIPSet{nips: unique}
 }
 
-// Slice returns a defensive copy of the underlying NIP numbers.
-func (s NIPSet) Slice() []int {
-	out := make([]int, len(s.nips))
+// Slice returns a defensive copy of the underlying NIP IDs.
+func (s NIPSet) Slice() []NIPID {
+	out := make([]NIPID, len(s.nips))
 	copy(out, s.nips)
 	return out
 }
@@ -51,7 +115,7 @@ func (s NIPSet) Slice() []int {
 // With returns a new NIPSet containing this set's NIPs plus the given ones,
 // for composition roots that need to add NIPs the SDK itself has no
 // visibility into (e.g. an application-level HTTP auth scheme).
-func (s NIPSet) With(nips ...int) NIPSet {
+func (s NIPSet) With(nips ...NIPID) NIPSet {
 	return NewNIPSet(append(s.Slice(), nips...)...)
 }
 
@@ -62,7 +126,7 @@ type Metadata struct {
 	Description string `mapstructure:"description" json:"description"`
 	// SupportedNips is intentionally not settable via config: it is only
 	// ever populated by NewHandler from a derived NIPSet.
-	SupportedNips []int      `mapstructure:"-" json:"supported_nips"`
+	SupportedNips []NIPID    `mapstructure:"-" json:"supported_nips"`
 	Software      string     `mapstructure:"software" json:"software"`
 	Version       string     `mapstructure:"version" json:"version"`
 	Limitation    Limitation `mapstructure:"limitation" json:"limitation"`

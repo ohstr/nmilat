@@ -1,7 +1,6 @@
 package relay
 
 import (
-	"sort"
 	"sync"
 
 	"github.com/ohstr/nmilat/nip11"
@@ -10,40 +9,50 @@ import (
 // coreNIPs are enforced directly by the event store / wire protocol,
 // regardless of how a SessionHandler is configured.
 var coreNIPs = []int{
-	1,  // NIP-01: basic protocol, always on.
-	9,  // NIP-09: deletion, see nip09.IsDeletionKind in store.go.
-	11, // NIP-11: this document itself.
-	16, // NIP-16: replaceable events, see nip16.IsReplaceableKind in store.go.
-	33, // NIP-33: parameterized replaceable events, see nip33.IsParamReplaceableKind in store.go.
-	40, // NIP-40: expiration timestamp, see getExpiration in store.go.
-	77, // NIP-77: negentropy set reconciliation, always wired in session.go.
+	1,  // NIP-01
+	9,  // NIP-09
+	11, // NIP-11
+	16, // NIP-16
+	33, // NIP-33
+	40, // NIP-40
+	77, // NIP-77
 }
 
 var (
 	nipRegistryMu sync.RWMutex
-	nipRegistry   = make(map[int]struct{})
+	nipRegistry   = make(map[string]nip11.NIPID)
 )
 
-// RegisterNIP declares that this build supports the given NIP. Feature
-// packages call this from init(), typically alongside RegisterEventValidator,
-// so the set of supported NIPs is derived from which packages are actually
-// linked into the binary rather than asserted by config.
+// RegisterNIP declares that this build supports the given numbered NIP.
+// Feature packages call this from init(), typically alongside
+// RegisterEventValidator, so the set of supported NIPs is derived from which
+// packages are actually linked into the binary rather than asserted by
+// config.
 func RegisterNIP(n int) {
+	registerNIPID(nip11.NIP(n))
+}
+
+// RegisterLetteredNIP declares support for a letter-suffixed NIP (e.g. "B0",
+// "B7") whose ID isn't a plain number. See RegisterNIP.
+func RegisterLetteredNIP(s string) {
+	registerNIPID(nip11.NIPLetter(s))
+}
+
+func registerNIPID(id nip11.NIPID) {
 	nipRegistryMu.Lock()
-	nipRegistry[n] = struct{}{}
+	nipRegistry[id.String()] = id
 	nipRegistryMu.Unlock()
 }
 
-// RegisteredNIPs returns the NIPs declared via RegisterNIP, sorted.
-func RegisteredNIPs() []int {
+// RegisteredNIPs returns the NIPs declared via RegisterNIP/RegisterLetteredNIP.
+func RegisteredNIPs() []nip11.NIPID {
 	nipRegistryMu.RLock()
 	defer nipRegistryMu.RUnlock()
 
-	nips := make([]int, 0, len(nipRegistry))
-	for n := range nipRegistry {
-		nips = append(nips, n)
+	nips := make([]nip11.NIPID, 0, len(nipRegistry))
+	for _, id := range nipRegistry {
+		nips = append(nips, id)
 	}
-	sort.Ints(nips)
 	return nips
 }
 
@@ -51,20 +60,23 @@ func RegisteredNIPs() []int {
 // implements from its wired-in configuration and services. Operators cannot
 // override this list — it is computed, not configured.
 func (sh *SessionHandler) SupportedNIPs() nip11.NIPSet {
-	nips := append([]int{}, coreNIPs...)
+	nips := make([]nip11.NIPID, 0, len(coreNIPs))
+	for _, n := range coreNIPs {
+		nips = append(nips, nip11.NIP(n))
+	}
 	nips = append(nips, RegisteredNIPs()...)
 
 	if sh.relayMetadata != nil && sh.relayMetadata.Limitation.AuthRequired {
-		nips = append(nips, 42) // NIP-42: Authentication
+		nips = append(nips, nip11.NIP(42)) // NIP-42: Authentication
 	}
 	if sh.relayMetadata != nil && sh.relayMetadata.Self != "" {
-		nips = append(nips, 43) // NIP-43: Relay Access Metadata and Requests
+		nips = append(nips, nip11.NIP(43)) // NIP-43: Relay Access Metadata and Requests
 	}
 	if sh.config != nil && sh.config.Delegation != nil {
-		nips = append(nips, 26) // NIP-26: Delegated Event Signing
+		nips = append(nips, nip11.NIP(26)) // NIP-26: Delegated Event Signing
 	}
 	if sh.searchService != nil {
-		nips = append(nips, 50) // NIP-50: Search Capability
+		nips = append(nips, nip11.NIP(50)) // NIP-50: Search Capability
 	}
 
 	return nip11.NewNIPSet(nips...)

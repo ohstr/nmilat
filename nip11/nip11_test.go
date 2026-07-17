@@ -23,7 +23,7 @@ func TestNewHandler(t *testing.T) {
 			AuthRequired:     true,
 		},
 	}
-	nips := NewNIPSet(1, 2, 9, 11)
+	nips := NewNIPSet(NIP(1), NIP(2), NIP(9), NIP(11))
 
 	handler := NewHandler(md, nips)
 
@@ -75,7 +75,7 @@ func TestNewHandler_NeverLeaksPrivateFields(t *testing.T) {
 		},
 	}
 
-	handler := NewHandler(md, NewNIPSet(1, 11))
+	handler := NewHandler(md, NewNIPSet(NIP(1), NIP(11)))
 
 	req := httptest.NewRequest("GET", "/", nil)
 	w := httptest.NewRecorder()
@@ -103,10 +103,44 @@ func TestNewHandler_NeverLeaksPrivateFields(t *testing.T) {
 }
 
 func TestNewNIPSet(t *testing.T) {
-	got := NewNIPSet(9, 1, 1, 11, 9).Slice()
-	want := []int{1, 9, 11}
+	got := NewNIPSet(NIP(9), NIP(1), NIP(1), NIP(11), NIP(9)).Slice()
+	want := []NIPID{NIP(1), NIP(9), NIP(11)}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("NewNIPSet() = %v, want %v", got, want)
+	}
+}
+
+func TestNewNIPSetLetteredSortsAfterNumbered(t *testing.T) {
+	got := NewNIPSet(NIPLetter("B7"), NIP(11), NIPLetter("B0"), NIP(1)).Slice()
+	want := []NIPID{NIP(1), NIP(11), NIPLetter("B0"), NIPLetter("B7")}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("NewNIPSet() = %v, want %v", got, want)
+	}
+}
+
+func TestNIPIDMarshalJSON(t *testing.T) {
+	numBytes, err := json.Marshal(NIP(42))
+	if err != nil {
+		t.Fatalf("json.Marshal(NIP(42)) error = %v", err)
+	}
+	if string(numBytes) != "42" {
+		t.Errorf("json.Marshal(NIP(42)) = %s, want 42", numBytes)
+	}
+
+	strBytes, err := json.Marshal(NIPLetter("B7"))
+	if err != nil {
+		t.Fatalf("json.Marshal(NIPLetter(\"B7\")) error = %v", err)
+	}
+	if string(strBytes) != `"B7"` {
+		t.Errorf("json.Marshal(NIPLetter(\"B7\")) = %s, want \"B7\"", strBytes)
+	}
+
+	var roundTripped NIPID
+	if err := json.Unmarshal(strBytes, &roundTripped); err != nil {
+		t.Fatalf("json.Unmarshal(%s) error = %v", strBytes, err)
+	}
+	if roundTripped != NIPLetter("B7") {
+		t.Errorf("round-tripped = %v, want %v", roundTripped, NIPLetter("B7"))
 	}
 }
 
