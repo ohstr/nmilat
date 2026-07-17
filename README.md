@@ -8,7 +8,7 @@
 ![Go](https://img.shields.io/badge/Go-%2300ADD8.svg?style=flat&logo=go&logoColor=white)
 
 nmilat is a Go SDK for building on the Nostr protocol. It handles the plumbing —
-event parsing, signing, verification, and 28+ NIPs — so you can focus on what
+event parsing, signing, verification, and 31 NIPs — so you can focus on what
 you're building.
 
 Use it to:
@@ -45,33 +45,34 @@ go get github.com/ohstr/nmilat
 - **[`nip33`](https://github.com/nostr-protocol/nips/blob/master/33.md)** — Parameterized replaceable events (renamed "addressable events" and folded into NIP-01 upstream)
 - **[`nip40`](https://github.com/nostr-protocol/nips/blob/master/40.md)** — Event expiration
 - **[`nip42`](https://github.com/nostr-protocol/nips/blob/master/42.md), [`nip98`](https://github.com/nostr-protocol/nips/blob/master/98.md)** — Relay/HTTP authentication
+- **[`nip43`](https://github.com/nostr-protocol/nips/blob/master/43.md)** — Relay access metadata and requests
 - **[`nip46`](https://github.com/nostr-protocol/nips/blob/master/46.md)** — Nostr Connect (remote signing)
 - **[`nip47`](https://github.com/nostr-protocol/nips/blob/master/47.md)** — Wallet Connect (NWC): info/request/response/notification events, encryption negotiation, pairing URI
 - **[`nip48`](https://github.com/nostr-protocol/nips/blob/master/48.md)** — Proxy tags
-- **[`nip57`](https://github.com/nostr-protocol/nips/blob/master/57.md)** — Lightning zaps: the spec-compliant kind 9734/9735 request/receipt/LNURL flow, plus **AltZap**, an extension of the same flow for alt-L1 chains (mandatory chain tag, custom 5520-5523 kinds) that is not wire-compatible with vanilla Bitcoin NIP-57
+- **[`nip57`](https://github.com/nostr-protocol/nips/blob/master/57.md)** — Lightning zaps, plus **AltZap** (see below)
 - **[`nip65`](https://github.com/nostr-protocol/nips/blob/master/65.md)** — Relay list metadata
 - **[`nip77`](https://github.com/nostr-protocol/nips/blob/master/77.md)** — Negentropy sync
 - **[`nip88`](https://github.com/nostr-protocol/nips/blob/master/88.md)** — Polls
 - **[`nip90`](https://github.com/nostr-protocol/nips/blob/master/90.md)** — Data Vending Machines
+- **[`nipAA`](https://github.com/block/buzz/blob/main/docs/nips/NIP-AA.md)** — Agent Auth
 - **[`nipB0`](https://github.com/nostr-protocol/nips/blob/master/B0.md)** — Web bookmarks
 - **[`nipB7`](https://github.com/nostr-protocol/nips/blob/master/B7.md)** — Blossom media (server list)
+- **[`nipOA`](https://github.com/block/buzz/blob/main/docs/nips/NIP-OA.md)** — Owner Attestation
 
 ### Relay engine and infrastructure
 
-- **`relay`** — Embeddable relay engine: event store, sessions, wire handlers, signature verification
-- **`relay/client`** — Relay client: WebSocket connect/subscribe/read, and higher-level clients like `NWCClient` (NIP-47)
-- **`relay/migrations`** — Embedded key-value store schema migrations used internally by `relay`
-- **`search`** — Profile search indexing/ranking, used by `relay` for profile scoring
-- **`config`** — Embedded YAML config for the search subsystem: profile scoring, NIP-05/LUD-16 verification bonuses, search-engine and cache tuning
-- **`wire`** — Relay wire-protocol packet types (EVENT, REQ, EOSE, OK, NOTICE, AUTH)
-- **`utils`** — Event/tag validation, NIP-05/LUD-16 helpers, key management, logging, and LNURL helpers shared across packages
+- **`relay`** — Embeddable relay engine
+- **`relay/client`** — Relay client (WebSocket, NWC)
+- **`relay/migrations`** — Event store schema migrations
+- **`search`** — Profile search indexing/ranking
+- **`config`** — Embedded YAML config for search
+- **`wire`** — Relay wire-protocol packet types
+- **`utils`** — Shared event/key/logging helpers
 
-Each NIP package that has relay-side concerns (NIP-47/48/57/65/88/90/B0/B7) is
-a dependency-free leaf on its own — a client that only builds/parses those
-NIPs' events never pulls in `relay`'s bbolt/WebSocket dependencies. Declaring
-one of these NIPs' support and event validation to a running relay is a
-separate, explicit step: blank-import that NIP's `relayreg` subpackage, e.g.
-`import _ "github.com/ohstr/nmilat/nip57/relayreg"`. See "Run a relay" below.
+NIP packages with relay-side concerns (NIP-47/48/57/65/88/90/B0/B7) stay
+dependency-free on their own; blank-import their `relayreg` subpackage to
+declare relay support, e.g. `import _ "github.com/ohstr/nmilat/nip57/relayreg"`.
+See "Run a relay" below.
 
 ## Quick start
 
@@ -91,8 +92,8 @@ import (
 	// should declare support for and auto-validate incoming events against.
 	// Without these, relay.New still works — it just won't know about
 	// zaps/polls/DVMs/etc. NIP-09/16/33/40/77 are always on (core to NIP-01
-	// handling), and NIP-42/26/50 turn on automatically from SessionConfig —
-	// none of those need a relayreg import.
+	// handling), and NIP-42/43/AA/26/50 turn on automatically from
+	// SessionConfig — none of those need a relayreg import.
 	_ "github.com/ohstr/nmilat/nip57/relayreg"
 	_ "github.com/ohstr/nmilat/nip65/relayreg"
 )
