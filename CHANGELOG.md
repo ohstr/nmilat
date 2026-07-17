@@ -5,6 +5,42 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.3]
+
+### Added
+- NIP-43 relay group membership: join/leave/invite request handling,
+  role-gated admin plumbing (member listing, invite issuance/deletion),
+  and a `membership_required` access gate enforced per-signer on
+  REQ/EVENT/COUNT.
+- `nipOA` — NIP-OA Owner Attestation: parsing and BIP-340 signature
+  verification of the "auth" tag's owner/conditions/sig format, tested
+  against the spec's official vectors.
+- `nipAA` — NIP-AA Agent Auth: virtual membership for agent keys,
+  granted at AUTH time via the spec's 6-step verification (freshness
+  window, credential evaluation, owner-membership check), plus
+  optional per-event `kind=` enforcement.
+- Multi-identity `Session` model: a connection can hold more than one
+  independently-authenticated pubkey (e.g. a human key plus one or
+  more agent keys), each with its own resolved membership status.
+- `relay.RegisterLetteredNIP` and `nip11.NIPID`/`NIP()`/`NIPLetter()`
+  for declaring letter-suffixed NIPs (NIP-B0, NIP-B7) alongside
+  numbered ones.
+
+### Fixed
+- `supported_nips` in the NIP-11 document no longer hex-coerces
+  lettered NIPs (NIP-B0, NIP-B7) into meaningless integers — they now
+  serialize as their literal string ID.
+- `EventStore.Close` waits out in-flight tasks instead of racing
+  `db.Close` against them.
+- NIP-42 AUTH's `relay` tag is checked against the configured relay
+  URL instead of the event's own tag.
+- NIP-13 PoW min/strict thresholds are read from `nip11.Limitation` as
+  the single source of truth.
+- NIP-50 search handler replies cleanly when search is disabled
+  instead of silently returning empty results.
+- Relay client reader honors context cancellation instead of hanging
+  until the socket is force-closed.
+
 ## [0.2.2]
 
 Initial public release.
