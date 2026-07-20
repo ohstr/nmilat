@@ -1,9 +1,12 @@
 # Changelog
 
-All notable changes to this project are documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/).
+## [0.2.4]
+
+### Removed
+- `nip11.DelegationConfig` — a dead, unused duplicate of `relay.DelegationConfig`
+  (the type actually wired up for NIP-26 delegation) that never had any
+  callers.
 
 ## [0.2.3]
 

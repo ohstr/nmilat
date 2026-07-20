@@ -131,12 +131,11 @@ type Metadata struct {
 	Version       string     `mapstructure:"version" json:"version"`
 	Limitation    Limitation `mapstructure:"limitation" json:"limitation"`
 
-	// Operational fields, config-only. json:"-" makes it a type-level
-	// guarantee that these never reach the wire, rather than relying on
-	// every caller that marshals a Metadata value to remember to blank
-	// them first (see NewHandler, which used to do exactly that).
-	PrivKey    string            `mapstructure:"privkey" json:"-"`
-	Delegation *DelegationConfig `mapstructure:"delegation" json:"-"`
+	// PrivKey is operational, config-only. json:"-" makes it a type-level
+	// guarantee that it never reaches the wire, rather than relying on
+	// every caller that marshals a Metadata value to remember to blank it
+	// first (see NewHandler, which used to do exactly that).
+	PrivKey string `mapstructure:"privkey" json:"-"`
 
 	// URL is this relay's own canonical address, used to validate the
 	// "relay" tag on incoming NIP-42 AUTH events. Not part of the NIP-11
@@ -162,12 +161,6 @@ type Metadata struct {
 	// from the NIP-11 document entirely when unset, matching the field's
 	// own MAY/optional status.
 	Self string `mapstructure:"-" json:"self,omitempty"`
-}
-
-type DelegationConfig struct {
-	Issuer     string `mapstructure:"issuer" json:"issuer"`
-	Conditions string `mapstructure:"conditions" json:"conditions"`
-	Token      string `mapstructure:"token" json:"token"`
 }
 
 type Limitation struct {
@@ -220,9 +213,9 @@ type Limitation struct {
 }
 
 func NewHandler(md *Metadata, supported NIPSet) http.Handler {
-	// PrivKey/Delegation are excluded from the marshaled output regardless
-	// (json:"-" on Metadata) - this copy only needs to override
-	// SupportedNips with the derived set rather than whatever md carries.
+	// PrivKey is excluded from the marshaled output regardless (json:"-"
+	// on Metadata) - this copy only needs to override SupportedNips with
+	// the derived set rather than whatever md carries.
 	publicMd := *md
 	publicMd.SupportedNips = supported.Slice()
 

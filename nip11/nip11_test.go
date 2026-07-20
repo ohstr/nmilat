@@ -68,11 +68,6 @@ func TestNewHandler_NeverLeaksPrivateFields(t *testing.T) {
 		Name:    "Test Relay",
 		PubKey:  "test-pubkey",
 		PrivKey: "super-secret-private-key",
-		Delegation: &DelegationConfig{
-			Issuer:     "issuer-pubkey",
-			Conditions: "kind=1",
-			Token:      "secret-delegation-token",
-		},
 	}
 
 	handler := NewHandler(md, NewNIPSet(NIP(1), NIP(11)))
@@ -84,10 +79,8 @@ func TestNewHandler_NeverLeaksPrivateFields(t *testing.T) {
 	body, _ := io.ReadAll(w.Result().Body)
 	bodyStr := string(body)
 
-	for _, secret := range []string{md.PrivKey, md.Delegation.Token} {
-		if contains(bodyStr, secret) {
-			t.Errorf("NewHandler() response leaked a private field.\nBody: %s", bodyStr)
-		}
+	if contains(bodyStr, md.PrivKey) {
+		t.Errorf("NewHandler() response leaked a private field.\nBody: %s", bodyStr)
 	}
 
 	var decoded map[string]any
@@ -96,9 +89,6 @@ func TestNewHandler_NeverLeaksPrivateFields(t *testing.T) {
 	}
 	if _, ok := decoded["privkey"]; ok {
 		t.Error("NewHandler() response contains a \"privkey\" key")
-	}
-	if _, ok := decoded["delegation"]; ok {
-		t.Error("NewHandler() response contains a \"delegation\" key")
 	}
 }
 
