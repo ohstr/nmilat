@@ -8,6 +8,18 @@
   (the type actually wired up for NIP-26 delegation) that never had any
   callers.
 
+## [0.2.5]
+
+### Added
+- `nipB7` Blossom media support expanded from server-list discovery alone
+  to the full protocol (BUD-01 through BUD-12): Authorization tokens with
+  a server-side verification check, Blob Descriptor and list types, NIP-94
+  metadata tags, blob reports, pre-flight/payment headers, and the
+  `blossom:` URI scheme.
+- `nipB7/client` — an HTTP client for talking to Blossom servers: upload,
+  download (with multi-server fallback), mirror, list, delete, and report,
+  all streaming and context-aware.
+
 ## [0.2.3]
 
 ### Added

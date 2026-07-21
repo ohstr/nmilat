@@ -1,7 +1,22 @@
-// Package nipB7 implements NIP-B7: Blossom media, letting clients discover
-// a user's preferred Blossom (BUD-01/BUD-03) file servers via a kind:10063
-// event, and locate a file by its SHA-256 hash across those servers when
-// its original URL becomes unavailable.
+// Package nipB7 implements NIP-B7: Blossom media — the Nostr-facing side of
+// the Blossom protocol (github.com/hzrd149/blossom), covering:
+//
+//   - BUD-03: server-list discovery (kind:10063, this file)
+//   - BUD-11: the kind:24242 Authorization token (auth.go), including a
+//     server-side VerifyAuthorization check analogous to nip98's
+//     VerifyAuthHeader
+//   - BUD-02/BUD-12: the Blob Descriptor and list-query types (blob.go)
+//   - BUD-08: NIP-94 file-metadata tag glue (metadata.go)
+//   - BUD-09: blob reports, kind:1984 (report.go)
+//   - BUD-06/BUD-07: pre-flight and payment-required HTTP headers
+//     (headers.go, payment.go)
+//   - BUD-10: the "blossom:<hash>.<ext>" URI scheme (uri.go)
+//
+// This package is a pure protocol library: event/type construction,
+// parsing, and validation, with no outbound HTTP calls of its own — pure
+// clients pay no net/http-dialing cost merely to build or check these
+// types. For an actual HTTP client that talks to Blossom servers using
+// these types, see the nipB7/client subpackage.
 package nipB7
 
 import (

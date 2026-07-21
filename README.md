@@ -56,7 +56,7 @@ go get github.com/ohstr/nmilat
 - **[`nip90`](https://github.com/nostr-protocol/nips/blob/master/90.md)** — Data Vending Machines
 - **[`nipAA`](https://github.com/block/buzz/blob/main/docs/nips/NIP-AA.md)** — Agent Auth
 - **[`nipB0`](https://github.com/nostr-protocol/nips/blob/master/B0.md)** — Web bookmarks
-- **[`nipB7`](https://github.com/nostr-protocol/nips/blob/master/B7.md)** — Blossom media (server list)
+- **[`nipB7`](https://github.com/nostr-protocol/nips/blob/master/B7.md)** — Blossom media ([BUD-01 through BUD-12](https://github.com/hzrd149/blossom)), plus an HTTP client in `nipB7/client`
 - **[`nipOA`](https://github.com/block/buzz/blob/main/docs/nips/NIP-OA.md)** — Owner Attestation
 
 ### Relay engine and infrastructure
@@ -371,6 +371,59 @@ func main() {
 	fmt.Println("paid! preimage:", result.Preimage)
 }
 ```
+
+### Upload a blob to a Blossom server (NIP-B7)
+
+Build a BUD-11 Authorization token scoped to the `upload` verb, then hand it
+to `nipB7/client` to stream the blob to a server and get back its Blob
+Descriptor:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/ohstr/nmilat/nipB7"
+	blossom "github.com/ohstr/nmilat/nipB7/client"
+)
+
+func main() {
+	auth := nipB7.NewAuthorization(nipB7.AuthorizationParams{
+		Verb:       nipB7.VerbUpload,
+		Content:    "Upload blob",
+		Expiration: time.Now().Add(5 * time.Minute),
+	})
+	if err := auth.Sign(privateKeyHex); err != nil {
+		panic(err)
+	}
+
+	c := &blossom.Client{}
+	descriptor, err := c.Upload(context.Background(), "https://blossom.example", blossom.UploadRequest{
+		Body:        strings.NewReader("hello nostr"),
+		Size:        11,
+		ContentType: "text/plain",
+		Auth:        auth,
+	})
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("stored at:", descriptor.URL)
+}
+```
+
+Retrieving a blob is a plain `c.Get(ctx, server, hash, blossom.GetOptions{})`,
+which returns a streamed `*http.Response` (close its `Body` when done); if
+you have a user's kind:10063 server list, `c.GetFromServers` tries each
+server in turn and returns whichever one has the blob — the "file recovery"
+process the server list exists for.
+
+On the server side, `nipB7.VerifyAuthorization(r, nipB7.VerifyParams{Verb: nipB7.VerbUpload})`
+is the BUD-11 analogue of NIP-98's `VerifyAuthHeader`: decode, verify, and
+check an incoming request's Authorization token in one call.
 
 ### Encode & decode entities (NIP-19)
 
