@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.2.5]
+## [0.2.4]
 
 ### Added
 - `nipB7` Blossom media support expanded from server-list discovery alone
@@ -11,8 +11,6 @@
 - `nipB7/client` — an HTTP client for talking to Blossom servers: upload,
   download (with multi-server fallback), mirror, list, delete, and report,
   all streaming and context-aware.
-
-## [0.2.4]
 
 ### Removed
 - `nip11.DelegationConfig` — a dead, unused duplicate of `relay.DelegationConfig`
