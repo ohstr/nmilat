@@ -56,12 +56,7 @@ go get github.com/ohstr/nmilat
 - **[`nip90`](https://github.com/nostr-protocol/nips/blob/master/90.md)** — Data Vending Machines
 - **[`nipAA`](https://github.com/block/buzz/blob/main/docs/nips/NIP-AA.md)** — Agent Auth
 - **[`nipB0`](https://github.com/nostr-protocol/nips/blob/master/B0.md)** — Web bookmarks
-- **[`nipB7`](https://github.com/nostr-protocol/nips/blob/master/B7.md)** — Blossom media: server-list discovery (kind:10063), the
-  kind:24242 Authorization token, Blob Descriptor/list types, blob reports,
-  the `blossom:` URI scheme, and pre-flight/payment headers — covering
-  [BUD-01 through BUD-12](https://github.com/hzrd149/blossom). See
-  `nipB7/client` for an HTTP client that talks to Blossom servers using
-  these types.
+- **[`nipB7`](https://github.com/nostr-protocol/nips/blob/master/B7.md)** — Blossom media ([BUD-01 through BUD-12](https://github.com/hzrd149/blossom)), plus an HTTP client in `nipB7/client`
 - **[`nipOA`](https://github.com/block/buzz/blob/main/docs/nips/NIP-OA.md)** — Owner Attestation
 
 ### Relay engine and infrastructure

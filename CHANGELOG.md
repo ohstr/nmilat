@@ -5,30 +5,17 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [0.2.4]
+## [0.2.5]
 
 ### Added
-- `nipB7` Blossom media support expanded from server-list discovery
-  (BUD-03) alone to the full protocol surface a client or server needs:
-  - BUD-11 `Authorization` (kind:24242) tokens — `NewAuthorization`/
-    `ParseAuthorization`/`ValidateAuthorization`, header encode/decode, and
-    `VerifyAuthorization` as a one-call server-side check (verb, timing,
-    server scope, hash scope), the Blossom analogue of `nip98.VerifyAuthHeader`.
-  - BUD-02/BUD-12 `BlobDescriptor` and `ListQuery` types, with
-    `SortDescending` for the list endpoint's required ordering.
-  - BUD-08 NIP-94 file-metadata tag glue (`NIP94Tags`/`HashFromNIP94Tags`).
-  - BUD-09 blob reports (kind:1984) via `NewReport`/`ParseReport`/
-    `ValidateReport`.
-  - BUD-06/BUD-07 pre-flight (`UploadRequirements`) and payment-required
-    (`PaymentRequest`) header helpers, plus a `WriteError` helper for
-    BUD-01's X-Reason convention.
-  - BUD-10 the `blossom:<hash>.<ext>` URI scheme (`ParseURI`/`URI.String`).
-- `nipB7/client` — a new HTTP client package for talking to Blossom
-  servers: `Get`/`GetFromServers` (streaming, with the BUD-03 multi-server
-  fallback), `Head`, `Upload`/`Media`, `HeadUpload`/`HeadMedia` pre-flight,
-  `Mirror`, `List`, `Delete`, and `Report`, all context-aware and
-  connection-pooled via a shared `*http.Client`. Errors classify as
-  `*client.HTTPError` or, for BUD-07 402 responses, `*client.PaymentRequiredError`.
+- `nipB7` Blossom media support expanded from server-list discovery alone
+  to the full protocol (BUD-01 through BUD-12): Authorization tokens with
+  a server-side verification check, Blob Descriptor and list types, NIP-94
+  metadata tags, blob reports, pre-flight/payment headers, and the
+  `blossom:` URI scheme.
+- `nipB7/client` — an HTTP client for talking to Blossom servers: upload,
+  download (with multi-server fallback), mirror, list, delete, and report,
+  all streaming and context-aware.
 
 ## [0.2.3]
 
