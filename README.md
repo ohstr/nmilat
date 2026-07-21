@@ -415,15 +415,9 @@ func main() {
 }
 ```
 
-Retrieving a blob is a plain `c.Get(ctx, server, hash, blossom.GetOptions{})`,
-which returns a streamed `*http.Response` (close its `Body` when done); if
-you have a user's kind:10063 server list, `c.GetFromServers` tries each
-server in turn and returns whichever one has the blob — the "file recovery"
-process the server list exists for.
-
-On the server side, `nipB7.VerifyAuthorization(r, nipB7.VerifyParams{Verb: nipB7.VerbUpload})`
-is the BUD-11 analogue of NIP-98's `VerifyAuthHeader`: decode, verify, and
-check an incoming request's Authorization token in one call.
+`c.Get`/`c.GetFromServers` download the same way (streamed, with
+server-list fallback), and `nipB7.VerifyAuthorization` is the server-side,
+BUD-11 analogue of NIP-98's `VerifyAuthHeader`.
 
 ### Encode & decode entities (NIP-19)
 
