@@ -56,7 +56,7 @@ go get github.com/ohstr/nmilat
 - **[`nip90`](https://github.com/nostr-protocol/nips/blob/master/90.md)** — Data Vending Machines
 - **[`nipAA`](https://github.com/block/buzz/blob/main/docs/nips/NIP-AA.md)** — Agent Auth
 - **[`nipB0`](https://github.com/nostr-protocol/nips/blob/master/B0.md)** — Web bookmarks
-- **[`nipB7`](https://github.com/nostr-protocol/nips/blob/master/B7.md)** — Blossom media ([BUD-01 through BUD-12](https://github.com/hzrd149/blossom)), plus an HTTP client in `nipB7/client`
+- **[`nipB7`](https://github.com/nostr-protocol/nips/blob/master/B7.md)** — Blossom media
 - **[`nipOA`](https://github.com/block/buzz/blob/main/docs/nips/NIP-OA.md)** — Owner Attestation
 
 ### Relay engine and infrastructure
