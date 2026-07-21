@@ -1,13 +1,5 @@
 # Changelog
 
-
-## [0.2.4]
-
-### Removed
-- `nip11.DelegationConfig` — a dead, unused duplicate of `relay.DelegationConfig`
-  (the type actually wired up for NIP-26 delegation) that never had any
-  callers.
-
 ## [0.2.5]
 
 ### Added
@@ -19,6 +11,13 @@
 - `nipB7/client` — an HTTP client for talking to Blossom servers: upload,
   download (with multi-server fallback), mirror, list, delete, and report,
   all streaming and context-aware.
+
+## [0.2.4]
+
+### Removed
+- `nip11.DelegationConfig` — a dead, unused duplicate of `relay.DelegationConfig`
+  (the type actually wired up for NIP-26 delegation) that never had any
+  callers.
 
 ## [0.2.3]
 
