@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.5]
+
+### Fixed
+
+- `relay/client.Connection`'s read/write/ping loops could leak a goroutine
+  forever, blocked sending on `Connection.errors`, if nobody was actively
+  reading `Errors()` at the exact moment a read/write error arrived --
+  exactly what tends to happen during ordinary shutdown, when a caller
+  cancels its context and stops its own error-consuming loop just before
+  the connection notices the now-dead socket. Every other channel
+  operation in `connection.go` already escaped via `closeCh`/`ctx.Done()`
+  when nobody was listening; the `errors <-` sends now do too.
+
 ## [0.2.4]
 
 ### Added
