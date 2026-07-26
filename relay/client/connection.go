@@ -180,8 +180,12 @@ func (c *Connection) handle(parent context.Context) {
 				c.conn.SetWriteDeadline(time.Now().Add(c.config.WriteTimeout))
 
 				if err := c.conn.WriteJSON(p); err != nil {
-					c.errors <- fmt.Errorf("write: %w", err)
 					c.writeMu.Unlock()
+					select {
+					case c.errors <- fmt.Errorf("write: %w", err):
+					case <-c.closeCh:
+					case <-ctx.Done():
+					}
 					return
 				}
 				c.writeMu.Unlock()
@@ -201,16 +205,28 @@ func (c *Connection) handle(parent context.Context) {
 			isPacketErr := wire.IsPacketError(err)
 			switch {
 			case isPacketErr:
-				c.errors <- err
+				select {
+				case c.errors <- err:
+				case <-c.closeCh:
+				case <-ctx.Done():
+				}
 			case websocket.IsCloseError(err,
 				websocket.CloseAbnormalClosure,
 				websocket.CloseNormalClosure,
 				websocket.CloseGoingAway,
 				websocket.CloseNoStatusReceived):
-				c.errors <- ErrConnectionClosed
+				select {
+				case c.errors <- ErrConnectionClosed:
+				case <-c.closeCh:
+				case <-ctx.Done():
+				}
 				return
 			default:
-				c.errors <- fmt.Errorf("read: %w", err)
+				select {
+				case c.errors <- fmt.Errorf("read: %w", err):
+				case <-c.closeCh:
+				case <-ctx.Done():
+				}
 				return
 			}
 		} else {
@@ -240,7 +256,10 @@ func (c *Connection) pingLoop() {
 			c.conn.SetWriteDeadline(time.Now().Add(c.config.WriteTimeout))
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				c.writeMu.Unlock()
-				c.errors <- fmt.Errorf("ping: %w", err)
+				select {
+				case c.errors <- fmt.Errorf("ping: %w", err):
+				case <-c.closeCh:
+				}
 				return
 			}
 			c.writeMu.Unlock()
