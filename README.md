@@ -8,7 +8,7 @@
 ![Go](https://img.shields.io/badge/Go-%2300ADD8.svg?style=flat&logo=go&logoColor=white)
 
 nmilat is a Go SDK for building on the Nostr protocol. It handles the plumbing —
-event parsing, signing, verification, and 31 NIPs — so you can focus on what
+event parsing, signing, verification, and 32 NIPs — so you can focus on what
 you're building.
 
 Use it to:
@@ -49,12 +49,13 @@ go get github.com/ohstr/nmilat
 - **[`nip46`](https://github.com/nostr-protocol/nips/blob/master/46.md)** — Nostr Connect (remote signing)
 - **[`nip47`](https://github.com/nostr-protocol/nips/blob/master/47.md)** — Wallet Connect (NWC): info/request/response/notification events, encryption negotiation, pairing URI
 - **[`nip48`](https://github.com/nostr-protocol/nips/blob/master/48.md)** — Proxy tags
-- **[`nip57`](https://github.com/nostr-protocol/nips/blob/master/57.md)** — Lightning zaps, plus **AltZap** (see below)
+- **[`nip57`](https://github.com/nostr-protocol/nips/blob/master/57.md)** — Lightning zaps
 - **[`nip65`](https://github.com/nostr-protocol/nips/blob/master/65.md)** — Relay list metadata
 - **[`nip77`](https://github.com/nostr-protocol/nips/blob/master/77.md)** — Negentropy sync
 - **[`nip88`](https://github.com/nostr-protocol/nips/blob/master/88.md)** — Polls
 - **[`nip90`](https://github.com/nostr-protocol/nips/blob/master/90.md)** — Data Vending Machines
 - **[`nipAA`](https://github.com/block/buzz/blob/main/docs/nips/NIP-AA.md)** — Agent Auth
+- **`nipAZ`** — AltZap: NIP-57 extension for zapping across L1 chains beyond Bitcoin (a mandatory `chain` tag and its own kinds, 5520-5523)
 - **[`nipB0`](https://github.com/nostr-protocol/nips/blob/master/B0.md)** — Web bookmarks
 - **[`nipB7`](https://github.com/nostr-protocol/nips/blob/master/B7.md)** — Blossom media
 - **[`nipOA`](https://github.com/block/buzz/blob/main/docs/nips/NIP-OA.md)** — Owner Attestation
@@ -284,7 +285,7 @@ func main() {
 }
 ```
 
-### Send an AltZap request (NIP-57 extension)
+### Send an AltZap request (NIP-AZ)
 
 **AltZap** is the same flow for non-Bitcoin chains — a mandatory `chain` tag
 and its own kinds (5520-5523):
@@ -297,12 +298,12 @@ import (
 	"fmt"
 	"net/url"
 
-	"github.com/ohstr/nmilat/nip57"
+	"github.com/ohstr/nmilat/nipAZ"
 	relayclient "github.com/ohstr/nmilat/relay/client"
 )
 
 func main() {
-	zapRequest := nip57.NewAltZapRequest(nip57.AltZapRequestParams{
+	zapRequest := nipAZ.NewAltZapRequest(nipAZ.AltZapRequestParams{
 		Chain:       "flokicoin", // prevents cross-chain replay
 		Recipient:   recipientPubKeyHex,
 		Lnurl:       recipientLnurl,
