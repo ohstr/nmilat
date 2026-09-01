@@ -55,7 +55,7 @@ go get github.com/ohstr/nmilat
 - **[`nip88`](https://github.com/nostr-protocol/nips/blob/master/88.md)** — Polls
 - **[`nip90`](https://github.com/nostr-protocol/nips/blob/master/90.md)** — Data Vending Machines
 - **[`nipAA`](https://github.com/block/buzz/blob/main/docs/nips/NIP-AA.md)** — Agent Auth
-- **`nipAZ`** — AltZap: NIP-57 extension for zapping across L1 chains beyond Bitcoin (a mandatory `chain` tag and its own kinds, 5520-5523)
+- **`nipAZ`** — AltZap: zaps for energy-backed coins beyond Bitcoin
 - **[`nipB0`](https://github.com/nostr-protocol/nips/blob/master/B0.md)** — Web bookmarks
 - **[`nipB7`](https://github.com/nostr-protocol/nips/blob/master/B7.md)** — Blossom media
 - **[`nipOA`](https://github.com/block/buzz/blob/main/docs/nips/NIP-OA.md)** — Owner Attestation
