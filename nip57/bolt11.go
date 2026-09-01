@@ -10,6 +10,22 @@ import (
 	"github.com/flokiorg/go-flokicoin/chainutil/bech32"
 )
 
+// Invoice represents decoded bolt11 data
+type Invoice struct {
+	AmountMloki     int64
+	DescriptionHash string
+	PaymentHash     string
+}
+
+// DecodeBolt11 decodes a bolt11 invoice string into the amount, payment
+// hash, and description hash NIP-57 needs to cross-check a zap receipt
+// against the invoice it claims to have paid. The default implementation
+// is a minimal, dependency-free BOLT11 parser (see bolt11.go) — swap this
+// var for your own decoder (e.g. one backed by a full Lightning node
+// library) if you need routing hints, the payee node ID, or node-signature
+// verification beyond what nip57 itself requires.
+var DecodeBolt11 = decodeBolt11
+
 // bolt11 tagged-field type values are the bech32-charset index of their
 // conventional letter, e.g. "qpzry9x8gf2tvdw0s3jn54khce6mua7l"[1] == 'p', so
 // payment_hash fields are tagged type 1; index 23 == 'h', so

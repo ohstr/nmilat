@@ -1,7 +1,6 @@
-// Package relayreg declares NIP-57 (Zaps, including the AltZap extension)
-// support to a relay engine. Blank-import it from a relay-embedding binary
-// that wants NIP-57 auto-declared in its NIP-11 document and its event
-// kinds auto-validated:
+// Package relayreg declares NIP-57 (Zaps) support to a relay engine.
+// Blank-import it from a relay-embedding binary that wants NIP-57
+// auto-declared in its NIP-11 document and its event kinds auto-validated:
 //
 //	import _ "github.com/ohstr/nmilat/nip57/relayreg"
 //
@@ -26,18 +25,5 @@ func init() {
 	})
 	relay.RegisterEventValidator(nip57.KindZapReceipt, func(_ context.Context, event *nip01.Event) error {
 		return nip57.ValidateZapReceipt(event)
-	})
-
-	relay.RegisterEventValidator(nip57.KindAltZapRequest, func(_ context.Context, event *nip01.Event) error {
-		return nip57.ValidateAltZapRequest(event, 0)
-	})
-	relay.RegisterEventValidator(nip57.KindAltZapOnBehalfRequest, func(_ context.Context, event *nip01.Event) error {
-		return nip57.ValidateAltZapRequest(event, 0)
-	})
-	relay.RegisterEventValidator(nip57.KindAltZapDirectPayment, func(_ context.Context, event *nip01.Event) error {
-		return nip57.ValidateAltZapRequest(event, 0)
-	})
-	relay.RegisterEventValidator(nip57.KindAltZapReceipt, func(_ context.Context, event *nip01.Event) error {
-		return nip57.ValidateAltZapReceipt(event)
 	})
 }
