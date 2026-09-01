@@ -4,34 +4,19 @@
 
 ### Changed
 
-- **Breaking:** AltZap is now NIP-AZ, its own lettered NIP, instead of a
-  second flavor bolted onto the `nip57` package. `nip57.AltZapRequest`,
-  `AltZapReceipt`, `AltZapRequestParams`, `AltZapReceiptParams`,
-  `AltZapDirectPaymentParams`, `KindAltZap*`, and every `New/Parse/ValidateAltZap*`
-  function move to the new `nipAZ` package with identical names — update
-  imports from `github.com/ohstr/nmilat/nip57` to `github.com/ohstr/nmilat/nipAZ`
-  and the qualifier from `nip57.` to `nipAZ.`. `nip57/relayreg` no longer
-  registers the AltZap kinds; blank-import the new `nipAZ/relayreg` instead
-  (it declares NIP-AZ via `relay.RegisterLetteredNIP("AZ")`, the same
-  mechanism already used for NIP-B0/NIP-B7). AltZap's error values that were
-  exclusive to it (`ErrMissingChainTag`, `ErrInvalidZapTag`, etc.) moved
-  alongside it into `nipAZ`; the ones shared with vanilla NIP-57 stay on
-  `nip57.Err*`, and `nipAZ` still calls through to them. `nip57.Invoice` and
-  `nip57.DecodeBolt11` are unaffected — both flows need bolt11 decoding, so
-  it stays put.
+- **Breaking:** AltZap is now its own package, `nipAZ` (NIP-AZ), instead of
+  living inside `nip57`. Update the import to `github.com/ohstr/nmilat/nipAZ`
+  and the qualifier from `nip57.` to `nipAZ.` — names are unchanged
+  (`AltZapRequest`, `NewAltZapReceipt`, etc.). Blank-import `nipAZ/relayreg`
+  instead of relying on `nip57/relayreg` to declare it.
 
 ### Added
 
-- `AltZapReceiptParams` (now in `nipAZ`) gained `ResolvedRecipientPubkey`,
-  `ResolvedSenderPubkey`, `Coordinate`, and `EventID` fields, wired into
-  `NewAltZapReceipt` as the `r`/`R`/`a`/`e` tags respectively. Previously the
-  only way to get those tags onto a receipt was for the caller to hand-build
-  `[]string` tags themselves, since `NewAltZapReceipt` only ever recovered
-  `e`/`a`/`r` from the embedded request's `description` JSON — and the
-  AltZap request format never carries `r`/`R` tags in the first place, so
-  callers whose `p`/`P` identity is a hashed value (not a raw pubkey) had no
-  way to attach the resolved native pubkey to a receipt without bypassing
-  the builder entirely.
+- `AltZapReceiptParams` can now set the receipt's `r`/`R`/`a`/`e` tags
+  directly (`ResolvedRecipientPubkey`, `ResolvedSenderPubkey`, `Coordinate`,
+  `EventID`), for callers whose `p`/`P` identity isn't a raw pubkey.
+
+[PR #2](https://github.com/ohstr/nmilat/pull/2)
 
 ## [0.2.5]
 
