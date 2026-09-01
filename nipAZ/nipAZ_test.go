@@ -363,7 +363,7 @@ func TestNewAltZapReceipt(t *testing.T) {
 			wantAmount: "123456",
 		},
 		{
-			name:       "Invalid nip57.Invoice",
+			name:       "Invalid Invoice",
 			bolt11:     "bad_invoice",
 			desc:       "{}",
 			wantErr:    true,
