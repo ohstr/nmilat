@@ -8,15 +8,13 @@
   living inside `nip57`. Update the import to `github.com/ohstr/nmilat/nipAZ`
   and the qualifier from `nip57.` to `nipAZ.` — names are unchanged
   (`AltZapRequest`, `NewAltZapReceipt`, etc.). Blank-import `nipAZ/relayreg`
-  instead of relying on `nip57/relayreg` to declare it.
+  instead of relying on `nip57/relayreg` to declare it. (#2)
 
 ### Added
 
 - `AltZapReceiptParams` can now set the receipt's `r`/`R`/`a`/`e` tags
   directly (`ResolvedRecipientPubkey`, `ResolvedSenderPubkey`, `Coordinate`,
-  `EventID`), for callers whose `p`/`P` identity isn't a raw pubkey.
-
-[PR #2](https://github.com/ohstr/nmilat/pull/2)
+  `EventID`), for callers whose `p`/`P` identity isn't a raw pubkey. (#2)
 
 ## [0.2.5]
 
