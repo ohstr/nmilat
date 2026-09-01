@@ -114,7 +114,7 @@ func ParseAltZapRequest(event *nip01.Event) (*AltZapRequest, error) {
 			if len(tag) > 2 && tag[2] != "" {
 				zr.Provider = tag[2]
 			} else {
-				zr.Provider = "nostr" // Default per Zap Protocol spec
+				zr.Provider = "nostr" // Default per AltZap convention
 			}
 			pTagCount++
 		case "P":
@@ -122,7 +122,7 @@ func ParseAltZapRequest(event *nip01.Event) (*AltZapRequest, error) {
 			if len(tag) > 2 && tag[2] != "" {
 				zr.SenderProvider = tag[2]
 			} else {
-				zr.SenderProvider = "nostr" // Default per Zap Protocol spec
+				zr.SenderProvider = "nostr" // Default per AltZap convention
 			}
 			PTagCount++
 		case "zap":
@@ -527,14 +527,25 @@ func NewAltZapDirectPaymentRequest(p AltZapDirectPaymentParams) *nip01.Event {
 // AltZapReceiptParams describes an AltZap receipt (kind 5521), issued by the
 // LNURL provider once the invoice is paid. ProviderPubkey and Bolt11 are
 // required; RecipientPubkey is omitted for anonymous kind-5522 receipts.
+//
+// ResolvedRecipientPubkey/ResolvedSenderPubkey/Coordinate/EventID are for
+// callers whose p/P tags carry a non-Nostr identity (e.g. a hashed
+// ConnectionKey rather than a raw pubkey) and need to mirror the resolved
+// native pubkey ("r"/"R" tags) and/or the zapped event/addressable-event
+// coordinate ("e"/"a" tags) onto the receipt directly, independent of
+// whatever the embedded request's Description happens to carry.
 type AltZapReceiptParams struct {
-	Chain           string
-	ProviderPubkey  string
-	RecipientPubkey string
-	SenderPubkey    string
-	Bolt11          string
-	Description     string // JSON of the embedded AltZap request, if any
-	Preimage        *string
+	Chain                   string
+	ProviderPubkey          string
+	RecipientPubkey         string
+	SenderPubkey            string
+	Bolt11                  string
+	Description             string // JSON of the embedded AltZap request, if any
+	Preimage                *string
+	ResolvedRecipientPubkey string // optional "r" tag
+	ResolvedSenderPubkey    string // optional "R" tag
+	Coordinate              string // optional "a" tag
+	EventID                 string // optional "e" tag
 }
 
 // NewAltZapReceipt creates a new AltZap receipt event (kind 5521).
@@ -565,6 +576,22 @@ func NewAltZapReceipt(p AltZapReceiptParams) (*nip01.Event, error) {
 
 	if p.Preimage != nil {
 		tags = append(tags, []string{"preimage", *p.Preimage})
+	}
+
+	if p.ResolvedRecipientPubkey != "" {
+		tags = append(tags, []string{"r", p.ResolvedRecipientPubkey})
+	}
+
+	if p.ResolvedSenderPubkey != "" {
+		tags = append(tags, []string{"R", p.ResolvedSenderPubkey})
+	}
+
+	if p.EventID != "" {
+		tags = append(tags, []string{"e", p.EventID})
+	}
+
+	if p.Coordinate != "" {
+		tags = append(tags, []string{"a", p.Coordinate})
 	}
 
 	// Extract tags from the description request if possible

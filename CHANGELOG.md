@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.6]
+
+### Added
+
+- `nip57.AltZapReceiptParams` gained `ResolvedRecipientPubkey`, `ResolvedSenderPubkey`,
+  `Coordinate`, and `EventID` fields, wired into `NewAltZapReceipt` as the
+  `r`/`R`/`a`/`e` tags respectively. Previously the only way to get those tags
+  onto a receipt was for the caller to hand-build `[]string` tags themselves,
+  since `NewAltZapReceipt` only ever recovered `e`/`a`/`r` from the embedded
+  request's `description` JSON — and the AltZap request format never carries
+  `r`/`R` tags in the first place, so callers whose `p`/`P` identity is a
+  hashed value (not a raw pubkey) had no way to attach the resolved native
+  pubkey to a receipt without bypassing the builder entirely.
+
 ## [0.2.5]
 
 ### Fixed
