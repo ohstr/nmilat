@@ -1,3 +1,10 @@
+// Package nip57 implements the spec-compliant NIP-57 Lightning Zaps
+// request/receipt/LNURL flow (kinds 9734/9735): NewZapRequest,
+// ParseZapRequest, ValidateZapRequest, NewZapReceipt, ParseZapReceipt,
+// ValidateZapReceipt.
+//
+// See github.com/ohstr/nmilat/nipAZ for AltZap, an SDK extension of this
+// same flow for zapping across L1 chains beyond Bitcoin.
 package nip57
 
 import (
@@ -13,41 +20,35 @@ import (
 	"github.com/ohstr/nmilat/utils"
 )
 
-// Failure modes for the New*/Parse*/Validate* functions in this package
-// (both the spec-compliant flow and AltZap), for callers that need to
-// distinguish them (e.g. via errors.Is) rather than match on message text.
+// Failure modes for the New*/Parse*/Validate* functions in this package,
+// for callers that need to distinguish them (e.g. via errors.Is) rather
+// than match on message text. Some of these (documented per-value below)
+// are also used by github.com/ohstr/nmilat/nipAZ, which builds on this
+// package.
 var (
-	ErrWrongKind                 = errors.New("nip57: wrong kind")
-	ErrInvalidRelayURL           = errors.New("nip57: invalid relay url")
-	ErrInvalidRelayScheme        = errors.New("nip57: relay url must use ws or wss scheme")
-	ErrInvalidAmount             = errors.New("nip57: invalid amount tag")
-	ErrInvalidLNURL              = errors.New("nip57: invalid lnurl tag")
-	ErrInvalidEventTag           = errors.New("nip57: invalid e tag")
-	ErrTooManyEventTags          = errors.New("nip57: at most one e tag allowed")
-	ErrInvalidRecipientTag       = errors.New("nip57: invalid p tag")
-	ErrRecipientTagCount         = errors.New("nip57: must have exactly one p tag")
-	ErrInvalidSenderTag          = errors.New("nip57: invalid P tag")
-	ErrTooManySenderTags         = errors.New("nip57: at most one P tag allowed")
-	ErrMissingSenderTag          = errors.New("nip57: missing P tag denoting the true sender")
-	ErrMissingRelaysTag          = errors.New("nip57: missing relays tag")
-	ErrInvalidZapTag             = errors.New("nip57: invalid zap tag")
-	ErrMissingChainTag           = errors.New("nip57: missing chain tag")
-	ErrDirectPaymentHasRecipient = errors.New("nip57: direct-payment request must not have a p tag")
-	ErrMissingBolt11Tag          = errors.New("nip57: missing bolt11 tag")
-	ErrMissingLNURLTag           = errors.New("nip57: missing lnurl tag")
-	ErrMissingPreimageTag        = errors.New("nip57: missing preimage tag")
-	ErrMissingDescriptionTag     = errors.New("nip57: missing description tag")
-	ErrInvalidDescriptionJSON    = errors.New("nip57: invalid description json")
-	ErrInvalidEmbeddedRequest    = errors.New("nip57: invalid embedded zap request")
-	ErrInvalidSignature          = errors.New("nip57: invalid signature")
-	ErrInvalidAmountValue        = errors.New("nip57: amount must be positive")
-	ErrAmountMismatch            = errors.New("nip57: amount mismatch")
-	ErrDescriptionHashMismatch   = errors.New("nip57: description hash mismatch")
-	ErrRecipientMismatch         = errors.New("nip57: recipient mismatch")
-	ErrHashLockMismatch          = errors.New("nip57: bolt11 hash-lock mismatch")
-	ErrBolt11DecodeFailed        = errors.New("nip57: failed to decode bolt11")
-	ErrInvalidInvoiceAmount      = errors.New("nip57: invalid or missing amount in bolt11 invoice")
-	ErrMissingRecipientTag       = errors.New("nip57: missing p tag")
+	ErrWrongKind               = errors.New("nip57: wrong kind")
+	ErrInvalidRelayURL         = errors.New("nip57: invalid relay url")
+	ErrInvalidRelayScheme      = errors.New("nip57: relay url must use ws or wss scheme")
+	ErrInvalidAmount           = errors.New("nip57: invalid amount tag")
+	ErrInvalidLNURL            = errors.New("nip57: invalid lnurl tag")
+	ErrInvalidEventTag         = errors.New("nip57: invalid e tag")
+	ErrTooManyEventTags        = errors.New("nip57: at most one e tag allowed")
+	ErrInvalidRecipientTag     = errors.New("nip57: invalid p tag")
+	ErrRecipientTagCount       = errors.New("nip57: must have exactly one p tag")
+	ErrInvalidSenderTag        = errors.New("nip57: invalid P tag")
+	ErrTooManySenderTags       = errors.New("nip57: at most one P tag allowed")
+	ErrMissingRelaysTag        = errors.New("nip57: missing relays tag")
+	ErrMissingBolt11Tag        = errors.New("nip57: missing bolt11 tag")
+	ErrMissingDescriptionTag   = errors.New("nip57: missing description tag")
+	ErrInvalidDescriptionJSON  = errors.New("nip57: invalid description json")
+	ErrInvalidEmbeddedRequest  = errors.New("nip57: invalid embedded zap request")
+	ErrInvalidSignature        = errors.New("nip57: invalid signature")
+	ErrInvalidAmountValue      = errors.New("nip57: amount must be positive")
+	ErrAmountMismatch          = errors.New("nip57: amount mismatch")
+	ErrDescriptionHashMismatch = errors.New("nip57: description hash mismatch")
+	ErrRecipientMismatch       = errors.New("nip57: recipient mismatch")
+	ErrBolt11DecodeFailed      = errors.New("nip57: failed to decode bolt11")
+	ErrMissingRecipientTag     = errors.New("nip57: missing p tag")
 )
 
 const (

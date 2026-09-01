@@ -1,4 +1,4 @@
-package nip57
+package nipAZ
 
 import (
 	"encoding/json"
@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ohstr/nmilat/nip01"
+	"github.com/ohstr/nmilat/nip57"
 )
 
 // Mock helpers
@@ -334,15 +335,15 @@ func TestParseAltZapReceipt(t *testing.T) {
 }
 
 func TestNewAltZapReceipt(t *testing.T) {
-	// Mock DecodeBolt11
-	originalDecode := DecodeBolt11
-	defer func() { DecodeBolt11 = originalDecode }()
+	// Mock nip57.DecodeBolt11
+	originalDecode := nip57.DecodeBolt11
+	defer func() { nip57.DecodeBolt11 = originalDecode }()
 
-	DecodeBolt11 = func(bolt11 string) (*Invoice, error) {
+	nip57.DecodeBolt11 = func(bolt11 string) (*nip57.Invoice, error) {
 		if bolt11 == "bad_invoice" {
 			return nil, fmt.Errorf("decode failed")
 		}
-		return &Invoice{
+		return &nip57.Invoice{
 			AmountMloki: 123456,
 		}, nil
 	}
