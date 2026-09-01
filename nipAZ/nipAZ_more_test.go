@@ -1,4 +1,4 @@
-package nip57
+package nipAZ
 
 import (
 	"crypto/sha256"
@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/ohstr/nmilat/nip01"
+	"github.com/ohstr/nmilat/nip57"
 )
 
 const zapsTestPrivKey = "0acd12cbf0fb87cd13b17bc9b57dffd11b3870b407984cec5a4ce2a69b90268c"
@@ -82,24 +83,24 @@ func TestValidateAltZapRequest_DirectPaymentHashLock(t *testing.T) {
 	descHash := sha256.Sum256(eventJSON)
 	descHashHex := hex.EncodeToString(descHash[:])
 
-	originalDecode := DecodeBolt11
-	defer func() { DecodeBolt11 = originalDecode }()
-	DecodeBolt11 = func(bolt11 string) (*Invoice, error) {
-		return &Invoice{AmountMloki: 1000, DescriptionHash: descHashHex}, nil
+	originalDecode := nip57.DecodeBolt11
+	defer func() { nip57.DecodeBolt11 = originalDecode }()
+	nip57.DecodeBolt11 = func(bolt11 string) (*nip57.Invoice, error) {
+		return &nip57.Invoice{AmountMloki: 1000, DescriptionHash: descHashHex}, nil
 	}
 
 	if err := ValidateAltZapRequest(ev, 0); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	DecodeBolt11 = func(bolt11 string) (*Invoice, error) {
-		return &Invoice{AmountMloki: 1000, DescriptionHash: "wrong-hash"}, nil
+	nip57.DecodeBolt11 = func(bolt11 string) (*nip57.Invoice, error) {
+		return &nip57.Invoice{AmountMloki: 1000, DescriptionHash: "wrong-hash"}, nil
 	}
 	if err := ValidateAltZapRequest(ev, 0); err == nil {
 		t.Fatal("expected hash-lock failure error")
 	}
 
-	DecodeBolt11 = func(bolt11 string) (*Invoice, error) {
+	nip57.DecodeBolt11 = func(bolt11 string) (*nip57.Invoice, error) {
 		return nil, fmt.Errorf("decode failed")
 	}
 	if err := ValidateAltZapRequest(ev, 0); err == nil {
@@ -195,10 +196,10 @@ func TestNewAltZapDirectPaymentRequest(t *testing.T) {
 }
 
 func TestNewAltZapReceipt_ExtractsTagsFromDescription(t *testing.T) {
-	originalDecode := DecodeBolt11
-	defer func() { DecodeBolt11 = originalDecode }()
-	DecodeBolt11 = func(bolt11 string) (*Invoice, error) {
-		return &Invoice{AmountMloki: 1000}, nil
+	originalDecode := nip57.DecodeBolt11
+	defer func() { nip57.DecodeBolt11 = originalDecode }()
+	nip57.DecodeBolt11 = func(bolt11 string) (*nip57.Invoice, error) {
+		return &nip57.Invoice{AmountMloki: 1000}, nil
 	}
 
 	reqEvent := signedZapRequestEvent(t, KindAltZapRequest, nil)
@@ -249,18 +250,18 @@ func TestValidateAltZapReceipt_DirectPayment(t *testing.T) {
 		t.Fatalf("failed to sign event: %v", err)
 	}
 
-	originalDecode := DecodeBolt11
-	defer func() { DecodeBolt11 = originalDecode }()
-	DecodeBolt11 = func(bolt11 string) (*Invoice, error) {
-		return &Invoice{AmountMloki: 1000}, nil
+	originalDecode := nip57.DecodeBolt11
+	defer func() { nip57.DecodeBolt11 = originalDecode }()
+	nip57.DecodeBolt11 = func(bolt11 string) (*nip57.Invoice, error) {
+		return &nip57.Invoice{AmountMloki: 1000}, nil
 	}
 
 	if err := ValidateAltZapReceipt(ev); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	DecodeBolt11 = func(bolt11 string) (*Invoice, error) {
-		return &Invoice{AmountMloki: 0}, nil
+	nip57.DecodeBolt11 = func(bolt11 string) (*nip57.Invoice, error) {
+		return &nip57.Invoice{AmountMloki: 0}, nil
 	}
 	if err := ValidateAltZapReceipt(ev); err == nil {
 		t.Fatal("expected error for zero/invalid invoice amount on a direct payment receipt")
@@ -292,10 +293,10 @@ func TestValidateAltZapReceipt_WithEmbeddedRequest(t *testing.T) {
 		t.Fatalf("failed to sign receipt: %v", err)
 	}
 
-	originalDecode := DecodeBolt11
-	defer func() { DecodeBolt11 = originalDecode }()
-	DecodeBolt11 = func(bolt11 string) (*Invoice, error) {
-		return &Invoice{AmountMloki: 1000, DescriptionHash: descHashHex}, nil
+	originalDecode := nip57.DecodeBolt11
+	defer func() { nip57.DecodeBolt11 = originalDecode }()
+	nip57.DecodeBolt11 = func(bolt11 string) (*nip57.Invoice, error) {
+		return &nip57.Invoice{AmountMloki: 1000, DescriptionHash: descHashHex}, nil
 	}
 
 	if err := ValidateAltZapReceipt(receipt); err != nil {
@@ -303,16 +304,16 @@ func TestValidateAltZapReceipt_WithEmbeddedRequest(t *testing.T) {
 	}
 
 	// Amount mismatch between invoice and the embedded request.
-	DecodeBolt11 = func(bolt11 string) (*Invoice, error) {
-		return &Invoice{AmountMloki: 42, DescriptionHash: descHashHex}, nil
+	nip57.DecodeBolt11 = func(bolt11 string) (*nip57.Invoice, error) {
+		return &nip57.Invoice{AmountMloki: 42, DescriptionHash: descHashHex}, nil
 	}
 	if err := ValidateAltZapReceipt(receipt); err == nil {
 		t.Fatal("expected amount mismatch error")
 	}
 
 	// Description hash mismatch.
-	DecodeBolt11 = func(bolt11 string) (*Invoice, error) {
-		return &Invoice{AmountMloki: 1000, DescriptionHash: "wrong"}, nil
+	nip57.DecodeBolt11 = func(bolt11 string) (*nip57.Invoice, error) {
+		return &nip57.Invoice{AmountMloki: 1000, DescriptionHash: "wrong"}, nil
 	}
 	if err := ValidateAltZapReceipt(receipt); err == nil {
 		t.Fatal("expected description hash mismatch error")

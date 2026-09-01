@@ -6,9 +6,26 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/ohstr/nmilat/nip01"
 )
+
+const zapsTestPrivKey = "0acd12cbf0fb87cd13b17bc9b57dffd11b3870b407984cec5a4ce2a69b90268c"
+
+// mockEvent builds a minimally-populated, unsigned event for structural
+// (Parse*) tests that don't need a valid signature.
+func mockEvent(kind int, tags [][]string, content string) *nip01.Event {
+	return &nip01.Event{
+		Kind:      kind,
+		Tags:      tags,
+		Content:   content,
+		CreatedAt: uint64(time.Now().Unix()),
+		PubKey:    "pubkey",
+		ID:        "mock-id",
+		Sig:       "mock-sig",
+	}
+}
 
 func TestParseZapRequest(t *testing.T) {
 	validPubkey := "0000000000000000000000000000000000000000000000000000000000000001"
@@ -42,7 +59,7 @@ func TestParseZapRequest(t *testing.T) {
 		},
 		{
 			name: "Invalid kind",
-			event: mockEvent(KindAltZapRequest, [][]string{
+			event: mockEvent(KindZapReceipt, [][]string{
 				{"relays", "wss://relay.com"},
 				{"p", validPubkey},
 			}, ""),
