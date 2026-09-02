@@ -140,7 +140,7 @@ func parseZapEvent(event *nip01.Event) (uint64, string, error) {
 	// 1. Extract Receiver: collect p[1]/p[2] and r[1] in one pass.
 	// p[1] may be a Nostr pubkey or a ConnectionKey (both are valid 64-hex).
 	// p[2] is the provider ("nostr", "discord", "telegram", …); absent means "nostr".
-	// r[1] is the resolved Nostr pubkey when p[1] is a ConnectionKey (LIDP-linked).
+	// r[1] is the resolved Nostr pubkey when p[1] is a ConnectionKey (web-identity-linked).
 	var pVal, pProvider, rVal string
 	for _, tag := range event.Tags {
 		if len(tag) < 2 {
@@ -168,14 +168,14 @@ func parseZapEvent(event *nip01.Event) (uint64, string, error) {
 	var receiver string
 	switch {
 	case utils.Validate32Key(rVal) == nil:
-		// r tag present and valid → use resolved Nostr pubkey (LIDP-linked, with or without p[2])
+		// r tag present and valid → use resolved Nostr pubkey (web-identity-linked, with or without p[2])
 		receiver = rVal
 	case pProvider == "" || pProvider == "nostr":
-		// no r tag, no LIDP marker → p[1] is a pure Nostr pubkey
+		// no r tag, no web identity marker → p[1] is a pure Nostr pubkey
 		receiver = pVal
 	default:
-		// LIDP (Lightning Identity/Address Provider) recipient with no resolved
-		// Nostr pubkey in the "r" tag → exclude from leaderboard, since there's no
+		// Web Identity (non-Nostr platform) recipient with no resolved Nostr
+		// pubkey in the "r" tag → exclude from leaderboard, since there's no
 		// Nostr identity to credit.
 		return 0, "", fmt.Errorf("p tag references a non-nostr provider (%q) but no resolved pubkey was found in an r tag", pProvider)
 	}

@@ -56,9 +56,9 @@ type AltZapRequest struct {
 	ATag           string // a tag coordinate
 	KTag           string // k tag kind limit
 	Author         string // p tag (recipient pubkey or hash)
-	Provider       string // p tag (recipient lidp name)
+	Provider       string // p tag (recipient web identity platform name)
 	Sender         string // P tag (sender pubkey or hash)
-	SenderProvider string // P tag (sender lidp name)
+	SenderProvider string // P tag (sender web identity platform name)
 }
 
 // ParseAltZapRequest parses and validates an AltZap request event (kinds
@@ -415,12 +415,12 @@ func ValidateAltZapReceipt(receipt *nip01.Event) error {
 type AltZapRequestParams struct {
 	Chain             string   // e.g. "flokicoin" — prevents cross-chain replay
 	Recipient         string   // recipient pubkey ("p" tag)
-	RecipientProvider string   // optional lidp name for the recipient, e.g. "nostr"
+	RecipientProvider string   // optional web identity platform name for the recipient, e.g. "nostr"
 	Lnurl             string   // recipient's LNURL-pay endpoint
 	AmountMloki       int64    // amount in mloki (milli-loki)
 	Relays            []string // relays the zap receipt should be published to
 	Sender            string   // optional sender pubkey ("P" tag)
-	SenderProvider    string   // optional lidp name for the sender
+	SenderProvider    string   // optional web identity platform name for the sender
 	EventID           *string  // optional zapped event ID ("e" tag)
 }
 
@@ -483,7 +483,7 @@ type AltZapDirectPaymentParams struct {
 	AmountMloki    int64
 	Relays         []string
 	Sender         string // optional sender pubkey ("P" tag)
-	SenderProvider string // optional lidp name for the sender
+	SenderProvider string // optional web identity platform name for the sender
 }
 
 // NewAltZapDirectPaymentRequest creates a new direct-payment AltZap request

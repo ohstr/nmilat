@@ -15,8 +15,8 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-func TestZapCacheLIDPScenarios(t *testing.T) {
-	tmpFile, err := os.CreateTemp("", "nmilat_zap_lidp_test_*.db")
+func TestZapCacheWebIdentityScenarios(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "nmilat_zap_web_identity_test_*.db")
 	require.NoError(t, err)
 	defer os.Remove(tmpFile.Name())
 	tmpFile.Close()
@@ -26,10 +26,10 @@ func TestZapCacheLIDPScenarios(t *testing.T) {
 	defer store.Close()
 
 	const (
-		// ConnectionKeys are SHA256(lidp:userID) — valid 64-hex, not Nostr pubkeys
+		// ConnectionKeys are SHA256(platform:userID) — valid 64-hex, not Nostr pubkeys
 		ConnKeyDiscord  = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 		ConnKeyTelegram = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-		// Resolved Nostr pubkeys for the LIDP-linked users
+		// Resolved Nostr pubkeys for the web-identity-linked users
 		ResolvedDiscord  = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 		ResolvedTelegram = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
 		// A pure Nostr user who also receives a direct zap (same as ResolvedDiscord, to test merging)
@@ -40,7 +40,7 @@ func TestZapCacheLIDPScenarios(t *testing.T) {
 	ts := uint64(now.Add(-1 * time.Hour).Unix())
 
 	events := []*nip01.Event{
-		// 1. LIDP-linked with p[2] set and r tag → indexed under ResolvedDiscord
+		// 1. Web-identity-linked with p[2] set and r tag → indexed under ResolvedDiscord
 		{
 			Kind:      5521,
 			CreatedAt: ts,
@@ -50,7 +50,7 @@ func TestZapCacheLIDPScenarios(t *testing.T) {
 				{"amount", "1000"},
 			},
 		},
-		// 2. LIDP-linked without p[2] but r tag present → indexed under ResolvedTelegram
+		// 2. Web-identity-linked without p[2] but r tag present → indexed under ResolvedTelegram
 		{
 			Kind:      5521,
 			CreatedAt: ts,
@@ -60,7 +60,7 @@ func TestZapCacheLIDPScenarios(t *testing.T) {
 				{"amount", "2000"},
 			},
 		},
-		// 3. LIDP-unlinked: p[2] = "discord", no r tag → NOT indexed
+		// 3. Web-identity-unlinked: p[2] = "discord", no r tag → NOT indexed
 		{
 			Kind:      5521,
 			CreatedAt: ts,
@@ -93,7 +93,7 @@ func TestZapCacheLIDPScenarios(t *testing.T) {
 	count, err := store.ReindexZaps(context.Background(), nil)
 	require.NoError(t, err)
 	// ReindexZaps counts all Kind 5521 events processed (4), regardless of whether
-	// they were stored — LIDP-unlinked zaps are silently skipped by IndexZap.
+	// they were stored — web-identity-unlinked zaps are silently skipped by IndexZap.
 	assert.Equal(t, 4, count)
 
 	until := uint64(now.Unix())
@@ -102,14 +102,14 @@ func TestZapCacheLIDPScenarios(t *testing.T) {
 	require.NoError(t, err)
 
 	// ResolvedTelegram: 2000
-	// NostrUser (=ResolvedDiscord): 1000 (LIDP-linked) + 500 (direct) = 1500
-	require.Len(t, stats, 2, "LIDP-unlinked entry must not appear")
+	// NostrUser (=ResolvedDiscord): 1000 (web-identity-linked) + 500 (direct) = 1500
+	require.Len(t, stats, 2, "web-identity-unlinked entry must not appear")
 
 	assert.Equal(t, ResolvedTelegram, stats[0].Pubkey)
 	assert.Equal(t, uint64(2000), stats[0].TotalMLoki)
 
 	assert.Equal(t, NostrUser, stats[1].Pubkey)
-	assert.Equal(t, uint64(1500), stats[1].TotalMLoki, "LIDP-linked and direct zap amounts must merge")
+	assert.Equal(t, uint64(1500), stats[1].TotalMLoki, "web-identity-linked and direct zap amounts must merge")
 }
 
 func TestZapCacheScenarios(t *testing.T) {
