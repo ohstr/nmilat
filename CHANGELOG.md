@@ -17,12 +17,12 @@
   which is long-lived/reusable by design and would reopen the replay
   surface this proof exists to close on a shared connection). `nipcash/client`
   is the NWC transport built on top, mirroring `nipB7`/`nipB7/client`'s
-  protocol/dial-out split.
+  protocol/dial-out split. (#9)
 - New `nipcw` package (NIP-CW, Circle Wallet): self-service
   `create_circle_wallet` for a host's own node, extended to a group who
   don't run one themselves. Defines kind 23199 (its own per-call identity
   proof, same reasoning as `nipcash.KindClaimProof`). `nipcw/client` is the
-  NWC transport built on top.
+  NWC transport built on top. (#9)
 
 ## [0.2.7]
 
@@ -79,7 +79,7 @@
   event with a self-contradictory PoW claim is tolerated (not treated as
   invalid) unless the relay operator has opted into strict PoW enforcement.
   Previously this fired regardless of any config, since `processEvent`
-  called `Event.Verify()` with no options.
+  called `Event.Verify()` with no options. (#10)
 
 ## [0.2.6]
 
