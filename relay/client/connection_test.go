@@ -46,7 +46,7 @@ func TestConnection_HandleDoesNotLeakWhenErrorsUnread(t *testing.T) {
 			// connection.go's read-loop default case).
 			name: "abrupt close (unrecognized read error)",
 			serverBehavior: func(conn *websocket.Conn) {
-				conn.Close()
+				_ = conn.Close()
 			},
 		},
 		{
@@ -58,8 +58,8 @@ func TestConnection_HandleDoesNotLeakWhenErrorsUnread(t *testing.T) {
 			name: "clean close (recognized close error)",
 			serverBehavior: func(conn *websocket.Conn) {
 				msg := websocket.FormatCloseMessage(websocket.CloseNormalClosure, "")
-				conn.WriteControl(websocket.CloseMessage, msg, time.Now().Add(time.Second))
-				conn.Close()
+				_ = conn.WriteControl(websocket.CloseMessage, msg, time.Now().Add(time.Second))
+				_ = conn.Close()
 			},
 		},
 	}
@@ -135,7 +135,7 @@ func TestConnection_HandleDoesNotLeakOnWriteTimeout(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		// Read (and discard) until the client disconnects, rather than
 		// blocking on r.Context() -- gorilla's Upgrade hijacks the
 		// connection, and a hijacked request's Context() doesn't get
@@ -210,7 +210,7 @@ func TestConnection_ErrorsDeliveredWhenListened(t *testing.T) {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
-		conn.Close()
+		_ = conn.Close()
 	})
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)

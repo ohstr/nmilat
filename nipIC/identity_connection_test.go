@@ -47,7 +47,7 @@ func TestParseIdentityConnection_PlatformPrefixedDTagRejected(t *testing.T) {
 
 func TestParseIdentityConnection_WrongKindRejected(t *testing.T) {
 	evt := signedIdentityConnectionEvent(t, testConnKeyHex)
-	evt.Kind = 1 // text note
+	evt.Kind = 1            // text note
 	evt.Sign(testIAPrivKey) //nolint:errcheck
 	if _, err := ParseIdentityConnection(evt); err == nil {
 		t.Error("expected error for wrong kind")

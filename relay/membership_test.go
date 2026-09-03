@@ -86,7 +86,7 @@ func sendEventAndAwaitOKForSession(t *testing.T, sess *Session, ev *nip01.Event)
 	if err := sess.processEvent(context.Background(), &wire.EventPacket{Event: ev}); err != nil {
 		t.Fatalf("processEvent: %v", err)
 	}
-	reply := <-sess.SessionContext.incoming
+	reply := <-sess.incoming
 	ok, isOk := reply.(*wire.OkSubscriptionResponse)
 	if !isOk {
 		t.Fatalf("reply type = %T, want *wire.OkSubscriptionResponse", reply)

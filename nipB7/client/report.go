@@ -34,7 +34,7 @@ func (c *Client) Report(ctx context.Context, server string, report *nip01.Event)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		return newResponseError(server, resp)

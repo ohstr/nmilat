@@ -55,7 +55,7 @@ func TestClientGetSuccess(t *testing.T) {
 			t.Errorf("path = %q", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "image/png")
-		w.Write([]byte("blobdata"))
+		_, _ = w.Write([]byte("blobdata"))
 	}))
 	defer srv.Close()
 
@@ -64,7 +64,7 @@ func TestClientGetSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(resp.Body)
 	if string(body) != "blobdata" {
@@ -77,7 +77,7 @@ func TestClientGetSendsAuthHeader(t *testing.T) {
 	var gotHeader string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotHeader = r.Header.Get("Authorization")
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	}))
 	defer srv.Close()
 
@@ -86,7 +86,7 @@ func TestClientGetSendsAuthHeader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	decoded, err := nipB7.DecodeAuthHeader(gotHeader)
 	if err != nil {
@@ -110,7 +110,7 @@ func TestClientGetSetsRangeHeader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if gotRange != "bytes=0-99" {
 		t.Errorf("Range header = %q, want bytes=0-99", gotRange)
 	}
@@ -154,7 +154,7 @@ func TestClientGetFromServersFallsBackOnFailure(t *testing.T) {
 	}))
 	defer bad.Close()
 	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("found it"))
+		_, _ = w.Write([]byte("found it"))
 	}))
 	defer good.Close()
 
@@ -163,7 +163,7 @@ func TestClientGetFromServersFallsBackOnFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetFromServers() error = %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if used != good.URL {
 		t.Errorf("used = %q, want %q", used, good.URL)
 	}
@@ -206,7 +206,7 @@ func TestClientGetFromServersStopsOnContextCancel(t *testing.T) {
 	defer bad.Close()
 	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		secondServerHit = true
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	}))
 	defer second.Close()
 
@@ -271,7 +271,7 @@ func TestClientUploadSuccess(t *testing.T) {
 		gotContentType = r.Header.Get("Content-Type")
 		gotAuthHeader = r.Header.Get("Authorization")
 		w.WriteHeader(http.StatusCreated)
-		w.Write(validDescriptorJSON(t))
+		_, _ = w.Write(validDescriptorJSON(t))
 	}))
 	defer srv.Close()
 
@@ -316,7 +316,7 @@ func TestClientUploadServerError(t *testing.T) {
 func TestClientUploadMalformedDescriptor(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("not json"))
+		_, _ = w.Write([]byte("not json"))
 	}))
 	defer srv.Close()
 
@@ -330,7 +330,7 @@ func TestClientUploadMalformedDescriptor(t *testing.T) {
 func TestClientUploadInvalidDescriptor(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(nipB7.BlobDescriptor{URL: "", Sha256: testHash, Size: 4, Uploaded: 1})
+		_ = json.NewEncoder(w).Encode(nipB7.BlobDescriptor{URL: "", Sha256: testHash, Size: 4, Uploaded: 1})
 	}))
 	defer srv.Close()
 
@@ -420,7 +420,7 @@ func TestClientMediaSuccess(t *testing.T) {
 			t.Errorf("path = %q, want /media", r.URL.Path)
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write(validDescriptorJSON(t))
+		_, _ = w.Write(validDescriptorJSON(t))
 	}))
 	defer srv.Close()
 
@@ -442,9 +442,9 @@ func TestClientMirrorSuccess(t *testing.T) {
 		if r.URL.Path != "/mirror" {
 			t.Errorf("path = %q", r.URL.Path)
 		}
-		json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
 		w.WriteHeader(http.StatusCreated)
-		w.Write(validDescriptorJSON(t))
+		_, _ = w.Write(validDescriptorJSON(t))
 	}))
 	defer srv.Close()
 
@@ -464,7 +464,7 @@ func TestClientMirrorSuccess(t *testing.T) {
 func TestClientMirrorMalformedDescriptor(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("not json"))
+		_, _ = w.Write([]byte("not json"))
 	}))
 	defer srv.Close()
 
@@ -477,7 +477,7 @@ func TestClientMirrorMalformedDescriptor(t *testing.T) {
 func TestClientMirrorInvalidDescriptor(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(nipB7.BlobDescriptor{URL: "", Sha256: testHash, Size: 4, Uploaded: 1})
+		_ = json.NewEncoder(w).Encode(nipB7.BlobDescriptor{URL: "", Sha256: testHash, Size: 4, Uploaded: 1})
 	}))
 	defer srv.Close()
 
@@ -518,7 +518,7 @@ func TestClientListSuccess(t *testing.T) {
 		if r.URL.Query().Get("limit") != "5" {
 			t.Errorf("limit query = %q", r.URL.Query().Get("limit"))
 		}
-		json.NewEncoder(w).Encode([]nipB7.BlobDescriptor{
+		_ = json.NewEncoder(w).Encode([]nipB7.BlobDescriptor{
 			{URL: "https://blossom.example/" + testHash, Sha256: testHash, Size: 4, Uploaded: 1700000000},
 		})
 	}))
@@ -536,7 +536,7 @@ func TestClientListSuccess(t *testing.T) {
 
 func TestClientListMalformedResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("not json"))
+		_, _ = w.Write([]byte("not json"))
 	}))
 	defer srv.Close()
 
@@ -614,7 +614,7 @@ func TestClientReportSuccess(t *testing.T) {
 		if r.URL.Path != "/report" {
 			t.Errorf("path = %q", r.URL.Path)
 		}
-		json.NewDecoder(r.Body).Decode(&gotEvent)
+		_ = json.NewDecoder(r.Body).Decode(&gotEvent)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
@@ -655,7 +655,7 @@ func TestClientReportError(t *testing.T) {
 
 func TestClientUsesConfiguredHTTPClient(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	}))
 	defer srv.Close()
 
@@ -670,7 +670,7 @@ func TestClientUsesConfiguredHTTPClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if !used {
 		t.Error("expected configured HTTPClient's transport to be used")
 	}

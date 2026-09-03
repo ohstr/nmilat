@@ -13,14 +13,14 @@ func newTestDB(t *testing.T) *bolt.DB {
 	if err != nil {
 		t.Fatalf("failed to create temp file: %v", err)
 	}
-	f.Close()
-	t.Cleanup(func() { os.Remove(f.Name()) })
+	_ = f.Close()
+	t.Cleanup(func() { _ = os.Remove(f.Name()) })
 
 	db, err := bolt.Open(f.Name(), 0600, nil)
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 	return db
 }
 

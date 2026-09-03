@@ -27,7 +27,7 @@ func newFakeRelayServer(t *testing.T, event *nip01.Event) *httptest.Server {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		// Read the client's REQ packet and echo back its subscription ID,
 		// like a real relay would, rather than a hardcoded one — the client
@@ -66,7 +66,7 @@ func newFakeRelayServer(t *testing.T, event *nip01.Event) *httptest.Server {
 		if err != nil {
 			return
 		}
-		conn.WriteMessage(websocket.TextMessage, eoseJSON)
+		_ = conn.WriteMessage(websocket.TextMessage, eoseJSON)
 
 		// Keep the connection open briefly so the client finishes reading
 		// before we tear the server down.
@@ -133,7 +133,7 @@ func newFakeSilentRelayServer(t *testing.T) *httptest.Server {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		if _, _, err := conn.ReadMessage(); err != nil {
 			return
@@ -205,7 +205,7 @@ func newFakeInteractiveRelayServer(t *testing.T, event *nip01.Event) *httptest.S
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		for {
 			_, data, err := conn.ReadMessage()
