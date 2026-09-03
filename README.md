@@ -55,9 +55,10 @@ go get github.com/ohstr/nmilat
 - **[`nip88`](https://github.com/nostr-protocol/nips/blob/master/88.md)** — Polls
 - **[`nip90`](https://github.com/nostr-protocol/nips/blob/master/90.md)** — Data Vending Machines
 - **[`nipAA`](https://github.com/block/buzz/blob/main/docs/nips/NIP-AA.md)** — Agent Auth
-- **[`nipAZ`](https://docs.zapf.app/protocol/zap-request-5520)** — AltZap: zaps for energy-backed coins
+- **[`nipAZ`](https://github.com/ohstr/zapf-nips/blob/main/NIP-AZ.md)** — AltZap: zaps for energy-backed coins
 - **[`nipB0`](https://github.com/nostr-protocol/nips/blob/master/B0.md)** — Web bookmarks
 - **[`nipB7`](https://github.com/nostr-protocol/nips/blob/master/B7.md)** — Blossom media
+- **[`nipIC`](https://github.com/ohstr/zapf-nips/blob/main/NIP-IC.md)** — Identity Connection: binds Web Identity accounts to Nostr pubkeys
 - **[`nipOA`](https://github.com/block/buzz/blob/main/docs/nips/NIP-OA.md)** — Owner Attestation
 
 ### Relay engine and infrastructure
@@ -285,10 +286,13 @@ func main() {
 }
 ```
 
-### Send an AltZap request (NIP-AZ)
+### Send an AltZap request to a Web Identity recipient (NIP-AZ + NIP-IC)
 
 **AltZap** is the same flow for non-Bitcoin chains — a mandatory `chain` tag
-and its own kinds (5520-5523):
+and its own kinds (5520-5523). Its most common use isn't zapping a native
+Nostr pubkey (`nipAZ.Pubkey(hex)`) — it's zapping a recipient who only has an
+account on another platform and no Nostr keypair yet. `nipAZ.Connection`
+covers that case by deriving a **NIP-IC** `ConnectionKey` internally:
 
 ```go
 package main
@@ -303,14 +307,19 @@ import (
 )
 
 func main() {
-	zapRequest := nipAZ.NewAltZapRequest(nipAZ.AltZapRequestParams{
-		Chain:       "flokicoin", // prevents cross-chain replay
-		Recipient:   recipientPubKeyHex,
+	zapRequest, err := nipAZ.NewAltZapRequest(nipAZ.AltZapRequestParams{
+		PrivateKey: senderPrivKeyHex, // signs internally
+		Chain:      "flokicoin",      // prevents cross-chain replay
+		// Recipient has no Nostr pubkey yet — identified by their Discord
+		// account instead. nipAZ.Connection hashes platform+externalID into
+		// a nipIC.ConnectionKey; use nipAZ.Pubkey(hex) for a native Nostr
+		// recipient instead.
+		Recipient:   nipAZ.Connection("discord", externalUserID),
 		Lnurl:       recipientLnurl,
 		AmountMloki: 21000,
 		Relays:      []string{"wss://relay.ohstr.com"},
 	})
-	if err := zapRequest.Sign(senderPrivKeyHex); err != nil {
+	if err != nil {
 		panic(err)
 	}
 
@@ -328,6 +337,59 @@ func main() {
 	fmt.Println("zap request accepted:", res.Accepted, res.Message)
 }
 ```
+
+### Bind a Web Identity to a Nostr pubkey (NIP-IC)
+
+**nipIC** implements Identity Connection: an Identity Authority (IA) attests
+that a Web Identity account (Discord, Telegram, ...) belongs to a Nostr
+pubkey by signing a Kind 35522 event; the user then references it from their
+own Kind 35521.
+
+```go
+package main
+
+import (
+	"fmt"
+
+	"github.com/ohstr/nmilat/nipIC"
+)
+
+func main() {
+	// 1. Mint a challenge + pre-auth code for the user to prove control of
+	//    their Nostr key, e.g. by posting the pre-auth code publicly.
+	challenge, preAuthCode, err := nipIC.NewChallenge(userPubkeyHex)
+	if err != nil {
+		panic(err)
+	}
+
+	// 2. Once the IA has verified the public post, it signs the attestation.
+	connectionKey := nipIC.NewConnectionKey("discord", externalUserID)
+	attestation, err := nipIC.NewAttestation(nipIC.AttestationParams{
+		PrivateKey:     iaPrivKeyHex, // IA's nsec hex, signs internally
+		ConnectionKey:  connectionKey,
+		UserPubkey:     userPubkeyHex,
+		Platform:       "discord",
+		ExpirationDays: 90,
+		Evidence: nipIC.Evidence{
+			Platform:    "discord",
+			UserID:      externalUserID,
+			Username:    "alice",
+			EvidenceURL: "https://discord.com/channels/.../123456789",
+			Challenge:   challenge,
+			PreAuthCode: preAuthCode,
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("attestation id:", attestation.ID)
+}
+```
+
+A verifier re-checks cross-IA re-attestation evidence with
+`challenge.Verify(userPubkeyHex, preAuthCode)` before trusting it — see
+[NIP-IC's Cross-IA Challenge Binding](https://github.com/ohstr/zapf-nips/blob/main/references/identity-connection.md#e--cross-ia-challenge-binding)
+for the full security model.
 
 ### Pay an invoice over Nostr Wallet Connect (NIP-47)
 

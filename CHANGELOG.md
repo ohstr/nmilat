@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.2.7]
+
+### Added
+
+- New `nipIC` package (NIP-IC, Identity Connection): binds Web Identity
+  accounts (Discord, Telegram, ...) to Nostr pubkeys via a signed IA
+  attestation. `NewAttestation`/`ParseAttestation`/`ValidateAttestation` for
+  Kind 35522, `ParseIdentityConnection`/`ValidateIdentityConnection` for Kind
+  35521, `NewChallenge`/`ChallengeToken.Verify` for the npv1 cross-IA
+  challenge binding, and `EncodeNConnection`/`DecodeNConnection` for the
+  `nconnection` bech32 profile-link format.
+
+### Fixed
+
+- **Security:** `nipAZ.NewAltZapReceipt` no longer silently re-derives its
+  `p`/`P` tags by parsing the embedded request's `description` JSON — it now
+  only ever uses `Identity` values the caller explicitly passed, closing a
+  gap where a tampered embedded request could redirect a receipt's
+  attribution.
+- `nipIC.NewChallenge`'s session entropy is now 16 bytes (32 hex chars),
+  matching its real caller (a token posted publicly); it was previously 12
+  hex chars, sized for a short human-typeable pre-auth code that belongs to
+  a different caller entirely.
+
 ## [0.2.6]
 
 ### Changed
