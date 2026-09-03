@@ -363,7 +363,19 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 		return nil
 	}
 
-	if err := ep.Event.Verify(); err != nil {
+	// A nonce tag's declared difficulty is only checked against the event's
+	// actual ID when StrictPow is on -- same gate as the MinPowDifficulty
+	// floor below. Off (the default), a nonce tag that overclaims its
+	// difficulty is tolerated rather than treated as an invalid event: NIP-13
+	// PoW is opt-in per-event, and a relay that hasn't opted into enforcing
+	// it shouldn't reject an event just because its self-reported difficulty
+	// doesn't hold up.
+	var verifyOpts []nip01.VerifyOption
+	if !s.limitation.StrictPow {
+		verifyOpts = append(verifyOpts, nip01.WithoutPowCheck())
+	}
+
+	if err := ep.Event.Verify(verifyOpts...); err != nil {
 
 		s.config.Logger.Error().Err(err).Msgf("failed to verify, ID=%s", ep.Event.ID)
 
