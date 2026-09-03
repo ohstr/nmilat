@@ -58,6 +58,8 @@ go get github.com/ohstr/nmilat
 - **[`nipAZ`](https://github.com/ohstr/zapf-nips/blob/main/NIP-AZ.md)** — AltZap: zaps for energy-backed coins
 - **[`nipB0`](https://github.com/nostr-protocol/nips/blob/master/B0.md)** — Web bookmarks
 - **[`nipB7`](https://github.com/nostr-protocol/nips/blob/master/B7.md)** — Blossom media
+- **[`nipcash`](https://github.com/flokiorg/lokihub/blob/main/docs/nips/NIP-CASH.md)** — Cash Hub: a Chaumian ecash system built directly on NIP-47
+- **[`nipcw`](https://github.com/flokiorg/lokihub/blob/main/docs/nips/NIP-CW.md)** — Circle Wallet: self-service NIP-47 wallets for a group sharing one host's node
 - **[`nipIC`](https://github.com/ohstr/zapf-nips/blob/main/NIP-IC.md)** — Identity Connection: binds Web Identity accounts to Nostr pubkeys
 - **[`nipOA`](https://github.com/block/buzz/blob/main/docs/nips/NIP-OA.md)** — Owner Attestation
 
@@ -432,6 +434,104 @@ func main() {
 		panic(err)
 	}
 	fmt.Println("paid! preimage:", result.Preimage)
+}
+```
+
+### Mint cash and redeem it into a Circle Wallet (NIP-CASH + NIP-CW)
+
+**NIP-CASH** mints `lokicash1...`/`satscash1...` bech32 tokens that carry
+real, spendable value the moment they're minted — hand one to someone the
+way you'd hand over a bill. **NIP-CW** self-serves a personal wallet from a
+host's own node, for people who don't want to run one themselves. The two
+compose naturally: a Circle Wallet member redeeming a cash token straight
+into their own wallet, on the *same host* that minted the cash, is the one
+case where `cash_redeem`'s same-node fee exemption applies deterministically
+— always the full amount, zero fee, since nothing leaves the node. Both
+packages follow the protocol/client split every other NIP here does
+(`nipcash` builds/parses, `nipcash/client` dials out) — imported under an
+alias here since both are used together in the same file:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/ohstr/nmilat/nip47"
+	"github.com/ohstr/nmilat/nipcash"
+	cashclient "github.com/ohstr/nmilat/nipcash/client"
+	"github.com/ohstr/nmilat/nipcw"
+	cwclient "github.com/ohstr/nmilat/nipcw/client"
+	relayclient "github.com/ohstr/nmilat/relay/client"
+)
+
+func main() {
+	ctx := context.Background()
+
+	// Mint a slice for a Nostr-identified recipient, over the Cash Hub's
+	// own connection.
+	hub, err := cashclient.Connect(ctx, cashHubPairingURI)
+	if err != nil {
+		panic(err)
+	}
+	defer hub.Close()
+
+	minted, err := hub.MintCash(ctx, nipcash.MintCashParams{
+		Recipients: []nipcash.Allocation{nipcash.Send(nipcash.Pubkey(memberPubkeyHex), 21_000_000)},
+		Expiry:     24 * time.Hour,
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	// The member self-serves their own Circle Wallet from the host's Hub.
+	circleHub, err := cwclient.Connect(ctx, circleHubPairingURI)
+	if err != nil {
+		panic(err)
+	}
+	defer circleHub.Close()
+
+	wallet, err := circleHub.CreateCircleWallet(ctx, nipcw.CreateCircleWalletParams{
+		Credential:      nipcw.BySigning(memberPrivKeyHex),
+		MaxAmountMillis: 100_000_000,
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	// Invoice from their own Circle Wallet — same host as the Cash Hub, so
+	// this redemption always resolves same-node: full amount, zero fee.
+	memberPairing, err := nip47.ParsePairingURI(wallet.PairingURI)
+	if err != nil {
+		panic(err)
+	}
+	member, err := relayclient.NewNWCClient(ctx, memberPairing, nip47.EncryptionNIP44V2)
+	if err != nil {
+		panic(err)
+	}
+	defer member.Close()
+
+	invoice, err := member.MakeInvoice(ctx, nip47.MakeInvoiceParams{Amount: 21_000_000})
+	if err != nil {
+		panic(err)
+	}
+
+	cashWallet, err := cashclient.Connect(ctx, minted.CashToken)
+	if err != nil {
+		panic(err)
+	}
+	defer cashWallet.Close()
+
+	result, err := cashWallet.CashRedeem(ctx, nipcash.CashRedeemParams{
+		Invoice:    invoice.Invoice,
+		Credential: nipcash.BySigning(memberPrivKeyHex),
+	})
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("redeemed! preimage:", result.Preimage, "fees paid:", result.FeesPaid)
 }
 ```
 
