@@ -32,7 +32,7 @@ func TestPacketFlow(t *testing.T) {
 		Filters:        CreateFilter([]int{}, 100),
 	}
 
-	go sess.ProcessPacket(ctx, req)
+	go func() { _ = sess.ProcessPacket(ctx, req) }()
 
 	for i, ptype := range expectedPackets {
 
@@ -54,7 +54,7 @@ func TestPacketFlow(t *testing.T) {
 					SubscriptionID: req.SubscriptionID,
 				}
 
-				go sess.ProcessPacket(ctx, closePacket)
+				go func() { _ = sess.ProcessPacket(ctx, closePacket) }()
 			}
 
 		case <-time.After(time.Second * 5):
@@ -115,7 +115,7 @@ func TestPacketSubscriptionDuplicated(t *testing.T) {
 				SubscriptionID: "xx-xxxxxxxxxx",
 				Filters:        CreateFilter([]int{2}, 100),
 			}
-			go sess.ProcessPacket(ctx, req)
+			go func() { _ = sess.ProcessPacket(ctx, req) }()
 			time.Sleep(time.Second * 1)
 		}
 
@@ -123,7 +123,7 @@ func TestPacketSubscriptionDuplicated(t *testing.T) {
 			SubscriptionID: "xx-xxxxxxxxxx",
 			Filters:        CreateFilter([]int{1}, 100),
 		}
-		go sess.ProcessPacket(ctx, req)
+		go func() { _ = sess.ProcessPacket(ctx, req) }()
 	}()
 
 	for {
@@ -188,7 +188,7 @@ func processPacketCase(b testing.TB, store *EventStore, test ScanTestCase) {
 		Filters:        filters,
 	}
 
-	go sess.ProcessPacket(ctx, rp)
+	go func() { _ = sess.ProcessPacket(ctx, rp) }()
 
 	var counter int
 
@@ -368,7 +368,7 @@ func TestProcessRequest_SearchFilter(t *testing.T) {
 	}
 
 	// Run process. It should trigger FindProfiles
-	go sess.ProcessPacket(ctx, req)
+	go func() { _ = sess.ProcessPacket(ctx, req) }()
 
 	// Wait for call
 	select {
@@ -400,7 +400,7 @@ func TestProcessRequest_SearchFilter_NoSearchService(t *testing.T) {
 		Filters:        filters,
 	}
 
-	go sess.ProcessPacket(ctx, req)
+	go func() { _ = sess.ProcessPacket(ctx, req) }()
 
 	select {
 	case packet := <-session.incoming:

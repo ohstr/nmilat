@@ -140,7 +140,7 @@ func (w *ProfileVerificationWorker) processJob(job VerificationJob) {
 			if url != "" {
 				req, _ := http.NewRequestWithContext(w.ctx, "GET", url, nil)
 				if resp, err := w.httpClient.Do(req); err == nil {
-					defer resp.Body.Close()
+					defer func() { _ = resp.Body.Close() }()
 					nip05Valid = utils.VerifyNip05(resp.Body, job.Pubkey, job.Nip05)
 				}
 			}
@@ -155,7 +155,7 @@ func (w *ProfileVerificationWorker) processJob(job VerificationJob) {
 			if url != "" {
 				req, _ := http.NewRequestWithContext(w.ctx, "GET", url, nil)
 				if resp, err := w.httpClient.Do(req); err == nil {
-					defer resp.Body.Close()
+					defer func() { _ = resp.Body.Close() }()
 					if resp.StatusCode == http.StatusOK {
 						body, err := io.ReadAll(resp.Body)
 						if err == nil {
@@ -197,7 +197,7 @@ func (w *ProfileVerificationWorker) processJob(job VerificationJob) {
 			defer wg.Done()
 			req, _ := http.NewRequestWithContext(w.ctx, "HEAD", job.Picture, nil)
 			if resp, err := w.httpClient.Do(req); err == nil {
-				defer resp.Body.Close()
+				defer func() { _ = resp.Body.Close() }()
 				pictureValid = resp.StatusCode >= 200 && resp.StatusCode < 400
 			}
 		}()

@@ -213,17 +213,17 @@ func NewSession(id int64, conn *websocket.Conn, sc *SessionContext, maxMessageLe
 	conn.SetReadLimit(maxMessageLength)
 
 	if sc.config.PongTimeout > 0 {
-		conn.SetReadDeadline(time.Now().Add(sc.config.PongTimeout))
+		_ = conn.SetReadDeadline(time.Now().Add(sc.config.PongTimeout))
 	} else {
 		var zero time.Time
-		conn.SetReadDeadline(zero)
+		_ = conn.SetReadDeadline(zero)
 	}
 	conn.SetPongHandler(func(string) error {
 		if sc.config.PongTimeout > 0 {
-			conn.SetReadDeadline(time.Now().Add(sc.config.PongTimeout))
+			_ = conn.SetReadDeadline(time.Now().Add(sc.config.PongTimeout))
 		} else {
 			var zero time.Time
-			conn.SetReadDeadline(zero)
+			_ = conn.SetReadDeadline(zero)
 		}
 		return nil
 	})
@@ -431,10 +431,10 @@ func (s *Session) sendPacket(packet wire.SubscriptionResponse) error {
 	defer s.writeMu.Unlock()
 
 	if s.config.DataWriteTimeout > 0 {
-		s.conn.SetWriteDeadline(time.Now().Add(s.config.DataWriteTimeout))
+		_ = s.conn.SetWriteDeadline(time.Now().Add(s.config.DataWriteTimeout))
 	} else {
 		var zero time.Time
-		s.conn.SetWriteDeadline(zero)
+		_ = s.conn.SetWriteDeadline(zero)
 	}
 
 	packetType := fmt.Sprintf("%T", packet)
@@ -469,7 +469,7 @@ func (s *Session) writeControl(messageType int, data []byte) error {
 	if s.config.ControlWriteTimeout > 0 {
 		deadline = time.Now().Add(s.config.ControlWriteTimeout)
 	}
-	s.conn.SetWriteDeadline(deadline)
+	_ = s.conn.SetWriteDeadline(deadline)
 	if err := s.conn.WriteControl(messageType, data, deadline); err != nil {
 		// Ignore errors if connection is already closed/closing
 		if errors.Is(err, websocket.ErrCloseSent) || errors.Is(err, net.ErrClosed) {
@@ -534,7 +534,7 @@ func (s *Session) Close() {
 			_ = s.awaitPeerClose()
 		}
 		close(s.closeCh)
-		s.conn.Close()
+		_ = s.conn.Close()
 
 		s.negMu.Lock()
 		s.negentropySessions = nil
@@ -664,7 +664,7 @@ func (sh *SessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ws.SetCompressionLevel(flate.BestSpeed)
+	_ = ws.SetCompressionLevel(flate.BestSpeed)
 
 	info := &ClientInfo{
 		RemoteAddr: ws.RemoteAddr().String(),
@@ -813,9 +813,9 @@ func parseOriginURL(origin string) (string, string, string, error) {
 func shouldLogError(err error) bool {
 	var netErr net.Error
 	if errors.As(err, &netErr) {
-		// Only suppress logging for temporary timeouts; everything else (including resets)
+		// Only suppress logging for timeouts; everything else (including resets)
 		// is important for diagnosing client disconnects.
-		return !(netErr.Timeout() && netErr.Temporary())
+		return !netErr.Timeout()
 	}
 	return true
 }

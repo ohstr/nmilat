@@ -33,7 +33,7 @@ func TestSessionRequest(t *testing.T) {
 func processRequestCases(b testing.TB, store *EventStore, test ScanTestCase) {
 
 	conn := createWS(b, store)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	filters := nip01.NewSubscriptionFilterGroup()
 	filters.Add(test.SubscriptionFilter)
