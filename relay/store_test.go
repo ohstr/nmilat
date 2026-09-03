@@ -558,6 +558,39 @@ func createStoreCases() []StoreTestCase {
 			0,
 		},
 		{
+			// case_created_1 (above) only proves live-tail delivery works for
+			// a kind+tag filter when the tag value ALREADY has matching
+			// events at subscribe time (its init seeds 30 before EOSE). This
+			// case mirrors it with init doing nothing at all -- the tag value
+			// has zero matches when the subscription starts, only gaining one
+			// after EOSE, matching NIP-47's real shape: cash_redeem/mint_cash
+			// responses filter on kind + "#e" = <this call's freshly-generated
+			// request event ID>, which by construction has never existed
+			// before. Reproduces a live hang seen against this same relay
+			// package (deployed via `ncli relay`) driving lokihub's NIP-47
+			// nipcash/client: a subscriber's very first request+response
+			// round trip never got its reply delivered.
+			"case_tags_zero_at_subscribe_then_live",
+			func(t *testing.T, store *EventStore) {},
+			func(t *testing.T, store *EventStore) {
+				events := []*nip01.Event{
+					CreateEventWithTimestamp(t, 1, uint64(time.Now().Unix()), []string{"e", "test"}),
+				}
+				InsertTestEvents(t, store, events)
+			},
+			func(filter *nip01.SubscriptionFilterGroup) {
+				f := &nip01.SubscriptionFilter{
+					Kinds: []int{1},
+					Tags:  make(map[string][]string),
+					Limit: 10,
+				}
+				f.Tags["e"] = []string{"test"}
+				filter.Add(f)
+			},
+			0,
+			1,
+		},
+		{
 			"case_kindAuthor_1",
 			initStore_3, onEOSE,
 			func(filter *nip01.SubscriptionFilterGroup) {
