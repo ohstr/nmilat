@@ -70,19 +70,12 @@ func CreateEventsFromKinds(t testing.TB, kinds []int, IDOffset int, tags ...[]st
 	for i, k := range kinds {
 		ev := CreateEvent(t, k, tags...)
 		ev.Content = fmt.Sprintf("content %d %d", i, IDOffset)
-		ev.Sign("0acd12cbf0fb87cd13b17bc9b57dffd11b3870b407984cec5a4ce2a69b90268c")
+		if err := ev.Sign("0acd12cbf0fb87cd13b17bc9b57dffd11b3870b407984cec5a4ce2a69b90268c"); err != nil {
+			t.Fatalf("failed to sign event: %v", err)
+		}
 		events = append(events, ev)
 	}
 	return events
-}
-
-func createSampleEvent(t testing.TB, kind int, tags ...[]string) *nip01.Event {
-	return CreateEvent(t, kind, tags...)
-}
-
-func createLowerIDEvent(t testing.TB, kind int) *nip01.Event {
-	events := CreateEvents(t, 1, kind)
-	return events[0]
 }
 
 func newStore(t testing.TB) *EventStore {
@@ -90,11 +83,11 @@ func newStore(t testing.TB) *EventStore {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.Close()
+	_ = f.Close()
 
 	// Cleanup
 	t.Cleanup(func() {
-		os.Remove(f.Name())
+		_ = os.Remove(f.Name())
 	})
 
 	store, err := NewEventStore(f.Name(), &nip11.Limitation{MaxLimit: 1000}, WithEventStoreLogger(testlogger.New(t)))
@@ -170,6 +163,16 @@ func createWS(t testing.TB, store *EventStore) *websocket.Conn {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Runs before srv.Close() (t.Cleanup is LIFO): gorilla/websocket hijacks
+	// the TCP connection on upgrade, so srv.Close()'s own WaitGroup treats
+	// it as already accounted for the instant it's hijacked and won't wait
+	// for the session's read/write goroutines to actually exit. Without
+	// this, a session from one test can still be running when the next
+	// test starts, racing on whatever memory its next allocation reuses.
+	t.Cleanup(func() {
+		_ = conn.Close()
+		waitForSessionCount(t, handler, 0)
+	})
 	return conn
 }
 

@@ -17,8 +17,8 @@ func newTestRelay(t testing.TB) *Relay {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.Close()
-	t.Cleanup(func() { os.Remove(f.Name()) })
+	_ = f.Close()
+	t.Cleanup(func() { _ = os.Remove(f.Name()) })
 
 	metadata := &nip11.Metadata{
 		Name:       "test-relay",
@@ -29,7 +29,7 @@ func newTestRelay(t testing.TB) *Relay {
 	if err != nil {
 		t.Fatalf("relay.New failed: %v", err)
 	}
-	t.Cleanup(func() { rl.Close() })
+	t.Cleanup(func() { _ = rl.Close() })
 
 	return rl
 }
@@ -49,7 +49,7 @@ func TestNew_ServesNip11Document(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", resp.StatusCode)
@@ -74,5 +74,6 @@ func TestNew_StillUpgradesWebSocket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected websocket upgrade to succeed, got: %v", err)
 	}
-	conn.Close()
+	_ = conn.Close()
+	waitForSessionCount(t, rl.handler, 0)
 }
