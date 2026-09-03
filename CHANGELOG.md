@@ -1,29 +1,5 @@
 # Changelog
 
-## [Unreleased]
-
-### Added
-
-- New `nipcash` package (NIP-CASH, Cash Hub): mint, hold, redeem, transfer,
-  split, and consolidate cash tokens (`lokicash1...`/`satscash1...`) — a
-  Chaumian ecash system built directly on NIP-47. `MintCash`/`CashRedeem`/
-  `CashTransfer`/`CashConsolidate`/`ListRecipients` request/response shapes;
-  `Recipient`/`Credential`/`BearerTarget`/`Source` abstractions (the
-  `pubkey`/`connection_key` cases build on `nipAZ.Identity`/`nipIC`, so no
-  caller ever hand-rolls a `connection_key` hash or an IA-attestation
-  reference); the cash-token TLV codec (`Decode`/`Encode`); mint-provenance
-  verification (`VerifyProvenance`, recoverable ECDSA). Defines kind 23198
-  (its own per-call claim proof — deliberately not NIP-IC's kind 35521,
-  which is long-lived/reusable by design and would reopen the replay
-  surface this proof exists to close on a shared connection). `nipcash/client`
-  is the NWC transport built on top, mirroring `nipB7`/`nipB7/client`'s
-  protocol/dial-out split.
-- New `nipcw` package (NIP-CW, Circle Wallet): self-service
-  `create_circle_wallet` for a host's own node, extended to a group who
-  don't run one themselves. Defines kind 23199 (its own per-call identity
-  proof, same reasoning as `nipcash.KindClaimProof`). `nipcw/client` is the
-  NWC transport built on top.
-
 ## [0.2.7]
 
 ### Changed
@@ -56,6 +32,25 @@
   35521, `NewChallenge`/`ChallengeToken.Verify` for the npv1 cross-IA
   challenge binding, and `EncodeNConnection`/`DecodeNConnection` for the
   `nconnection` bech32 profile-link format. (#4)
+- New `nipcash` package (NIP-CASH, Cash Hub): mint, hold, redeem, transfer,
+  split, and consolidate cash tokens (`lokicash1...`/`satscash1...`) — a
+  Chaumian ecash system built directly on NIP-47. `MintCash`/`CashRedeem`/
+  `CashTransfer`/`CashConsolidate`/`ListRecipients` request/response shapes;
+  `Recipient`/`Credential`/`BearerTarget`/`Source` abstractions (the
+  `pubkey`/`connection_key` cases build on `nipAZ.Identity`/`nipIC`, so no
+  caller ever hand-rolls a `connection_key` hash or an IA-attestation
+  reference); the cash-token TLV codec (`Decode`/`Encode`); mint-provenance
+  verification (`VerifyProvenance`, recoverable ECDSA). Defines kind 23198
+  (its own per-call claim proof — deliberately not NIP-IC's kind 35521,
+  which is long-lived/reusable by design and would reopen the replay
+  surface this proof exists to close on a shared connection). `nipcash/client`
+  is the NWC transport built on top, mirroring `nipB7`/`nipB7/client`'s
+  protocol/dial-out split. (#9)
+- New `nipcw` package (NIP-CW, Circle Wallet): self-service
+  `create_circle_wallet` for a host's own node, extended to a group who
+  don't run one themselves. Defines kind 23199 (its own per-call identity
+  proof, same reasoning as `nipcash.KindClaimProof`). `nipcw/client` is the
+  NWC transport built on top. (#9)
 
 ### Fixed
 
@@ -72,14 +67,9 @@
   supersession) now returns an error if writing to the expiration index
   fails, instead of silently swallowing it and leaving the index only
   partially updated. (#7)
-- `relay`'s event-ingestion path no longer unconditionally rejects an event
-  whose `nonce` tag declares a higher NIP-13 difficulty than its ID actually
-  has. That check now honors `Limitation.StrictPow` like the existing
-  `MinPowDifficulty` floor already did — off by default, so an incoming
-  event with a self-contradictory PoW claim is tolerated (not treated as
-  invalid) unless the relay operator has opted into strict PoW enforcement.
-  Previously this fired regardless of any config, since `processEvent`
-  called `Event.Verify()` with no options.
+- `relay` no longer rejects an event whose `nonce` tag overclaims its NIP-13
+  difficulty regardless of config — that check now honors
+  `Limitation.StrictPow`, same as the existing `MinPowDifficulty` floor. (#10)
 
 ## [0.2.6]
 
