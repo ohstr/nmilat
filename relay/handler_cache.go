@@ -48,7 +48,9 @@ func (h *CacheHandler) Handle(ctx context.Context, s *Session, rp *wire.RequestP
 				Limit  int    `json:"limit"`
 			}
 			if len(args) > 1 {
-				json.Unmarshal(args[1], &opts)
+				if err := json.Unmarshal(args[1], &opts); err != nil {
+					return false, fmt.Errorf("invalid cache options: %w", err)
+				}
 			}
 			return h.handleGetTopZapped(ctx, s, rp, opts.Window, opts.Limit)
 		}

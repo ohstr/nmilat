@@ -5,7 +5,6 @@ package nip77
 
 import (
 	"crypto/sha256"
-	"fmt"
 	"math"
 )
 
@@ -170,16 +169,4 @@ func encodeVarint(x uint64) []byte {
 	out := make([]byte, len(result))
 	copy(out, result)
 	return out
-}
-
-// decodeVarint decodes a MSB-first varint from buf.
-func decodeVarint(buf []byte) (uint64, int, error) {
-	var res uint64
-	for i, b := range buf {
-		res = (res << 7) | uint64(b&0x7F)
-		if (b & 0x80) == 0 {
-			return res, i + 1, nil
-		}
-	}
-	return 0, 0, fmt.Errorf("varint too short")
 }

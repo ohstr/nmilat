@@ -19,9 +19,28 @@ func dialWithOrigin(t testing.TB, wsURL, origin string) error {
 	}
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, header)
 	if conn != nil {
-		conn.Close()
+		_ = conn.Close()
 	}
 	return err
+}
+
+// waitForSessionCount polls until handler reports want sessions, or fails
+// the test after 2s. gorilla/websocket hijacks the underlying TCP
+// connection on upgrade, so httptest.Server.Close()'s own WaitGroup treats
+// a session's connection as already accounted for the instant it's
+// hijacked -- it does NOT wait for that session's read/write goroutines to
+// actually exit. Without this synchronization, a session from one test can
+// still be running when the next test starts, racing on whatever memory
+// its next allocation happens to reuse.
+func waitForSessionCount(t testing.TB, handler *SessionHandler, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for handler.SessionCount() != want {
+		if time.Now().After(deadline) {
+			t.Fatalf("expected %d sessions, got %d", want, handler.SessionCount())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func TestWithSessionAllowedOrigins_RestrictsCORS(t *testing.T) {
@@ -43,6 +62,8 @@ func TestWithSessionAllowedOrigins_RestrictsCORS(t *testing.T) {
 	if err := dialWithOrigin(t, wsURL, "https://not-allowed.example"); err == nil {
 		t.Error("expected a non-allowed origin to be rejected")
 	}
+
+	waitForSessionCount(t, handler, 0)
 }
 
 func TestWithSessionAllowedOrigins_DefaultAllowsAny(t *testing.T) {
@@ -57,6 +78,8 @@ func TestWithSessionAllowedOrigins_DefaultAllowsAny(t *testing.T) {
 	if err := dialWithOrigin(t, wsURL, "https://anything.example"); err != nil {
 		t.Errorf("expected default config to allow any origin, got: %v", err)
 	}
+
+	waitForSessionCount(t, handler, 0)
 }
 
 func TestSession_GettersAndSessionCount(t *testing.T) {
@@ -75,16 +98,11 @@ func TestSession_GettersAndSessionCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to dial: %v", err)
 	}
-	defer conn.Close()
+	defer waitForSessionCount(t, handler, 0)
+	defer func() { _ = conn.Close() }()
 
 	// Give the server a moment to register the session.
-	deadline := time.Now().Add(2 * time.Second)
-	for handler.SessionCount() != 1 {
-		if time.Now().After(deadline) {
-			t.Fatalf("expected 1 session after connecting, got %d", handler.SessionCount())
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitForSessionCount(t, handler, 1)
 
 	var gotID int64
 	var gotInfo *ClientInfo

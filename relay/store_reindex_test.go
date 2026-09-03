@@ -19,8 +19,8 @@ func TestReindexZaps(t *testing.T) {
 	// Setup temporary DB
 	tmpFile, err := os.CreateTemp("", "nmilat_test_*.db")
 	require.NoError(t, err)
-	defer os.Remove(tmpFile.Name())
-	tmpFile.Close()
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
+	_ = tmpFile.Close()
 
 	store, err := NewEventStore(tmpFile.Name(), &nip11.Limitation{}, WithEventStoreLogger(testlogger.New(t)))
 	require.NoError(t, err)
@@ -55,7 +55,7 @@ func TestReindexZaps(t *testing.T) {
 		// Event 1: Normal Note (Kind 1)
 		ev1 := &nip01.Event{Kind: 1, Content: "Hello", CreatedAt: 100}
 		ev1Bytes, _ := json.Marshal(ev1)
-		b.Put(itob(1), ev1Bytes)
+		_ = b.Put(itob(1), ev1Bytes)
 
 		// Event 2: Zap (Kind 5521)
 		ev2 := zapEvent
@@ -66,18 +66,18 @@ func TestReindexZaps(t *testing.T) {
 			{"description", `{"kind":5520,"tags":[["amount","1000000"]]}`},
 		}
 		ev2Bytes, _ := json.Marshal(ev2)
-		b.Put(itob(2), ev2Bytes)
+		_ = b.Put(itob(2), ev2Bytes)
 
 		return nil
 	})
 	require.NoError(t, err)
 
-	// 2. Clear indexZaps to ensure Reindex populates it
-	err = store.db.Update(func(tx *bolt.Tx) error {
-		tx.DeleteBucket(indexZaps)
+	// 2. Clear indexZaps to ensure Reindex populates it. Ignore error if
+	// bucket doesn't exist.
+	_ = store.db.Update(func(tx *bolt.Tx) error {
+		_ = tx.DeleteBucket(indexZaps)
 		return nil
 	})
-	// Ignore error if bucket doesn't exist
 
 	// 3. Run ReindexZaps
 	count, err := store.ReindexZaps(ctx, func(c int) {

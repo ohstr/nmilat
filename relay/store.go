@@ -33,15 +33,15 @@ var (
 	ErrStoreClosed     = errors.New("store is closed")
 	ErrEventNotFound   = errors.New("event not found")
 
-	indexEvents      = []byte{1}
-	indexID          = []byte{2}
-	indexPubkey      = []byte{3}
-	indexKind        = []byte{4}
-	indexTag         = []byte{5}
-	indexCreatedAt   = []byte{6}
-	indexExpiration  = []byte{7}
-	indexKindPubkey  = []byte{8}
-	indexZaps        = []byte{9}
+	indexEvents     = []byte{1}
+	indexID         = []byte{2}
+	indexPubkey     = []byte{3}
+	indexKind       = []byte{4}
+	indexTag        = []byte{5}
+	indexCreatedAt  = []byte{6}
+	indexExpiration = []byte{7}
+	indexKindPubkey = []byte{8}
+	indexZaps       = []byte{9}
 	// 10 was indexIdentities, removed as dead (never read anywhere).
 	indexProfileMetrics = []byte{11}
 
@@ -116,7 +116,7 @@ type EventDeleteTask struct {
 
 func NewEventDeleteTask(pes []*PotentialEvent) *EventDeleteTask {
 	return &EventDeleteTask{
-		pes:    pes,
+		pes: pes,
 		// Buffered: see the matching comment in NewEventInsertTask.
 		errors: make(chan error, 1),
 		done:   make(chan struct{}),
@@ -154,10 +154,10 @@ type Task interface {
 }
 
 type EventStore struct {
-	db            *bolt.DB
-	taskQueue     chan Task
-	closeCh       chan interface{}
-	closer        sync.Once
+	db        *bolt.DB
+	taskQueue chan Task
+	closeCh   chan interface{}
+	closer    sync.Once
 	// workersWg tracks handleTasks/startHousekeeper goroutines, all of which
 	// touch db. Close waits on it before closing db, so no background
 	// goroutine can still be mid-Update (or about to start one) once db is
@@ -198,7 +198,7 @@ func NewEventStore(path string, limitation *nip11.Limitation, opts ...EventStore
 	})
 
 	if err := mgr.Run(); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("failed to run migrations: %w", err)
 	}
 
@@ -213,7 +213,7 @@ func NewEventStore(path string, limitation *nip11.Limitation, opts ...EventStore
 		}
 		return nil
 	}); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, err
 	}
 
@@ -266,7 +266,7 @@ func (s *EventStore) Close() {
 	s.workersWg.Wait()
 
 	if s.db != nil {
-		s.db.Close()
+		_ = s.db.Close()
 	}
 }
 
@@ -621,23 +621,23 @@ func (s *EventStore) delete(tx *bolt.Tx, evsid uint64, ev *nip01.Event) error { 
 	evsidBytes := itob(evsid)
 	kindBytes := itob(uint64(ev.Kind))
 
-	tx.Bucket(indexEvents).Delete(evsidBytes)
-	tx.Bucket(indexID).Delete(makeKey(eventIDBytes, evsidBytes))
+	_ = tx.Bucket(indexEvents).Delete(evsidBytes)
+	_ = tx.Bucket(indexID).Delete(makeKey(eventIDBytes, evsidBytes))
 
-	tx.Bucket(indexPubkey).Delete(makeKey(pubkeyBytes, evsidBytes))
-	tx.Bucket(indexKind).Delete(makeKey(kindBytes, evsidBytes))
-	tx.Bucket(indexKindPubkey).Delete(makeKey(kindBytes, pubkeyBytes, evsidBytes))
+	_ = tx.Bucket(indexPubkey).Delete(makeKey(pubkeyBytes, evsidBytes))
+	_ = tx.Bucket(indexKind).Delete(makeKey(kindBytes, evsidBytes))
+	_ = tx.Bucket(indexKindPubkey).Delete(makeKey(kindBytes, pubkeyBytes, evsidBytes))
 
 	// createdAt: 8+32+8
 	createdAtKey := make([]byte, 0, 8+32+8)
 	createdAtKey = append(createdAtKey, itob(ev.CreatedAt)...)
 	createdAtKey = append(createdAtKey, eventIDBytes...)
 	createdAtKey = append(createdAtKey, evsidBytes...)
-	tx.Bucket(indexCreatedAt).Delete(createdAtKey)
+	_ = tx.Bucket(indexCreatedAt).Delete(createdAtKey)
 
 	if exp, _ := getExpiration(ev.Tags); exp > 0 {
 		expBytes := itob(exp)
-		tx.Bucket(indexExpiration).Delete(makeKey(expBytes, evsidBytes))
+		_ = tx.Bucket(indexExpiration).Delete(makeKey(expBytes, evsidBytes))
 	}
 
 	tagEntries, err := prepareIndexableTags(ev.Tags, s.limitation.MaxIndexableTags)
@@ -645,7 +645,7 @@ func (s *EventStore) delete(tx *bolt.Tx, evsid uint64, ev *nip01.Event) error { 
 		return err
 	}
 	for _, entry := range tagEntries {
-		tx.Bucket(indexTag).Delete(makeKey(entry, evsidBytes))
+		_ = tx.Bucket(indexTag).Delete(makeKey(entry, evsidBytes))
 	}
 
 	return nil
@@ -749,6 +749,7 @@ func (s *EventStore) insertIndexes(tx *bolt.Tx, event *nip01.Event, evsid uint64
 	if exp > 0 {
 		expBytes := itob(exp)
 		if err := tx.Bucket(indexExpiration).Put(makeKey(expBytes, evsidBytes), createdAtBytes); err != nil {
+			return err
 		}
 	}
 
@@ -886,14 +887,6 @@ func (s *EventStore) findEventsToDelete(ctx context.Context, tx *bolt.Tx, tags [
 	return eventsToDelete, requestedKinds, nil
 }
 
-func (s *EventStore) findEventsByPubKeyAndKind(tx *bolt.Tx, event *nip01.Event) ([]*PotentialEvent, error) { // find events with same pubkey and kind
-	filter := &nip01.SubscriptionFilter{
-		Authors: []string{event.PubKey},
-		Kinds:   []int{event.Kind},
-	}
-	return s.findEvents(context.Background(), tx, filter)
-}
-
 func (s *EventStore) FindEvents(ctx context.Context, filter *nip01.SubscriptionFilter) ([]*PotentialEvent, error) {
 	return s.findEvents(ctx, nil, filter)
 }
@@ -1020,7 +1013,7 @@ func (s *EventStore) FetchAll() ([]*nip01.Event, error) {
 func (s *EventStore) FindEventBytes(evsid uint64) ([]byte, error) {
 
 	var eventBytes []byte
-	s.db.View(func(tx *bolt.Tx) error {
+	_ = s.db.View(func(tx *bolt.Tx) error {
 		eventBytes = tx.Bucket(indexEvents).Get(itob(evsid))
 		return nil
 	})
@@ -1411,7 +1404,7 @@ func (s *EventStore) QueryNip77Items(ctx context.Context, filter *nip01.Subscrip
 
 	// Async fetch
 	go func() {
-		q.Fetch(ctx, outgoing, &wg, false)
+		_ = q.Fetch(ctx, outgoing, &wg, false)
 		wg.Wait()
 		close(outgoing)
 	}()
@@ -1774,7 +1767,9 @@ func (s *EventStore) startHousekeeper() {
 		case <-s.closeCh:
 			return
 		case <-ticker.C:
-			s.pruneExpiredEvents()
+			if err := s.pruneExpiredEvents(); err != nil {
+				s.logger.Warn().Err(err).Msg("housekeeper: failed to prune expired events")
+			}
 		}
 	}
 }

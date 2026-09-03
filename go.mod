@@ -1,6 +1,6 @@
 module github.com/ohstr/nmilat
 
-go 1.25.5
+go 1.26.8
 
 require (
 	github.com/flokiorg/go-flokicoin v0.25.12-alpha

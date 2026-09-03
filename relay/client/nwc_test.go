@@ -40,7 +40,7 @@ func newFakeWalletServer(t *testing.T, respond func(reqEvent *nip01.Event) []*ni
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		var subID string
 		for {

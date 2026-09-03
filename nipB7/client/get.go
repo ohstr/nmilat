@@ -45,7 +45,7 @@ func (c *Client) Get(ctx context.Context, server, hash string, opts GetOptions) 
 		return nil, err
 	}
 	if resp.StatusCode >= 400 {
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		return nil, newResponseError(server, resp)
 	}
 	return resp, nil
@@ -105,7 +105,7 @@ func (c *Client) Head(ctx context.Context, server, hash string, opts GetOptions)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		return nil, newResponseError(server, resp)

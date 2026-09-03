@@ -19,8 +19,8 @@ import (
 func TestCacheHandler_Defaults(t *testing.T) {
 	// Setup Store
 	tmpDB := "test_cache_defaults.db"
-	os.Remove(tmpDB)
-	defer os.Remove(tmpDB)
+	_ = os.Remove(tmpDB)
+	defer func() { _ = os.Remove(tmpDB) }()
 
 	store, err := NewEventStore(tmpDB, &nip11.Limitation{}, WithEventStoreLogger(testlogger.New(t)))
 	require.NoError(t, err)

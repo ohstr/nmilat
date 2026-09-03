@@ -135,7 +135,7 @@ func ValidateWebSocketURL(u string) error {
 		return err
 	}
 
-	if !((parsedURL.Scheme == "ws" || parsedURL.Scheme == "wss") && parsedURL.Host != "") {
+	if (parsedURL.Scheme != "ws" && parsedURL.Scheme != "wss") || parsedURL.Host == "" {
 		return errors.New("invalid url")
 	}
 
@@ -145,7 +145,7 @@ func ValidateWebSocketURL(u string) error {
 func ValidateName(name string) error {
 	validNamePattern := regexp.MustCompile(`^[A-Za-z0-9\-_.]+$`)
 	if !validNamePattern.MatchString(name) {
-		return errors.New("name must contain only a-z, 0-9, -, _, or .")
+		return errors.New("name must contain only a-z, 0-9, ., -, or _")
 	}
 	return nil
 }

@@ -43,7 +43,7 @@ func TestProcessAuth_Success(t *testing.T) {
 		t.Fatalf("AuthedPubkey() = %q, want %q", sess.AuthedPubkey(), authTestPubKey)
 	}
 
-	reply := <-sess.SessionContext.incoming
+	reply := <-sess.incoming
 	ok, isOk := reply.(*wire.OkSubscriptionResponse)
 	if !isOk {
 		t.Fatalf("reply type = %T, want *wire.OkSubscriptionResponse", reply)
@@ -71,7 +71,7 @@ func TestProcessAuth_RejectsRelayTagForAnotherRelay(t *testing.T) {
 		t.Fatalf("AuthedPubkey() = %q, want empty -- event's relay tag did not match this relay", sess.AuthedPubkey())
 	}
 
-	reply := <-sess.SessionContext.incoming
+	reply := <-sess.incoming
 	ok, isOk := reply.(*wire.OkSubscriptionResponse)
 	if !isOk {
 		t.Fatalf("reply type = %T, want *wire.OkSubscriptionResponse", reply)
@@ -97,7 +97,7 @@ func TestProcessAuth_NoChallengeSent(t *testing.T) {
 		t.Fatalf("AuthedPubkey() = %q, want empty", sess.AuthedPubkey())
 	}
 
-	reply := <-sess.SessionContext.incoming
+	reply := <-sess.incoming
 	notice, isNotice := reply.(*wire.NoticeSubscriptionResponse)
 	if !isNotice {
 		t.Fatalf("reply type = %T, want *wire.NoticeSubscriptionResponse", reply)
@@ -125,7 +125,7 @@ func TestProcessAuth_InvalidSignature(t *testing.T) {
 		t.Fatalf("AuthedPubkey() = %q, want empty", sess.AuthedPubkey())
 	}
 
-	reply := <-sess.SessionContext.incoming
+	reply := <-sess.incoming
 	ok, isOk := reply.(*wire.OkSubscriptionResponse)
 	if !isOk {
 		t.Fatalf("reply type = %T, want *wire.OkSubscriptionResponse", reply)
@@ -143,12 +143,12 @@ func TestAuthGating_RequestAndEvent(t *testing.T) {
 	if err := sess.processRequest(context.Background(), req); err != nil {
 		t.Fatalf("processRequest (unauthed): %v", err)
 	}
-	if reply := <-sess.SessionContext.incoming; reply == nil {
+	if reply := <-sess.incoming; reply == nil {
 		t.Fatal("expected a NOTICE reply for unauthed REQ")
 	} else if _, isNotice := reply.(*wire.NoticeSubscriptionResponse); !isNotice {
 		t.Fatalf("reply type = %T, want *wire.NoticeSubscriptionResponse", reply)
 	}
-	if reply := <-sess.SessionContext.incoming; reply == nil {
+	if reply := <-sess.incoming; reply == nil {
 		t.Fatal("expected a CLOSED reply for unauthed REQ")
 	} else if _, isClosed := reply.(*wire.ClosedSubscriptionResponse); !isClosed {
 		t.Fatalf("reply type = %T, want *wire.ClosedSubscriptionResponse", reply)
@@ -158,7 +158,7 @@ func TestAuthGating_RequestAndEvent(t *testing.T) {
 	if err := sess.processEvent(context.Background(), &wire.EventPacket{Event: ev}); err != nil {
 		t.Fatalf("processEvent (unauthed): %v", err)
 	}
-	if reply := <-sess.SessionContext.incoming; reply == nil {
+	if reply := <-sess.incoming; reply == nil {
 		t.Fatal("expected an OK reply for unauthed EVENT")
 	} else if ok, isOk := reply.(*wire.OkSubscriptionResponse); !isOk || ok.Accepted {
 		t.Fatalf("reply = %+v, want OK false for unauthed EVENT", reply)
@@ -172,12 +172,12 @@ func TestAuthGating_RequestAndEvent(t *testing.T) {
 	if err := sess.processAuth(context.Background(), &wire.AuthPacket{Event: authEv}); err != nil {
 		t.Fatalf("processAuth: %v", err)
 	}
-	<-sess.SessionContext.incoming
+	<-sess.incoming
 
 	if err := sess.processEvent(context.Background(), &wire.EventPacket{Event: ev}); err != nil {
 		t.Fatalf("processEvent (authed): %v", err)
 	}
-	reply := <-sess.SessionContext.incoming
+	reply := <-sess.incoming
 	ok, isOk := reply.(*wire.OkSubscriptionResponse)
 	if !isOk {
 		t.Fatalf("reply type = %T, want *wire.OkSubscriptionResponse", reply)

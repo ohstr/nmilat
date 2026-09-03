@@ -180,11 +180,11 @@ type AltZapRequest struct {
 	Relays    []string
 	Amount    int64
 	Lnurl     string
-	Bolt11    string // for kind 5522 direct payments
-	Chain     Chain  // required, to prevent cross-chain replay
-	EventID   string // e tag
-	ATag      string // a tag coordinate
-	KTag      string // k tag kind limit
+	Bolt11    string   // for kind 5522 direct payments
+	Chain     Chain    // required, to prevent cross-chain replay
+	EventID   string   // e tag
+	ATag      string   // a tag coordinate
+	KTag      string   // k tag kind limit
 	Recipient Identity // p tag
 	Sender    Identity // P tag
 }

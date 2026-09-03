@@ -18,8 +18,8 @@ import (
 func TestZapCacheWebIdentityScenarios(t *testing.T) {
 	tmpFile, err := os.CreateTemp("", "nmilat_zap_web_identity_test_*.db")
 	require.NoError(t, err)
-	defer os.Remove(tmpFile.Name())
-	tmpFile.Close()
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
+	_ = tmpFile.Close()
 
 	store, err := NewEventStore(tmpFile.Name(), &nip11.Limitation{}, WithEventStoreLogger(testlogger.New(t)))
 	require.NoError(t, err)
@@ -84,7 +84,7 @@ func TestZapCacheWebIdentityScenarios(t *testing.T) {
 		b := tx.Bucket(indexEvents)
 		for i, ev := range events {
 			evBytes, _ := json.Marshal(ev)
-			b.Put(itob(uint64(i+1)), evBytes)
+			_ = b.Put(itob(uint64(i+1)), evBytes)
 		}
 		return nil
 	})
@@ -116,8 +116,8 @@ func TestZapCacheScenarios(t *testing.T) {
 	// Setup temporary DB
 	tmpFile, err := os.CreateTemp("", "nmilat_zap_test_*.db")
 	require.NoError(t, err)
-	defer os.Remove(tmpFile.Name())
-	tmpFile.Close()
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
+	_ = tmpFile.Close()
 
 	store, err := NewEventStore(tmpFile.Name(), &nip11.Limitation{}, WithEventStoreLogger(testlogger.New(t)))
 	require.NoError(t, err)
@@ -189,7 +189,7 @@ func TestZapCacheScenarios(t *testing.T) {
 		for i, ev := range events {
 			evBytes, _ := json.Marshal(ev)
 			// Use simple incrementing evsid
-			b.Put(itob(uint64(i+1)), evBytes)
+			_ = b.Put(itob(uint64(i+1)), evBytes)
 		}
 		return nil
 	})

@@ -11,7 +11,7 @@ import (
 
 const (
 	defaultMaxSubscriptions = 355
-	eventBufferCapacity    = 55
+	eventBufferCapacity     = 55
 )
 
 var (

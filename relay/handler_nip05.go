@@ -100,7 +100,7 @@ func (h *nip05Handler) findIdentities(ctx context.Context, name string) (*nip05.
 		}
 	}()
 
-	query.Fetch(ctx, potEvent, &wg, false)
+	_ = query.Fetch(ctx, potEvent, &wg, false)
 	wg.Wait()
 	close(potEvent)
 
