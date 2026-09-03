@@ -153,9 +153,9 @@ func NewConnection(ctx context.Context, relayURL *url.URL, cfg *ConnectionConfig
 		return nil, NewConnectionError(relayURL, "failed to connect", err)
 	}
 
-	c.conn.SetReadDeadline(time.Now().Add(cfg.PongTimeout))
+	_ = c.conn.SetReadDeadline(time.Now().Add(cfg.PongTimeout))
 	c.conn.SetPongHandler(func(string) error {
-		c.conn.SetReadDeadline(time.Now().Add(cfg.PongTimeout))
+		_ = c.conn.SetReadDeadline(time.Now().Add(cfg.PongTimeout))
 		return nil
 	})
 
@@ -177,7 +177,7 @@ func (c *Connection) handle(parent context.Context) {
 			select {
 			case p := <-c.outgoing:
 				c.writeMu.Lock()
-				c.conn.SetWriteDeadline(time.Now().Add(c.config.WriteTimeout))
+				_ = c.conn.SetWriteDeadline(time.Now().Add(c.config.WriteTimeout))
 
 				if err := c.conn.WriteJSON(p); err != nil {
 					c.writeMu.Unlock()
@@ -237,7 +237,7 @@ func (c *Connection) handle(parent context.Context) {
 			case <-ctx.Done():
 			}
 		}
-		c.conn.SetReadDeadline(time.Now().Add(c.config.PongTimeout))
+		_ = c.conn.SetReadDeadline(time.Now().Add(c.config.PongTimeout))
 	}
 
 }
@@ -253,7 +253,7 @@ func (c *Connection) pingLoop() {
 			return
 		case <-ticker.C:
 			c.writeMu.Lock()
-			c.conn.SetWriteDeadline(time.Now().Add(c.config.WriteTimeout))
+			_ = c.conn.SetWriteDeadline(time.Now().Add(c.config.WriteTimeout))
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				c.writeMu.Unlock()
 				select {
@@ -447,7 +447,7 @@ func (c *Connection) Close() {
 	c.closer.Do(func() {
 		close(c.closeCh)
 		if c.conn != nil {
-			c.conn.Close()
+			_ = c.conn.Close()
 		}
 
 		c.subsMu.Lock()
