@@ -3,6 +3,13 @@
 // Bitcoin. It adds a mandatory "chain" tag for cross-chain replay safety
 // and its own event kinds (5520-5523), so it is not wire-compatible with
 // vanilla NIP-57 and does not claim to be.
+//
+// nipAZ depends on nipIC (github.com/ohstr/nmilat/nipIC) for the
+// Identity/WebIdentity/ConnectionKey types — NIP-AZ's own spec says NIP-IC
+// owns the ConnectionKey concept a p/P tag may carry instead of a raw
+// pubkey. WebIdentity and ConnectionKey are re-exported here under nipAZ's
+// own names so a caller who only touches AltZap doesn't have to import
+// nipIC directly for the common case.
 package nipAZ
 
 import (
@@ -17,6 +24,7 @@ import (
 
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip57"
+	"github.com/ohstr/nmilat/nipIC"
 	"github.com/ohstr/nmilat/utils"
 )
 
@@ -43,22 +51,142 @@ const (
 	KindAltZapOnBehalfRequest = 5523
 )
 
+// DescriptionHash computes SHA256(description), hex-encoded — the value a
+// ZSP must request as a BOLT11 invoice's LUD-11 description_hash so it
+// cryptographically binds to a specific AltZap request (NIP-AZ.md's
+// "Description-hash binding" rule). description is hashed verbatim: for a
+// kind 5521 receipt's "description" tag this is the exact wire string being
+// stored (never re-marshaled — a receiver later hashes that same stored
+// string to verify, so any re-serialization here would break the match);
+// for a kind 5522 direct payment it's typically the request event's own
+// canonical JSON (json.Marshal(event)) since there's no separate
+// description field to bind to.
+func DescriptionHash(description string) string {
+	sum := sha256.Sum256([]byte(description))
+	return hex.EncodeToString(sum[:])
+}
+
+// Chain identifies which Lightning-routable network a request/receipt
+// settles on. Open string type, no predefined values — a different consumer
+// of this SDK may settle on an entirely different set of chains than any
+// particular deployment does today. An application that wants named
+// constants for its own known chains defines them itself, on top of this type.
+type Chain string
+
+// WebIdentity and ConnectionKey are re-exported from nipIC — see the
+// package doc comment.
+type (
+	WebIdentity   = nipIC.WebIdentity
+	ConnectionKey = nipIC.ConnectionKey
+)
+
+// Identity is a p/P tag value: either a native Nostr pubkey or a
+// ConnectionKey scoped to a WebIdentity platform, with an optional stable
+// display handle. Build one with Pubkey or Connection — never construct the
+// underlying tag array by hand.
+type Identity struct {
+	value       string
+	webIdentity WebIdentity
+	handle      string
+}
+
+// Pubkey builds an Identity for a native Nostr recipient/sender.
+func Pubkey(hex string) Identity {
+	return Identity{value: hex}
+}
+
+// Connection builds an Identity for a recipient/sender on platform who has
+// no Nostr keypair yet, computing its ConnectionKey internally — the caller
+// never hashes platform+externalID by hand.
+func Connection(platform WebIdentity, externalID string) Identity {
+	return Identity{
+		value:       nipIC.NewConnectionKey(platform, externalID).String(),
+		webIdentity: platform,
+	}
+}
+
+// ResolvedConnection builds an Identity from a ConnectionKey the caller has
+// already computed (e.g. resolved earlier in a request-handling pipeline and
+// passed through several layers) — unlike Connection, it does not hash
+// anything, so a caller who already has the key avoids computing the same
+// SHA256 twice for one logical identity.
+func ResolvedConnection(key ConnectionKey, platform WebIdentity) Identity {
+	return Identity{value: key.String(), webIdentity: platform}
+}
+
+// WithHandle attaches a stable, human-readable display handle (e.g. a
+// Discord username) to a receipt's Identity. Informational only — MUST NOT
+// be used for identity resolution (NIP-AZ.md). Has no effect on request-side
+// tags (5520/5523 never emit a 4th tag element; see AltZapRequestParams).
+func (id Identity) WithHandle(handle string) Identity {
+	id.handle = handle
+	return id
+}
+
+// IsZero reports whether id is the zero Identity — i.e. absent. Used for
+// optional identities (a request's Sender, a receipt's Recipient on an
+// anonymous direct payment).
+func (id Identity) IsZero() bool { return id.value == "" }
+
+// WebIdentity returns the platform id is scoped to, or the zero value for a
+// native Nostr identity.
+func (id Identity) WebIdentity() WebIdentity { return id.webIdentity }
+
+// Value returns the hex pubkey or ConnectionKey hex.
+func (id Identity) Value() string { return id.value }
+
+// Handle returns the stable display handle, or "" if none was set.
+func (id Identity) Handle() string { return id.handle }
+
+// toSlice renders id as a Nostr tag array under key ("p" or "P"). Requests
+// never include a handle even if one is set on id (5520/5523 cap at 3
+// elements, matching NIP-AZ's request format); receipts do, via includeHandle.
+func (id Identity) toSlice(key string, includeHandle bool) []string {
+	if id.webIdentity == "" {
+		return []string{key, id.value}
+	}
+	if includeHandle && id.handle != "" {
+		return []string{key, id.value, string(id.webIdentity), id.handle}
+	}
+	return []string{key, id.value, string(id.webIdentity)}
+}
+
+// identityFromRequestTag builds an Identity from a parsed p/P tag on a
+// request (2 or 3 elements — requests never carry a handle). An empty or
+// literal "nostr" platform element both mean "native pubkey", matching
+// NIP-AZ.md's own rule that an omitted platform element defaults to nostr.
+func identityFromRequestTag(tag []string) Identity {
+	id := Identity{value: tag[1]}
+	if len(tag) > 2 && tag[2] != "" && tag[2] != "nostr" {
+		id.webIdentity = WebIdentity(tag[2])
+	}
+	return id
+}
+
+// identityFromReceiptTag is identityFromRequestTag plus an optional 4th
+// element handle, which only receipts carry.
+func identityFromReceiptTag(tag []string) Identity {
+	id := identityFromRequestTag(tag)
+	if len(tag) > 3 && tag[3] != "" {
+		id.handle = tag[3]
+	}
+	return id
+}
+
 // AltZapRequest is a parsed and validated AltZap request event (kinds 5520,
 // 5522, or 5523).
 type AltZapRequest struct {
 	*nip01.Event
-	Relays         []string
-	Amount         int64
-	Lnurl          string
-	Bolt11         string // for kind 5522 direct payments
-	Chain          string // required, to prevent cross-chain replay
-	EventID        string // e tag
-	ATag           string // a tag coordinate
-	KTag           string // k tag kind limit
-	Author         string // p tag (recipient pubkey or hash)
-	Provider       string // p tag (recipient lidp name)
-	Sender         string // P tag (sender pubkey or hash)
-	SenderProvider string // P tag (sender lidp name)
+	Relays    []string
+	Amount    int64
+	Lnurl     string
+	Bolt11    string // for kind 5522 direct payments
+	Chain     Chain  // required, to prevent cross-chain replay
+	EventID   string // e tag
+	ATag      string // a tag coordinate
+	KTag      string // k tag kind limit
+	Recipient Identity // p tag
+	Sender    Identity // P tag
 }
 
 // ParseAltZapRequest parses and validates an AltZap request event (kinds
@@ -113,26 +241,16 @@ func ParseAltZapRequest(event *nip01.Event) (*AltZapRequest, error) {
 		case "bolt11":
 			zr.Bolt11 = tag[1]
 		case "chain":
-			zr.Chain = tag[1]
+			zr.Chain = Chain(tag[1])
 		case "a":
 			zr.ATag = tag[1]
 		case "k":
 			zr.KTag = tag[1]
 		case "p":
-			zr.Author = tag[1]
-			if len(tag) > 2 && tag[2] != "" {
-				zr.Provider = tag[2]
-			} else {
-				zr.Provider = "nostr" // Default per AltZap convention
-			}
+			zr.Recipient = identityFromRequestTag(tag)
 			pTagCount++
 		case "P":
-			zr.Sender = tag[1]
-			if len(tag) > 2 && tag[2] != "" {
-				zr.SenderProvider = tag[2]
-			} else {
-				zr.SenderProvider = "nostr" // Default per AltZap convention
-			}
+			zr.Sender = identityFromRequestTag(tag)
 			PTagCount++
 		case "zap":
 			if len(tag) < 3 {
@@ -229,8 +347,7 @@ func ValidateAltZapRequest(event *nip01.Event, expectedAmountMloki int64) error 
 			return fmt.Errorf("nip57: failed to marshal 5522 event for hash validation: %w", err)
 		}
 
-		descHash := sha256.Sum256(eventJSON)
-		descHashHex := hex.EncodeToString(descHash[:])
+		descHashHex := DescriptionHash(string(eventJSON))
 
 		if inv.DescriptionHash != descHashHex {
 			return fmt.Errorf("%w: bolt11 description hash %s does not match event hash %s", ErrHashLockMismatch, inv.DescriptionHash, descHashHex)
@@ -243,14 +360,12 @@ func ValidateAltZapRequest(event *nip01.Event, expectedAmountMloki int64) error 
 // AltZapReceipt is a parsed and validated AltZap receipt event (kind 5521).
 type AltZapReceipt struct {
 	*nip01.Event
-	Recipient            string // p tag
-	RecipientProvider    string
-	Sender               string // P tag
-	SenderProvider       string
-	ResolvedPubkey       string // r tag
-	ResolvedSenderPubkey string // R tag
+	Recipient            Identity // p tag
+	Sender               Identity // P tag
+	ResolvedPubkey       string   // r tag
+	ResolvedSenderPubkey string   // R tag
 	Bolt11               string
-	Chain                string
+	Chain                Chain
 	Preimage             string
 	Description          string
 	Request              *AltZapRequest
@@ -270,19 +385,9 @@ func ParseAltZapReceipt(event *nip01.Event) (*AltZapReceipt, error) {
 		}
 		switch tag[0] {
 		case "p":
-			zr.Recipient = tag[1]
-			if len(tag) > 2 && tag[2] != "" {
-				zr.RecipientProvider = tag[2]
-			} else {
-				zr.RecipientProvider = "nostr"
-			}
+			zr.Recipient = identityFromReceiptTag(tag)
 		case "P":
-			zr.Sender = tag[1]
-			if len(tag) > 2 && tag[2] != "" {
-				zr.SenderProvider = tag[2]
-			} else {
-				zr.SenderProvider = "nostr"
-			}
+			zr.Sender = identityFromReceiptTag(tag)
 		case "r":
 			zr.ResolvedPubkey = tag[1]
 		case "R":
@@ -290,7 +395,7 @@ func ParseAltZapReceipt(event *nip01.Event) (*AltZapReceipt, error) {
 		case "bolt11":
 			zr.Bolt11 = tag[1]
 		case "chain":
-			zr.Chain = tag[1]
+			zr.Chain = Chain(tag[1])
 		case "preimage":
 			zr.Preimage = tag[1]
 		case "description":
@@ -323,7 +428,7 @@ func ParseAltZapReceipt(event *nip01.Event) (*AltZapReceipt, error) {
 	if zr.Preimage == "" {
 		return nil, ErrMissingPreimageTag
 	}
-	if zr.Recipient == "" && zr.Description != "" {
+	if zr.Recipient.IsZero() && zr.Description != "" {
 		// Only 5522 can have no p tag, and 5522 has no description.
 		// If description exists, it must have a p tag.
 		return nil, nip57.ErrMissingRecipientTag
@@ -382,8 +487,7 @@ func ValidateAltZapReceipt(receipt *nip01.Event) error {
 
 		// A. Verify description hash (CRITICAL)
 		// SHA256(description) == invoice.DescriptionHash
-		descHash := sha256.Sum256([]byte(zr.Description))
-		descHashHex := hex.EncodeToString(descHash[:])
+		descHashHex := DescriptionHash(zr.Description)
 
 		if invoice.DescriptionHash != descHashHex {
 			return fmt.Errorf("%w: have=%s want=%s", nip57.ErrDescriptionHashMismatch, descHashHex, invoice.DescriptionHash)
@@ -396,8 +500,8 @@ func ValidateAltZapReceipt(receipt *nip01.Event) error {
 		}
 
 		// C. Verify Recipients match
-		if zr.Recipient != zr.Request.Author {
-			return fmt.Errorf("%w: receipt=%s request_author=%s", nip57.ErrRecipientMismatch, zr.Recipient, zr.Request.Author)
+		if zr.Recipient.Value() != zr.Request.Recipient.Value() {
+			return fmt.Errorf("%w: receipt=%s request_author=%s", nip57.ErrRecipientMismatch, zr.Recipient.Value(), zr.Request.Recipient.Value())
 		}
 	} else {
 		// Direct Payment (no Zap Request description)
@@ -410,40 +514,34 @@ func ValidateAltZapReceipt(receipt *nip01.Event) error {
 }
 
 // AltZapRequestParams describes an AltZap request (kind 5520, or 5523 when
-// built via NewAltZapOnBehalfRequest). Chain, Recipient, Lnurl, AmountMloki,
-// and Relays are required; the rest are optional.
+// built via NewAltZapOnBehalfRequest). PrivateKey, Chain, Recipient, Lnurl,
+// AmountMloki, and Relays are required; the rest are optional. The event is
+// signed with PrivateKey internally — the caller never calls .Sign()
+// themselves.
 type AltZapRequestParams struct {
-	Chain             string   // e.g. "flokicoin" — prevents cross-chain replay
-	Recipient         string   // recipient pubkey ("p" tag)
-	RecipientProvider string   // optional lidp name for the recipient, e.g. "nostr"
-	Lnurl             string   // recipient's LNURL-pay endpoint
-	AmountMloki       int64    // amount in mloki (milli-loki)
-	Relays            []string // relays the zap receipt should be published to
-	Sender            string   // optional sender pubkey ("P" tag)
-	SenderProvider    string   // optional lidp name for the sender
-	EventID           *string  // optional zapped event ID ("e" tag)
+	PrivateKey  string   // sender's (or proxy agent's, for on-behalf) nsec hex
+	Chain       Chain    // e.g. "flokicoin" — prevents cross-chain replay
+	Recipient   Identity // recipient ("p" tag) — required
+	Lnurl       string   // recipient's LNURL-pay endpoint
+	AmountMloki int64    // amount in mloki (milli-loki)
+	Relays      []string // relays the zap receipt should be published to
+	Sender      Identity // optional sender override ("P" tag) — required in effect for 5523, see NewAltZapOnBehalfRequest
+	Content     string   // optional note content
+	EventID     *string  // optional zapped event ID ("e" tag)
 }
 
-// NewAltZapRequest creates a new AltZap request event (kind 5520).
-func NewAltZapRequest(p AltZapRequestParams) *nip01.Event {
-	pTag := []string{"p", p.Recipient}
-	if p.RecipientProvider != "" {
-		pTag = append(pTag, p.RecipientProvider)
-	}
-
+// NewAltZapRequest creates, signs, and returns a new AltZap request event
+// (kind 5520).
+func NewAltZapRequest(p AltZapRequestParams) (*nip01.Event, error) {
 	tags := [][]string{
-		pTag,
+		p.Recipient.toSlice("p", false),
 		{"amount", fmt.Sprintf("%d", p.AmountMloki)},
 		{"lnurl", p.Lnurl},
-		{"chain", p.Chain},
+		{"chain", string(p.Chain)},
 	}
 
-	if p.Sender != "" {
-		PTag := []string{"P", p.Sender}
-		if p.SenderProvider != "" {
-			PTag = append(PTag, p.SenderProvider)
-		}
-		tags = append(tags, PTag)
+	if !p.Sender.IsZero() {
+		tags = append(tags, p.Sender.toSlice("P", false))
 	}
 
 	if len(p.Relays) > 0 {
@@ -456,51 +554,56 @@ func NewAltZapRequest(p AltZapRequestParams) *nip01.Event {
 		tags = append(tags, []string{"e", *p.EventID})
 	}
 
-	return &nip01.Event{
-		PubKey:    p.Sender,
+	event := &nip01.Event{
 		CreatedAt: uint64(time.Now().Unix()),
 		Kind:      KindAltZapRequest,
 		Tags:      tags,
-		Content:   "",
+		Content:   p.Content,
 	}
+	if err := event.Sign(p.PrivateKey); err != nil {
+		return nil, fmt.Errorf("nipAZ: sign request: %w", err)
+	}
+	return event, nil
 }
 
-// NewAltZapOnBehalfRequest creates a new proxy AltZap request event (kind
-// 5523) — used when a service is zapping on behalf of another identified
-// sender (set via AltZapRequestParams.Sender).
-func NewAltZapOnBehalfRequest(p AltZapRequestParams) *nip01.Event {
-	event := NewAltZapRequest(p)
+// NewAltZapOnBehalfRequest creates, signs, and returns a new proxy AltZap
+// request event (kind 5523) — used when a Proxy Agent (e.g. a bot) signs on
+// behalf of an identified sender who does not hold the signing key. sender
+// is required (not an optional params field) so it is impossible to build
+// an invalid 5523 at construction time — kind 5523 mandates a P tag.
+func NewAltZapOnBehalfRequest(sender Identity, p AltZapRequestParams) (*nip01.Event, error) {
+	p.Sender = sender
+	event, err := NewAltZapRequest(p)
+	if err != nil {
+		return nil, err
+	}
 	event.Kind = KindAltZapOnBehalfRequest
-	return event
+	return event, nil
 }
 
 // AltZapDirectPaymentParams describes a direct-payment AltZap request (kind
 // 5522) — a bolt11 invoice paid directly, bypassing the LNURL/zap-request
-// flow. Chain, Bolt11, AmountMloki, and Relays are required.
+// flow. PrivateKey, Chain, Bolt11, AmountMloki, and Relays are required.
 type AltZapDirectPaymentParams struct {
-	Chain          string
-	Bolt11         string
-	AmountMloki    int64
-	Relays         []string
-	Sender         string // optional sender pubkey ("P" tag)
-	SenderProvider string // optional lidp name for the sender
+	PrivateKey  string
+	Chain       Chain
+	Bolt11      string
+	AmountMloki int64
+	Relays      []string
+	Sender      Identity // optional sender override ("P" tag)
 }
 
-// NewAltZapDirectPaymentRequest creates a new direct-payment AltZap request
-// event (kind 5522).
-func NewAltZapDirectPaymentRequest(p AltZapDirectPaymentParams) *nip01.Event {
+// NewAltZapDirectPaymentRequest creates, signs, and returns a new
+// direct-payment AltZap request event (kind 5522).
+func NewAltZapDirectPaymentRequest(p AltZapDirectPaymentParams) (*nip01.Event, error) {
 	tags := [][]string{
 		{"amount", fmt.Sprintf("%d", p.AmountMloki)},
 		{"bolt11", p.Bolt11},
-		{"chain", p.Chain},
+		{"chain", string(p.Chain)},
 	}
 
-	if p.Sender != "" {
-		PTag := []string{"P", p.Sender}
-		if p.SenderProvider != "" {
-			PTag = append(PTag, p.SenderProvider)
-		}
-		tags = append(tags, PTag)
+	if !p.Sender.IsZero() {
+		tags = append(tags, p.Sender.toSlice("P", false))
 	}
 
 	if len(p.Relays) > 0 {
@@ -509,30 +612,36 @@ func NewAltZapDirectPaymentRequest(p AltZapDirectPaymentParams) *nip01.Event {
 		tags = append(tags, relayTag)
 	}
 
-	return &nip01.Event{
-		PubKey:    p.Sender,
+	event := &nip01.Event{
 		CreatedAt: uint64(time.Now().Unix()),
 		Kind:      KindAltZapDirectPayment,
 		Tags:      tags,
 		Content:   "",
 	}
+	if err := event.Sign(p.PrivateKey); err != nil {
+		return nil, fmt.Errorf("nipAZ: sign direct payment request: %w", err)
+	}
+	return event, nil
 }
 
 // AltZapReceiptParams describes an AltZap receipt (kind 5521), issued by the
-// LNURL provider once the invoice is paid. ProviderPubkey and Bolt11 are
-// required; RecipientPubkey is omitted for anonymous kind-5522 receipts.
+// ZSP once the invoice is paid. PrivateKey and Bolt11 are required;
+// Recipient is the zero Identity for an anonymous kind-5522 receipt.
 //
 // ResolvedRecipientPubkey/ResolvedSenderPubkey/Coordinate/EventID are for
-// callers whose p/P tags carry a non-Nostr identity (e.g. a hashed
-// ConnectionKey rather than a raw pubkey) and need to mirror the resolved
-// native pubkey ("r"/"R" tags) and/or the zapped event/addressable-event
-// coordinate ("e"/"a" tags) onto the receipt directly, independent of
-// whatever the embedded request's Description happens to carry.
+// callers whose p/P tags carry a non-Nostr identity (e.g. a ConnectionKey)
+// and need to mirror the resolved native pubkey ("r"/"R" tags) and/or the
+// zapped event/addressable-event coordinate ("e"/"a" tags) onto the receipt.
+//
+// Recipient/Sender (including any handle attached via Identity.WithHandle)
+// are always authoritative — never re-derived or overridden from Description,
+// even when Description embeds different-looking p/P tags. Description is
+// stored verbatim for auditability only.
 type AltZapReceiptParams struct {
-	Chain                   string
-	ProviderPubkey          string
-	RecipientPubkey         string
-	SenderPubkey            string
+	PrivateKey              string // ZSP's nsec hex — required, derives the event pubkey and signs
+	Chain                   Chain
+	Recipient               Identity
+	Sender                  Identity
 	Bolt11                  string
 	Description             string // JSON of the embedded AltZap request, if any
 	Preimage                *string
@@ -542,15 +651,16 @@ type AltZapReceiptParams struct {
 	EventID                 string // optional "e" tag
 }
 
-// NewAltZapReceipt creates a new AltZap receipt event (kind 5521).
+// NewAltZapReceipt creates, signs, and returns a new AltZap receipt event
+// (kind 5521).
 func NewAltZapReceipt(p AltZapReceiptParams) (*nip01.Event, error) {
 	tags := [][]string{
 		{"bolt11", p.Bolt11},
-		{"chain", p.Chain},
+		{"chain", string(p.Chain)},
 	}
 
-	if p.RecipientPubkey != "" {
-		tags = append(tags, []string{"p", p.RecipientPubkey})
+	if !p.Recipient.IsZero() {
+		tags = append(tags, p.Recipient.toSlice("p", true))
 	}
 
 	if p.Description != "" {
@@ -564,8 +674,8 @@ func NewAltZapReceipt(p AltZapReceiptParams) (*nip01.Event, error) {
 	}
 	tags = append(tags, []string{"amount", fmt.Sprintf("%d", inv.AmountMloki)})
 
-	if p.SenderPubkey != "" {
-		tags = append(tags, []string{"P", p.SenderPubkey})
+	if !p.Sender.IsZero() {
+		tags = append(tags, p.Sender.toSlice("P", true))
 	}
 
 	if p.Preimage != nil {
@@ -588,46 +698,14 @@ func NewAltZapReceipt(p AltZapReceiptParams) (*nip01.Event, error) {
 		tags = append(tags, []string{"a", p.Coordinate})
 	}
 
-	// Extract tags from the description request if possible
-	var req nip01.Event
-	if err := json.Unmarshal([]byte(p.Description), &req); err == nil {
-		for _, tag := range req.Tags {
-			if len(tag) < 2 {
-				continue
-			}
-			key := tag[0]
-			if key == "e" || key == "a" || key == "tbd" || key == "r" || key == "p" || key == "P" {
-				// We overwrite our default basic 'p' and 'P' tags with the detailed ones from the request
-				if key == "p" || key == "P" {
-					for i, existingTag := range tags {
-						if len(existingTag) > 0 && existingTag[0] == key {
-							tags[i] = tag // Replace basic tag with the fully detailed tag (containing provider)
-							break
-						}
-					}
-					// If it wasn't there at all, append it
-					found := false
-					for _, existingTag := range tags {
-						if len(existingTag) > 0 && existingTag[0] == key {
-							found = true
-							break
-						}
-					}
-					if !found {
-						tags = append(tags, tag)
-					}
-					continue
-				}
-				tags = append(tags, tag)
-			}
-		}
-	}
-
-	return &nip01.Event{
-		PubKey:    p.ProviderPubkey,
+	event := &nip01.Event{
 		CreatedAt: uint64(time.Now().Unix()),
 		Kind:      KindAltZapReceipt,
 		Tags:      tags,
 		Content:   "",
-	}, nil
+	}
+	if err := event.Sign(p.PrivateKey); err != nil {
+		return nil, fmt.Errorf("nipAZ: sign receipt: %w", err)
+	}
+	return event, nil
 }
