@@ -8,7 +8,7 @@
   for several stdlib CVEs (`crypto/tls`, `crypto/x509`, `net/http`) that
   `govulncheck` flags against older patch versions — not nmilat code bugs,
   but real reachable vulnerabilities in code this module's `relay/client`
-  and `nipB7/client` call into.
+  and `nipB7/client` call into. (#7)
 - **Breaking:** `AltZapRequestParams`/`AltZapReceiptParams` no longer take
   raw `Recipient`/`Sender`/`*Provider` strings — both are now `Identity`,
   built via `nipAZ.Pubkey(hex)`, `nipAZ.Connection(platform, externalID)`,
@@ -43,12 +43,11 @@
 - `nipIC.NewChallenge`'s session entropy is now 16 bytes (32 hex chars),
   matching its real caller (a token posted publicly); it was previously 12
   hex chars, sized for a short human-typeable pre-auth code that belongs to
-  a different caller entirely.
+  a different caller entirely. (#4)
 - `relay`'s event-delete path (used by NIP-09 deletion and replaceable-event
   supersession) now returns an error if writing to the expiration index
   fails, instead of silently swallowing it and leaving the index only
-  partially updated.
-  a different caller entirely. (#4)
+  partially updated. (#7)
 
 ## [0.2.6]
 
