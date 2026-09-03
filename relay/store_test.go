@@ -1359,7 +1359,7 @@ func BenchmarkStoreCursor(b *testing.B) {
 
 				var totalCollected int
 
-				store.db.View(func(tx *bolt.Tx) error {
+				_ = store.db.View(func(tx *bolt.Tx) error {
 					for {
 						for ci, cursor := range ss.cursors {
 
@@ -1426,7 +1426,7 @@ func TestStoreSimpleCursor(b *testing.T) {
 				t.Fatal(err)
 			}
 
-			store.db.View(func(tx *bolt.Tx) error {
+			_ = store.db.View(func(tx *bolt.Tx) error {
 			loop:
 				for _, cursor := range ss.cursors {
 

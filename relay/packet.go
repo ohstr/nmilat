@@ -489,7 +489,7 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 				s.reply(&wire.OkSubscriptionResponse{
 					EventID:  ep.Event.ID,
 					Accepted: false,
-					Message:  fmt.Sprintf("%s", err.Error()),
+					Message:  err.Error(),
 				})
 
 			default:
@@ -525,7 +525,7 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 				return m.TotalScore() - m.BaseScore, nil
 			})
 			if err != nil {
-				// log.Warn().Err(err).Msg("failed to queue profile for indexing")
+				s.config.Logger.Warn().Err(err).Msg("failed to queue profile for indexing")
 			}
 		}
 

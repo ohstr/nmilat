@@ -8,6 +8,7 @@ import (
 
 	"github.com/ohstr/nmilat/nip01"
 	bolt "go.etcd.io/bbolt"
+	bolterrors "go.etcd.io/bbolt/errors"
 )
 
 // ClearZapIndex deletes and recreates the zap index bucket, discarding all
@@ -20,7 +21,7 @@ func (s *EventStore) ClearZapIndex(ctx context.Context) error {
 	default:
 	}
 	return s.db.Update(func(tx *bolt.Tx) error {
-		if err := tx.DeleteBucket(indexZaps); err != nil && err != bolt.ErrBucketNotFound {
+		if err := tx.DeleteBucket(indexZaps); err != nil && err != bolterrors.ErrBucketNotFound {
 			return err
 		}
 		_, err := tx.CreateBucketIfNotExists(indexZaps)
