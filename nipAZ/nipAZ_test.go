@@ -157,6 +157,59 @@ func TestParseAltZapRequest(t *testing.T) {
 	}
 }
 
+func TestParseAltZapRequest_IdentityFields(t *testing.T) {
+	validPubkey := "0000000000000000000000000000000000000000000000000000000000000001"
+
+	t.Run("native pubkey, empty platform element", func(t *testing.T) {
+		req, err := ParseAltZapRequest(mockEvent(KindAltZapRequest, [][]string{
+			{"relays", "wss://relay.com"},
+			{"p", validPubkey, ""},
+			{"amount", "1000"},
+			{"chain", "flokicoin"},
+			{"lnurl", "lnurl1dp68gurn8ghj7ar9wd6zucm0d5hkzurf9akxuatjdsyukzu5"},
+		}, ""))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if req.Recipient.WebIdentity() != "" || req.Recipient.Value() != validPubkey {
+			t.Errorf("expected native recipient identity, got %+v", req.Recipient)
+		}
+	})
+
+	t.Run("native pubkey, literal 'nostr' platform element treated as native", func(t *testing.T) {
+		req, err := ParseAltZapRequest(mockEvent(KindAltZapRequest, [][]string{
+			{"relays", "wss://relay.com"},
+			{"p", validPubkey, "nostr"},
+			{"amount", "1000"},
+			{"chain", "flokicoin"},
+			{"lnurl", "lnurl1dp68gurn8ghj7ar9wd6zucm0d5hkzurf9akxuatjdsyukzu5"},
+		}, ""))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if req.Recipient.WebIdentity() != "" {
+			t.Errorf("expected literal 'nostr' platform element to normalize to native (zero WebIdentity), got %q", req.Recipient.WebIdentity())
+		}
+	})
+
+	t.Run("ConnectionKey recipient carries platform", func(t *testing.T) {
+		connKey := "aa11223344556677889900112233445566778899001122334455667788990011"
+		req, err := ParseAltZapRequest(mockEvent(KindAltZapRequest, [][]string{
+			{"relays", "wss://relay.com"},
+			{"p", connKey, "discord"},
+			{"amount", "1000"},
+			{"chain", "flokicoin"},
+			{"lnurl", "lnurl1dp68gurn8ghj7ar9wd6zucm0d5hkzurf9akxuatjdsyukzu5"},
+		}, ""))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if req.Recipient.WebIdentity() != "discord" || req.Recipient.Value() != connKey {
+			t.Errorf("expected discord-scoped recipient, got %+v", req.Recipient)
+		}
+	})
+}
+
 func TestParseAltZapReceipt(t *testing.T) {
 	validPubkey := "0000000000000000000000000000000000000000000000000000000000000001"
 
@@ -246,8 +299,8 @@ func TestParseAltZapReceipt(t *testing.T) {
 			}, ""),
 			wantErr: false,
 			check: func(zr *AltZapReceipt) error {
-				if zr.Recipient != "" {
-					return fmt.Errorf("expected empty recipient")
+				if !zr.Recipient.IsZero() {
+					return fmt.Errorf("expected zero recipient identity")
 				}
 				return nil
 			},
@@ -375,13 +428,13 @@ func TestNewAltZapReceipt(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var preimage = "1122"
 			got, err := NewAltZapReceipt(AltZapReceiptParams{
-				Chain:           "flokicoin",
-				ProviderPubkey:  "provider",
-				RecipientPubkey: "recipient",
-				SenderPubkey:    "sender",
-				Bolt11:          tt.bolt11,
-				Description:     tt.desc,
-				Preimage:        &preimage,
+				PrivateKey:  zapsTestPrivKey,
+				Chain:       "flokicoin",
+				Recipient:   Pubkey("recipient"),
+				Sender:      Pubkey("sender"),
+				Bolt11:      tt.bolt11,
+				Description: tt.desc,
+				Preimage:    &preimage,
 			})
 			if (err != nil) != tt.wantErr {
 				t.Errorf("NewAltZapReceipt() error = %v, wantErr %v", err, tt.wantErr)
@@ -401,6 +454,9 @@ func TestNewAltZapReceipt(t *testing.T) {
 				}
 				if !amountFound {
 					t.Errorf("NewAltZapReceipt() missing amount tag")
+				}
+				if err := got.Verify(); err != nil {
+					t.Errorf("expected NewAltZapReceipt to return an already-signed, valid event: %v", err)
 				}
 			}
 		})
