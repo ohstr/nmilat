@@ -2,11 +2,14 @@ package relay
 
 import (
 	"context"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip11"
+	"github.com/ohstr/nmilat/nip13"
 	"github.com/ohstr/nmilat/utils"
 	"github.com/ohstr/nmilat/wire"
 )
@@ -30,6 +33,29 @@ func minedPowTestEvent(t *testing.T, targetDifficulty int) *nip01.Event {
 	}
 	if err := ev.Sign(powTestPrivKey); err != nil {
 		t.Fatalf("failed to sign event: %v", err)
+	}
+	return ev
+}
+
+// mismatchedPowTestEvent builds a validly signed event whose nonce tag
+// DECLARES declaredDifficulty leading zero bits without the event ID
+// actually having anywhere near that many -- the "lying" nonce tag case,
+// distinct from minedPowTestEvent (which always mines a real match). This
+// is what a relay sees when it receives an event whose author's PoW claim
+// doesn't hold up.
+func mismatchedPowTestEvent(t *testing.T, declaredDifficulty int) *nip01.Event {
+	t.Helper()
+	pubKey, err := utils.GetPublicKey(powTestPrivKey)
+	if err != nil {
+		t.Fatalf("failed to derive pubkey: %v", err)
+	}
+	ev := nip01.NewUnsignedEvent(1, pubKey, "pow mismatch test event")
+	ev.AddTag([]string{"nonce", "1", strconv.Itoa(declaredDifficulty)})
+	if err := ev.Sign(powTestPrivKey); err != nil {
+		t.Fatalf("failed to sign event: %v", err)
+	}
+	if difficulty, err := nip13.Difficulty(ev.ID); err != nil || difficulty >= declaredDifficulty {
+		t.Fatalf("test setup failure: event ID unexpectedly meets declared difficulty %d (actual %d, err %v) -- rerun or pick a higher declaredDifficulty", declaredDifficulty, difficulty, err)
 	}
 	return ev
 }
@@ -119,6 +145,38 @@ func TestProcessEvent_PowStrictAcceptsSufficientDifficulty(t *testing.T) {
 	resp := sendEventAndAwaitOK(t, sess, minedPowTestEvent(t, minDifficulty))
 	if !resp.Accepted {
 		t.Fatalf("expected a sufficiently-mined event to be accepted, got rejected: %q", resp.Message)
+	}
+}
+
+// TestProcessEvent_MismatchedNonceToleratedByDefault covers the bug this
+// file previously missed: an event whose nonce tag OVERCLAIMS its
+// difficulty (declares more leading zero bits than the ID actually has) is
+// a different case from minedPowTestEvent's honest zero-difficulty event
+// above -- Verify()'s NIP-13 check treats a present-but-wrong nonce tag as
+// an error, not merely "no PoW." StrictPow unset (default off) must still
+// accept it, the same as it accepts an honestly-unmined event.
+func TestProcessEvent_MismatchedNonceToleratedByDefault(t *testing.T) {
+	sess := newPowTestSession(t, nip11.Limitation{})
+
+	resp := sendEventAndAwaitOK(t, sess, mismatchedPowTestEvent(t, 20))
+	if !resp.Accepted {
+		t.Fatalf("expected an event with a mismatched nonce tag to be accepted when StrictPow is off, got rejected: %q", resp.Message)
+	}
+}
+
+// TestProcessEvent_MismatchedNonceRejectedWhenStrict is the positive
+// counterpart: once StrictPow is on, the same lying nonce tag is rejected
+// (via the base Verify() check, not the separate MinPowDifficulty floor --
+// MinPowDifficulty is left at 0/unset here).
+func TestProcessEvent_MismatchedNonceRejectedWhenStrict(t *testing.T) {
+	sess := newPowTestSession(t, nip11.Limitation{StrictPow: true})
+
+	resp := sendEventAndAwaitOK(t, sess, mismatchedPowTestEvent(t, 20))
+	if resp.Accepted {
+		t.Fatal("expected an event with a mismatched nonce tag to be rejected when StrictPow is on")
+	}
+	if resp.Message == "" || !strings.HasPrefix(resp.Message, "invalid: pow check failed") {
+		t.Fatalf("expected an %q-prefixed rejection message, got %q", "invalid: pow check failed", resp.Message)
 	}
 }
 
