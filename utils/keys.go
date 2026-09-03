@@ -15,7 +15,7 @@ func Validate32Key(hexStr string) error {
 
 	for i := 0; i < len(hexStr); i++ {
 		c := hexStr[i]
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
 			return errors.New("invalid hex format")
 		}
 	}

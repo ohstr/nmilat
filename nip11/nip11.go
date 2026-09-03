@@ -228,7 +228,7 @@ func NewHandler(md *Metadata, supported NIPSet) http.Handler {
 		w.Header().Add("content-type", ContentTypeHeader)
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.WriteHeader(http.StatusOK)
-		w.Write(metadataBytes)
+		_, _ = w.Write(metadataBytes)
 	})
 }
 

@@ -34,7 +34,7 @@ func (c *Client) List(ctx context.Context, server, pubkey string, query nipB7.Li
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, newResponseError(server, resp)

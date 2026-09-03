@@ -35,7 +35,9 @@ func TestWrap(t *testing.T) {
 
 	// Create a dummy payload event
 	payload := nip01.NewEvent(1, "Hello Secret World")
-	payload.Sign(senderPrivKeyHex)
+	if err := payload.Sign(senderPrivKeyHex); err != nil {
+		t.Fatalf("payload.Sign() error = %v", err)
+	}
 
 	// Perform Wrap
 	wrapEvent, err := Wrap(payload, senderPrivKeyHex, recipientPubKeyHex)

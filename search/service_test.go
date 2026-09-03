@@ -65,7 +65,7 @@ func TestService_Initialize(t *testing.T) {
 	assert.NoError(t, err)
 	mockClient.AssertExpectations(t)
 	// clean shutdown to avoid goroutine leak
-	svc.Shutdown(context.Background())
+	_ = svc.Shutdown(context.Background())
 }
 
 func TestService_Batching(t *testing.T) {
@@ -94,7 +94,7 @@ func TestService_Batching(t *testing.T) {
 
 	ctx := context.Background()
 	for i := 0; i < 12; i++ {
-		svc.IndexProfile(ctx, &ProfileDocument{ID: "id"})
+		_ = svc.IndexProfile(ctx, &ProfileDocument{ID: "id"})
 	}
 
 	// We can't easily wait for the ANY bulk index via mock without a WaitGroup hook
@@ -103,7 +103,7 @@ func TestService_Batching(t *testing.T) {
 	// We need to ensure it happened.
 	// We added Run hook to wg.Done().
 
-	svc.Shutdown(ctx)
+	_ = svc.Shutdown(ctx)
 
 	// Wait for expectations? Shutdown waits for worker loop to exit.
 	// Worker loop handles flush.
@@ -130,7 +130,7 @@ func TestService_Ticker(t *testing.T) {
 	svc.batchInterval = 100 * time.Millisecond
 	svc.startWorker()
 
-	svc.IndexProfile(context.Background(), &ProfileDocument{ID: "ticker_id"})
+	_ = svc.IndexProfile(context.Background(), &ProfileDocument{ID: "ticker_id"})
 
 	// Wait for ticker
 	// We wait via wg, which is triggered by mock run
@@ -147,7 +147,7 @@ func TestService_Ticker(t *testing.T) {
 		t.Fatal("Ticker flush timed out")
 	}
 
-	svc.Shutdown(context.Background())
+	_ = svc.Shutdown(context.Background())
 	mockClient.AssertExpectations(t)
 }
 
