@@ -2,6 +2,22 @@
 
 ## [0.2.7]
 
+### Changed
+
+- **Breaking:** `AltZapRequestParams`/`AltZapReceiptParams` no longer take
+  raw `Recipient`/`Sender`/`*Provider` strings — both are now `Identity`,
+  built via `nipAZ.Pubkey(hex)`, `nipAZ.Connection(platform, externalID)`,
+  or `nipAZ.ResolvedConnection(key, platform)`. `WebIdentity` and
+  `ConnectionKey` are re-exported from the new `nipIC` package under
+  `nipAZ`'s own names. (#4)
+- **Breaking:** `NewAltZapRequest`, `NewAltZapOnBehalfRequest`, and
+  `NewAltZapReceipt` now sign internally via a required `PrivateKey` param
+  and return `(*nip01.Event, error)` — callers no longer call `.Sign()`
+  themselves. (#4)
+- **Breaking:** `NewAltZapOnBehalfRequest` now takes `sender` as a required
+  positional `Identity` argument instead of an optional params field, so an
+  invalid kind 5523 (missing `P` tag) can't be constructed. (#4)
+
 ### Added
 
 - New `nipIC` package (NIP-IC, Identity Connection): binds Web Identity
@@ -10,7 +26,7 @@
   Kind 35522, `ParseIdentityConnection`/`ValidateIdentityConnection` for Kind
   35521, `NewChallenge`/`ChallengeToken.Verify` for the npv1 cross-IA
   challenge binding, and `EncodeNConnection`/`DecodeNConnection` for the
-  `nconnection` bech32 profile-link format.
+  `nconnection` bech32 profile-link format. (#4)
 
 ### Fixed
 
@@ -18,11 +34,11 @@
   `p`/`P` tags by parsing the embedded request's `description` JSON — it now
   only ever uses `Identity` values the caller explicitly passed, closing a
   gap where a tampered embedded request could redirect a receipt's
-  attribution.
+  attribution. (#4)
 - `nipIC.NewChallenge`'s session entropy is now 16 bytes (32 hex chars),
   matching its real caller (a token posted publicly); it was previously 12
   hex chars, sized for a short human-typeable pre-auth code that belongs to
-  a different caller entirely.
+  a different caller entirely. (#4)
 
 ## [0.2.6]
 
