@@ -211,7 +211,7 @@ func (ev *Event) Sign(privateKey string) error {
 }
 
 func (ev *Event) Copy() *Event {
-	var event Event = *ev
+	event := *ev
 
 	if len(ev.Tags) > 0 {
 		event.Tags = make([][]string, len(ev.Tags))

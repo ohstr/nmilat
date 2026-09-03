@@ -596,7 +596,9 @@ func TestDescriptionHash_MatchesRawSHA256(t *testing.T) {
 
 func TestDescriptionHash_Deterministic(t *testing.T) {
 	input := "some description string"
-	if DescriptionHash(input) != DescriptionHash(input) {
+	got1 := DescriptionHash(input)
+	got2 := DescriptionHash(input)
+	if got1 != got2 {
 		t.Error("expected DescriptionHash to be deterministic")
 	}
 }

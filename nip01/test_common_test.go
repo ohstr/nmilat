@@ -21,10 +21,6 @@ func CreateEvent(t testing.TB, kind int, tags ...[]string) *Event {
 	return ev
 }
 
-func createSampleEvent(t testing.TB, kind int, tags ...[]string) *Event {
-	return CreateEvent(t, kind, tags...)
-}
-
 func createAlteredEvent(t testing.TB, kind int, alter func(*Event)) *Event {
 	ev := CreateEvent(t, kind)
 	alter(ev)
