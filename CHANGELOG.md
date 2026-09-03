@@ -48,6 +48,14 @@
   supersession) now returns an error if writing to the expiration index
   fails, instead of silently swallowing it and leaving the index only
   partially updated. (#7)
+- `relay`'s event-ingestion path no longer unconditionally rejects an event
+  whose `nonce` tag declares a higher NIP-13 difficulty than its ID actually
+  has. That check now honors `Limitation.StrictPow` like the existing
+  `MinPowDifficulty` floor already did — off by default, so an incoming
+  event with a self-contradictory PoW claim is tolerated (not treated as
+  invalid) unless the relay operator has opted into strict PoW enforcement.
+  Previously this fired regardless of any config, since `processEvent`
+  called `Event.Verify()` with no options.
 
 ## [0.2.6]
 
