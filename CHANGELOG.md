@@ -2,6 +2,14 @@
 
 ## [0.2.7]
 
+### Changed
+
+- Minimum Go version raised from 1.25.5 to 1.26.8, to pick up upstream fixes
+  for several stdlib CVEs (`crypto/tls`, `crypto/x509`, `net/http`) that
+  `govulncheck` flags against older patch versions — not nmilat code bugs,
+  but real reachable vulnerabilities in code this module's `relay/client`
+  and `nipB7/client` call into.
+
 ### Added
 
 - New `nipIC` package (NIP-IC, Identity Connection): binds Web Identity
@@ -23,6 +31,10 @@
   matching its real caller (a token posted publicly); it was previously 12
   hex chars, sized for a short human-typeable pre-auth code that belongs to
   a different caller entirely.
+- `relay`'s event-delete path (used by NIP-09 deletion and replaceable-event
+  supersession) now returns an error if writing to the expiration index
+  fails, instead of silently swallowing it and leaving the index only
+  partially updated.
 
 ## [0.2.6]
 
