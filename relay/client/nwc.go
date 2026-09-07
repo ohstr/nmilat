@@ -40,11 +40,44 @@ type NWCClient struct {
 	encryption   string
 
 	mu       sync.Mutex
-	subs     map[string]chan *nip47.ResponseEvent
+	subs     map[string]*nwcSub
 	closed   bool
 	closeErr error
 
 	doneCh chan struct{}
+}
+
+// nwcSub is one in-flight call's response demultiplexing state: a buffered
+// channel of matching response events, plus a closed signal for the relay
+// telling us — via a CLOSED message — that this subscription is dead and no
+// response will ever arrive on it (e.g. the relay rejected it outright, or
+// revoked it mid-flight). reason is only valid to read once closed is
+// closed; both fields are written exactly once, only by dispatch(), so
+// readers that only look at reason after observing closed's close are safe
+// under Go's memory model without their own lock (same pattern as sync.Once).
+type nwcSub struct {
+	ch     chan *nip47.ResponseEvent
+	closed chan struct{}
+	reason string
+}
+
+// SubscriptionClosedError is returned when the relay sends a CLOSED message
+// for an in-flight call's response subscription before any response event
+// arrived on it — most commonly the relay rejecting the subscription
+// outright (e.g. a "too many concurrent subscriptions" NOTICE is typically
+// immediately followed by CLOSED), or revoking it mid-flight. Distinguishing
+// this from ctx.Err() matters: without it, a caller whose subscription the
+// relay already told us is dead has no way to know that, and just waits out
+// its full timeout for a response that was never coming.
+type SubscriptionClosedError struct {
+	Reason string
+}
+
+func (e *SubscriptionClosedError) Error() string {
+	if e.Reason == "" {
+		return "nwc: relay closed the response subscription"
+	}
+	return fmt.Sprintf("nwc: relay closed the response subscription: %s", e.Reason)
 }
 
 // NewNWCClient parses pairing.RelayURLs[0] (only the first relay is used)
@@ -90,7 +123,7 @@ func NewNWCClient(ctx context.Context, pairing *nip47.PairingInfo, encryption st
 		walletPubkey: pairing.WalletPubkey,
 		appPrivKey:   pairing.Secret,
 		encryption:   encryption,
-		subs:         make(map[string]chan *nip47.ResponseEvent),
+		subs:         make(map[string]*nwcSub),
 		doneCh:       make(chan struct{}),
 	}
 	go c.dispatch()
@@ -108,12 +141,12 @@ func (c *NWCClient) Close() {
 }
 
 // dispatch is the sole reader of the underlying connection's incoming
-// messages for the client's whole life, fanning parsed responses out to
-// whichever call registered the matching subscription ID. A single shared
-// reader is required because Connection.Read()'s channel delivers each
-// message to exactly one waiting goroutine — multiple calls filtering it
-// concurrently by subscription ID would race and drop each other's
-// responses.
+// messages for the client's whole life, fanning parsed responses (and
+// subscription-closed notices) out to whichever call registered the
+// matching subscription ID. A single shared reader is required because
+// Connection.Read()'s channel delivers each message to exactly one waiting
+// goroutine — multiple calls filtering it concurrently by subscription ID
+// would race and drop each other's responses.
 func (c *NWCClient) dispatch() {
 	defer close(c.doneCh)
 	for {
@@ -123,23 +156,44 @@ func (c *NWCClient) dispatch() {
 				c.failAll(ErrConnectionClosed)
 				return
 			}
-			evMsg, isEvent := msg.(*wire.EventSubscriptionResponse)
-			if !isEvent {
-				continue
-			}
-			c.mu.Lock()
-			ch, found := c.subs[evMsg.SubscriptionID]
-			c.mu.Unlock()
-			if !found {
-				continue
-			}
-			resp, err := nip47.ParseResponseEvent(evMsg.Event, c.appPrivKey)
-			if err != nil {
-				continue
-			}
-			select {
-			case ch <- resp:
-			default:
+			switch m := msg.(type) {
+			case *wire.EventSubscriptionResponse:
+				c.mu.Lock()
+				sub, found := c.subs[m.SubscriptionID]
+				c.mu.Unlock()
+				if !found {
+					continue
+				}
+				// Fall back to the encryption this client itself used for
+				// the request, not nip47's hardcoded NIP-04 default: a
+				// wallet's response is a reply to a request we ourselves
+				// just encrypted under c.encryption, so we already know
+				// unambiguously what scheme to expect back even if the
+				// wallet doesn't bother re-tagging its response with it
+				// (most real wallets don't — see
+				// ParseResponseEventWithFallback's own doc comment).
+				resp, err := nip47.ParseResponseEventWithFallback(m.Event, c.appPrivKey, c.encryption)
+				if err != nil {
+					continue
+				}
+				select {
+				case sub.ch <- resp:
+				default:
+				}
+			case *wire.ClosedSubscriptionResponse:
+				c.mu.Lock()
+				sub, found := c.subs[m.SubscriptionID]
+				c.mu.Unlock()
+				if !found {
+					continue
+				}
+				select {
+				case <-sub.closed:
+					// already closed; ignore a duplicate CLOSED
+				default:
+					sub.reason = m.Message
+					close(sub.closed)
+				}
 			}
 		case err := <-c.conn.Errors():
 			c.failAll(err)
@@ -158,8 +212,8 @@ func (c *NWCClient) failAll(err error) {
 		return
 	}
 	c.closed, c.closeErr = true, err
-	for id, ch := range c.subs {
-		close(ch)
+	for id, sub := range c.subs {
+		close(sub.ch)
 		delete(c.subs, id)
 	}
 }
@@ -173,18 +227,21 @@ func (c *NWCClient) err() error {
 	return ErrConnectionClosed
 }
 
-// register allocates a fresh subscription ID and a bufSize-buffered
-// response channel, or fails immediately if the client is already closed.
-func (c *NWCClient) register(bufSize int) (subID string, ch chan *nip47.ResponseEvent, err error) {
+// register allocates a fresh subscription ID and its demultiplexing state,
+// or fails immediately if the client is already closed.
+func (c *NWCClient) register(bufSize int) (subID string, sub *nwcSub, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
 		return "", nil, c.closeErr
 	}
 	subID = uuid.NewString()
-	ch = make(chan *nip47.ResponseEvent, bufSize)
-	c.subs[subID] = ch
-	return subID, ch, nil
+	sub = &nwcSub{
+		ch:     make(chan *nip47.ResponseEvent, bufSize),
+		closed: make(chan struct{}),
+	}
+	c.subs[subID] = sub
+	return subID, sub, nil
 }
 
 // unregister removes subID from the dispatch table and best-effort tells
@@ -206,14 +263,14 @@ func (c *NWCClient) unregister(subID string) {
 // bufSize-buffered response channel under a fresh subscription ID before
 // sending, so no response can race the registration. The returned cleanup
 // func must be called (typically via defer) exactly once.
-func (c *NWCClient) subscribeAndSend(ctx context.Context, method string, params any, bufSize int) (<-chan *nip47.ResponseEvent, func(), error) {
+func (c *NWCClient) subscribeAndSend(ctx context.Context, method string, params any, bufSize int) (*nwcSub, func(), error) {
 	select {
 	case <-ctx.Done():
 		return nil, func() {}, ctx.Err()
 	default:
 	}
 
-	subID, ch, err := c.register(bufSize)
+	subID, sub, err := c.register(bufSize)
 	if err != nil {
 		return nil, func() {}, err
 	}
@@ -240,16 +297,36 @@ func (c *NWCClient) subscribeAndSend(ctx context.Context, method string, params 
 		cleanup()
 		return nil, func() {}, ErrConnectionClosed
 	}
-	return ch, cleanup, nil
+	return sub, cleanup, nil
 }
 
-func (c *NWCClient) waitOne(ctx context.Context, ch <-chan *nip47.ResponseEvent) (*nip47.ResponseEvent, error) {
+// drainOrClosedErr is called once sub.closed has fired. dispatch() is
+// single-threaded, so a response event and a CLOSED for the same
+// subscription can only ever be processed in one order — but if the relay
+// sent both (e.g. an EVENT immediately followed by a CLOSED, both already
+// waiting to be read), a real answer that made it into sub.ch always takes
+// priority over reporting the closure.
+func (c *NWCClient) drainOrClosedErr(sub *nwcSub) (*nip47.ResponseEvent, error) {
 	select {
-	case resp, ok := <-ch:
+	case resp, ok := <-sub.ch:
 		if !ok {
 			return nil, c.err()
 		}
 		return resp, nil
+	default:
+		return nil, &SubscriptionClosedError{Reason: sub.reason}
+	}
+}
+
+func (c *NWCClient) waitOne(ctx context.Context, sub *nwcSub) (*nip47.ResponseEvent, error) {
+	select {
+	case resp, ok := <-sub.ch:
+		if !ok {
+			return nil, c.err()
+		}
+		return resp, nil
+	case <-sub.closed:
+		return c.drainOrClosedErr(sub)
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -257,9 +334,10 @@ func (c *NWCClient) waitOne(ctx context.Context, ch <-chan *nip47.ResponseEvent)
 
 // waitAll collects one response per id in ids (matched via
 // ResponseEvent.SubPaymentID), ignoring stray or duplicate responses, until
-// every id has answered or ctx is done. Returns whatever was collected so
-// far alongside a non-nil error on partial completion.
-func (c *NWCClient) waitAll(ctx context.Context, ch <-chan *nip47.ResponseEvent, ids []string) (map[string]*nip47.ResponseEvent, error) {
+// every id has answered, the relay closes the subscription, or ctx is done.
+// Returns whatever was collected so far alongside a non-nil error on
+// partial completion.
+func (c *NWCClient) waitAll(ctx context.Context, sub *nwcSub, ids []string) (map[string]*nip47.ResponseEvent, error) {
 	want := make(map[string]struct{}, len(ids))
 	for _, id := range ids {
 		want[id] = struct{}{}
@@ -267,7 +345,7 @@ func (c *NWCClient) waitAll(ctx context.Context, ch <-chan *nip47.ResponseEvent,
 	got := make(map[string]*nip47.ResponseEvent, len(ids))
 	for len(got) < len(want) {
 		select {
-		case resp, ok := <-ch:
+		case resp, ok := <-sub.ch:
 			if !ok {
 				return got, c.err()
 			}
@@ -278,6 +356,30 @@ func (c *NWCClient) waitAll(ctx context.Context, ch <-chan *nip47.ResponseEvent,
 				continue
 			}
 			got[resp.SubPaymentID] = resp
+		case <-sub.closed:
+			// Drain whatever responses are already buffered before
+			// reporting the closure — same priority rule as waitOne, just
+			// collecting every match instead of stopping at the first.
+			for {
+				select {
+				case resp, ok := <-sub.ch:
+					if !ok {
+						return got, c.err()
+					}
+					if _, expected := want[resp.SubPaymentID]; expected {
+						if _, dup := got[resp.SubPaymentID]; !dup {
+							got[resp.SubPaymentID] = resp
+						}
+					}
+					continue
+				default:
+				}
+				break
+			}
+			if len(got) >= len(want) {
+				return got, nil
+			}
+			return got, &SubscriptionClosedError{Reason: sub.reason}
 		case <-ctx.Done():
 			return got, ctx.Err()
 		}
@@ -290,13 +392,13 @@ func (c *NWCClient) waitAll(ctx context.Context, ch <-chan *nip47.ResponseEvent,
 // method. This is the only generic in the package; it's unexported, so
 // callers of PayInvoice/GetBalance/etc. never see a type parameter.
 func nwcCall[TResult any](ctx context.Context, c *NWCClient, method string, params any) (*TResult, error) {
-	ch, cleanup, err := c.subscribeAndSend(ctx, method, params, 1)
+	sub, cleanup, err := c.subscribeAndSend(ctx, method, params, 1)
 	if err != nil {
 		return nil, err
 	}
 	defer cleanup()
 
-	resp, err := c.waitOne(ctx, ch)
+	resp, err := c.waitOne(ctx, sub)
 	if err != nil {
 		return nil, err
 	}
@@ -427,13 +529,13 @@ func (c *NWCClient) MultiPayInvoice(ctx context.Context, params nip47.MultiPayIn
 		return nil, err
 	}
 
-	ch, cleanup, err := c.subscribeAndSend(ctx, nip47.MethodMultiPayInvoice, params, len(ids))
+	sub, cleanup, err := c.subscribeAndSend(ctx, nip47.MethodMultiPayInvoice, params, len(ids))
 	if err != nil {
 		return nil, err
 	}
 	defer cleanup()
 
-	got, waitErr := c.waitAll(ctx, ch, ids)
+	got, waitErr := c.waitAll(ctx, sub, ids)
 
 	results := make([]MultiPayInvoiceResult, 0, len(got))
 	for _, id := range ids {
@@ -466,13 +568,13 @@ func (c *NWCClient) MultiPayKeysend(ctx context.Context, params nip47.MultiPayKe
 		return nil, err
 	}
 
-	ch, cleanup, err := c.subscribeAndSend(ctx, nip47.MethodMultiPayKeysend, params, len(ids))
+	sub, cleanup, err := c.subscribeAndSend(ctx, nip47.MethodMultiPayKeysend, params, len(ids))
 	if err != nil {
 		return nil, err
 	}
 	defer cleanup()
 
-	got, waitErr := c.waitAll(ctx, ch, ids)
+	got, waitErr := c.waitAll(ctx, sub, ids)
 
 	results := make([]MultiPayKeysendResult, 0, len(got))
 	for _, id := range ids {
@@ -502,10 +604,10 @@ func (c *NWCClient) MultiPayKeysend(ctx context.Context, params nip47.MultiPayKe
 // response event; it is not suitable for fan-out under a non-standard
 // method name.
 func (c *NWCClient) Call(ctx context.Context, method string, params any) (*nip47.ResponseEvent, error) {
-	ch, cleanup, err := c.subscribeAndSend(ctx, method, params, 1)
+	sub, cleanup, err := c.subscribeAndSend(ctx, method, params, 1)
 	if err != nil {
 		return nil, err
 	}
 	defer cleanup()
-	return c.waitOne(ctx, ch)
+	return c.waitOne(ctx, sub)
 }
