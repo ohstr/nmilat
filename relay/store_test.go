@@ -984,6 +984,47 @@ func TestStoreFetchAll(t *testing.T) {
 	}
 }
 
+// TestStoreFetchCombinedKindDeliversByRecencyNotCursorOrder guards
+// storeScan.scan's fetchUntilEmpty (live/continuous) path: a combined-kind
+// filter (nip01.SubscriptionFilter.Kinds with more than one kind) builds one
+// storeCursor per kind, and a large backlog on one kind must not force every
+// event of that kind to be delivered before a newer event on a different,
+// quieter kind sharing the same filter -- the head-of-line blocking that,
+// against a real backpressured subscription channel (see
+// subscription.go's eventBufferCapacity), can stall a fresh, high-priority
+// event behind an unrelated kind's flood for as long as a slow consumer
+// takes to drain the flood.
+func TestStoreFetchCombinedKindDeliversByRecencyNotCursorOrder(t *testing.T) {
+	store := newStore(t)
+	defer store.Close()
+
+	base := uint64(time.Now().Unix())
+
+	burst := make([]*nip01.Event, 0, 200)
+	for i := 0; i < 200; i++ {
+		burst = append(burst, CreateEventWithTimestamp(t, 1, base+uint64(i)))
+	}
+	InsertTestEvents(t, store, burst)
+
+	fresh := CreateEventWithTimestamp(t, 7, base+1000)
+	InsertTestEvents(t, store, []*nip01.Event{fresh})
+
+	got, err := store.FindEvents(context.Background(), &nip01.SubscriptionFilter{
+		Kinds: []int{1, 7},
+		Limit: 500,
+	})
+	if err != nil {
+		t.Fatalf("FindEvents: %v", err)
+	}
+	if len(got) != 201 {
+		t.Fatalf("got %d events, want 201", len(got))
+	}
+	if got[0].EventID != fresh.ID {
+		t.Fatalf("fresh kind-7 event (newest in the store) was not delivered first; got[0]=%s want=%s, got[len-1]=%s",
+			got[0].EventID, fresh.ID, got[len(got)-1].EventID)
+	}
+}
+
 func TestStoreScan(t *testing.T) {
 
 	tests := createStoreCases()

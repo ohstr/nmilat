@@ -1352,14 +1352,30 @@ func (ss *storeScan) scan(ctx context.Context, tx *bolt.Tx, potEvents chan<- *Po
 					}
 
 					if collected > 0 {
+						if fetchUntilEmpty {
+							// Deliver once per pass, after every cursor
+							// has collected -- see this func's own doc
+							// comment below. Draining per-cursor here
+							// (the !fetchUntilEmpty branch's behavior)
+							// would force a burst on one busy cursor to
+							// fully flush through potEvents, which for a
+							// live subscription is a small, backpressured,
+							// per-subscription channel (see
+							// subscription.go's eventBufferCapacity) --
+							// starving every other cursor sharing this
+							// same combined-kind filter until a slow
+							// consumer fully drains the busy one's whole
+							// batch.
+							activeCursors = activeCursors || collected == cursorLimit
+						} else {
+							sent, err := ss.handleEvents(ctx, potEvents, tx, wg, fetchUntilEmpty)
+							if err != nil {
+								return err
+							}
 
-						sent, err := ss.handleEvents(ctx, potEvents, tx, wg, fetchUntilEmpty)
-						if err != nil {
-							return err
+							totalCollected += sent
+							activeCursors = collected == cursorLimit
 						}
-
-						totalCollected += sent
-						activeCursors = collected == cursorLimit
 					}
 
 					if !fetchUntilEmpty && totalCollected >= ss.filter.Limit {
@@ -1368,6 +1384,22 @@ func (ss *storeScan) scan(ctx context.Context, tx *bolt.Tx, potEvents chan<- *Po
 
 				}
 
+			}
+
+			// fetchUntilEmpty: every cursor has now collected everything
+			// newly available for this pass into the shared
+			// ss.queueEvents heap (ordered newest-first by CreatedAt, see
+			// eventQueue.Less) -- flush it in one shot so cursors sharing
+			// one combined-kind filter interleave by recency instead of
+			// one cursor's whole batch blocking every other cursor's
+			// turn. The bounded (!fetchUntilEmpty) path is untouched: it
+			// keeps sending per-cursor so totalCollected's accounting
+			// against ss.filter.Limit -- which only that path uses --
+			// stays exactly as before.
+			if fetchUntilEmpty {
+				if _, err := ss.handleEvents(ctx, potEvents, tx, wg, fetchUntilEmpty); err != nil {
+					return err
+				}
 			}
 
 			refill = 10
