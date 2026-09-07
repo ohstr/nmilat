@@ -1,5 +1,46 @@
 # Changelog
 
+## [0.2.8]
+
+### Added
+
+- `nipcash.EncodeCashHubConnection`/`DecodeCashHubConnection` and
+  `nipcw.EncodeCircleHubConnection`/`DecodeCircleHubConnection`: a
+  `cashhub1...`/`circlehub1...` bech32 encoding of a Hub's own pairing data
+  (wallet pubkey, relay(s), secret, optional human-readable label), for a
+  single copy-paste-safe connection string instead of a raw
+  `nostr+walletconnect://` URI. Each format's HRP is fixed internally, so a
+  Cash Hub connection can't be mistaken for a Circle Wallet Hub one or vice
+  versa. (#16)
+- `nip47.ParseResponseEventWithFallback`: like `ParseResponseEvent`, but
+  falls back to a caller-supplied encryption scheme instead of assuming
+  NIP-04 when a response event carries no `encryption` tag of its own.
+  (#14)
+- `relay/client.SubscriptionClosedError`, returned by `NWCClient` calls when
+  the relay sends a `CLOSED` message for the underlying subscription (e.g.
+  after a "too many concurrent subscriptions" NOTICE), instead of the call
+  hanging silently until `ctx`'s full timeout. (#14)
+
+### Fixed
+
+- `relay/client.NWCClient` misparsed untagged NIP-44 v2 responses as legacy
+  NIP-04, defaulting to NIP-04 whenever a response didn't redeclare its own
+  `encryption` tag instead of falling back to the scheme the client used
+  for the original request — silently breaking decryption for wallets that
+  reply in NIP-44 without redeclaring it. Fixed via
+  `ParseResponseEventWithFallback`; `NWCClient` now passes its own known
+  encryption as the fallback. (#14)
+- `relay`'s combined-kind live-scan path (`SubscriptionFilter.Kinds` with
+  more than one kind) drained one cursor's whole collected batch through
+  the subscription's buffered outgoing channel before the next cursor even
+  ran its own collect — a sustained burst on one kind could starve every
+  other kind sharing that filter for as long as a slow consumer took to
+  drain the busy kind's backlog. Cursors sharing a combined-kind filter now
+  collect into one recency-ordered queue before a single end-of-pass
+  flush, so events from different kinds interleave by recency instead of
+  by cursor position. The bounded (non-live) query path and its `Limit`
+  semantics are unaffected. (#15)
+
 ## [0.2.7]
 
 ### Changed
