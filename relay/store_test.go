@@ -984,6 +984,250 @@ func TestStoreFetchAll(t *testing.T) {
 	}
 }
 
+// TestStoreFetchCombinedKindDeliversByRecencyNotCursorOrder guards
+// storeScan.scan's fetchUntilEmpty (live/continuous) path: a combined-kind
+// filter (nip01.SubscriptionFilter.Kinds with more than one kind) builds one
+// storeCursor per kind, and a large backlog on one kind must not force every
+// event of that kind to be delivered before a newer event on a different,
+// quieter kind sharing the same filter -- the head-of-line blocking that,
+// against a real backpressured subscription channel (see
+// subscription.go's eventBufferCapacity), can stall a fresh, high-priority
+// event behind an unrelated kind's flood for as long as a slow consumer
+// takes to drain the flood.
+func TestStoreFetchCombinedKindDeliversByRecencyNotCursorOrder(t *testing.T) {
+	store := newStore(t)
+	defer store.Close()
+
+	base := uint64(time.Now().Unix())
+
+	burst := make([]*nip01.Event, 0, 200)
+	for i := 0; i < 200; i++ {
+		burst = append(burst, CreateEventWithTimestamp(t, 1, base+uint64(i)))
+	}
+	InsertTestEvents(t, store, burst)
+
+	fresh := CreateEventWithTimestamp(t, 7, base+1000)
+	InsertTestEvents(t, store, []*nip01.Event{fresh})
+
+	got, err := store.FindEvents(context.Background(), &nip01.SubscriptionFilter{
+		Kinds: []int{1, 7},
+		Limit: 500,
+	})
+	if err != nil {
+		t.Fatalf("FindEvents: %v", err)
+	}
+	if len(got) != 201 {
+		t.Fatalf("got %d events, want 201", len(got))
+	}
+	if got[0].EventID != fresh.ID {
+		t.Fatalf("fresh kind-7 event (newest in the store) was not delivered first; got[0]=%s want=%s, got[len-1]=%s",
+			got[0].EventID, fresh.ID, got[len(got)-1].EventID)
+	}
+}
+
+// readEventsCollecting is readEvents plus the actual delivered events (in
+// delivery order) -- readEvents only counts, which isn't enough to assert
+// ordering, dedup, or exact identity.
+func readEventsCollecting(t testing.TB, query *StoreQuery, fetchUntilEmpty bool) []*PotentialEvent {
+	t.Helper()
+
+	var got []*PotentialEvent
+	events := make(chan *PotentialEvent)
+	wg := sync.WaitGroup{}
+
+	go func() {
+		for pe := range events {
+			got = append(got, pe)
+			wg.Done()
+		}
+	}()
+
+	if err := query.Fetch(context.Background(), events, &wg, fetchUntilEmpty); err != nil {
+		t.Fatal(err)
+	}
+
+	wg.Wait()
+	close(events)
+
+	return got
+}
+
+// TestStoreFetchCombinedKindNoEventsDroppedAcrossManyKinds guards
+// correctness, not just ordering: deferring delivery to one handleEvents
+// call per pass (see TestStoreFetchCombinedKindDeliversByRecencyNotCursorOrder)
+// must still deliver every matching event exactly once, and in strict
+// recency order, when several kinds' events are genuinely interleaved in
+// time rather than clustered at opposite ends of the timeline.
+func TestStoreFetchCombinedKindNoEventsDroppedAcrossManyKinds(t *testing.T) {
+	store := newStore(t)
+	defer store.Close()
+
+	base := uint64(time.Now().Unix())
+	kinds := []int{1, 7, 40, 42, 1111}
+
+	var all []*nip01.Event
+	wantIDs := map[string]bool{}
+	ts := base
+	for i := 0; i < 300; i++ {
+		ev := CreateEventWithTimestamp(t, kinds[i%len(kinds)], ts)
+		ts++
+		all = append(all, ev)
+		wantIDs[ev.ID] = true
+	}
+	InsertTestEvents(t, store, all)
+
+	got, err := store.FindEvents(context.Background(), &nip01.SubscriptionFilter{
+		Kinds: kinds,
+		Limit: 1000,
+	})
+	if err != nil {
+		t.Fatalf("FindEvents: %v", err)
+	}
+	if len(got) != len(all) {
+		t.Fatalf("got %d events, want %d (some were dropped or duplicated)", len(got), len(all))
+	}
+
+	seen := map[string]bool{}
+	for i, pe := range got {
+		if seen[pe.EventID] {
+			t.Fatalf("event %s delivered more than once", pe.EventID)
+		}
+		seen[pe.EventID] = true
+		if !wantIDs[pe.EventID] {
+			t.Fatalf("delivered event %s was never inserted", pe.EventID)
+		}
+		if i > 0 && got[i-1].CreatedAt < pe.CreatedAt {
+			t.Fatalf("delivery order not sorted by recency at index %d: got[%d].CreatedAt=%d < got[%d].CreatedAt=%d",
+				i, i-1, got[i-1].CreatedAt, i, pe.CreatedAt)
+		}
+	}
+}
+
+// TestStoreFetchCombinedKindMultipleTicksDeliverOnlyNewEvents guards the
+// deferred, pass-wide handleEvents call against a live subscription's real
+// usage pattern: StoreQuery.Fetch called repeatedly (once per tick, see
+// subscription.go's Start) on the SAME *StoreQuery, whose cursors carry
+// firstCollect/lastKey state across calls. A second tick must not
+// re-deliver the first tick's events, and a fresh event on a different
+// kind landing between ticks must come back promptly on the next one.
+func TestStoreFetchCombinedKindMultipleTicksDeliverOnlyNewEvents(t *testing.T) {
+	store := newStore(t)
+	defer store.Close()
+
+	base := uint64(time.Now().Unix())
+
+	burst1 := make([]*nip01.Event, 0, 50)
+	for i := 0; i < 50; i++ {
+		burst1 = append(burst1, CreateEventWithTimestamp(t, 1, base+uint64(i)))
+	}
+	InsertTestEvents(t, store, burst1)
+
+	filters := nip01.NewSubscriptionFilterGroup()
+	filters.Add(&nip01.SubscriptionFilter{Kinds: []int{1, 7}, Limit: 500})
+	q := newQuery(t, store, filters)
+
+	first := readEventsCollecting(t, q, true)
+	if len(first) != 50 {
+		t.Fatalf("tick 1: got %d events, want 50", len(first))
+	}
+
+	fresh := CreateEventWithTimestamp(t, 7, base+1000)
+	InsertTestEvents(t, store, []*nip01.Event{fresh})
+
+	second := readEventsCollecting(t, q, true)
+	if len(second) != 1 || second[0].EventID != fresh.ID {
+		t.Fatalf("tick 2: got %d events (want exactly [%s]): %+v", len(second), fresh.ID, second)
+	}
+
+	// Tick 3, nothing new landed: must be a clean no-op, not a re-delivery
+	// of anything from ticks 1 or 2.
+	third := readEventsCollecting(t, q, true)
+	if len(third) != 0 {
+		t.Fatalf("tick 3: got %d events, want 0 (nothing new since tick 2): %+v", len(third), third)
+	}
+}
+
+// TestStoreFetchBoundedCombinedKindRespectsLimitExactly guards the
+// !fetchUntilEmpty (bounded/historical) path, which the fairness fix
+// deliberately leaves untouched -- it keeps its original per-cursor
+// handleEvents call and totalCollected accounting. A combined-kind bounded
+// query must still return exactly Limit events, not more, not fewer, even
+// though one kind alone has far more than Limit matching events available.
+func TestStoreFetchBoundedCombinedKindRespectsLimitExactly(t *testing.T) {
+	store := newStore(t)
+	defer store.Close()
+
+	base := uint64(time.Now().Unix())
+	var all []*nip01.Event
+	for i := 0; i < 100; i++ {
+		all = append(all, CreateEventWithTimestamp(t, 1, base+uint64(i)))
+	}
+	for i := 0; i < 100; i++ {
+		all = append(all, CreateEventWithTimestamp(t, 7, base+2000+uint64(i)))
+	}
+	InsertTestEvents(t, store, all)
+
+	filters := nip01.NewSubscriptionFilterGroup()
+	filters.Add(&nip01.SubscriptionFilter{Kinds: []int{1, 7}, Limit: 30})
+	q := newQuery(t, store, filters)
+
+	if got := readEvents(t, q, false); got != 30 {
+		t.Fatalf("bounded combined-kind fetch returned %d events, want exactly 30 (Limit)", got)
+	}
+}
+
+// TestStoreScanCombinedKindCancelledContextReturnsPromptly guards the new
+// deferred-handleEvents structure against a hang or panic when ctx is
+// already cancelled before a pass's per-cursor loop reaches its
+// end-of-pass flush -- the flush must simply never run, not block forever
+// waiting on cursors that will never finish collecting.
+func TestStoreScanCombinedKindCancelledContextReturnsPromptly(t *testing.T) {
+	store := newStore(t)
+	defer store.Close()
+
+	var all []*nip01.Event
+	for i := 0; i < 500; i++ {
+		all = append(all, CreateEvent(t, 1))
+	}
+	for i := 0; i < 500; i++ {
+		all = append(all, CreateEvent(t, 7))
+	}
+	InsertTestEvents(t, store, all)
+
+	filters := nip01.NewSubscriptionFilterGroup()
+	filters.Add(&nip01.SubscriptionFilter{Kinds: []int{1, 7}, Limit: 2000})
+	scan, err := newStoreScan(store, filters.GetAll()[0], make(map[uint64]bool))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	potEvents := make(chan *PotentialEvent)
+	var wg sync.WaitGroup
+	go func() {
+		for range potEvents {
+			wg.Done()
+		}
+	}()
+
+	// Cancel before Scan even starts, so the very first per-cursor select
+	// hits the ctx.Done() branch rather than the natural-exit path.
+	cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- scan.Scan(ctx, potEvents, &wg, true) }()
+
+	select {
+	case err := <-done:
+		if err != context.Canceled {
+			t.Fatalf("Scan returned %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Scan did not return promptly after ctx cancellation")
+	}
+	close(potEvents)
+}
+
 func TestStoreScan(t *testing.T) {
 
 	tests := createStoreCases()

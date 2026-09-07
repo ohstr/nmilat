@@ -275,8 +275,36 @@ type ResponseEvent struct {
 
 // ParseResponseEvent decrypts and parses a kind:23195 response event
 // received by the client. The encryption scheme is determined by the
-// presence/absence of the response's "encryption" tag.
+// presence/absence of the response's "encryption" tag, defaulting to
+// EncryptionNIP04 if absent — kept for backward compatibility with any
+// existing caller of this exact signature. New code should prefer
+// ParseResponseEventWithFallback: not every wallet re-tags its responses
+// with the scheme it encrypted them under (a response is inherently a reply
+// to a request the client itself just encrypted under a scheme of its own
+// choosing, so re-declaring it is redundant, and plenty of real NIP-47
+// wallet implementations don't), and silently assuming legacy NIP-04 for an
+// untagged response that's actually NIP-44 v2 fails decryption outright —
+// see ParseResponseEventWithFallback's own doc comment.
 func ParseResponseEvent(event *nip01.Event, appPrivKey string) (*ResponseEvent, error) {
+	return ParseResponseEventWithFallback(event, appPrivKey, EncryptionNIP04)
+}
+
+// ParseResponseEventWithFallback decrypts and parses a kind:23195 response
+// event received by the client, using the response's own "encryption" tag
+// when present, or fallbackEncryption when it's absent.
+//
+// A NIP-47 response is always a reply to a request the client itself just
+// built and encrypted under a scheme of its own choosing — the client
+// already knows that scheme unambiguously, without needing the wallet to
+// redeclare it on the response. Callers that track the encryption they used
+// for the original request (e.g. NWCClient, which replies with a response
+// on the very same connection whose encryption it set at construction)
+// should pass that as fallbackEncryption, rather than accepting
+// ParseResponseEvent's hardcoded EncryptionNIP04 default: a wallet that
+// (like most real implementations) doesn't bother re-tagging its NIP-44 v2
+// responses would otherwise have every one of them misinterpreted as
+// legacy NIP-04 ciphertext and fail to decrypt.
+func ParseResponseEventWithFallback(event *nip01.Event, appPrivKey, fallbackEncryption string) (*ResponseEvent, error) {
 	if event.Kind != KindNWCResponse {
 		return nil, fmt.Errorf("invalid kind %d, expected %d", event.Kind, KindNWCResponse)
 	}
@@ -293,7 +321,7 @@ func ParseResponseEvent(event *nip01.Event, appPrivKey string) (*ResponseEvent, 
 		return nil, fmt.Errorf("response d tag: %w", err)
 	}
 
-	encryption := EncryptionNIP04
+	encryption := fallbackEncryption
 	if enc, err := utils.FindUniqueEventTagValue(event.Tags, "encryption"); err == nil && enc != "" {
 		encryption = enc
 	}
