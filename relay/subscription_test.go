@@ -179,24 +179,35 @@ func TestSubscriptionCombinedKindBurstDoesNotStarveFreshEvent(t *testing.T) {
 	}
 }
 
-// TestSubscriptionBackpressureDelaysButNeverLosesEvents reproduces the
-// mechanism behind the community-reported "occasional multi-second silent
-// stall delivering a new event to an already-open REQ subscription" (see
-// issues.md / issue-evaluation.md).
+// TestSubscriptionBackpressureDelaysButNeverLosesEvents reproduces one
+// specific mechanism behind the community-reported "occasional multi-second
+// silent stall delivering a new event to an already-open REQ subscription"
+// (see issues.md / issue-evaluation.md) -- but not at the report's own
+// observed scale, and it only guards lossless eventual delivery, not any
+// latency bound. See "Self-critique" in issue-evaluation.md for the full
+// caveats; summarized here:
 //
 // storeScan.handleEvents' send into the subscription's outgoing channel
-// (subscription.go's eventBufferCapacity) has no timeout, and
+// (subscription.go's eventBufferCapacity, 55 slots) has no timeout, and
 // Subscription.Start's poll loop calls StoreQuery.Fetch synchronously on
 // every tick -- so once that channel is full, the *next* poll tick blocks
 // inside Fetch until the consumer drains it, which means a newly-published
 // matching event can sit undelivered for as long as the consumer stays
-// behind. In production, that consumer is a per-connection goroutine whose
+// behind. That part is real and is what this test exercises. But reaching
+// it this way requires backlogging *one* subscription past 55 unread
+// events -- the report's own captured instance was a burst of 9, nowhere
+// near that. The more likely real-world trigger for a small burst is one
+// layer downstream and not covered here: a per-connection goroutine whose
 // own write to the client's socket has no deadline by default
-// (SessionConfig.DataWriteTimeout == 0), so a momentarily slow reader on
-// the client side reproduces exactly this with no error or log anywhere on
-// the relay side.
+// (SessionConfig.DataWriteTimeout == 0) backs up the *shared*,
+// per-connection s.incoming (512 slots, shared across every subscription
+// and control message on that connection) -- which only takes one stuck
+// write anywhere on the connection to stall every subscription sharing it,
+// no matter how few events any single one of them has pending. That path
+// needs a websocket-level test (a real slow-reading client) to reproduce
+// convincingly; this test doesn't attempt it.
 //
-// This can't be shown by simply reading from the stalled subscription's own
+// This also can't be shown by simply reading from the stalled subscription's own
 // channel and expecting a timeout: it's a full, FIFO-ordered buffer, so any
 // read immediately returns one of the already-queued filler events
 // regardless of whether the fresh event's own delivery is stuck behind them
