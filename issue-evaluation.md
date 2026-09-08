@@ -3,9 +3,22 @@
 Source: `issues.md` (community report, `nmilat` v0.2.8).
 Method: every code claim in the report was checked line-by-line against `relay/subscription.go`, `relay/config.go`, and `relay/store.go` at the cited version (repo `HEAD` is tagged `v0.2.8`), then traced further downstream into `relay/handlers.go`, `relay/session.go`, and `relay/packet.go`, which the report itself doesn't cite.
 
+**Update, after building the regression tests below**: the original verdict text right below this
+("no data is lost... nothing is mis-designed to the point of corruption") is no longer accurate as
+a blanket statement. Building a faithful, session-level reproduction of the report's own scenario
+(see "Session-level regression test" further down) surfaced a second, independent, more severe bug
+— `EventStore.FindEventBytes` could serve actually-corrupted event JSON to a client under
+sustained backlog, not just deliver it late. That bug is now fixed (see below). The report's own
+empirical claim ("nothing was ever actually lost") still held in *their* environment/scale, and the
+latency issue below is still real and still the primary subject of this document — this update
+doesn't retract the rest of the evaluation, it corrects one oversold sentence in light of what
+digging further up turned.
+
 ## Verdict: true positive, real architectural issue, not a phantom report
 
-No data is lost and nothing is mis-designed to the point of corruption, but the report accurately
+No data is lost and nothing is mis-designed to the point of corruption *by the mechanism the report
+itself describes* (see update above for a corruption bug found by digging further), but the report
+accurately
 describes a genuine, currently-unbounded and currently-invisible latency path. It's low severity
 (self-heals, rare, no data loss) but worth fixing — the failure mode ("an already-open
 subscription doesn't see a new matching event for up to 30s, silently") is exactly the kind of
@@ -271,3 +284,103 @@ own recommendation #5 ("make `storeLimiter` degrade gracefully... a bounded queu
 backpressure instead of rejecting"): a version of "queue instead of reject" already exists one
 layer down, and it already exhibits exactly the failure mode #5 should be careful not to
 reintroduce.
+
+## Regression tests
+
+Three tests, in order of how closely each matches the report's own scale and methodology:
+
+- `TestSubscriptionBackpressureDelaysButNeverLosesEvents` (`relay/subscription_test.go`) — the
+  narrowest reproduction: backlogs a single subscription's own 55-slot outgoing channel directly.
+  Requires far more events than the report's own observed burst (55+ vs. their 9), so it proves the
+  no-timeout-blocking-send bug class exists in the code but not that it's reachable at the report's
+  actual scale. Kept as the simplest, fastest, most isolated demonstration of that specific
+  mechanism.
+- `TestSessionSlowReaderStallsEveryOtherSubscriptionOnThatConnection` (`relay/session_backpressure_test.go`)
+  — the faithful one: a real two-connection (three, counting the "retry" control) websocket-level
+  reproduction. A large backlog on *one* subscription jams a connection's shared outgoing pipe
+  (`Session.incoming`), which stalls delivery to a second, unrelated, low-volume subscription
+  sharing that connection — needing only 3 fresh events on the filter actually under test, much
+  closer to the report's own 9. Shrinks both ends' OS-level TCP buffers (via a wrapped
+  `net.Listener` and the dialed client's own `net.TCPConn`) to make "the peer stops reading"
+  reproduce genuine TCP backpressure within ~150 small messages instead of depending on this
+  environment's own default buffer sizes, which turned out to be large and inconsistent (see that
+  file's doc comment for the calibration notes).
+- `TestFindEventBytesSurvivesLaterWrites` (`relay/store_findeventbytes_test.go`) — a best-effort,
+  not-fully-reliable standalone check for the corruption bug below (see that bug's own section for
+  why it doesn't reliably reproduce in isolation). Kept as cheap defensive coverage of the
+  invariant, not as the primary evidence — that's the session-level test above, which reliably
+  reproduced the actual corruption 3/3 times before the fix landed.
+
+## Second, independent bug found while building the session-level test: data corruption, not just latency
+
+Building `TestSessionSlowReaderStallsEveryOtherSubscriptionOnThatConnection` surfaced a real,
+reproducible (3/3 runs, including under `-race`, which stayed silent throughout) failure distinct
+from the latency issue this whole document is otherwise about:
+
+```
+sendPacket failed error="json: error calling MarshalJSON for type *wire.EventSubscriptionResponse:
+invalid character '\x00' looking for beginning of value" packet_type=*wire.EventSubscriptionResponse
+```
+
+**Root cause**: `EventStore.FindEventBytes` (`relay/store.go`) returned bbolt's `Get()` result
+directly to its caller, after the read transaction that produced it had already closed:
+
+```go
+// before
+var eventBytes []byte
+_ = s.db.View(func(tx *bolt.Tx) error {
+    eventBytes = tx.Bucket(indexEvents).Get(itob(evsid))
+    return nil
+})
+return eventBytes, nil
+```
+
+Per bbolt's own documented contract, a `[]byte` from `Get()` is a direct reference into the
+mmap'd database file and is "only valid for the life of the transaction... Do not use it outside
+of the transaction." `FindEventBytes`'s only caller (`relay/handlers.go`'s per-subscription
+consumer) fetches these bytes at *delivery* time and hands them to `s.reply()`, which queues them
+into `Session.incoming` for `handleOutgoingMessages` to actually marshal and write later — under
+the exact kind of held-for-a-while backlog central to the report this whole document evaluates,
+that gap can be substantial. Every other `Get()` call site in this package
+(`store_membership.go`) was already safe, because each `json.Unmarshal`s its result *inside* the
+transaction closure before returning; `FindEventBytes` was the one exception, kept as a raw-bytes
+fast path specifically to avoid a marshal/unmarshal round trip.
+
+**What I could and couldn't pin down**: the observed corruption is specific and consistent (NUL
+bytes, not arbitrary garbage), and reproduced reliably through the full session/websocket stack —
+but I was not able to reproduce it in a minimal, single-goroutine, standalone bbolt test, even
+after forcing thousands of subsequent writes across dozens of separate transactions (well past any
+plausible mmap-growth or freelist-reuse threshold) and a version with a concurrent writer/reader
+goroutine pair. My best-supported guess is that it requires genuine concurrency — most likely
+bbolt's mmap being grown (unmapped and remapped) by a concurrent writer while some other goroutine
+still holds a stale pointer into the old mapping, which would also explain why `-race` never
+flagged it (an mmap remap is a memory hazard below Go's own memory-model visibility, not an
+ordinary data race on a Go-level variable) — but that's inference, not a confirmed mechanism.
+
+This doesn't weaken the case for the fix: copying the bytes out *inside* the transaction closure is
+correct and sufficient regardless of which specific bbolt-internal behavior ends up triggering
+staleness in practice, because it eliminates the entire class of "reference outlives its
+transaction" hazard categorically, not just the specific trigger observed here.
+
+**Fix applied** (`relay/store.go`):
+
+```go
+_ = s.db.View(func(tx *bolt.Tx) error {
+    raw := tx.Bucket(indexEvents).Get(itob(evsid))
+    if raw != nil {
+        eventBytes = append([]byte(nil), raw...)
+    }
+    return nil
+})
+```
+
+Verified: the session-level test now passes cleanly (3/3 under `-race`), and the full `relay`
+package suite still passes.
+
+**Severity note**: this is more severe than the latency issue the rest of this document is about —
+a client could receive a payload it can't even parse (or, in a worse case not observed here but not
+ruled out, one that parses but decodes to the *wrong* event) instead of just receiving a correct
+one late. It's also *only* reachable under conditions adjacent to the reported stall (a large
+backlog held for a while before delivery), which is presumably why the community report itself
+never observed it — their own scenario was small bursts (9 events), likely well under whatever
+threshold makes the underlying mmap/page hazard actually manifest.
