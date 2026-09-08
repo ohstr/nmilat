@@ -169,3 +169,105 @@ a *different* connection are unaffected, while other subscriptions on the *same*
 slow reader stall too. That would directly confirm the shared-per-connection-pipe theory over the
 poll-floor-only theory, and is a much smaller lift than instrumenting the write pipeline (which
 the report suggested, but which this evaluation argues is the less likely culprit).
+
+## Self-critique (of this evaluation, its fix plan, and the regression test)
+
+Written after re-examining my own conclusions with a skeptical eye. Several things above are
+weaker than they were first presented.
+
+**The regression test (`TestSubscriptionBackpressureDelaysButNeverLosesEvents`) does not actually
+reproduce the report's own empirical scale.** It requires filling the per-subscription outgoing
+channel to its full 55-slot capacity before the poll loop's send blocks. The report's own captured
+instance was a burst of **9** concurrent matching events — nowhere near 55. At that volume,
+`handleEvents`' send into `sub.outgoing` would never block on its own; the channel has plenty of
+spare capacity. So the test's specific trigger (one subscription single-handedly backlogged past
+55 unread events) is real and now proven to exist in the code, but it is very unlikely to be *the*
+trigger behind the report's numbers. The mechanism I described as most likely in the body of this
+document — a slow/blocked `conn.WriteJSON` (no deadline by default) backing up the **shared,
+per-connection** `s.incoming` (512 slots, shared across every subscription and control message on
+that connection) — needs far fewer matching events on any single filter to manifest, because it
+only takes *one* stuck write, anywhere on that connection, to stall the shared consumer goroutine
+that every subscription funnels through. That mechanism lives in `session.go`/`handlers.go` and
+requires a websocket-level test (two real connections, a client that stops reading) to reproduce
+convincingly — I did not write that test. What's committed today is evidence that *a* variant of
+the underlying bug class (unbounded blocking send, no timeout) is real and reachable, not evidence
+that it's reachable at the report's actual observed burst size.
+
+**The regression test only guards "no loss/no duplication," not "bounded latency."** The report's
+actual complaint is latency (a stall), not correctness (nothing is reported lost). My test's only
+hard assertions are "the retry subscription sees the event promptly" and "the stalled subscription
+eventually delivers everything exactly once" — it has no assertion that would fail if a future
+change made the stall *worse* (say, minutes instead of seconds), as long as delivery is still
+eventually lossless. A test that actually pins down "the stall must not exceed N poll intervals
+once P0/P1 land" would be more valuable, but I don't have a bound to assert yet since no fix has
+landed — the honest framing is that this is a characterization test for the current behavior's
+integrity, not a regression guard for the reported symptom itself.
+
+**The "fresh retry" subscription in the test isn't a fully matched control.** It's opened *after*
+56 matching events already exist in the store, so it observes the fresh event via its initial,
+bounded (`fetchUntilEmpty=false`) fetch — a different internal code path than the one the stalled
+subscription is stuck in post-EOSE (`fetchUntilEmpty=true`, the live-poll path). It's a fair
+black-box proxy for what the report itself measured (a client-side retry), but not an
+apples-to-apples internal comparison.
+
+**P0's "give `DataWriteTimeout` a sane non-zero default" doesn't propose a number, because I don't
+have one.** Too short, and a legitimately slow-but-not-broken client gets disconnected more often
+(trading a silent stall for a spurious close) — a real regression for anyone relying on today's
+"wait forever" tolerance, not just a strict improvement. Too long, and it doesn't meaningfully
+bound the worst case the report is complaining about. This needs production latency data (e.g. via
+the P0 instrumentation, deployed first) to pick a real value, not a guess baked into this document.
+
+**P1's "give each subscription its own write path" is looser than it can actually be.**
+`gorilla/websocket` does not support concurrent writes to one `*websocket.Conn` without external
+synchronization, so a connection's outgoing traffic cannot be fully de-serialized — there will
+always be exactly one writer goroutine per connection. What's actually achievable is *fairer
+scheduling* across subscriptions sharing that one writer (e.g. round-robin draining, or a
+per-subscription cap on how many consecutive messages one subscription can push before yielding),
+not removing the shared bottleneck outright. The write-up as currently phrased could be read as
+promising more than that.
+
+**P1's "decouple the poll loop from the drain" needs a bounded design, not just "move it off the
+poll goroutine."** If the scan side is fully decoupled from a slow drain via an unbounded
+intermediate structure, the failure mode changes from "one subscription's poll loop blocks" (safe,
+self-limiting, bounded memory) to "events accumulate somewhere unbounded while a slow consumer
+never catches up" (an OOM risk instead of a stall). Any real implementation needs its own
+bound-plus-drop/log policy, which is a real design task, not a one-line change.
+
+**P2's write-pipeline critique ("`WorkerCount > 1` can only add latency, never help") is
+one-sided.** A multi-worker design *can* legitimately help throughput even with bbolt's
+single-writer constraint, by overlapping each worker's (cheap, CPU-only) batch accumulation with
+another worker's (expensive, I/O-bound) `db.Update`/fsync — i.e. pipelining accumulation against
+commit latency, rather than parallelizing commits themselves (which is impossible regardless). I
+already hedged this in the P2 write-up ("unclear... near-zero or negative," suggesting a benchmark
+first) rather than asserting fragmentation is strictly bad, and that hedge should stay — a rewrite
+here isn't justified without measuring first.
+
+**The "OK gates on commit, so the write pipeline is off the critical path" claim is solid but not
+airtight.** It correctly rules the write pipeline out as an explanation for the specific
+OK-to-visible gap the report measured. It does not rule out the separate, already-noted mmap-growth
+lock possibility (a write transaction growing the on-disk file can briefly block *new* transaction
+begins, read or write, relay-wide) as a contributor to occasional short stalls — I flagged this as
+low-confidence in the body and that confidence level is the right one, not higher.
+
+**On the `ncli` side-check:** verifying `storeLimiter` is per-connection and that its rejection
+path is clean was straightforward and I stand by that verdict (not an `nmilat` bug). One thing I
+missed in the original pass and only found while re-examining this: the `ncli` report's own
+workaround — raising `MaxConcurrentStoreTasks` from 2048 to 16384 — doesn't fix the underlying
+bottleneck, it moves it. `executeStoreTask` (`session.go:182`) only guards a per-session semaphore;
+past that, it spawns a goroutine that calls the *store-wide* `EventStore.Execute`
+(`store.go:962`), whose own queue (`TaskQueueSize`, default 8192, shared across every connection
+on the process, unaffected by `MaxConcurrentStoreTasks`) can itself fill under enough concurrent
+submitters. When it does, `Execute`'s `s.taskQueue <- task` send blocks — bounded only by that
+task's `ctx` (traced back through `processEvent`/`ProcessPacket` to the session's own long-lived
+context, which has no deadline by default) — with no rejection, no log, no timeout. This doesn't
+stall the connection's read loop (the blocking happens inside the per-task goroutine
+`executeStoreTask` spawns, not inline), but it does mean that specific event's `OK`/rejection can
+now go silent for an unbounded time instead of failing fast. In other words: raising the session
+ceiling without also raising (or understanding its relationship to) the store-wide queue size
+trades a clean, fast, observable `ErrRateLimited` for a shot at the same unbounded-silent-wait
+failure class documented for the *subscription* side elsewhere in this document — worth flagging
+to whoever applied that workaround, and a concrete reason to be cautious about the `ncli` report's
+own recommendation #5 ("make `storeLimiter` degrade gracefully... a bounded queue with
+backpressure instead of rejecting"): a version of "queue instead of reject" already exists one
+layer down, and it already exhibits exactly the failure mode #5 should be careful not to
+reintroduce.
