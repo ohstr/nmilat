@@ -20,6 +20,15 @@
   the relay sends a `CLOSED` message for the underlying subscription (e.g.
   after a "too many concurrent subscriptions" NOTICE), instead of the call
   hanging silently until `ctx`'s full timeout. (#14)
+- `relay`: regression test (`TestSubscriptionBackpressureDelaysButNeverLosesEvents`)
+  reproducing a community-reported delivery stall — an already-open
+  subscription whose downstream consumer falls behind (e.g. a slow
+  websocket write, unbounded by default via `SessionConfig.DataWriteTimeout`)
+  can have new matching events delayed well past the 50ms poll interval,
+  though never lost or duplicated once the consumer catches up. Root-cause
+  analysis in `issue-evaluation.md`; this is test/documentation only, no
+  behavior change — a follow-up fix (bounding the write path, decoupling
+  delivery from poll cadence) is tracked separately. (#18)
 
 ### Fixed
 
