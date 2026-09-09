@@ -36,10 +36,7 @@ func (l *shrinkBufferListener) Accept() (net.Conn, error) {
 }
 
 // createBackpressureWS is like createWS, but serves over a
-// shrinkBufferListener and also shrinks the dialed client connection's own
-// read buffer, so a client that stops reading reliably jams the connection
-// within a couple hundred small messages instead of depending on this
-// environment's own (large, inconsistent) default socket buffer sizes.
+// shrinkBufferListener and shrinks the client's own read buffer too.
 func createBackpressureWS(t testing.TB, store *EventStore) *websocket.Conn {
 	conn, _ := createBackpressureWSWithOpts(t, store)
 	return conn
@@ -162,9 +159,7 @@ func TestSessionSlowReaderStallsEveryOtherSubscriptionOnThatConnection(t *testin
 		}
 	}
 
-	// The report's own comparison: a brand-new connection/subscription
-	// against the same probe filter, opened *after* the probe events were
-	// published, with nothing backlogged. It should observe them promptly.
+	// The retry control: nothing backlogged, should observe them promptly.
 	retry := createBackpressureWS(t, store)
 	if err := retry.WriteJSON(wire.NewRequestPacket("sub-retry", CreateFilter([]int{9999}, 10))); err != nil {
 		t.Fatal(err)
