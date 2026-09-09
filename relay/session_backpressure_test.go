@@ -97,7 +97,7 @@ func readUntil(t testing.TB, conn *websocket.Conn, deadline time.Time, fn func(w
 }
 
 // TestSessionSlowReaderStallsEveryOtherSubscriptionOnThatConnection
-// reproduces the delivery stall (issue-evaluation.md) at report-realistic
+// reproduces the delivery stall fixed in PR #19 at report-realistic
 // scale: 3 fresh events on the filter under test, not the 55+
 // TestSubscriptionBackpressureDelaysButNeverLosesEvents needs.
 //
