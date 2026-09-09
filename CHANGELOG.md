@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.2.9]
+
+### Fixed
+
+- `relay.SessionConfig.DataWriteTimeout` defaulted to `0` (no deadline) on
+  a connection's single shared outgoing pipe — every subscription and
+  control message on one connection funnels through one goroutine making
+  one blocking `conn.WriteJSON` call at a time, so a slow or unresponsive
+  reader could silently stall delivery to every subscription on that
+  connection, indefinitely. Default is now 30s (overridable, including
+  back to `0`, via the existing `WithSessionWriteTimeouts`). `sendPacket`
+  also now logs a warning when a single write exceeds 250ms — previously
+  there was no observable signal for this at all. Root-cause writeup and
+  regression tests in `issue-evaluation.md`. (#19)
+- `relay/store.EventStore.FindEventBytes` returned a bbolt-transaction-
+  scoped byte slice after its own read transaction had already closed —
+  invalid per bbolt's own contract, and reproducibly served corrupted
+  (NUL-byte) event JSON to a client under a held-for-a-while delivery
+  backlog. Fixed by copying the bytes inside the transaction closure.
+  (#19)
+
 ## [0.2.8]
 
 ### Added
@@ -23,22 +44,6 @@
 
 ### Fixed
 
-- `relay.SessionConfig.DataWriteTimeout` defaulted to `0` (no deadline) on
-  a connection's single shared outgoing pipe — every subscription and
-  control message on one connection funnels through one goroutine making
-  one blocking `conn.WriteJSON` call at a time, so a slow or unresponsive
-  reader could silently stall delivery to every subscription on that
-  connection, indefinitely. Default is now 30s (overridable, including
-  back to `0`, via the existing `WithSessionWriteTimeouts`). `sendPacket`
-  also now logs a warning when a single write exceeds 250ms — previously
-  there was no observable signal for this at all. Root-cause writeup and
-  regression tests in `issue-evaluation.md`. (#19)
-- `relay/store.EventStore.FindEventBytes` returned a bbolt-transaction-
-  scoped byte slice after its own read transaction had already closed —
-  invalid per bbolt's own contract, and reproducibly served corrupted
-  (NUL-byte) event JSON to a client under a held-for-a-while delivery
-  backlog. Fixed by copying the bytes inside the transaction closure.
-  (#19)
 - `relay/client.NWCClient` misparsed untagged NIP-44 v2 responses as legacy
   NIP-04, defaulting to NIP-04 whenever a response didn't redeclare its own
   `encryption` tag instead of falling back to the scheme the client used
