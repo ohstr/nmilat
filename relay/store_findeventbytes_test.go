@@ -8,59 +8,30 @@ import (
 )
 
 // TestFindEventBytesSurvivesLaterWrites guards a use-after-transaction-
-// scope bug found while building a regression test for the stall reported
-// in issues.md. EventStore.FindEventBytes (relay/store.go) used to do
-// this:
+// scope bug in EventStore.FindEventBytes: it used to return bbolt's Get()
+// result to the caller after its own read transaction had already closed.
+// Per bbolt's contract, that []byte is only valid for the transaction's
+// lifetime -- a later write can recycle the page it points into. Fixed by
+// copying the bytes out inside the transaction closure.
 //
-//	var eventBytes []byte
-//	_ = s.db.View(func(tx *bolt.Tx) error {
-//	    eventBytes = tx.Bucket(indexEvents).Get(itob(evsid))
-//	    return nil
-//	})
-//	return eventBytes, nil
-//
-// -- returning bbolt's Get result to the *caller*, after the read
-// transaction that produced it had already closed. Per bbolt's own
-// documented contract, a []byte from Get is a direct reference into the
-// mmap'd database file and "is only valid for the life of the transaction
-// ... Do not use it outside of the transaction". It's now fixed by copying
-// the bytes out inside the transaction closure before returning.
-//
-// This was not a theoretical concern: it's what caused
+// Not theoretical: this caused
 // TestSessionSlowReaderStallsEveryOtherSubscriptionOnThatConnection to
-// fail with "invalid character '\x00' looking for beginning of value" the
-// first few times it was written, pre-fix -- reliably, 3/3 runs including
-// under -race (which stayed silent throughout, consistent with this being
-// an mmap-level memory hazard below Go's own memory-model visibility, not
-// an ordinary data race on a Go variable). That test holds a large backlog
-// queued for delivery for a while under a slow/backpressured connection --
-// the same shape as the community-reported stall -- which is exactly the
-// condition under which a FindEventBytes caller (relay/handlers.go's
-// per-subscription consumer, which fetches bytes at delivery time and can
-// then sit queued in Session.incoming for a while before actually being
-// marshaled) can end up serving corrupted event JSON to a client instead
-// of just delivering it late.
+// fail with corrupted (NUL-byte) event JSON 3/3 times, pre-fix, under
+// exactly the "large backlog held for a while before delivery" shape the
+// stall report describes (relay/handlers.go fetches bytes at delivery
+// time, which can sit queued for a while before actually being
+// marshaled). -race stayed silent throughout, consistent with an
+// mmap-level hazard below Go's memory-model visibility.
 //
-// What this test does *not* do: reliably reproduce that corruption in
-// isolation. Several standalone attempts to force it deterministically --
-// many separate write transactions after the read (up to 10,000 events
-// across 40 transactions), and a version with a concurrent
-// writer/reader goroutine pair -- did not reproduce it even once, despite
-// the real session-level test catching it 3/3 times. The exact trigger
-// (most likely bbolt's mmap being grown -- unmapped and remapped -- by a
-// concurrent writer while this package held a stale pointer into the old
-// mapping, though that's inference, not confirmed root cause) needs
-// genuine concurrency and/or timing this test doesn't reliably hit. This
-// test is kept anyway as a cheap defensive/documentation check of the
-// invariant "FindEventBytes's result must survive later writes
-// byte-for-byte" -- treat TestSessionSlowReaderStallsEveryOtherSubscriptionOnThatConnection
-// as the real regression coverage for this bug, not this one.
+// This test does *not* reliably reproduce that corruption standalone --
+// several attempts (many separate write transactions, a concurrent
+// writer/reader pair) didn't trigger it even once, unlike the real
+// session-level test above. Kept as cheap defensive coverage of the
+// invariant, not as primary evidence.
 //
-// Every other Get() call site in this package (store_membership.go) was
-// already safe: each json.Unmarshals its result *inside* the transaction
-// closure, before the slice can go stale. FindEventBytes was the one
-// exception, kept as a raw-bytes fast path specifically to avoid a
-// marshal/unmarshal round trip (see EventSubscriptionResponse.MarshalJSON).
+// FindEventBytes was the only unsafe Get() call site in this package --
+// every other one (store_membership.go) already json.Unmarshals its
+// result inside the transaction closure.
 func TestFindEventBytesSurvivesLaterWrites(t *testing.T) {
 	store := newStore(t)
 	defer store.Close()

@@ -31,12 +31,10 @@ const (
 	wsDefaultReadLimit = 1_101_005
 
 	// slowSendWarnThreshold is how long a single sendPacket call may take
-	// before it's logged as a warning. Several multiples of
-	// subscription.go's 50ms poll interval: this is meant to surface
-	// exactly the "shared outgoing pipe is backed up" symptom from
-	// issues.md / issue-evaluation.md (previously invisible -- a slow
-	// conn.WriteJSON produced zero observable signal), not to fire on
-	// ordinary jitter.
+	// before it's logged as a warning -- surfaces a backed-up outgoing
+	// pipe (see issue-evaluation.md), which previously had no observable
+	// signal at all. Several multiples of the poll interval, to avoid
+	// firing on ordinary jitter.
 	slowSendWarnThreshold = 250 * time.Millisecond
 )
 
@@ -450,12 +448,8 @@ func (s *Session) sendPacket(packet wire.SubscriptionResponse) error {
 	start := time.Now()
 	err := s.conn.WriteJSON(packet)
 	if elapsed := time.Since(start); elapsed > slowSendWarnThreshold && err == nil {
-		// A successful-but-slow write: the connection isn't dead (no
-		// error), but something -- most likely a slow-reading peer, since
-		// every subscription and control message on this connection
-		// shares this one write -- backed it up well past ordinary
-		// scheduling jitter. This is the queue-depth/backpressure signal
-		// issues.md asked for; previously there was none at all.
+		// Successful but slow: no error, but something (most likely a
+		// slow-reading peer) backed this up well past ordinary jitter.
 		s.config.Logger.Warn().
 			Int64("session", s.id).
 			Str("remote", s.info.RemoteAddr).
