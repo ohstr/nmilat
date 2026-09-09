@@ -46,8 +46,20 @@ func (l *shrinkBufferListener) Accept() (net.Conn, error) {
 // within a couple hundred small messages instead of depending on this
 // environment's own (large, inconsistent) default socket buffer sizes.
 func createBackpressureWS(t testing.TB, store *EventStore) *websocket.Conn {
+	conn, _ := createBackpressureWSWithOpts(t, store)
+	return conn
+}
+
+// createBackpressureWSWithOpts is createBackpressureWS, but also takes
+// SessionOptions (e.g. WithSessionWriteTimeouts to override
+// DataWriteTimeout for a specific test) and returns the handler alongside
+// the connection so a test can inspect session state (e.g.
+// waitForSessionCount) without waiting on createBackpressureWS's own
+// t.Cleanup ordering.
+func createBackpressureWSWithOpts(t testing.TB, store *EventStore, opts ...SessionOption) (*websocket.Conn, *SessionHandler) {
 	metadata := &nip11.Metadata{Limitation: nip11.Limitation{MaxMessageLength: 1024 * 1024}}
-	handler := NewSessionHandler(store, metadata, nil, WithLogger(testlogger.New(t)))
+	allOpts := append([]SessionOption{WithLogger(testlogger.New(t))}, opts...)
+	handler := NewSessionHandler(store, metadata, nil, allOpts...)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -71,7 +83,7 @@ func createBackpressureWS(t testing.TB, store *EventStore) *websocket.Conn {
 		_ = conn.Close()
 		waitForSessionCount(t, handler, 0)
 	})
-	return conn
+	return conn, handler
 }
 
 // readUntil reads ClientPayload frames from conn (bounded by deadline)
@@ -238,4 +250,49 @@ func TestSessionSlowReaderStallsEveryOtherSubscriptionOnThatConnection(t *testin
 	if eoseCount != 2 {
 		t.Fatalf("got %d EOSE messages via the stalled connection, want exactly 2 (one per subscription)", eoseCount)
 	}
+}
+
+// TestDataWriteTimeoutClosesAPermanentlyStuckReaderInsteadOfHangingForever
+// is the direct regression test for the fix itself (relay/config.go's
+// defaultDataWriteTimeout, relay/session.go's sendPacket): before it,
+// SessionConfig.DataWriteTimeout defaulted to 0 (no deadline), so a reader
+// that never comes back at all -- not just "slow for a while," as in
+// TestSessionSlowReaderStallsEveryOtherSubscriptionOnThatConnection above,
+// but genuinely gone -- would jam that connection's shared outgoing pipe
+// forever, with no error, no log, no way for the relay to ever notice or
+// recover the goroutines/resources involved.
+//
+// Configures short DataWriteTimeout/ControlWriteTimeout *and*
+// Ping/PongTimeout so the whole test finishes fast; production's actual
+// DataWriteTimeout default is far more generous (30s, see
+// defaultDataWriteTimeout's doc comment for why), and Ping/Pong are left
+// at their own existing defaults untouched in production. Both matter
+// here, not just DataWriteTimeout alone: sendPacket's write timeout only
+// unblocks the *outgoing* goroutine (handleOutgoingMessages); a client
+// that never sends anything either leaves receiveMessages's own blocking
+// conn.ReadJSON call stuck until *its* read deadline -- seeded from
+// PongTimeout at session start (see NewSession) -- expires. Session.Close
+// only actually runs once receiveMessages returns, so full teardown for a
+// totally unresponsive peer depends on both timeouts, not just the one
+// this fix adds. This test's short values make that whole chain complete
+// in well under a second instead of needing PongTimeout's full default
+// (60s) to prove the connection doesn't hang forever.
+func TestDataWriteTimeoutClosesAPermanentlyStuckReaderInsteadOfHangingForever(t *testing.T) {
+	backlog := CreateEvents(t, 150, 1)
+	store := newStoreWithEvents(t, backlog)
+
+	stalled, handler := createBackpressureWSWithOpts(t, store,
+		WithSessionWriteTimeouts(300*time.Millisecond, 200*time.Millisecond),
+		WithSessionPingConfig(1*time.Hour, 500*time.Millisecond)) // ping interval irrelevant here; only the initial PongTimeout-seeded read deadline matters
+
+	if err := stalled.WriteJSON(wire.NewRequestPacket("sub-backlog", CreateFilter([]int{1}, 500))); err != nil {
+		t.Fatal(err)
+	}
+
+	// Never read from `stalled` at all, for the rest of this test. Under
+	// the old default (DataWriteTimeout=0) the outgoing side of this
+	// would hang indefinitely. waitForSessionCount fails the test if the
+	// session hasn't closed within its own 2s budget -- comfortably more
+	// than this test's own (sub-second) configured timeouts need.
+	waitForSessionCount(t, handler, 0)
 }

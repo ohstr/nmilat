@@ -36,11 +36,25 @@
   unrelated, low-volume subscription sharing that connection, needing only
   a handful of fresh events on the filter actually under test — much
   closer to the scale the report described. Root-cause analysis in
-  `issue-evaluation.md`; test/documentation only for the stall itself, no
-  behavior change there yet — a follow-up fix (bounding the write path,
-  decoupling delivery from poll cadence) is tracked separately.
+  `issue-evaluation.md`. See "Fixed" below for the write-timeout fix this
+  led to; decoupling delivery from poll cadence (a further, larger
+  improvement) is still tracked separately, not done here.
 
 ### Fixed
+
+- `relay.SessionConfig.DataWriteTimeout` defaulted to `0` (no deadline at
+  all) on a single connection's shared outgoing pipe — every subscription
+  and control message on one connection funnels through one
+  `handleOutgoingMessages` goroutine making one blocking `conn.WriteJSON`
+  call at a time, so a momentarily slow or fully unresponsive reader could
+  stall delivery to every subscription on that connection indefinitely,
+  silently (the delivery-stall report above). Default is now 30s
+  (deliberately generous, not a tuned optimum — still overridable via the
+  existing `WithSessionWriteTimeouts`, including back to `0`). `sendPacket`
+  also now logs a warning whenever a single write takes longer than 250ms,
+  whether or not it eventually succeeds/times out — previously this
+  produced no observable signal at all.
+  (`TestDataWriteTimeoutClosesAPermanentlyStuckReaderInsteadOfHangingForever`)
 
 - `relay/store.EventStore.FindEventBytes` returned a bbolt-transaction-
   scoped byte slice after its own read transaction had already closed —
