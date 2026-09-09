@@ -179,48 +179,25 @@ func TestSubscriptionCombinedKindBurstDoesNotStarveFreshEvent(t *testing.T) {
 	}
 }
 
-// TestSubscriptionBackpressureDelaysButNeverLosesEvents reproduces one
-// specific mechanism behind the community-reported "occasional multi-second
-// silent stall delivering a new event to an already-open REQ subscription"
-// (see issues.md / issue-evaluation.md) -- but not at the report's own
-// observed scale, and it only guards lossless eventual delivery, not any
-// latency bound. See "Self-critique" in issue-evaluation.md for the full
-// caveats; summarized here:
+// TestSubscriptionBackpressureDelaysButNeverLosesEvents reproduces the
+// no-timeout blocking-send mechanism behind the delivery stall in
+// issue-evaluation.md: storeScan.handleEvents' send into a subscription's
+// outgoing channel (eventBufferCapacity, 55 slots) has no timeout, and
+// Subscription.Start's poll loop calls Fetch synchronously on every tick --
+// so once the channel is full, the next poll tick blocks inside Fetch until
+// the consumer drains it, stalling delivery of any new matching event.
+// (Needs 55+ backlogged events to trigger directly; see
+// TestSessionSlowReaderStallsEveryOtherSubscriptionOnThatConnection for the
+// more realistic small-burst trigger one layer downstream.)
 //
-// storeScan.handleEvents' send into the subscription's outgoing channel
-// (subscription.go's eventBufferCapacity, 55 slots) has no timeout, and
-// Subscription.Start's poll loop calls StoreQuery.Fetch synchronously on
-// every tick -- so once that channel is full, the *next* poll tick blocks
-// inside Fetch until the consumer drains it, which means a newly-published
-// matching event can sit undelivered for as long as the consumer stays
-// behind. That part is real and is what this test exercises. But reaching
-// it this way requires backlogging *one* subscription past 55 unread
-// events -- the report's own captured instance was a burst of 9, nowhere
-// near that. The more likely real-world trigger for a small burst is one
-// layer downstream and not covered here: a per-connection goroutine whose
-// own write to the client's socket has no deadline by default
-// (SessionConfig.DataWriteTimeout == 0) backs up the *shared*,
-// per-connection s.incoming (512 slots, shared across every subscription
-// and control message on that connection) -- which only takes one stuck
-// write anywhere on the connection to stall every subscription sharing it,
-// no matter how few events any single one of them has pending. That path
-// needs a websocket-level test (a real slow-reading client) to reproduce
-// convincingly; this test doesn't attempt it.
-//
-// This also can't be shown by simply reading from the stalled subscription's own
-// channel and expecting a timeout: it's a full, FIFO-ordered buffer, so any
-// read immediately returns one of the already-queued filler events
-// regardless of whether the fresh event's own delivery is stuck behind them
-// -- that's just how a bounded channel behaves, not evidence of anything.
-// Instead, this test mirrors the report's own methodology: it compares the
-// stalled subscription against a brand-new "retry" subscription opened
-// after the same event is published, with nothing backlogged -- exactly
-// the comparison the report itself made ("retrying the identical request
-// immediately ... succeeds in ~100ms"). The retry subscription observes
-// the fresh event promptly; the stalled one is then confirmed to
-// eventually deliver every event -- including the fresh one -- exactly
-// once, matching the report's other core finding: this is a latency
-// problem, not a correctness one.
+// Can't be shown by just reading from the stalled subscription's own
+// channel and expecting a timeout -- it's a full FIFO buffer, so any read
+// just returns an already-queued filler event regardless of whether the
+// fresh one is stuck behind it. Instead this mirrors the report's own
+// methodology: compares the stalled subscription against a brand-new
+// "retry" subscription opened after the same event is published. The retry
+// sees it promptly; the stalled one is then confirmed to eventually
+// deliver everything, including the fresh event, exactly once.
 func TestSubscriptionBackpressureDelaysButNeverLosesEvents(t *testing.T) {
 	store := newStore(t)
 	defer store.Close()

@@ -11,22 +11,12 @@ const (
 	defaultOutgoingBufferSize = 512
 
 	// defaultDataWriteTimeout bounds how long a single outgoing data frame
-	// (EVENT/OK/EOSE/etc, via sendPacket) may block on conn.WriteJSON
-	// before the session gives up on this connection and closes it. Before
-	// this existed, DataWriteTimeout defaulted to 0 (no deadline at all):
-	// every subscription on a connection funnels through one shared,
-	// single-goroutine outgoing pipe (Session.incoming, drained by
-	// handleOutgoingMessages), so one momentarily slow/stuck reader could
-	// silently stall delivery to every subscription on that connection
-	// indefinitely, with no error, no log, no bound -- see issues.md /
-	// issue-evaluation.md for the full writeup. 30s is a deliberately
-	// generous starting point, not a tuned optimum (no production latency
-	// data went into picking it): long enough to comfortably absorb the
-	// worst stalls actually observed in the field (up to ~30s, per that
-	// report) without punishing a merely-slow-but-recovering reader, while
-	// still bounding what used to be unbounded. Override via
-	// WithSessionWriteTimeouts if a deployment needs a different value (or
-	// 0 to restore the old unbounded behavior).
+	// may block on conn.WriteJSON before the session gives up and closes
+	// the connection. Every subscription on a connection shares one
+	// outgoing pipe, so an unbounded deadline let one stuck reader stall
+	// delivery to all of them indefinitely (see issue-evaluation.md). 30s
+	// is a deliberately generous default, not a tuned optimum. Override
+	// via WithSessionWriteTimeouts (0 restores the old unbounded behavior).
 	defaultDataWriteTimeout = 30 * time.Second
 
 	defaultMaxConcurrentStoreTasks = 2048

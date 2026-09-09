@@ -108,39 +108,28 @@ func readUntil(t testing.TB, conn *websocket.Conn, deadline time.Time, fn func(w
 }
 
 // TestSessionSlowReaderStallsEveryOtherSubscriptionOnThatConnection
-// reproduces the community-reported stall (issues.md / issue-evaluation.md)
-// at the level it most likely actually happens in production, and at a
-// scale close to what was reported: a handful of fresh events (3 here,
-// the report's own captured instance was 9), not the 55+ needed to trigger
-// TestSubscriptionBackpressureDelaysButNeverLosesEvents's narrower,
-// single-subscription-buffer variant of the same bug class.
+// reproduces the delivery stall (issue-evaluation.md) at the level it most
+// likely happens in production, at report-realistic scale: 3 fresh events
+// on the filter under test, not the 55+ TestSubscriptionBackpressureDelaysButNeverLosesEvents
+// needs for its narrower variant of the same bug class.
 //
 // Every subscription on one websocket connection -- and every other
-// outgoing message, including EOSE and OK -- shares one outgoing pipe:
-// Session.incoming (512 slots) drained by a single handleOutgoingMessages
-// goroutine making one blocking conn.WriteJSON call at a time
-// (session.go), and SessionConfig.DataWriteTimeout defaults to 0 (no write
-// deadline). So a large, undrained backlog on ONE subscription can jam
-// that shared pipe and stall delivery to a completely unrelated, otherwise
-// idle subscription on the very same connection, no matter how few events
-// that second subscription has pending.
+// outgoing message -- shares one outgoing pipe (Session.incoming, 512
+// slots, drained by one goroutine making one blocking conn.WriteJSON call
+// at a time). So a large, undrained backlog on ONE subscription jams
+// delivery to a completely unrelated, otherwise-idle subscription on the
+// same connection.
 //
-// This mirrors the report's own methodology rather than reading from the
-// stalled connection and expecting a timeout (which, as with the
-// subscription-level test, would just return already-queued backlog
-// messages and prove nothing): it compares delivery of the same freshly
-// published events via the stalled connection against a brand-new
-// connection/subscription opened afterward with nothing backlogged.
+// Mirrors the report's own methodology rather than reading from the
+// stalled connection and expecting a timeout (a full FIFO buffer would
+// just return already-queued backlog and prove nothing): compares
+// delivery of the same freshly published events via the stalled
+// connection against a brand-new connection opened afterward.
 //
-// This test also incidentally caught a second, independent bug the first
-// few times it was written: EventStore.FindEventBytes (relay/store.go)
-// used to return a bbolt-transaction-scoped byte slice after its own
-// transaction had already closed, which under exactly this kind of
-// held-for-a-while backlog could serve corrupted (NUL-byte-containing)
-// event JSON to a client instead of just delivering it late. See
-// TestFindEventBytesSurvivesLaterWrites for that bug specifically; it's
-// now fixed, so this test no longer exercises it directly, only the
-// timing/fairness issue described above.
+// This test also caught EventStore.FindEventBytes's transaction-scope bug
+// (see TestFindEventBytesSurvivesLaterWrites) the first few times it was
+// written; that's fixed now, so this only exercises the timing/fairness
+// issue above.
 func TestSessionSlowReaderStallsEveryOtherSubscriptionOnThatConnection(t *testing.T) {
 	backlog := CreateEvents(t, 150, 1)
 	store := newStoreWithEvents(t, backlog)
@@ -253,30 +242,18 @@ func TestSessionSlowReaderStallsEveryOtherSubscriptionOnThatConnection(t *testin
 }
 
 // TestDataWriteTimeoutClosesAPermanentlyStuckReaderInsteadOfHangingForever
-// is the direct regression test for the fix itself (relay/config.go's
-// defaultDataWriteTimeout, relay/session.go's sendPacket): before it,
-// SessionConfig.DataWriteTimeout defaulted to 0 (no deadline), so a reader
-// that never comes back at all -- not just "slow for a while," as in
-// TestSessionSlowReaderStallsEveryOtherSubscriptionOnThatConnection above,
-// but genuinely gone -- would jam that connection's shared outgoing pipe
-// forever, with no error, no log, no way for the relay to ever notice or
-// recover the goroutines/resources involved.
+// is the regression test for the fix itself (config.go's
+// defaultDataWriteTimeout, session.go's sendPacket): a reader that's
+// genuinely gone, not just slow, used to jam a connection's outgoing pipe
+// forever with no error, no log, no recovery.
 //
 // Configures short DataWriteTimeout/ControlWriteTimeout *and*
-// Ping/PongTimeout so the whole test finishes fast; production's actual
-// DataWriteTimeout default is far more generous (30s, see
-// defaultDataWriteTimeout's doc comment for why), and Ping/Pong are left
-// at their own existing defaults untouched in production. Both matter
-// here, not just DataWriteTimeout alone: sendPacket's write timeout only
-// unblocks the *outgoing* goroutine (handleOutgoingMessages); a client
-// that never sends anything either leaves receiveMessages's own blocking
-// conn.ReadJSON call stuck until *its* read deadline -- seeded from
-// PongTimeout at session start (see NewSession) -- expires. Session.Close
-// only actually runs once receiveMessages returns, so full teardown for a
-// totally unresponsive peer depends on both timeouts, not just the one
-// this fix adds. This test's short values make that whole chain complete
-// in well under a second instead of needing PongTimeout's full default
-// (60s) to prove the connection doesn't hang forever.
+// Ping/PongTimeout (production defaults are far more generous) so the
+// whole test finishes fast. Both matter: the write timeout alone only
+// unblocks the outgoing goroutine -- a client that also never sends
+// anything leaves the read side stuck until its own deadline (seeded from
+// PongTimeout) expires, and Session.Close only runs once that read
+// returns. Full teardown for a totally dead peer depends on both.
 func TestDataWriteTimeoutClosesAPermanentlyStuckReaderInsteadOfHangingForever(t *testing.T) {
 	backlog := CreateEvents(t, 150, 1)
 	store := newStoreWithEvents(t, backlog)

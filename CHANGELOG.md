@@ -20,55 +20,25 @@
   the relay sends a `CLOSED` message for the underlying subscription (e.g.
   after a "too many concurrent subscriptions" NOTICE), instead of the call
   hanging silently until `ctx`'s full timeout. (#14)
-- `relay`: two regression tests reproducing a community-reported delivery
-  stall — an already-open subscription whose downstream consumer falls
-  behind (e.g. a slow websocket write, unbounded by default via
-  `SessionConfig.DataWriteTimeout`) can have new matching events delayed
-  well past the 50ms poll interval, though never lost or duplicated once
-  the consumer catches up.
-  `TestSubscriptionBackpressureDelaysButNeverLosesEvents` reproduces the
-  underlying no-timeout-blocking-send mechanism directly (needs 55+
-  backlogged events on one subscription).
-  `TestSessionSlowReaderStallsEveryOtherSubscriptionOnThatConnection` is
-  the closer-to-reality version: a real two-connection websocket
-  reproduction showing a large backlog on *one* subscription jams a
-  connection's shared outgoing pipe and stalls delivery to a completely
-  unrelated, low-volume subscription sharing that connection, needing only
-  a handful of fresh events on the filter actually under test — much
-  closer to the scale the report described. Root-cause analysis in
-  `issue-evaluation.md`. See "Fixed" below for the write-timeout fix this
-  led to; decoupling delivery from poll cadence (a further, larger
-  improvement) is still tracked separately, not done here.
 
 ### Fixed
 
-- `relay.SessionConfig.DataWriteTimeout` defaulted to `0` (no deadline at
-  all) on a single connection's shared outgoing pipe — every subscription
-  and control message on one connection funnels through one
-  `handleOutgoingMessages` goroutine making one blocking `conn.WriteJSON`
-  call at a time, so a momentarily slow or fully unresponsive reader could
-  stall delivery to every subscription on that connection indefinitely,
-  silently (the delivery-stall report above). Default is now 30s
-  (deliberately generous, not a tuned optimum — still overridable via the
-  existing `WithSessionWriteTimeouts`, including back to `0`). `sendPacket`
-  also now logs a warning whenever a single write takes longer than 250ms,
-  whether or not it eventually succeeds/times out — previously this
-  produced no observable signal at all.
-  (`TestDataWriteTimeoutClosesAPermanentlyStuckReaderInsteadOfHangingForever`)
-
+- `relay.SessionConfig.DataWriteTimeout` defaulted to `0` (no deadline) on
+  a connection's single shared outgoing pipe — every subscription and
+  control message on one connection funnels through one goroutine making
+  one blocking `conn.WriteJSON` call at a time, so a slow or unresponsive
+  reader could silently stall delivery to every subscription on that
+  connection, indefinitely. Default is now 30s (overridable, including
+  back to `0`, via the existing `WithSessionWriteTimeouts`). `sendPacket`
+  also now logs a warning when a single write exceeds 250ms — previously
+  there was no observable signal for this at all. Root-cause writeup and
+  regression tests in `issue-evaluation.md`. (#19)
 - `relay/store.EventStore.FindEventBytes` returned a bbolt-transaction-
   scoped byte slice after its own read transaction had already closed —
-  bbolt's documented contract is that such a slice is only valid for the
-  transaction's lifetime, and once closed, the page it referenced becomes
-  eligible for reuse by a later write. Found while building the delivery-
-  stall regression tests above (a large backlog held for a while before
-  delivery is exactly the condition under which this could manifest):
-  reproduced 3/3 times as corrupted (NUL-byte-containing) event JSON sent
-  to a client instead of just being delivered late. Fixed by copying the
-  bytes out inside the transaction closure before returning them.
-  (`TestFindEventBytesSurvivesLaterWrites`,
-  `TestSessionSlowReaderStallsEveryOtherSubscriptionOnThatConnection`)
-
+  invalid per bbolt's own contract, and reproducibly served corrupted
+  (NUL-byte) event JSON to a client under a held-for-a-while delivery
+  backlog. Fixed by copying the bytes inside the transaction closure.
+  (#19)
 - `relay/client.NWCClient` misparsed untagged NIP-44 v2 responses as legacy
   NIP-04, defaulting to NIP-04 whenever a response didn't redeclare its own
   `encryption` tag instead of falling back to the scheme the client used

@@ -1015,17 +1015,13 @@ func (s *EventStore) FindEventBytes(evsid uint64) ([]byte, error) {
 	var eventBytes []byte
 	_ = s.db.View(func(tx *bolt.Tx) error {
 		// Get's returned slice is a direct reference into bbolt's mmap'd
-		// file and is only valid for the life of this transaction (see
-		// bbolt's own Caveats doc) -- callers of FindEventBytes routinely
-		// hold onto the result well past this View call returning (e.g.
-		// relay/handlers.go queues it into a channel for delivery, which
-		// can sit for a while under a slow/backpressured consumer), so it
-		// must be copied out before the transaction closes. Confirmed via
-		// a real reproduction, not just theoretical: under sustained
-		// concurrent writes with a slow consumer, the original
-		// (uncopied) version of this function could hand back a slice
-		// that later read as corrupted (observed as embedded NUL bytes)
-		// once enough had changed under it.
+		// file, only valid for this transaction's lifetime (see bbolt's
+		// Caveats doc). Callers hold onto the result well past this View
+		// returning (relay/handlers.go queues it for delivery, which can
+		// sit for a while under a slow consumer), so it must be copied
+		// out before the transaction closes -- confirmed via reproduction,
+		// not just theoretical: the uncopied version could hand back a
+		// slice that later read as corrupted (NUL bytes).
 		raw := tx.Bucket(indexEvents).Get(itob(evsid))
 		if raw != nil {
 			eventBytes = append([]byte(nil), raw...)
