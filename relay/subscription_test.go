@@ -179,6 +179,126 @@ func TestSubscriptionCombinedKindBurstDoesNotStarveFreshEvent(t *testing.T) {
 	}
 }
 
+// TestSubscriptionBackpressureDelaysButNeverLosesEvents reproduces the
+// no-timeout blocking-send mechanism behind the delivery stall in
+// issue-evaluation.md: storeScan.handleEvents' send into a subscription's
+// outgoing channel (eventBufferCapacity, 55 slots) has no timeout, and
+// Subscription.Start's poll loop calls Fetch synchronously on every tick --
+// so once the channel is full, the next poll tick blocks inside Fetch until
+// the consumer drains it, stalling delivery of any new matching event.
+// (Needs 55+ backlogged events to trigger directly; see
+// TestSessionSlowReaderStallsEveryOtherSubscriptionOnThatConnection for the
+// more realistic small-burst trigger one layer downstream.)
+//
+// Can't be shown by just reading from the stalled subscription's own
+// channel and expecting a timeout -- it's a full FIFO buffer, so any read
+// just returns an already-queued filler event regardless of whether the
+// fresh one is stuck behind it. Instead this mirrors the report's own
+// methodology: compares the stalled subscription against a brand-new
+// "retry" subscription opened after the same event is published. The retry
+// sees it promptly; the stalled one is then confirmed to eventually
+// deliver everything, including the fresh event, exactly once.
+func TestSubscriptionBackpressureDelaysButNeverLosesEvents(t *testing.T) {
+	store := newStore(t)
+	defer store.Close()
+
+	filters := nip01.NewSubscriptionFilterGroup()
+	filters.Add(&nip01.SubscriptionFilter{Kinds: []int{1}, Limit: 500})
+
+	// The "stalled" subscription: opened first (while the store is still
+	// empty, so its own EOSE arrives immediately), its outgoing channel is
+	// then deliberately never drained until the very end of this test --
+	// simulating a slow/blocked downstream consumer.
+	var stalledWG sync.WaitGroup
+	stalledCtx, stalledCancel := context.WithCancel(context.Background())
+	defer stalledCancel()
+	stalledSub, stalledEvents, stalledErrs, stalledEOSE := NewSubscription("sub-stalled", newQuery(t, store, filters))
+	go stalledSub.Start(stalledCtx, &stalledWG)
+	select {
+	case <-stalledEOSE:
+	case err := <-stalledErrs:
+		t.Fatalf("stalled subscription error before EOSE: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("stalled subscription: EOSE never arrived")
+	}
+
+	// Fill its outgoing channel to capacity and let it settle -- it has
+	// nowhere else to put these, so within a handful of 50ms ticks they
+	// should all be sitting there, unread.
+	base := uint64(time.Now().Unix())
+	filler := make([]*nip01.Event, 0, eventBufferCapacity)
+	for i := 0; i < eventBufferCapacity; i++ {
+		filler = append(filler, CreateEventWithTimestamp(t, 1, base+uint64(i)))
+	}
+	InsertTestEvents(t, store, filler)
+	time.Sleep(300 * time.Millisecond)
+	if n := len(stalledEvents); n != eventBufferCapacity {
+		t.Fatalf("setup: stalled subscription's outgoing channel has %d buffered events, want exactly %d (full)", n, eventBufferCapacity)
+	}
+
+	// Publish the event under test while the stalled subscription's
+	// buffer is still full and undrained.
+	fresh := CreateEventWithTimestamp(t, 1, base+uint64(eventBufferCapacity)+1000)
+	InsertTestEvents(t, store, []*nip01.Event{fresh})
+
+	// A brand-new subscription opened after fresh was published, nothing
+	// backlogged. Its own initial fetch finds 56 matching events (one more
+	// than eventBufferCapacity), so events and EOSE must be read from the
+	// same select or it'd hit the same full-buffer deadlock as above.
+	var freshWG sync.WaitGroup
+	freshCtx, freshCancel := context.WithCancel(context.Background())
+	defer freshCancel()
+	freshSub, freshEvents, freshErrs, freshEOSE := NewSubscription("sub-fresh-retry", newQuery(t, store, filters))
+	go freshSub.Start(freshCtx, &freshWG)
+
+	foundOnFreshSub := false
+	for i := 0; i < eventBufferCapacity+10 && !foundOnFreshSub; i++ {
+		select {
+		case ev := <-freshEvents:
+			freshWG.Done()
+			if ev.EventID == fresh.ID {
+				foundOnFreshSub = true
+			}
+		case <-freshEOSE:
+			// keep looping: the fresh event may legitimately arrive as
+			// part of the initial fetch, before or after EOSE
+		case err := <-freshErrs:
+			t.Fatalf("fresh subscription error: %v", err)
+		case <-time.After(200 * time.Millisecond):
+			t.Fatalf("fresh subscription: timed out waiting for the fresh event")
+		}
+	}
+	if !foundOnFreshSub {
+		t.Fatal("fresh subscription never observed the newly-published event")
+	}
+
+	// Finally, confirm nothing is actually lost on the stalled side
+	// either: draining it now delivers every event, including fresh,
+	// exactly once.
+	seen := make(map[string]int)
+	total := eventBufferCapacity + 1
+	deadline := time.After(2 * time.Second)
+	for len(seen) < total {
+		select {
+		case ev := <-stalledEvents:
+			seen[ev.EventID]++
+			stalledWG.Done()
+		case err := <-stalledErrs:
+			t.Fatalf("stalled subscription error while draining: %v", err)
+		case <-deadline:
+			t.Fatalf("timed out draining stalled subscription: got %d/%d distinct events", len(seen), total)
+		}
+	}
+	if seen[fresh.ID] != 1 {
+		t.Fatalf("fresh event delivered %d times via the stalled subscription, want exactly 1", seen[fresh.ID])
+	}
+	for _, ev := range filler {
+		if seen[ev.ID] != 1 {
+			t.Fatalf("filler event %s delivered %d times, want exactly 1", ev.ID, seen[ev.ID])
+		}
+	}
+}
+
 func BenchmarkSubscription(b *testing.B) {
 
 	store := OpenBenchStore(b)

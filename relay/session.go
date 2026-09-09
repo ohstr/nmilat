@@ -29,6 +29,13 @@ const (
 	wsReadBuffer       = 1024
 	wsWriteBuffer      = 1024
 	wsDefaultReadLimit = 1_101_005
+
+	// slowSendWarnThreshold is how long a single sendPacket call may take
+	// before it's logged as a warning -- surfaces a backed-up outgoing
+	// pipe (see issue-evaluation.md), which previously had no observable
+	// signal at all. Several multiples of the poll interval, to avoid
+	// firing on ordinary jitter.
+	slowSendWarnThreshold = 250 * time.Millisecond
 )
 
 var (
@@ -438,7 +445,19 @@ func (s *Session) sendPacket(packet wire.SubscriptionResponse) error {
 	}
 
 	packetType := fmt.Sprintf("%T", packet)
+	start := time.Now()
 	err := s.conn.WriteJSON(packet)
+	if elapsed := time.Since(start); elapsed > slowSendWarnThreshold && err == nil {
+		// Successful but slow: no error, but something (most likely a
+		// slow-reading peer) backed this up well past ordinary jitter.
+		s.config.Logger.Warn().
+			Int64("session", s.id).
+			Str("remote", s.info.RemoteAddr).
+			Str("packet_type", packetType).
+			Dur("elapsed", elapsed).
+			Int("outgoing_queue_len", len(s.incoming)).
+			Msg("sendPacket was slow -- possible backpressure on this connection")
+	}
 	if err != nil {
 		if shouldLogError(err) {
 			s.config.Logger.Warn().
