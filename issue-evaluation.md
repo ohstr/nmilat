@@ -121,13 +121,38 @@ finding while anyone is in this code for the stall fix.
 
 Fix, in this priority order:
 
-### P0 — bound the blocking write, make it observable (small, low-risk)
-- Give `DataWriteTimeout` a sane non-zero default (or otherwise cap `conn.WriteJSON`'s deadline)
-  so one slow reader can no longer block a connection's outgoing pipeline indefinitely. On
-  timeout, treat it like any other write failure (close the session) rather than hanging forever.
-- Add a debug-log/metric for: `len(sub.outgoing)`, `len(s.incoming)`, and time spent blocked in
-  `reply()`/`sendPacket` past some threshold (e.g. >50ms). This directly answers the report's own
-  ask ("this currently produces zero observable signal") and would have let them self-diagnose.
+### P0 — bound the blocking write, make it observable (small, low-risk) — DONE
+
+Implemented (`relay/config.go`, `relay/session.go`):
+
+- `DataWriteTimeout` now defaults to 30s instead of 0 (unbounded). Deliberately generous, not a
+  tuned optimum — no production latency data went into the number, just "long enough to absorb the
+  report's own worst observed case (~30s) without punishing a merely-slow reader, short enough to
+  eventually bound what used to be infinite." Still overridable (including back to `0`) via the
+  existing `WithSessionWriteTimeouts` option — no new API surface, just a changed default. On
+  timeout, the existing error-handling path already did the right thing (close the session) with
+  no changes needed there — `sendPacket`'s error return already cascades through
+  `handleOutgoingMessages` → cancel → `receiveMessages` → `Session.Close()`.
+- `sendPacket` now logs a `Warn` (with `elapsed` and `outgoing_queue_len`) whenever a single write
+  takes longer than 250ms, whether or not it eventually succeeds. This is the observability signal
+  the report explicitly asked for ("this currently produces zero observable signal") — a deployer
+  can now actually see a connection's shared pipe backing up instead of only ever seeing either
+  nothing or a fully-timed-out closed session after the fact.
+- New regression test,
+  `TestDataWriteTimeoutClosesAPermanentlyStuckReaderInsteadOfHangingForever`
+  (`relay/session_backpressure_test.go`): confirms a connection whose peer never reads *at all*
+  gets its session closed within a bounded time (seconds, with short test-configured timeouts)
+  instead of hanging forever. Also surfaced a real nuance worth documenting here: `DataWriteTimeout`
+  alone only bounds the *outgoing* goroutine — a client that also never sends anything (no PONGs)
+  leaves `receiveMessages`'s blocking read stuck until the *separate*, pre-existing `PongTimeout`
+  (default 60s, seeded as a read deadline at session start, unrelated to this fix) expires. Full
+  teardown for a totally unresponsive peer depends on both timeouts, not just the new one; the test
+  configures both short to actually observe the whole chain complete quickly. Production's default
+  `PongTimeout` (60s) was left untouched — this fix doesn't change it, just flags that it's the
+  other half of "how fast does a fully-dead connection actually get reclaimed."
+
+Verified: full `relay` package suite (existing + all new regression tests) passes, including under
+`-race`.
 
 ### P1 — stop one slow consumer from starving the whole poll loop
 - Don't let `handleEvents`'s send into `sub.outgoing` (`relay/store.go:1488-1493`) be the same
