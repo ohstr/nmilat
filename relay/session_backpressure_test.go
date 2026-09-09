@@ -14,16 +14,11 @@ import (
 )
 
 // shrinkBufferListener wraps a net.Listener so every accepted connection
-// gets a small OS-level TCP read/write buffer. Real default socket buffers
-// on this environment's loopback interface turned out to absorb multiple
-// megabytes before a stalled reader ever produces backpressure (verified
-// empirically while building this test -- a plain, unshrunk connection
-// took anywhere from ~1.3MB to "never" before blocking, and inconsistently
-// surfaced as a hard connection reset rather than a clean block). Shrinking
-// both ends to 1024 bytes makes "the peer stops reading" reproduce genuine,
-// clean TCP backpressure after a couple hundred small messages instead --
-// small enough to run fast and deterministically, without touching any
-// production code.
+// gets a small OS-level TCP read/write buffer. Default buffers on this
+// environment's loopback interface absorb multiple megabytes before a
+// stalled reader produces any backpressure; shrinking both ends to 1024
+// bytes makes "the peer stops reading" reproduce genuine backpressure
+// within a couple hundred small messages instead.
 type shrinkBufferListener struct {
 	net.Listener
 }
@@ -51,11 +46,8 @@ func createBackpressureWS(t testing.TB, store *EventStore) *websocket.Conn {
 }
 
 // createBackpressureWSWithOpts is createBackpressureWS, but also takes
-// SessionOptions (e.g. WithSessionWriteTimeouts to override
-// DataWriteTimeout for a specific test) and returns the handler alongside
-// the connection so a test can inspect session state (e.g.
-// waitForSessionCount) without waiting on createBackpressureWS's own
-// t.Cleanup ordering.
+// SessionOptions and returns the handler so a test can inspect session
+// state (e.g. waitForSessionCount) directly.
 func createBackpressureWSWithOpts(t testing.TB, store *EventStore, opts ...SessionOption) (*websocket.Conn, *SessionHandler) {
 	metadata := &nip11.Metadata{Limitation: nip11.Limitation{MaxMessageLength: 1024 * 1024}}
 	allOpts := append([]SessionOption{WithLogger(testlogger.New(t))}, opts...)
@@ -108,39 +100,34 @@ func readUntil(t testing.TB, conn *websocket.Conn, deadline time.Time, fn func(w
 }
 
 // TestSessionSlowReaderStallsEveryOtherSubscriptionOnThatConnection
-// reproduces the delivery stall (issue-evaluation.md) at the level it most
-// likely happens in production, at report-realistic scale: 3 fresh events
-// on the filter under test, not the 55+ TestSubscriptionBackpressureDelaysButNeverLosesEvents
-// needs for its narrower variant of the same bug class.
+// reproduces the delivery stall (issue-evaluation.md) at report-realistic
+// scale: 3 fresh events on the filter under test, not the 55+
+// TestSubscriptionBackpressureDelaysButNeverLosesEvents needs.
 //
-// Every subscription on one websocket connection -- and every other
-// outgoing message -- shares one outgoing pipe (Session.incoming, 512
-// slots, drained by one goroutine making one blocking conn.WriteJSON call
-// at a time). So a large, undrained backlog on ONE subscription jams
-// delivery to a completely unrelated, otherwise-idle subscription on the
-// same connection.
+// Every subscription on one websocket connection shares one outgoing pipe
+// (Session.incoming, drained by one goroutine, one blocking conn.WriteJSON
+// call at a time), so a large undrained backlog on one subscription jams
+// delivery to an unrelated, otherwise-idle subscription on the same
+// connection.
 //
-// Mirrors the report's own methodology rather than reading from the
+// Mirrors the report's own methodology instead of reading from the
 // stalled connection and expecting a timeout (a full FIFO buffer would
-// just return already-queued backlog and prove nothing): compares
-// delivery of the same freshly published events via the stalled
-// connection against a brand-new connection opened afterward.
+// just return queued backlog and prove nothing): compares delivery of the
+// same events via the stalled connection against a brand-new connection
+// opened afterward.
 //
-// This test also caught EventStore.FindEventBytes's transaction-scope bug
-// (see TestFindEventBytesSurvivesLaterWrites) the first few times it was
-// written; that's fixed now, so this only exercises the timing/fairness
-// issue above.
+// Also caught EventStore.FindEventBytes's transaction-scope bug (see
+// TestFindEventBytesSurvivesLaterWrites) the first few times this was
+// written; fixed now, so this only exercises the timing/fairness issue.
 func TestSessionSlowReaderStallsEveryOtherSubscriptionOnThatConnection(t *testing.T) {
 	backlog := CreateEvents(t, 150, 1)
 	store := newStoreWithEvents(t, backlog)
 
 	stalled := createBackpressureWS(t, store)
 
-	// sub-backlog: a broad, pre-existing 150-event kind-1 backlog. The
-	// relay will try to write all 150 (plus its own EOSE) down `stalled`
-	// as soon as this REQ is processed -- comfortably enough small
-	// messages to jam the shrunk connection (calibrated empirically at
-	// ~87 messages of similar size for a clean block, not an error).
+	// sub-backlog: a pre-existing 150-event kind-1 backlog, comfortably
+	// enough small messages to jam the shrunk connection (empirically,
+	// ~87 messages of similar size is enough for a clean block).
 	if err := stalled.WriteJSON(wire.NewRequestPacket("sub-backlog", CreateFilter([]int{1}, 500))); err != nil {
 		t.Fatal(err)
 	}
@@ -155,9 +142,8 @@ func TestSessionSlowReaderStallsEveryOtherSubscriptionOnThatConnection(t *testin
 	time.Sleep(500 * time.Millisecond)
 
 	// Publish a small number of fresh events matching sub-probe's filter
-	// from a separate connection -- mirroring both the report's own scale
-	// (a handful of events, not a flood) and its measurement methodology
-	// (OK acceptance as the start of the clock).
+	// from a separate connection, using OK acceptance as the start of the
+	// clock (matching the report's own measurement methodology).
 	publisher := createBackpressureWS(t, store)
 	probe := CreateEvents(t, 3, 9999)
 	for _, ev := range probe {
@@ -194,12 +180,9 @@ func TestSessionSlowReaderStallsEveryOtherSubscriptionOnThatConnection(t *testin
 		t.Fatalf("retry connection: only observed %d/%d probe events promptly", len(seenOnRetry), len(probe))
 	}
 
-	// Meanwhile `stalled` -- whose peer has had at least as long to
-	// "read" -- still hasn't delivered the probe events, because its
-	// shared outgoing pipe is jammed behind sub-backlog's undrained
-	// 150-event backlog. Confirm nothing is actually lost: draining it
-	// now delivers everything -- the full backlog, both subscriptions'
-	// EOSE, and all 3 probe events -- exactly once.
+	// Meanwhile `stalled` still hasn't delivered the probe events -- its
+	// pipe is jammed behind sub-backlog. Confirm nothing is lost: draining
+	// it now delivers everything exactly once.
 	total := len(backlog) + len(probe)
 	seen := make(map[string]int)
 	eoseCount := 0
@@ -266,10 +249,8 @@ func TestDataWriteTimeoutClosesAPermanentlyStuckReaderInsteadOfHangingForever(t 
 		t.Fatal(err)
 	}
 
-	// Never read from `stalled` at all, for the rest of this test. Under
-	// the old default (DataWriteTimeout=0) the outgoing side of this
-	// would hang indefinitely. waitForSessionCount fails the test if the
-	// session hasn't closed within its own 2s budget -- comfortably more
-	// than this test's own (sub-second) configured timeouts need.
+	// Never read from `stalled` again. waitForSessionCount fails the test
+	// if the session doesn't close within its own 2s budget -- comfortably
+	// more than this test's sub-second configured timeouts need.
 	waitForSessionCount(t, handler, 0)
 }

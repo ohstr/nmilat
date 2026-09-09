@@ -241,13 +241,10 @@ func TestSubscriptionBackpressureDelaysButNeverLosesEvents(t *testing.T) {
 	fresh := CreateEventWithTimestamp(t, 1, base+uint64(eventBufferCapacity)+1000)
 	InsertTestEvents(t, store, []*nip01.Event{fresh})
 
-	// The report's own comparison: a brand-new subscription against the
-	// same filter, opened *after* fresh was published, with nothing
-	// backlogged. Its own initial (pre-EOSE) fetch will find all 56
-	// matching events already in the store -- one more than
-	// eventBufferCapacity -- so events and EOSE must be read from the same
-	// select to avoid this subscription hitting the exact same
-	// full-buffer condition while nothing drains it.
+	// A brand-new subscription opened after fresh was published, nothing
+	// backlogged. Its own initial fetch finds 56 matching events (one more
+	// than eventBufferCapacity), so events and EOSE must be read from the
+	// same select or it'd hit the same full-buffer deadlock as above.
 	var freshWG sync.WaitGroup
 	freshCtx, freshCancel := context.WithCancel(context.Background())
 	defer freshCancel()
