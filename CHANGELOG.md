@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- `nipcash.ResolvedConnectionKey`: builds a `connection_key`-mode Recipient/
+  Target from a `nipIC.ConnectionKey` the caller already has (e.g. decoded
+  from an `nconnection1...` string via `nipIC.DecodeNConnection`), without
+  re-hashing it from a raw external ID the caller may not have on hand.
+  `nipcash.ConnectionKey` still hashes `(platform, externalID)` internally
+  for the common case; this is the counterpart for a caller starting from
+  the key itself.
+
 ## [0.2.9]
 
 ### Fixed

@@ -7,8 +7,10 @@ import "encoding/json"
 // (NIP-CASH §Consolidating Tokens).
 type CashConsolidateParams struct {
 	// Sources MUST contain at least two distinct sources (ErrTooFewSources),
-	// none bearer-identified (ErrBearerSource — this revision of
-	// cash_consolidate accepts only pubkey-identified sources).
+	// none bearer-identified (ErrBearerSource — bearer sources remain
+	// rejected: a bearer secret has no signature and no binding to the
+	// request carrying it, unlike a connection_key source's signed
+	// identity_event + attestation_event, which this revision does accept).
 	Sources []Source
 	// To is who the merged wallet belongs to — MUST be a pubkey (namedIdentity
 	// built via Pubkey); ErrConsolidateTargetNotPubkey otherwise. A
@@ -23,11 +25,12 @@ type CashConsolidateParams struct {
 // consolidateSourceParam is the wire shape of one entry in cash_consolidate's
 // "sources" request array.
 type consolidateSourceParam struct {
-	WalletPubkey  string `json:"wallet_pubkey"`
-	IdentityType  string `json:"identity_type,omitempty"`
-	IdentityValue string `json:"identity_value,omitempty"`
-	IdentityEvent string `json:"identity_event,omitempty"`
-	BearerSecret  string `json:"bearer_secret,omitempty"`
+	WalletPubkey     string `json:"wallet_pubkey"`
+	IdentityType     string `json:"identity_type,omitempty"`
+	IdentityValue    string `json:"identity_value,omitempty"`
+	IdentityEvent    string `json:"identity_event,omitempty"`
+	AttestationEvent string `json:"attestation_event,omitempty"`
+	BearerSecret     string `json:"bearer_secret,omitempty"`
 }
 
 // CashConsolidateRequest is cash_consolidate's wire request shape.
@@ -57,7 +60,7 @@ func (p CashConsolidateParams) Request() (CashConsolidateRequest, error) {
 			NewIdentityHash: newIdentityHash(p.To),
 			AmountMillis:    &amount,
 		}
-		identityType, identityValue, identityEvent, _, bearerSecret, err := src.Credential.buildProof(binding)
+		identityType, identityValue, identityEvent, attestationEvent, bearerSecret, err := src.Credential.buildProof(binding)
 		if err != nil {
 			return CashConsolidateRequest{}, err
 		}
@@ -71,6 +74,9 @@ func (p CashConsolidateParams) Request() (CashConsolidateRequest, error) {
 		}
 		if identityEvent != nil {
 			sources[i].IdentityEvent = string(identityEvent)
+		}
+		if attestationEvent != nil {
+			sources[i].AttestationEvent = string(attestationEvent)
 		}
 	}
 
