@@ -140,6 +140,16 @@ func (t *BearerTarget) identityType() string  { return identityTypeBearer }
 func (t *BearerTarget) identityValue() string { return t.commit }
 func (t *BearerTarget) iaPubkey() string      { return "" }
 
+// IsPubkeyTarget reports whether t identifies a bare Nostr pubkey — never
+// bearer, never connection_key. Exported so nipcash/client composites
+// that need to validate a Target's own type before making a wire call
+// (e.g. rejecting a bad value before it can cause a real, partial
+// side effect) don't need targetFields' otherwise-unexported shape.
+func IsPubkeyTarget(t Target) bool {
+	tf, ok := t.(targetFields)
+	return ok && tf.identityType() == identityTypePubkey
+}
+
 // Allocation pairs a Recipient with the amount mint_cash funds their slice
 // with. Build one with Send.
 type Allocation struct {
