@@ -1,6 +1,10 @@
 package nipcash
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/ohstr/nmilat/nipIC"
+)
 
 // Compile-time checks of the Recipient/Target split (see Target's own doc
 // comment): namedIdentity (Pubkey/ConnectionKey) satisfies both; bearerRecipient
@@ -36,6 +40,27 @@ func TestPubkeyConnectionKeyAnyone_IdentityTypes(t *testing.T) {
 	anyone := Anyone().(targetFields)
 	if anyone.identityType() != identityTypeBearer {
 		t.Fatalf("Anyone: got type=%s", anyone.identityType())
+	}
+}
+
+func TestResolvedConnectionKey_MatchesConnectionKeyWithoutRehashing(t *testing.T) {
+	// ConnectionKey hashes (platform, externalID) internally; a caller who
+	// only has the already-hashed key (e.g. decoded from an nconnection1...
+	// string) has no externalID to feed it. ResolvedConnectionKey must
+	// produce an identical identity_type/identity_value/ia_pubkey given
+	// that same key directly, with no external ID involved at all.
+	viaExternalID := ConnectionKey("discord", "some.user", "iapub")
+	key := nipIC.NewConnectionKey("discord", "some.user")
+	viaKey := ResolvedConnectionKey(key, "discord", "iapub")
+
+	if viaKey.identityType() != viaExternalID.identityType() {
+		t.Fatalf("identityType mismatch: got %s, want %s", viaKey.identityType(), viaExternalID.identityType())
+	}
+	if viaKey.identityValue() != viaExternalID.identityValue() {
+		t.Fatalf("identityValue mismatch: got %s, want %s", viaKey.identityValue(), viaExternalID.identityValue())
+	}
+	if viaKey.iaPubkey() != "iapub" {
+		t.Fatalf("iaPubkey: got %s, want iapub", viaKey.iaPubkey())
 	}
 }
 

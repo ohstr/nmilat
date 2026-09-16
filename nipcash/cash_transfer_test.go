@@ -106,6 +106,34 @@ func TestCashTransferParams_ParseResult_SpinOff_DecryptsToken(t *testing.T) {
 	}
 }
 
+func TestCashTransferResult_RecipientToken_InPlaceFallsBackToOriginal(t *testing.T) {
+	result := &CashTransferResult{NewWalletToken: ""}
+	got := result.RecipientToken("lokicash1original")
+	if got != "lokicash1original" {
+		t.Fatalf("RecipientToken() = %q, want the original token (in-place reassignment)", got)
+	}
+}
+
+func TestCashTransferResult_RecipientToken_SpinOffUsesNewWalletToken(t *testing.T) {
+	result := &CashTransferResult{NewWalletToken: "lokicash1spunoff"}
+	got := result.RecipientToken("lokicash1original")
+	if got != "lokicash1spunoff" {
+		t.Fatalf("RecipientToken() = %q, want the spun-off NewWalletToken", got)
+	}
+}
+
+func TestCashTransferResult_RecipientToken_PartialSplitUsesNewWalletToken(t *testing.T) {
+	// Both NewWalletToken and RemainderWalletToken set: the caller's own
+	// remainder is a separate concern (RemainderWalletToken), not
+	// RecipientToken's — this only ever answers "what does the recipient
+	// need."
+	result := &CashTransferResult{NewWalletToken: "lokicash1carvedoff", RemainderWalletToken: "lokicash1remainder"}
+	got := result.RecipientToken("lokicash1original")
+	if got != "lokicash1carvedoff" {
+		t.Fatalf("RecipientToken() = %q, want the carved-off NewWalletToken, not the caller's own remainder", got)
+	}
+}
+
 // encryptForTest mirrors decryptFromPubkey's own key derivation, in the
 // opposite direction, to build a delivery ciphertext a real server would
 // produce — ECDH is commutative, so deriving from (recipientPriv,

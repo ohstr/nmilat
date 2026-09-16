@@ -71,10 +71,13 @@ var (
 	// deferred to the server.
 	ErrBearerSource = errors.New("nipcash: cash_consolidate does not accept a bearer-identified source")
 
-	// ErrConsolidateTargetNotPubkey is returned by CashConsolidate when the
-	// target identity isn't a bare pubkey — this revision of NIP-CASH only
-	// accepts a pubkey new_identity for a consolidated wallet.
-	ErrConsolidateTargetNotPubkey = errors.New("nipcash: cash_consolidate requires a pubkey new_identity")
+	// ErrConsolidateTargetInvalid is returned by CashConsolidate when To is
+	// nil — cash_consolidate itself now accepts a pubkey, connection_key,
+	// or bearer new_identity alike (previously pubkey-only; NIP-CASH's
+	// 2026-09-14 revision added bearer/connection_key consolidate targets
+	// server-side), so nothing about a real Target's own type is rejected
+	// here anymore, only a target that was never set at all.
+	ErrConsolidateTargetInvalid = errors.New("nipcash: cash_consolidate requires a new_identity target")
 
 	// ErrWrongCredentialForTarget is returned when a BearerTarget is used
 	// where a Recipient is expected, or vice versa — mint_cash's bearer
