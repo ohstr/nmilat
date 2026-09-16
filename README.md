@@ -40,9 +40,11 @@ go get github.com/ohstr/nmilat
 - **[`nip16`](https://github.com/nostr-protocol/nips/blob/master/16.md)** — Event treatment (regular/replaceable/ephemeral kinds)
 - **[`nip17`](https://github.com/nostr-protocol/nips/blob/master/17.md), [`nip59`](https://github.com/nostr-protocol/nips/blob/master/59.md)** — Private direct messages, gift wraps
 - **[`nip19`](https://github.com/nostr-protocol/nips/blob/master/19.md)** — Bech32-encoded entities: npub, nsec, note, plus the TLV-based nprofile, nevent, and naddr
+- **[`nip22`](https://github.com/nostr-protocol/nips/blob/master/22.md)** — Comment: generic kind:1111 threading note scoped to a root event, address, or NIP-73 external identifier
 - **[`nip23`](https://github.com/nostr-protocol/nips/blob/master/23.md)** — Long-form content
 - **[`nip26`](https://github.com/nostr-protocol/nips/blob/master/26.md)** — Event delegation
 - **[`nip33`](https://github.com/nostr-protocol/nips/blob/master/33.md)** — Parameterized replaceable events (now called addressable events)
+- **[`nip34`](https://github.com/nostr-protocol/nips/blob/master/34.md)** — git stuff: repository announcements/state, patches, pull requests, issues, replies, and status over Nostr
 - **[`nip40`](https://github.com/nostr-protocol/nips/blob/master/40.md)** — Event expiration
 - **[`nip42`](https://github.com/nostr-protocol/nips/blob/master/42.md), [`nip98`](https://github.com/nostr-protocol/nips/blob/master/98.md)** — Relay/HTTP authentication
 - **[`nip43`](https://github.com/nostr-protocol/nips/blob/master/43.md)** — Relay access metadata and requests
@@ -73,7 +75,7 @@ go get github.com/ohstr/nmilat
 - **`wire`** — Relay wire-protocol packet types
 - **`utils`** — Shared event/key/logging helpers
 
-NIP packages with relay-side concerns (NIP-47/48/57/65/88/90/B0/B7) stay
+NIP packages with relay-side concerns (NIP-22/34/47/48/57/65/88/90/B0/B7) stay
 dependency-free on their own; blank-import their `relayreg` subpackage to
 declare relay support, e.g. `import _ "github.com/ohstr/nmilat/nip57/relayreg"`.
 See "Run a relay" below.
@@ -712,6 +714,567 @@ naddr, err := nip19.EncodeAddr(nip19.EntityPointer{
 	Relays:     []string{"wss://relay.example.com"},
 })
 addr, err := nip19.DecodeAddr(naddr) // *nip19.EntityPointer
+```
+
+### NIP-34: git collaboration over Nostr
+
+`nip34` covers the whole spec -- repository announcements/state, patches,
+pull requests, issues, threaded replies (via `nip22`), status, grasp
+lists, and `nostr://` clone URLs. Every event type follows the same
+`New*`/`Parse*`/`Validate*` shape; the examples below walk through each
+one, in the order a repository's activity actually happens.
+
+#### Announce a repository and publish its state
+
+```go
+package main
+
+import (
+	"fmt"
+
+	"github.com/ohstr/nmilat/nip34"
+	"github.com/ohstr/nmilat/utils"
+)
+
+func main() {
+	announceEv, err := nip34.NewRepositoryAnnouncement(nip34.RepositoryAnnouncementParams{
+		Pubkey:               ownerPubkeyHex,
+		Identifier:           "ngit",
+		Name:                 "ngit",
+		Description:          "git over nostr",
+		Web:                  []string{"https://gitworkshop.dev/ngit"},
+		Clone:                []string{"https://github.com/example/ngit.git"},
+		Relays:               []string{"wss://relay.ngit.dev"},
+		EarliestUniqueCommit: rootCommitHex,
+		Maintainers:          []string{maintainerPubkeyHex},
+		Hashtags:             []string{"git", "nostr"},
+	})
+	if err != nil {
+		panic(err)
+	}
+	if err := announceEv.Sign(ownerPrivateKeyHex); err != nil {
+		panic(err)
+	}
+
+	stateEv, err := nip34.NewRepositoryState(nip34.RepositoryStateParams{
+		Pubkey:     ownerPubkeyHex,
+		Identifier: "ngit",
+		Refs: []nip34.Ref{
+			{Name: "refs/heads/master", CommitID: tipCommitHex},
+			{Name: "refs/tags/v1.0.0", CommitID: tagCommitHex},
+		},
+		Head: "refs/heads/master",
+	})
+	if err != nil {
+		panic(err)
+	}
+	if err := stateEv.Sign(ownerPrivateKeyHex); err != nil {
+		panic(err)
+	}
+
+	// What a subscriber does on receipt: verify, then parse.
+	if err := nip34.ValidateRepositoryAnnouncement(announceEv); err != nil {
+		panic(err)
+	}
+	repo, err := nip34.ParseRepositoryAnnouncement(announceEv)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(repo.Name, repo.Clone, repo.Maintainers)
+
+	// The repo's "a" tag address, for filtering patches/issues/PRs sent to it.
+	repoAddr, err := utils.FormatATag(nip34.KindRepositoryAnnouncement, ownerPubkeyHex, repo.Identifier)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("repo address:", repoAddr)
+}
+```
+
+`ValidateRepositoryState`/`ParseRepositoryState` are the state event's own
+counterparts, shown together with `New` above.
+
+#### Submit a patch series, a revision, and a pull request
+
+```go
+package main
+
+import (
+	"fmt"
+
+	"github.com/ohstr/nmilat/nip34"
+)
+
+func main() {
+	repoAddr := "30617:" + ownerPubkeyHex + ":ngit"
+
+	// Root patch: first in the series.
+	rootPatch, err := nip34.NewPatch(nip34.PatchParams{
+		Pubkey:          contributorPubkeyHex,
+		Content:         "diff --git a/main.go b/main.go\n...", // `git format-patch` output
+		RepoAddress:     repoAddr,
+		RepositoryOwner: ownerPubkeyHex,
+		IsRoot:          true,
+		Commit:          newCommitHex,
+		ParentCommit:    parentCommitHex,
+		Committer: &nip34.Committer{
+			Name: "Ada Contributor", Email: "ada@example.com",
+			Timestamp: 1_700_000_000, TZOffsetMinutes: -60,
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+	if err := rootPatch.Sign(contributorPrivateKeyHex); err != nil {
+		panic(err)
+	}
+
+	// Second patch in the same series: replies to the root patch.
+	secondPatch, err := nip34.NewPatch(nip34.PatchParams{
+		Pubkey:          contributorPubkeyHex,
+		Content:         "diff --git a/util.go b/util.go\n...",
+		RepoAddress:     repoAddr,
+		RepositoryOwner: ownerPubkeyHex,
+		ReplyTo:         rootPatch.ID,
+		Commit:          secondCommitHex,
+		ParentCommit:    newCommitHex,
+	})
+	if err != nil {
+		panic(err)
+	}
+	if err := secondPatch.Sign(contributorPrivateKeyHex); err != nil {
+		panic(err)
+	}
+
+	// A revised series (e.g. after review feedback): its first patch is
+	// tagged root-revision and replies to the original root patch.
+	revisionPatch, err := nip34.NewPatch(nip34.PatchParams{
+		Pubkey:          contributorPubkeyHex,
+		Content:         "diff --git a/main.go b/main.go\n... (v2)",
+		RepoAddress:     repoAddr,
+		RepositoryOwner: ownerPubkeyHex,
+		IsRootRevision:  true,
+		ReplyTo:         rootPatch.ID,
+	})
+	if err != nil {
+		panic(err)
+	}
+	if err := revisionPatch.Sign(contributorPrivateKeyHex); err != nil {
+		panic(err)
+	}
+
+	// For a change too large for a patch (spec: SHOULD use a PR over 60kb),
+	// a pull request points at a branch on a regular git host instead.
+	prEv, err := nip34.NewPullRequest(nip34.PullRequestParams{
+		Pubkey:          contributorPubkeyHex,
+		Content:         "Adds the cool feature described in issue #12.",
+		RepoAddress:     repoAddr,
+		RepositoryOwner: ownerPubkeyHex,
+		Subject:         "Add cool feature",
+		Labels:          []string{"enhancement"},
+		Commit:          tipCommitHex,
+		CloneURLs:       []string{"https://github.com/contributor/ngit.git"},
+		BranchName:      "cool-feature",
+	})
+	if err != nil {
+		panic(err)
+	}
+	if err := prEv.Sign(contributorPrivateKeyHex); err != nil {
+		panic(err)
+	}
+
+	// Pushed more commits to the same branch: update the PR's tip.
+	prUpdateEv, err := nip34.NewPullRequestUpdate(nip34.PullRequestUpdateParams{
+		Pubkey:             contributorPubkeyHex,
+		RepoAddress:        repoAddr,
+		PullRequestEventID: prEv.ID,
+		PullRequestAuthor:  contributorPubkeyHex,
+		Commit:             newerTipCommitHex,
+		CloneURLs:          []string{"https://github.com/contributor/ngit.git"},
+	})
+	if err != nil {
+		panic(err)
+	}
+	if err := prUpdateEv.Sign(contributorPrivateKeyHex); err != nil {
+		panic(err)
+	}
+
+	// Parsing a patch back out, e.g. after fetching it from a relay.
+	parsed, err := nip34.ParsePatch(rootPatch)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(parsed.IsRoot, parsed.Commit, parsed.Committer.Name)
+}
+```
+
+`ParsePullRequest`/`ValidatePullRequest` and
+`ParsePullRequestUpdate`/`ValidatePullRequestUpdate` mirror `ParsePatch`
+above for the PR events.
+
+#### Open an issue and thread replies (NIP-22)
+
+Replies to an issue, patch, or PR follow NIP-22's `kind:1111` comment
+shape; `nip34.NewReply`/`nip34.ParseReply` are a thin convenience layer
+over the `nip22` package that also checks the thread actually roots at a
+NIP-34 item:
+
+```go
+package main
+
+import (
+	"fmt"
+
+	"github.com/ohstr/nmilat/nip34"
+)
+
+func main() {
+	repoAddr := "30617:" + ownerPubkeyHex + ":ngit"
+
+	issueEv, err := nip34.NewIssue(nip34.IssueParams{
+		Pubkey:          contributorPubkeyHex,
+		Content:         "The build is broken on main.",
+		RepoAddress:     repoAddr,
+		RepositoryOwner: ownerPubkeyHex,
+		Subject:         "Build broken",
+		Labels:          []string{"bug"},
+	})
+	if err != nil {
+		panic(err)
+	}
+	if err := issueEv.Sign(contributorPrivateKeyHex); err != nil {
+		panic(err)
+	}
+
+	// Top-level reply: RootEvent and ParentEvent are the same (issue).
+	maintainerReply, err := nip34.NewReply(nip34.ReplyParams{
+		Pubkey:    ownerPubkeyHex,
+		Content:   "thanks for reporting, looking into it",
+		RootEvent: issueEv,
+	})
+	if err != nil {
+		panic(err)
+	}
+	if err := maintainerReply.Sign(ownerPrivateKeyHex); err != nil {
+		panic(err)
+	}
+
+	// Nested reply: RootEvent stays the issue, ParentEvent is the previous
+	// reply -- this is how a threaded discussion is built up.
+	followUp, err := nip34.NewReply(nip34.ReplyParams{
+		Pubkey:      contributorPubkeyHex,
+		Content:     "any update?",
+		RootEvent:   issueEv,
+		ParentEvent: maintainerReply,
+	})
+	if err != nil {
+		panic(err)
+	}
+	if err := followUp.Sign(contributorPrivateKeyHex); err != nil {
+		panic(err)
+	}
+
+	// Parsing a reply back out (e.g. after fetching from a relay):
+	// nip34.ParseReply is nip22.ParseComment plus a check that the thread's
+	// root is actually an issue/patch/PR.
+	comment, err := nip34.ParseReply(followUp)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("replying to root", comment.Root.Pointer.Value, "kind", comment.Root.Kind)
+	fmt.Println("direct parent", comment.Parent.Pointer.Value)
+}
+```
+
+#### Set and resolve status
+
+```go
+package main
+
+import (
+	"fmt"
+
+	"github.com/ohstr/nmilat/nip01"
+	"github.com/ohstr/nmilat/nip34"
+)
+
+func main() {
+	// Open is the implicit default; an explicit Open event re-opens a
+	// previously closed/applied thread.
+	openEv, err := nip34.NewStatus(nip34.StatusParams{
+		Pubkey:          contributorPubkeyHex,
+		Kind:            nip34.KindStatusOpen,
+		RootID:          patchEventID,
+		RepositoryOwner: ownerPubkeyHex,
+		RootAuthor:      contributorPubkeyHex,
+	})
+	if err != nil {
+		panic(err)
+	}
+	if err := openEv.Sign(contributorPrivateKeyHex); err != nil {
+		panic(err)
+	}
+
+	// Applied/Merged: a maintainer merges a patch revision, citing it and
+	// the resulting merge commit.
+	appliedEv, err := nip34.NewStatus(nip34.StatusParams{
+		Pubkey:             ownerPubkeyHex,
+		Kind:               nip34.KindStatusApplied,
+		RootID:             patchEventID,
+		AcceptedRevisionID: revisionEventID,
+		RepositoryOwner:    ownerPubkeyHex,
+		RootAuthor:         contributorPubkeyHex,
+		RevisionAuthor:     contributorPubkeyHex,
+		AppliedPatches:     []nip34.QuotedPatch{{EventID: revisionEventID, Pubkey: contributorPubkeyHex}},
+		MergeCommit:        mergeCommitHex,
+		Content:            "merged, thanks!",
+	})
+	if err != nil {
+		panic(err)
+	}
+	if err := appliedEv.Sign(ownerPrivateKeyHex); err != nil {
+		panic(err)
+	}
+
+	// Closed: rejected without merging.
+	closedEv, err := nip34.NewStatus(nip34.StatusParams{
+		Pubkey:          ownerPubkeyHex,
+		Kind:            nip34.KindStatusClosed,
+		RootID:          patchEventID,
+		RepositoryOwner: ownerPubkeyHex,
+		Content:         "superseded by a different approach",
+	})
+	if err != nil {
+		panic(err)
+	}
+	if err := closedEv.Sign(ownerPrivateKeyHex); err != nil {
+		panic(err)
+	}
+
+	// Draft: not ready for review yet (set by the author).
+	draftEv, err := nip34.NewStatus(nip34.StatusParams{
+		Pubkey: contributorPubkeyHex,
+		Kind:   nip34.KindStatusDraft,
+		RootID: patchEventID,
+	})
+	if err != nil {
+		panic(err)
+	}
+	if err := draftEv.Sign(contributorPrivateKeyHex); err != nil {
+		panic(err)
+	}
+	fmt.Println("closed kind:", closedEv.Kind, "draft kind:", draftEv.Kind)
+
+	// Resolving which status actually counts: a client subscribes to every
+	// 1630-1633 event for a thread (see "Subscribe to a repository's
+	// activity" below), parses each, and picks the winner per the spec --
+	// latest by created_at, from the root author or a recognized
+	// maintainer. A status from anyone else is ignored even if it's newer:
+	fetched := []*nip34.Status{
+		{Event: &nip01.Event{PubKey: contributorPubkeyHex, CreatedAt: 1_700_000_000}, Kind: nip34.KindStatusOpen, RootID: patchEventID},
+		{Event: &nip01.Event{PubKey: ownerPubkeyHex, CreatedAt: 1_700_000_500}, Kind: nip34.KindStatusApplied, RootID: patchEventID, AcceptedRevisionID: revisionEventID},
+		{Event: &nip01.Event{PubKey: strangerPubkeyHex, CreatedAt: 1_700_001_000}, Kind: nip34.KindStatusClosed, RootID: patchEventID}, // newer, but not authorized -- ignored
+	}
+
+	resolved := nip34.ResolveStatus(fetched, contributorPubkeyHex, []string{maintainerPubkeyHex, ownerPubkeyHex})
+	if resolved == nil {
+		panic("no authorized status found")
+	}
+	fmt.Println("resolved status kind:", resolved.Kind) // KindStatusApplied
+
+	// A patch revision inherits its root's resolved status, unless the
+	// root was merged and this wasn't the accepted revision -- then it's
+	// implicitly closed.
+	effective := nip34.ResolveRevisionStatus(revisionEventID, resolved)
+	fmt.Println("revision's effective status:", effective) // KindStatusApplied: it matches AcceptedRevisionID
+}
+```
+
+#### Publish a grasp server list
+
+The git-hosting analogue of a NIP-65 relay list or NIP-B7 Blossom server
+list -- the [grasp servers](https://github.com/nostr-protocol/nips/blob/master/34.md#user-grasp-list)
+a user prefers for NIP-34 activity, in order:
+
+```go
+package main
+
+import (
+	"fmt"
+
+	"github.com/ohstr/nmilat/nip34"
+)
+
+func main() {
+	ev := nip34.NewGraspServerList(pubkeyHex, []string{
+		"wss://relay.ngit.dev",
+		"wss://grasp.example",
+	})
+	if err := ev.Sign(privateKeyHex); err != nil {
+		panic(err)
+	}
+
+	list, err := nip34.ParseGraspServerList(ev)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("preferred grasp servers, in order:", list.Servers)
+}
+```
+
+#### Build and parse `nostr://` clone URLs
+
+```go
+package main
+
+import (
+	"fmt"
+
+	"github.com/ohstr/nmilat/nip19"
+	"github.com/ohstr/nmilat/nip34"
+)
+
+func main() {
+	// Form 1: "nostr://<naddr>" -- wraps the repository announcement's
+	// naddr (see "Encode & decode entities" above).
+	naddr, err := nip19.EncodeAddr(nip19.EntityPointer{
+		Identifier: "ngit",
+		PublicKey:  pubkeyHex,
+		Kind:       nip34.KindRepositoryAnnouncement,
+		Relays:     []string{"wss://relay.ngit.dev"},
+	})
+	if err != nil {
+		panic(err)
+	}
+	naddrForm := nip34.BuildCloneURLFromAddr(naddr)
+	fmt.Println(naddrForm) // nostr://naddr1...
+
+	parsed, err := nip34.ParseCloneURL(naddrForm)
+	if err != nil {
+		panic(err)
+	}
+	pointer, err := parsed.ResolveAddr()
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(pointer.Identifier, pointer.PublicKey, pointer.Kind)
+
+	// Form 2/3: "nostr://<npub|nip05>/[<relay-hint>/]<identifier>" -- more
+	// readable, resolved by looking up the owner's relay list instead of
+	// embedding one.
+	npub, err := nip19.EncodePublicKey(pubkeyHex)
+	if err != nil {
+		panic(err)
+	}
+	readableForm := nip34.BuildCloneURL(npub, "relay.ngit.dev", "ngit")
+	fmt.Println(readableForm) // nostr://npub1.../relay.ngit.dev/ngit
+
+	parsed2, err := nip34.ParseCloneURL(readableForm)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(parsed2.Owner, parsed2.RelayHint, parsed2.Identifier)
+
+	// A NIP-05 identifier works as the owner too, and the relay hint is
+	// optional:
+	nip05Form := nip34.BuildCloneURL("dev@example.com", "", "ngit")
+	fmt.Println(nip05Form) // nostr://dev@example.com/ngit
+}
+```
+
+#### Subscribe to a repository's activity from a relay
+
+The "server/client" side of NIP-34 is just `nip01`'s generic filter
+builder plus `relay/client`, the same as any other NIP here -- there's no
+`nip34/client` package, since NIP-34 has no second transport to dial:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"net/url"
+
+	"github.com/ohstr/nmilat/nip01"
+	"github.com/ohstr/nmilat/nip34"
+	relayclient "github.com/ohstr/nmilat/relay/client"
+)
+
+func main() {
+	relayURL, _ := url.Parse("wss://relay.ngit.dev")
+
+	// Every content kind a repository's activity can arrive as, filtered
+	// by the repo's own "a" tag address (the same one NewPatch/NewIssue/
+	// NewPullRequest/NewStatus were given as RepoAddress).
+	filter := nip01.NewFilter().
+		WithKinds(
+			nip34.KindPatch,
+			nip34.KindPullRequest,
+			nip34.KindPullRequestUpdate,
+			nip34.KindIssue,
+			nip34.KindStatusOpen,
+			nip34.KindStatusApplied,
+			nip34.KindStatusClosed,
+			nip34.KindStatusDraft,
+		).
+		WithTag("a", repoAddr)
+
+	events, err := relayclient.ReadEventsFromRelay(context.Background(), relayURL, nip01.NewSubscriptionFilterGroup(filter))
+	if err != nil {
+		panic(err)
+	}
+
+	for _, ev := range events {
+		if err := ev.Verify(); err != nil {
+			continue // bad signature, bad ID, or malformed -- skip it
+		}
+
+		switch ev.Kind {
+		case nip34.KindPatch:
+			patch, err := nip34.ParsePatch(ev)
+			if err == nil {
+				fmt.Println("patch:", patch.Commit)
+			}
+		case nip34.KindPullRequest:
+			pr, err := nip34.ParsePullRequest(ev)
+			if err == nil {
+				fmt.Println("PR:", pr.Subject)
+			}
+		case nip34.KindPullRequestUpdate:
+			upd, err := nip34.ParsePullRequestUpdate(ev)
+			if err == nil {
+				fmt.Println("PR update:", upd.Commit)
+			}
+		case nip34.KindIssue:
+			issue, err := nip34.ParseIssue(ev)
+			if err == nil {
+				fmt.Println("issue:", issue.Subject)
+			}
+		default:
+			if nip34.IsStatusKind(ev.Kind) {
+				status, err := nip34.ParseStatus(ev)
+				if err == nil {
+					fmt.Println("status for", status.RootID, "->", status.Kind)
+				}
+			}
+		}
+	}
+
+	// Replies (kind:1111) aren't repo-scoped by an "a" tag -- they're
+	// threaded off the issue/patch/PR event directly -- so subscribe to
+	// them by root instead:
+	replyFilter := nip01.NewFilter().WithKinds(1111).WithTag("E", issueEventID)
+	replies, err := relayclient.ReadEventsFromRelay(context.Background(), relayURL, nip01.NewSubscriptionFilterGroup(replyFilter))
+	if err != nil {
+		panic(err)
+	}
+	for _, ev := range replies {
+		if reply, err := nip34.ParseReply(ev); err == nil {
+			fmt.Println("reply:", reply.Content)
+		}
+	}
+}
 ```
 
 ## Development

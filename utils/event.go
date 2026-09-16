@@ -152,6 +152,23 @@ func ParseATag(tag string) (kind int, pubKey, dValue string, err error) {
 	return kind, pubKey, items[2], nil
 }
 
+// FormatATag renders kind, pubKey, and dValue as an "a" tag value
+// ("<kind>:<pubkey>:<d-value>"), the counterpart to ParseATag. kind must be
+// a replaceable or parameterized-replaceable kind and pubKey must be a
+// valid 32-byte hex key.
+func FormatATag(kind int, pubKey, dValue string) (string, error) {
+	if err := ValidateKind(kind); err != nil {
+		return "", err
+	}
+	if !nip16.IsReplaceableKind(kind) && !nip33.IsParamReplaceableKind(kind) {
+		return "", fmt.Errorf("%d is not a replaceable kind", kind)
+	}
+	if err := Validate32Key(pubKey); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%d:%s:%s", kind, pubKey, dValue), nil
+}
+
 const hexDigits = "0123456789abcdef"
 
 // hexDigit returns the lowercase hex character for nibble (0-15).
