@@ -131,6 +131,18 @@ type CashTransferResult struct {
 	RemainderWalletToken  string
 }
 
+// RecipientToken resolves the three-way NewWalletToken ambiguity above:
+// the cash token string the recipient needs to receive/redeem what was
+// sent. originalToken is the token this transfer was placed from — the
+// answer for the in-place-reassignment case. For a bearer target, still
+// combine with BearerTarget.Secret(); this only resolves the token half.
+func (r *CashTransferResult) RecipientToken(originalToken string) string {
+	if r.NewWalletToken != "" {
+		return r.NewWalletToken
+	}
+	return originalToken
+}
+
 // ParseResult parses cash_transfer's wire response, decrypting any
 // *_wallet_token field with p.Credential's own privkey (see Credential's
 // decryptDelivery doc comment for why a bearer credential's tokens instead
