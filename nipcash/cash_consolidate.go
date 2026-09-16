@@ -12,10 +12,9 @@ type CashConsolidateParams struct {
 	// request carrying it, unlike a connection_key source's signed
 	// identity_event + attestation_event, which this revision does accept).
 	Sources []Source
-	// To is who the merged wallet belongs to — MUST be a pubkey (namedIdentity
-	// built via Pubkey); ErrConsolidateTargetNotPubkey otherwise. A
-	// *BearerTarget or connection_key Target is this revision's deferred
-	// scope, rejected client-side rather than left to fail server-side.
+	// To is who the merged wallet belongs to — any Target (pubkey,
+	// connection_key, or a *BearerTarget) is accepted; ErrConsolidateTargetInvalid
+	// only if left nil.
 	To Target
 	// MintSignature opts the merged wallet's token into mint provenance —
 	// independent of whether any source wallet had one.
@@ -48,8 +47,8 @@ func (p CashConsolidateParams) Request() (CashConsolidateRequest, error) {
 		return CashConsolidateRequest{}, ErrTooFewSources
 	}
 	targetFieldsVal, ok := p.To.(targetFields)
-	if !ok || targetFieldsVal.identityType() != identityTypePubkey {
-		return CashConsolidateRequest{}, ErrConsolidateTargetNotPubkey
+	if !ok {
+		return CashConsolidateRequest{}, ErrConsolidateTargetInvalid
 	}
 
 	sources := make([]consolidateSourceParam, len(p.Sources))
@@ -85,6 +84,7 @@ func (p CashConsolidateParams) Request() (CashConsolidateRequest, error) {
 		NewIdentity: cashTransferNewIdentityParam{
 			IdentityType:  targetFieldsVal.identityType(),
 			IdentityValue: targetFieldsVal.identityValue(),
+			IAPubkey:      targetFieldsVal.iaPubkey(),
 		},
 		MintSignature: p.MintSignature,
 	}, nil

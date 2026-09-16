@@ -12,6 +12,12 @@
   for the common case; this is the counterpart for a caller starting from
   the key itself.
 
+### Changed
+
+- `cash_consolidate` now accepts a bearer or connection_key `To` target,
+  not just pubkey. `ErrConsolidateTargetNotPubkey` renamed to
+  `ErrConsolidateTargetInvalid`.
+
 ## [0.2.9]
 
 ### Fixed
