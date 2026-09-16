@@ -34,6 +34,13 @@
 - `TransferFromSources` reused a stale, wallet-bound client for its
   second call, so every multi-source transfer failed with `NOT_FOUND`.
   Now reconnects to the new wallet first.
+- `nip47.GetInfoResult`/`PayInvoiceResult`/`PayKeysendResult`/`Transaction`
+  had no field for a circle_hub's own `get_info` terms block or a
+  circle_wallet payment's forwarding-fee skim — `encoding/json` silently
+  dropped both on unmarshal, so no caller could ever see them. Added
+  `GetInfoResult.CircleWallet` (new `CircleWalletInfo` type: available
+  balance, max expiry, fees_ppm, circle policy) and `FeeSkimMloki` on the
+  three payment-result types.
 
 ## [0.2.9]
 
