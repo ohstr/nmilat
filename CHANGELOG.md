@@ -11,6 +11,8 @@
   `nipcash.ConnectionKey` still hashes `(platform, externalID)` internally
   for the common case; this is the counterpart for a caller starting from
   the key itself.
+- `nipcash.SplitBearerSliceString`: splits a bearer slice's combined
+  `"<token>#<bearer_secret>"` presentation into its two parts.
 
 ### Changed
 
