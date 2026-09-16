@@ -535,6 +535,89 @@ func main() {
 }
 ```
 
+### Mint, verify, and secure a bearer-mode cash slice (NIP-CASH)
+
+A **bearer-mode** slice (`nipcash.Anyone()` as the recipient) has no
+Nostr identity attached — whoever holds its `bearer_secret` can spend it.
+`CheckClaim` confirms a received slice is real before trusting it;
+`RekeyBearerSlice` then re-keys it under a fresh secret only the new
+holder knows, so the old one stops working:
+
+```go
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/ohstr/nmilat/nipcash"
+	cashclient "github.com/ohstr/nmilat/nipcash/client"
+)
+
+func main() {
+	ctx := context.Background()
+
+	hub, err := cashclient.Connect(ctx, cashHubPairingURI)
+	if err != nil {
+		panic(err)
+	}
+	defer hub.Close()
+
+	minted, err := hub.MintCash(ctx, nipcash.MintCashParams{
+		Recipients: []nipcash.Allocation{nipcash.Send(nipcash.Anyone(), 21_000_000)},
+		Expiry:     24 * time.Hour,
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	// One string to hand over: the combined "<token>#<bearer_secret>"
+	// presentation.
+	billString := minted.CashToken + "#" + minted.Recipients[0].BearerSecret
+
+	// Recipient's side: split it, then verify it's real.
+	token, secret := nipcash.SplitBearerSliceString(billString)
+	tok, err := nipcash.Decode(token)
+	if err != nil {
+		panic(err)
+	}
+
+	recipient, err := cashclient.Connect(ctx, token)
+	if err != nil {
+		panic(err)
+	}
+	defer recipient.Close()
+
+	check, err := recipient.CheckClaim(ctx, tok, nipcash.NoLocalIdentity)
+	if errors.Is(err, nipcash.ErrClaimNotFound) {
+		panic("dead, already-claimed, or never a real slice")
+	} else if err != nil {
+		panic(err)
+	}
+	fmt.Println("verified:", check.AmountMillis, "millis, bearer:", check.IsBearer)
+
+	// Re-key it: secured.NewSecret is the only copy, persist it now.
+	secured, err := recipient.RekeyBearerSlice(ctx, cashclient.RekeyBearerSliceParams{
+		BearerSlice: nipcash.Source{
+			WalletPubkey: tok.WalletPubkey,
+			Amount:       check.AmountMillis,
+			Credential:   nipcash.BySecret(secret),
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("secured — new secret only this wallet knows:", secured.NewSecret)
+}
+```
+
+To merge with another same-issuer slice you already hold, add
+`ConsolidateWith`, `InterimIdentity`, and `InterimCredential` to the same
+call. `nipcash/client.TransferFromSources` does the reverse: send a
+specific amount, drawing from and auto-consolidating several sources.
+
 ### Upload a blob to a Blossom server (NIP-B7)
 
 Build a BUD-11 Authorization token scoped to the `upload` verb, then hand it
