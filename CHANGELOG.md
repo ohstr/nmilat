@@ -18,6 +18,8 @@
 - `nipcash.IsPubkeyTarget`: reports whether a `Target` is pubkey-identified.
 - `nipcash/client.RekeyBearerSlice`: re-keys a bearer slice under a fresh
   secret, optionally merging it with other same-issuer sources.
+- `nipcash/client.TransferFromSources`: transfers an amount drawn from one
+  or more sources, auto-consolidating first if none alone covers it.
 - `nipcash/client.PartialProgressError`: reports partial progress when the
   first of two chained calls above lands but the second fails.
 
@@ -26,6 +28,12 @@
 - `cash_consolidate` now accepts a bearer or connection_key `To` target,
   not just pubkey. `ErrConsolidateTargetNotPubkey` renamed to
   `ErrConsolidateTargetInvalid`.
+
+### Fixed
+
+- `TransferFromSources` reused a stale, wallet-bound client for its
+  second call, so every multi-source transfer failed with `NOT_FOUND`.
+  Now reconnects to the new wallet first.
 
 ## [0.2.9]
 
