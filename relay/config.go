@@ -14,8 +14,8 @@ const (
 	// may block on conn.WriteJSON before the session gives up and closes
 	// the connection. Every subscription on a connection shares one
 	// outgoing pipe, so an unbounded deadline let one stuck reader stall
-	// delivery to all of them indefinitely (see issue-evaluation.md). 30s
-	// is a deliberately generous default, not a tuned optimum. Override
+	// delivery to all of them indefinitely (see PR #19). 30s is a
+	// deliberately generous default, not a tuned optimum. Override
 	// via WithSessionWriteTimeouts (0 restores the old unbounded behavior).
 	defaultDataWriteTimeout = 30 * time.Second
 
