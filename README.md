@@ -40,9 +40,11 @@ go get github.com/ohstr/nmilat
 - **[`nip16`](https://github.com/nostr-protocol/nips/blob/master/16.md)** — Event treatment (regular/replaceable/ephemeral kinds)
 - **[`nip17`](https://github.com/nostr-protocol/nips/blob/master/17.md), [`nip59`](https://github.com/nostr-protocol/nips/blob/master/59.md)** — Private direct messages, gift wraps
 - **[`nip19`](https://github.com/nostr-protocol/nips/blob/master/19.md)** — Bech32-encoded entities: npub, nsec, note, plus the TLV-based nprofile, nevent, and naddr
+- **[`nip22`](https://github.com/nostr-protocol/nips/blob/master/22.md)** — Comment: generic kind:1111 threading note scoped to a root event, address, or NIP-73 external identifier
 - **[`nip23`](https://github.com/nostr-protocol/nips/blob/master/23.md)** — Long-form content
 - **[`nip26`](https://github.com/nostr-protocol/nips/blob/master/26.md)** — Event delegation
 - **[`nip33`](https://github.com/nostr-protocol/nips/blob/master/33.md)** — Parameterized replaceable events (now called addressable events)
+- **[`nip34`](https://github.com/nostr-protocol/nips/blob/master/34.md)** — git stuff: repository announcements/state, patches, pull requests, issues, replies, and status over Nostr
 - **[`nip40`](https://github.com/nostr-protocol/nips/blob/master/40.md)** — Event expiration
 - **[`nip42`](https://github.com/nostr-protocol/nips/blob/master/42.md), [`nip98`](https://github.com/nostr-protocol/nips/blob/master/98.md)** — Relay/HTTP authentication
 - **[`nip43`](https://github.com/nostr-protocol/nips/blob/master/43.md)** — Relay access metadata and requests
@@ -73,7 +75,7 @@ go get github.com/ohstr/nmilat
 - **`wire`** — Relay wire-protocol packet types
 - **`utils`** — Shared event/key/logging helpers
 
-NIP packages with relay-side concerns (NIP-47/48/57/65/88/90/B0/B7) stay
+NIP packages with relay-side concerns (NIP-22/34/47/48/57/65/88/90/B0/B7) stay
 dependency-free on their own; blank-import their `relayreg` subpackage to
 declare relay support, e.g. `import _ "github.com/ohstr/nmilat/nip57/relayreg"`.
 See "Run a relay" below.
@@ -713,6 +715,76 @@ naddr, err := nip19.EncodeAddr(nip19.EntityPointer{
 })
 addr, err := nip19.DecodeAddr(naddr) // *nip19.EntityPointer
 ```
+
+### Announce a git repository and open an issue (NIP-34)
+
+Publish a repository announcement, then a patch and an issue that reference
+it by its address; replies to either follow NIP-22's `kind:1111` comment
+shape via the `nip34.NewReply`/`nip34.ParseReply` convenience layer:
+
+```go
+package main
+
+import (
+	"fmt"
+
+	"github.com/ohstr/nmilat/nip34"
+	"github.com/ohstr/nmilat/utils"
+)
+
+func main() {
+	repoEv, err := nip34.NewRepositoryAnnouncement(nip34.RepositoryAnnouncementParams{
+		Pubkey:      pubkeyHex,
+		Identifier:  "ngit",
+		Name:        "ngit",
+		Description: "git over nostr",
+		Clone:       []string{"https://github.com/example/ngit.git"},
+		Relays:      []string{"wss://relay.ngit.dev"},
+		Maintainers: []string{pubkeyHex},
+	})
+	if err != nil {
+		panic(err)
+	}
+	if err := repoEv.Sign(privateKeyHex); err != nil {
+		panic(err)
+	}
+
+	repoAddr, _ := utils.FormatATag(nip34.KindRepositoryAnnouncement, pubkeyHex, "ngit")
+
+	issueEv, err := nip34.NewIssue(nip34.IssueParams{
+		Pubkey:          otherPubkeyHex,
+		Content:         "The build is broken on main.",
+		RepoAddress:     repoAddr,
+		RepositoryOwner: pubkeyHex,
+		Subject:         "Build broken",
+		Labels:          []string{"bug"},
+	})
+	if err != nil {
+		panic(err)
+	}
+	if err := issueEv.Sign(otherPrivateKeyHex); err != nil {
+		panic(err)
+	}
+
+	replyEv, err := nip34.NewReply(nip34.ReplyParams{
+		Pubkey:    pubkeyHex,
+		Content:   "thanks for reporting, looking into it",
+		RootEvent: issueEv,
+	})
+	if err != nil {
+		panic(err)
+	}
+	if err := replyEv.Sign(privateKeyHex); err != nil {
+		panic(err)
+	}
+	fmt.Println("reply kind:", replyEv.Kind) // 1111
+}
+```
+
+Status events (`nip34.NewStatus`, kinds `1630`-`1633`) close the loop, and
+`nip34.ResolveStatus`/`nip34.ResolveRevisionStatus` implement the spec's
+"latest status from the root author or a maintainer wins" resolution rule
+for a client that has fetched every status event for a thread.
 
 ## Development
 
