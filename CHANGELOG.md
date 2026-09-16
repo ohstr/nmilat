@@ -13,6 +13,8 @@
   the key itself.
 - `nipcash.SplitBearerSliceString`: splits a bearer slice's combined
   `"<token>#<bearer_secret>"` presentation into its two parts.
+- `nipcash.CheckClaim` / `nipcash/client.CheckClaim`: one call to check
+  whether a token has a real, unclaimed recipient (bearer or pubkey).
 
 ### Changed
 
