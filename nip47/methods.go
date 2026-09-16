@@ -79,19 +79,28 @@ type Notification struct {
 // make_invoice/make_hold_invoice/lookup_invoice results, list_transactions
 // result items, and payment_received/payment_sent notification payloads.
 type Transaction struct {
-	Type            string          `json:"type"`
-	State           string          `json:"state,omitempty"`
-	Invoice         string          `json:"invoice,omitempty"`
-	Description     string          `json:"description,omitempty"`
-	DescriptionHash string          `json:"description_hash,omitempty"`
-	Preimage        string          `json:"preimage,omitempty"`
-	PaymentHash     string          `json:"payment_hash"`
-	AmountMloki     int64           `json:"amount"`
-	FeesPaidMloki   int64           `json:"fees_paid,omitempty"`
-	CreatedAt       int64           `json:"created_at"`
-	ExpiresAt       *int64          `json:"expires_at,omitempty"`
-	SettledAt       *int64          `json:"settled_at,omitempty"`
-	Metadata        json.RawMessage `json:"metadata,omitempty"`
+	Type            string `json:"type"`
+	State           string `json:"state,omitempty"`
+	Invoice         string `json:"invoice,omitempty"`
+	Description     string `json:"description,omitempty"`
+	DescriptionHash string `json:"description_hash,omitempty"`
+	Preimage        string `json:"preimage,omitempty"`
+	PaymentHash     string `json:"payment_hash"`
+	AmountMloki     int64  `json:"amount"`
+	FeesPaidMloki   int64  `json:"fees_paid,omitempty"`
+	// FeeSkimMloki is a circle_hub's forwarding-fee cut (CircleHubConfig.
+	// FeesPpm) debited from a circle_wallet's own outgoing payment, on top of
+	// FeesPaidMloki (the real Lightning routing fee) — present only for a
+	// circle_wallet's own outgoing, non-self payments (see lokihub's
+	// transactions_service.go validateCanPay/nip47/controllers/models.go
+	// payResponse.FeeSkimMloki, which this mirrors). Without this field, a
+	// circle member had no way to learn why their balance dropped by more
+	// than AmountMloki+FeesPaidMloki.
+	FeeSkimMloki int64           `json:"fee_skim_mloki,omitempty"`
+	CreatedAt    int64           `json:"created_at"`
+	ExpiresAt    *int64          `json:"expires_at,omitempty"`
+	SettledAt    *int64          `json:"settled_at,omitempty"`
+	Metadata     json.RawMessage `json:"metadata,omitempty"`
 }
 
 // TLVRecord is a keysend custom TLV record.
@@ -111,6 +120,10 @@ type PayInvoiceParams struct {
 type PayInvoiceResult struct {
 	Preimage      string `json:"preimage"`
 	FeesPaidMloki int64  `json:"fees_paid,omitempty"`
+	// FeeSkimMloki — see Transaction.FeeSkimMloki's doc comment; identical
+	// meaning, just on the immediate pay_invoice response rather than a
+	// list_transactions row.
+	FeeSkimMloki int64 `json:"fee_skim_mloki,omitempty"`
 }
 
 // PayKeysendParams is the pay_keysend request payload.
@@ -125,6 +138,8 @@ type PayKeysendParams struct {
 type PayKeysendResult struct {
 	Preimage      string `json:"preimage"`
 	FeesPaidMloki int64  `json:"fees_paid,omitempty"`
+	// FeeSkimMloki — see Transaction.FeeSkimMloki's doc comment.
+	FeeSkimMloki int64 `json:"fee_skim_mloki,omitempty"`
 }
 
 // MultiPayInvoiceItem is one sub-payment of a multi_pay_invoice request.
@@ -230,6 +245,25 @@ type GetInfoResult struct {
 	BlockHash     string   `json:"block_hash,omitempty"`
 	Methods       []string `json:"methods"`
 	Notifications []string `json:"notifications,omitempty"`
+	// CircleWallet is set only when the dialed connection IS a circle_hub's
+	// own connection (lokihub's get_info_controller.go only attaches it for
+	// app.Kind == circle_hub, never for an individual circle_wallet member) —
+	// the terms a prospective/current member needs to evaluate the Hub
+	// before or after joining. Absent from every other get_info response,
+	// including a joined member's own `wallet get-info`.
+	CircleWallet *CircleWalletInfo `json:"circle_wallet,omitempty"`
+}
+
+// CircleWalletInfo is get_info's circle_hub-only terms block — see
+// GetInfoResult.CircleWallet's doc comment for when it's populated.
+type CircleWalletInfo struct {
+	AvailableMloki int64 `json:"available_mloki"`
+	MaxExpSecs     int   `json:"max_exp_secs"`
+	// FeesPpm is the circle_hub's configured forwarding fee (parts per
+	// million of each circle_wallet child's own outgoing, non-self payment —
+	// see transactions_service.go's CalculateFeeSkimMloki on the Hub side).
+	FeesPpm      int    `json:"fees_ppm"`
+	CirclePolicy string `json:"circle_policy"`
 }
 
 // SignMessageParams is the sign_message request payload. Like
