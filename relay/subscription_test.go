@@ -180,9 +180,9 @@ func TestSubscriptionCombinedKindBurstDoesNotStarveFreshEvent(t *testing.T) {
 }
 
 // TestSubscriptionBackpressureDelaysButNeverLosesEvents reproduces the
-// no-timeout blocking-send mechanism behind the delivery stall in
-// issue-evaluation.md: storeScan.handleEvents' send into a subscription's
-// outgoing channel (eventBufferCapacity, 55 slots) has no timeout, and
+// no-timeout blocking-send mechanism behind the delivery stall fixed in
+// PR #19: storeScan.handleEvents' send into a subscription's outgoing
+// channel (eventBufferCapacity, 55 slots) has no timeout, and
 // Subscription.Start's poll loop calls Fetch synchronously on every tick --
 // so once the channel is full, the next poll tick blocks inside Fetch until
 // the consumer drains it, stalling delivery of any new matching event.

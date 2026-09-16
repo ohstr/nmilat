@@ -32,9 +32,9 @@ const (
 
 	// slowSendWarnThreshold is how long a single sendPacket call may take
 	// before it's logged as a warning -- surfaces a backed-up outgoing
-	// pipe (see issue-evaluation.md), which previously had no observable
-	// signal at all. Several multiples of the poll interval, to avoid
-	// firing on ordinary jitter.
+	// pipe (see PR #19), which previously had no observable signal at
+	// all. Several multiples of the poll interval, to avoid firing on
+	// ordinary jitter.
 	slowSendWarnThreshold = 250 * time.Millisecond
 )
 

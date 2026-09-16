@@ -54,8 +54,8 @@
   connection, indefinitely. Default is now 30s (overridable, including
   back to `0`, via the existing `WithSessionWriteTimeouts`). `sendPacket`
   also now logs a warning when a single write exceeds 250ms — previously
-  there was no observable signal for this at all. Root-cause writeup and
-  regression tests in `issue-evaluation.md`. (#19)
+  there was no observable signal for this at all. See PR #19 for the full
+  root-cause writeup and regression tests. (#19)
 - `relay/store.EventStore.FindEventBytes` returned a bbolt-transaction-
   scoped byte slice after its own read transaction had already closed —
   invalid per bbolt's own contract, and reproducibly served corrupted
