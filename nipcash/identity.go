@@ -68,6 +68,17 @@ func ConnectionKey(platform nipIC.WebIdentity, externalID, iaPubkey string) name
 	return namedIdentity{identity: nipAZ.Connection(platform, externalID), ia: iaPubkey}
 }
 
+// ResolvedConnectionKey builds a Recipient/Target from a nipIC.ConnectionKey
+// the caller already has — e.g. one decoded from an nconnection1... string
+// via nipIC.DecodeNConnection, which carries the key itself, not the raw
+// external ID it was hashed from. Unlike ConnectionKey, this never hashes
+// anything (via nipAZ.ResolvedConnection): a caller with only the key, not
+// the external ID, has no way to reproduce ConnectionKey's own hash step
+// and shouldn't need to.
+func ResolvedConnectionKey(key nipIC.ConnectionKey, platform nipIC.WebIdentity, iaPubkey string) namedIdentity {
+	return namedIdentity{identity: nipAZ.ResolvedConnection(key, platform), ia: iaPubkey}
+}
+
 // bearerRecipient is Anyone()'s concrete Recipient — plain cash, no
 // registered identity, redeemable by whoever holds the wallet's secret.
 // Deliberately satisfies only Recipient, not Target: see BearerTarget.
@@ -129,6 +140,16 @@ func (t *BearerTarget) identityType() string  { return identityTypeBearer }
 func (t *BearerTarget) identityValue() string { return t.commit }
 func (t *BearerTarget) iaPubkey() string      { return "" }
 
+// IsPubkeyTarget reports whether t identifies a bare Nostr pubkey — never
+// bearer, never connection_key. Exported so nipcash/client composites
+// that need to validate a Target's own type before making a wire call
+// (e.g. rejecting a bad value before it can cause a real, partial
+// side effect) don't need targetFields' otherwise-unexported shape.
+func IsPubkeyTarget(t Target) bool {
+	tf, ok := t.(targetFields)
+	return ok && tf.identityType() == identityTypePubkey
+}
+
 // Allocation pairs a Recipient with the amount mint_cash funds their slice
 // with. Build one with Send.
 type Allocation struct {
@@ -143,12 +164,11 @@ func Send(recipient Recipient, amountMillis uint64) Allocation {
 
 // Source pairs a source wallet with its own current committed amount and
 // the Credential proving control over it, for CashConsolidate. Build one
-// with From — a live Credential (BySigning; connection_key/bearer sources
-// are rejected by this revision of NIP-CASH, see ErrBearerSource), or one
-// built from a proof captured earlier via ByProof. Authorization is
-// per-source, not per-connection, so a relayer holding only captured
-// proofs can still consolidate on someone else's behalf (NIP-CASH
-// §Consolidating Tokens).
+// with From — a live Credential (BySigning; pubkey and connection_key both
+// work, bearer sources are rejected, see ErrBearerSource), or one built
+// from a proof captured earlier via ByProof. Authorization is per-source,
+// not per-connection, so a relayer holding only captured proofs can still
+// consolidate on someone else's behalf (NIP-CASH §Consolidating Tokens).
 type Source struct {
 	WalletPubkey string
 	// Amount is this source's own current committed amount, in millis —
