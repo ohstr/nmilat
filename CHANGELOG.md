@@ -4,6 +4,18 @@
 
 ### Added
 
+- `nip34`: NIP-34 (git stuff) — repository announcements (`kind:30617`) and
+  state (`kind:30618`), patches (`kind:1617`), pull requests (`kind:1618`)
+  and PR updates (`kind:1619`), issues (`kind:1621`), replies (built on the
+  new `nip22` package), status events (`kind:1630`-`1633`) with
+  `ResolveStatus`/`ResolveRevisionStatus` helpers implementing the spec's
+  status-resolution rules, user grasp lists (`kind:10317`), and `nostr://`
+  clone URL parsing/building. `nip34/relayreg` declares relay-side support.
+- `nip22`: NIP-22 (Comment) — the generic `kind:1111` threading note that
+  NIP-34 replies build on, scoped to a root event, addressable event, or
+  NIP-73 external identifier. `nip22/relayreg` declares relay-side support.
+- `utils.FormatATag`: renders a `kind:pubkey:d-value` "a" tag string, the
+  build-side counterpart to the existing `utils.ParseATag`.
 - `nipcash.ResolvedConnectionKey`: builds a `connection_key`-mode Recipient/
   Target from a `nipIC.ConnectionKey` the caller already has (e.g. decoded
   from an `nconnection1...` string via `nipIC.DecodeNConnection`), without
