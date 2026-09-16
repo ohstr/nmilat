@@ -26,7 +26,40 @@ func TestCashConsolidateParams_Request_BearerSourceRejected(t *testing.T) {
 	}
 }
 
-func TestCashConsolidateParams_Request_TargetMustBePubkey(t *testing.T) {
+func TestCashConsolidateParams_Request_NilTargetRejected(t *testing.T) {
+	privKeyHex, _ := generateTestKeypair(t)
+	p := CashConsolidateParams{
+		Sources: []Source{
+			From(randomKeyHex(t), 1000, BySigning(privKeyHex)),
+			From(randomKeyHex(t), 1000, BySigning(privKeyHex)),
+		},
+		To: nil,
+	}
+	if _, err := p.Request(); err != ErrConsolidateTargetInvalid {
+		t.Fatalf("got %v, want ErrConsolidateTargetInvalid", err)
+	}
+}
+
+func TestCashConsolidateParams_Request_BearerTargetAccepted(t *testing.T) {
+	privKeyHex, _ := generateTestKeypair(t)
+	bt := NewBearerTarget()
+	p := CashConsolidateParams{
+		Sources: []Source{
+			From(randomKeyHex(t), 1000, BySigning(privKeyHex)),
+			From(randomKeyHex(t), 1000, BySigning(privKeyHex)),
+		},
+		To: bt,
+	}
+	req, err := p.Request()
+	if err != nil {
+		t.Fatalf("Request: %v", err)
+	}
+	if req.NewIdentity.IdentityType != identityTypeBearer || req.NewIdentity.IdentityValue != bt.identityValue() {
+		t.Fatalf("NewIdentity: %+v, want bearer/%s", req.NewIdentity, bt.identityValue())
+	}
+}
+
+func TestCashConsolidateParams_Request_ConnectionKeyTargetAccepted(t *testing.T) {
 	privKeyHex, _ := generateTestKeypair(t)
 	p := CashConsolidateParams{
 		Sources: []Source{
@@ -35,8 +68,15 @@ func TestCashConsolidateParams_Request_TargetMustBePubkey(t *testing.T) {
 		},
 		To: ConnectionKey("discord", "someone", "iapub"),
 	}
-	if _, err := p.Request(); err != ErrConsolidateTargetNotPubkey {
-		t.Fatalf("got %v, want ErrConsolidateTargetNotPubkey", err)
+	req, err := p.Request()
+	if err != nil {
+		t.Fatalf("Request: %v", err)
+	}
+	if req.NewIdentity.IdentityType != identityTypeConnectionKey {
+		t.Fatalf("NewIdentity.IdentityType: got %s, want connection_key", req.NewIdentity.IdentityType)
+	}
+	if req.NewIdentity.IAPubkey != "iapub" {
+		t.Fatalf("NewIdentity.IAPubkey: got %q, want \"iapub\" — previously dropped entirely, must now pass through", req.NewIdentity.IAPubkey)
 	}
 }
 

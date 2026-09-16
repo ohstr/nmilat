@@ -28,3 +28,9 @@ type RecipientStatus struct {
 type ListRecipientsResult struct {
 	Recipients []RecipientStatus `json:"recipients"`
 }
+
+// IsBearer reports whether r is a bearer-mode recipient row — the one
+// place identityTypeBearer's own comparison lives, so a caller outside
+// this package (nipcash/client's CheckClaim, say) never needs the
+// unexported wire constant itself just to ask this question.
+func (r RecipientStatus) IsBearer() bool { return r.IdentityType == identityTypeBearer }

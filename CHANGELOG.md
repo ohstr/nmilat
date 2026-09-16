@@ -1,5 +1,47 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- `nipcash.ResolvedConnectionKey`: builds a `connection_key`-mode Recipient/
+  Target from a `nipIC.ConnectionKey` the caller already has (e.g. decoded
+  from an `nconnection1...` string via `nipIC.DecodeNConnection`), without
+  re-hashing it from a raw external ID the caller may not have on hand.
+  `nipcash.ConnectionKey` still hashes `(platform, externalID)` internally
+  for the common case; this is the counterpart for a caller starting from
+  the key itself.
+- `nipcash.SplitBearerSliceString`: splits a bearer slice's combined
+  `"<token>#<bearer_secret>"` presentation into its two parts.
+- `nipcash.CheckClaim` / `nipcash/client.CheckClaim`: one call to check
+  whether a token has a real, unclaimed recipient (bearer or pubkey).
+- `nipcash.IsPubkeyTarget`: reports whether a `Target` is pubkey-identified.
+- `nipcash/client.RekeyBearerSlice`: re-keys a bearer slice under a fresh
+  secret, optionally merging it with other same-issuer sources.
+- `nipcash/client.TransferFromSources`: transfers an amount drawn from one
+  or more sources, auto-consolidating first if none alone covers it.
+- `nipcash/client.PartialProgressError`: reports partial progress when the
+  first of two chained calls above lands but the second fails.
+
+### Changed
+
+- `cash_consolidate` now accepts a bearer or connection_key `To` target,
+  not just pubkey. `ErrConsolidateTargetNotPubkey` renamed to
+  `ErrConsolidateTargetInvalid`.
+
+### Fixed
+
+- `TransferFromSources` reused a stale, wallet-bound client for its
+  second call, so every multi-source transfer failed with `NOT_FOUND`.
+  Now reconnects to the new wallet first.
+- `nip47.GetInfoResult`/`PayInvoiceResult`/`PayKeysendResult`/`Transaction`
+  had no field for a circle_hub's own `get_info` terms block or a
+  circle_wallet payment's forwarding-fee skim — `encoding/json` silently
+  dropped both on unmarshal, so no caller could ever see them. Added
+  `GetInfoResult.CircleWallet` (new `CircleWalletInfo` type: available
+  balance, max expiry, fees_ppm, circle policy) and `FeeSkimMloki` on the
+  three payment-result types.
+
 ## [0.2.9]
 
 ### Fixed
