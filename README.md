@@ -40,11 +40,11 @@ go get github.com/ohstr/nmilat
 - **[`nip16`](https://github.com/nostr-protocol/nips/blob/master/16.md)** — Event treatment (regular/replaceable/ephemeral kinds)
 - **[`nip17`](https://github.com/nostr-protocol/nips/blob/master/17.md), [`nip59`](https://github.com/nostr-protocol/nips/blob/master/59.md)** — Private direct messages, gift wraps
 - **[`nip19`](https://github.com/nostr-protocol/nips/blob/master/19.md)** — Bech32-encoded entities: npub, nsec, note, plus the TLV-based nprofile, nevent, and naddr
-- **[`nip22`](https://github.com/nostr-protocol/nips/blob/master/22.md)** — Comment: generic kind:1111 threading note scoped to a root event, address, or NIP-73 external identifier
+- **[`nip22`](https://github.com/nostr-protocol/nips/blob/master/22.md)** — Comment: generic kind:1111 threading note
 - **[`nip23`](https://github.com/nostr-protocol/nips/blob/master/23.md)** — Long-form content
 - **[`nip26`](https://github.com/nostr-protocol/nips/blob/master/26.md)** — Event delegation
 - **[`nip33`](https://github.com/nostr-protocol/nips/blob/master/33.md)** — Parameterized replaceable events (now called addressable events)
-- **[`nip34`](https://github.com/nostr-protocol/nips/blob/master/34.md)** — git stuff: repository announcements/state, patches, pull requests, issues, replies, and status over Nostr
+- **[`nip34`](https://github.com/nostr-protocol/nips/blob/master/34.md)** — git stuff: code collaboration over Nostr
 - **[`nip40`](https://github.com/nostr-protocol/nips/blob/master/40.md)** — Event expiration
 - **[`nip42`](https://github.com/nostr-protocol/nips/blob/master/42.md), [`nip98`](https://github.com/nostr-protocol/nips/blob/master/98.md)** — Relay/HTTP authentication
 - **[`nip43`](https://github.com/nostr-protocol/nips/blob/master/43.md)** — Relay access metadata and requests
