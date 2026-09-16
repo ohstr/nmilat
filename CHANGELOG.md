@@ -15,6 +15,9 @@
   `"<token>#<bearer_secret>"` presentation into its two parts.
 - `nipcash.CheckClaim` / `nipcash/client.CheckClaim`: one call to check
   whether a token has a real, unclaimed recipient (bearer or pubkey).
+- `nipcash.IsPubkeyTarget`: reports whether a `Target` is pubkey-identified.
+- `nipcash/client.RekeyBearerSlice`: re-keys a bearer slice under a fresh
+  secret, optionally merging it with other same-issuer sources.
 - `nipcash/client.PartialProgressError`: reports partial progress when the
   first of two chained calls above lands but the second fails.
 
