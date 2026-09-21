@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.3.1]
+
+### Added
+
+- `utils.ParsePayMetadataChains`/`utils.FetchLud16PayResponse`: parse a
+  LUD-06 pay response and list the Lightning-routable chains it
+  advertises. Previously only available privately inside the relay's
+  own profile-verification worker.
+- `nip57.RequestZapInvoice`: a high-level zap helper — resolves a
+  recipient's LUD-16 address, builds and signs the zap request, and
+  fetches an invoice back in one call.
+
+### Changed
+
+- `nip57.ZapRequestParams` gained a `Content` field, so a zap request
+  can carry an optional public comment.
+
+### Fixed
+
+- `nipcash.CashConsolidateParams.ParseResult` always decrypted
+  `new_wallet_token` and returned an error if that failed, even though
+  the merge itself had already succeeded. A bearer/connection_key target
+  has no real pubkey yet, so the Hub delivers the token in the clear and
+  decryption always failed for it. `ParseResult` now passes that token
+  through unchanged; for a pubkey target it still decrypts with the first
+  source's credential, but a decryption failure now preserves the raw
+  value instead of returning an error.
+
 ## [0.3.0]
 
 ### Added

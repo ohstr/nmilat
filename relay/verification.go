@@ -3,9 +3,7 @@ package relay
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -151,42 +149,8 @@ func (w *ProfileVerificationWorker) processJob(job VerificationJob) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			url := utils.GetLud16URL(job.Lud16)
-			if url != "" {
-				req, _ := http.NewRequestWithContext(w.ctx, "GET", url, nil)
-				if resp, err := w.httpClient.Do(req); err == nil {
-					defer func() { _ = resp.Body.Close() }()
-					if resp.StatusCode == http.StatusOK {
-						body, err := io.ReadAll(resp.Body)
-						if err == nil {
-							var payResponse struct {
-								Metadata string `json:"metadata"`
-							}
-							if err := utils.UnmarshalJSON(body, &payResponse); err != nil {
-								// Alternative: some services return the metadata directly as an array or object
-								// but LUD-06 says it's inside a metadata field as a string.
-							} else {
-								var metadata [][]interface{}
-								if err := utils.UnmarshalJSON([]byte(payResponse.Metadata), &metadata); err == nil {
-									chainCount := 0
-									for _, item := range metadata {
-										if len(item) > 0 {
-											if tag, ok := item[0].(string); ok && strings.HasPrefix(tag, "chain/") {
-												chainCount++
-											}
-										}
-									}
-									if chainCount == 0 {
-										// Bitcoin is assumed if no chain tags provided
-										ludChains = 1
-									} else {
-										ludChains = chainCount
-									}
-								}
-							}
-						}
-					}
-				}
+			if payResp, err := utils.FetchLud16PayResponse(w.ctx, w.httpClient, job.Lud16); err == nil {
+				ludChains = len(payResp.Chains)
 			}
 		}()
 	}

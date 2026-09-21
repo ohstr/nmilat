@@ -45,3 +45,17 @@ func ValidateLNURL(lnurlStr string) error {
 
 	return nil
 }
+
+// EncodeLNURL bech32-encodes rawURL as an "lnurl1..." string — the inverse
+// of ValidateLNURL's decode step.
+func EncodeLNURL(rawURL string) (string, error) {
+	bits5, err := bech32.ConvertBits([]byte(rawURL), 8, 5, true)
+	if err != nil {
+		return "", fmt.Errorf("failed to convert bits: %w", err)
+	}
+	encoded, err := bech32.Encode("lnurl", bits5)
+	if err != nil {
+		return "", fmt.Errorf("failed to encode bech32: %w", err)
+	}
+	return encoded, nil
+}
