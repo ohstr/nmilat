@@ -109,19 +109,15 @@ type CashConsolidateResult struct {
 	ExpiresAt       *int64
 }
 
-// ParseResult parses cash_consolidate's wire response. Unlike cash_transfer,
-// cash_consolidate keys new_wallet_token's delivery to the TARGET (p.To),
-// not the caller: a bearer/connection_key target has no real pubkey yet, so
-// the Hub sends the token in the clear; a pubkey target gets it encrypted to
-// THAT pubkey. A source's Credential can only ever derive the caller's own
-// delivery key, so decrypting only makes sense when the target IS the
-// caller's own pubkey (the ordinary "merge my own slices" case) — anything
-// else is handled without attempting decryption:
-//   - bearer/connection_key target: NewWalletToken is already plaintext.
-//   - third-party pubkey target: the caller structurally cannot decrypt this
-//     (it's encrypted to the recipient, not them) — the raw ciphertext is
-//     preserved as-is rather than erroring, since the merge itself already
-//     succeeded; only the real target's own client can read it.
+// ParseResult parses cash_consolidate's wire response, decrypting
+// NewWalletToken with the first source's own Credential when the target is
+// a pubkey — the Hub encrypts it to the caller, same as cash_transfer's own
+// delivery. A bearer/connection_key target has no real pubkey yet, so the
+// Hub sends the token in the clear instead; ParseResult passes it through
+// unchanged rather than attempting decryption. If decryption ever fails
+// (e.g. an older Hub still keying pubkey-target delivery some other way),
+// the raw value is preserved as-is instead of erroring — the merge itself
+// already succeeded.
 //
 // Exported for nipcash/client's use; a caller using nipcash/client's
 // CashConsolidate method never calls this directly.
@@ -135,23 +131,12 @@ func (p CashConsolidateParams) ParseResult(data []byte) (*CashConsolidateResult,
 		NewWalletPubkey: wire.NewWalletPubkey,
 		ExpiresAt:       wire.ExpiresAt,
 	}
-	if wire.NewWalletToken == "" || len(p.Sources) == 0 {
-		return result, nil
-	}
 	result.NewWalletToken = wire.NewWalletToken
-
-	if !IsPubkeyTarget(p.To) {
+	if wire.NewWalletToken == "" || len(p.Sources) == 0 || !IsPubkeyTarget(p.To) {
 		return result, nil
 	}
-	targetPubkey := p.To.(targetFields).identityValue()
-	ownPubkey, ok := p.Sources[0].Credential.ownIdentityPubkey()
-	if !ok || ownPubkey != targetPubkey {
-		return result, nil
+	if token, err := p.Sources[0].Credential.decryptDelivery(wire.NewWalletPubkey, wire.NewWalletToken); err == nil {
+		result.NewWalletToken = token
 	}
-	token, err := p.Sources[0].Credential.decryptDelivery(wire.NewWalletPubkey, wire.NewWalletToken)
-	if err != nil {
-		return nil, err
-	}
-	result.NewWalletToken = token
 	return result, nil
 }

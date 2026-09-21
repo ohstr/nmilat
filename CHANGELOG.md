@@ -20,13 +20,13 @@
 ### Fixed
 
 - `nipcash.CashConsolidateParams.ParseResult` always decrypted
-  `new_wallet_token` as if it were keyed to the caller, like
-  `cash_transfer`. `cash_consolidate` actually keys it to the target:
-  plaintext for a bearer/connection_key target, encrypted to that pubkey
-  for a third-party target. Both cases failed with a decrypt error even
-  though the merge itself succeeded. `ParseResult` now only decrypts when
-  the target is the caller's own pubkey, and otherwise passes the token
-  through as received.
+  `new_wallet_token` and returned an error if that failed, even though
+  the merge itself had already succeeded. A bearer/connection_key target
+  has no real pubkey yet, so the Hub delivers the token in the clear and
+  decryption always failed for it. `ParseResult` now passes that token
+  through unchanged; for a pubkey target it still decrypts with the first
+  source's credential, but a decryption failure now preserves the raw
+  value instead of returning an error.
 
 ## [0.3.0]
 
