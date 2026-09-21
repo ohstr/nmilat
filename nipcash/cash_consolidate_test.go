@@ -186,13 +186,45 @@ func TestCashConsolidateParams_ParseResult_SelfTarget_Decrypts(t *testing.T) {
 	}
 }
 
-func TestCashConsolidateParams_ParseResult_ThirdPartyPubkeyTarget_NoDecryptAttempt(t *testing.T) {
+func TestCashConsolidateParams_ParseResult_ThirdPartyPubkeyTarget_Decrypts(t *testing.T) {
+	callerPrivHex, callerPubHex := generateTestKeypair(t)
+	_, carolPubHex := generateTestKeypair(t)
+	newWalletPrivHex, newWalletPubHex := generateTestKeypair(t)
+
+	// The Hub encrypts to the CALLER even though the target is Carol (same
+	// convention as cash_transfer) — the caller decrypts it themselves and
+	// hands Carol a plain token out of band.
+	ciphertext := encryptForTest(t, newWalletPrivHex, callerPubHex, "lokicash1forcarol")
+
+	p := CashConsolidateParams{
+		Sources: []Source{From(randomKeyHex(t), 1000, BySigning(callerPrivHex))},
+		To:      Pubkey(carolPubHex),
+	}
+	raw, err := json.Marshal(cashConsolidateResponseWire{
+		AmountMillis:    1000,
+		NewWalletPubkey: newWalletPubHex,
+		NewWalletToken:  ciphertext,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := p.ParseResult(raw)
+	if err != nil {
+		t.Fatalf("ParseResult: %v", err)
+	}
+	if result.NewWalletToken != "lokicash1forcarol" {
+		t.Fatalf("NewWalletToken: got %q, want decrypted plaintext", result.NewWalletToken)
+	}
+}
+
+func TestCashConsolidateParams_ParseResult_UndecryptableDelivery_FallsBackToRawValue(t *testing.T) {
 	callerPrivHex, _ := generateTestKeypair(t)
 	_, carolPubHex := generateTestKeypair(t)
 	newWalletPrivHex, newWalletPubHex := generateTestKeypair(t)
 
-	// Encrypted to Carol (the target), not the caller — the caller's own
-	// credential cannot derive this key, so ParseResult must not even try.
+	// Encrypted to a key the caller doesn't hold — e.g. a Hub still keying
+	// pubkey-target delivery some other way. Decryption fails; ParseResult
+	// must not error, just preserve the raw value instead of losing it.
 	ciphertext := encryptForTest(t, newWalletPrivHex, carolPubHex, "lokicash1forcarol")
 
 	p := CashConsolidateParams{
@@ -209,7 +241,7 @@ func TestCashConsolidateParams_ParseResult_ThirdPartyPubkeyTarget_NoDecryptAttem
 	}
 	result, err := p.ParseResult(raw)
 	if err != nil {
-		t.Fatalf("ParseResult must not error on an undecryptable third-party delivery: %v", err)
+		t.Fatalf("ParseResult must not error on an undecryptable delivery: %v", err)
 	}
 	if result.NewWalletToken != ciphertext {
 		t.Fatalf("NewWalletToken: got %q, want the raw ciphertext preserved as-is", result.NewWalletToken)

@@ -126,10 +126,6 @@ func (secretCredential) decryptDelivery(_, ciphertext string) (string, error) {
 	return ciphertext, nil
 }
 
-// ownIdentityPubkey has no real pubkey — a bearer-current caller's proof is
-// their raw secret, not a signing key.
-func (secretCredential) ownIdentityPubkey() (string, bool) { return "", false }
-
 // --- BySigning: pubkey credential ---
 
 type signingCredential struct{ privKeyHex string }
@@ -157,14 +153,6 @@ func (c signingCredential) buildProof(binding proofBinding) (identityType, ident
 
 func (c signingCredential) decryptDelivery(newWalletPubkey, ciphertext string) (string, error) {
 	return decryptFromPubkey(c.privKeyHex, newWalletPubkey, ciphertext)
-}
-
-func (c signingCredential) ownIdentityPubkey() (string, bool) {
-	pubkey, err := utils.GetPublicKey(c.privKeyHex)
-	if err != nil {
-		return "", false
-	}
-	return pubkey, true
 }
 
 // --- BySigningConnectionKey: connection_key credential ---
@@ -216,14 +204,6 @@ func (c connectionKeyCredential) decryptDelivery(newWalletPubkey, ciphertext str
 	return decryptFromPubkey(c.privKeyHex, newWalletPubkey, ciphertext)
 }
 
-func (c connectionKeyCredential) ownIdentityPubkey() (string, bool) {
-	pubkey, err := utils.GetPublicKey(c.privKeyHex)
-	if err != nil {
-		return "", false
-	}
-	return pubkey, true
-}
-
 // --- ByProof: a proof captured earlier, not built from a live signing key ---
 
 type proofCredential struct {
@@ -260,7 +240,3 @@ func (c proofCredential) buildProof(proofBinding) (identityType, identityValue s
 func (proofCredential) decryptDelivery(string, string) (string, error) {
 	return "", errors.New("nipcash: a ByProof credential has no private key and cannot decrypt a delivery")
 }
-
-// ownIdentityPubkey has no real pubkey either — ByProof never holds the
-// private key behind the proof it captured, only the proof itself.
-func (proofCredential) ownIdentityPubkey() (string, bool) { return "", false }
