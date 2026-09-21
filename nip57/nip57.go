@@ -296,6 +296,7 @@ type ZapRequestParams struct {
 	EventID    *string  // optional "e" tag — zapped event ID
 	ATag       string   // optional "a" tag — zapped addressable event coordinate
 	KTag       string   // optional "k" tag — zapped event's kind
+	Content    string   // optional public note attached to the zap
 }
 
 // NewZapRequest creates a new NIP-57 zap request event (kind 9734).
@@ -328,7 +329,7 @@ func NewZapRequest(p ZapRequestParams) *nip01.Event {
 		CreatedAt: uint64(time.Now().Unix()),
 		Kind:      KindZapRequest,
 		Tags:      tags,
-		Content:   "",
+		Content:   p.Content,
 	}
 }
 

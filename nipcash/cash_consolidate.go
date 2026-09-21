@@ -110,12 +110,17 @@ type CashConsolidateResult struct {
 }
 
 // ParseResult parses cash_consolidate's wire response, decrypting
-// NewWalletToken with the first source's own Credential — any source's
-// decryptDelivery derives the identical key, since the inner delivery layer
-// is keyed to the caller's own real identity privkey and the new wallet's
-// pubkey, not to any one specific source. Exported for nipcash/client's
-// use; a caller using nipcash/client's CashConsolidate method never calls
-// this directly.
+// NewWalletToken with the first source's own Credential when the target is
+// a pubkey — the Hub encrypts it to the caller, same as cash_transfer's own
+// delivery. A bearer/connection_key target has no real pubkey yet, so the
+// Hub sends the token in the clear instead; ParseResult passes it through
+// unchanged rather than attempting decryption. If decryption ever fails
+// (e.g. an older Hub still keying pubkey-target delivery some other way),
+// the raw value is preserved as-is instead of erroring — the merge itself
+// already succeeded.
+//
+// Exported for nipcash/client's use; a caller using nipcash/client's
+// CashConsolidate method never calls this directly.
 func (p CashConsolidateParams) ParseResult(data []byte) (*CashConsolidateResult, error) {
 	var wire cashConsolidateResponseWire
 	if err := json.Unmarshal(data, &wire); err != nil {
@@ -126,11 +131,11 @@ func (p CashConsolidateParams) ParseResult(data []byte) (*CashConsolidateResult,
 		NewWalletPubkey: wire.NewWalletPubkey,
 		ExpiresAt:       wire.ExpiresAt,
 	}
-	if wire.NewWalletToken != "" && len(p.Sources) > 0 {
-		token, err := p.Sources[0].Credential.decryptDelivery(wire.NewWalletPubkey, wire.NewWalletToken)
-		if err != nil {
-			return nil, err
-		}
+	result.NewWalletToken = wire.NewWalletToken
+	if wire.NewWalletToken == "" || len(p.Sources) == 0 || !IsPubkeyTarget(p.To) {
+		return result, nil
+	}
+	if token, err := p.Sources[0].Credential.decryptDelivery(wire.NewWalletPubkey, wire.NewWalletToken); err == nil {
 		result.NewWalletToken = token
 	}
 	return result, nil
