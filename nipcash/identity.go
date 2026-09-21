@@ -212,4 +212,14 @@ type Credential interface {
 	// requires this case deliver in the clear instead — see NIP-CASH
 	// §Spinning a Slice Off's own "bearer-current caller" paragraph).
 	decryptDelivery(newWalletPubkey, ciphertext string) (string, error)
+
+	// ownIdentityPubkey reports this credential's own real Nostr pubkey, if
+	// it has one to disclose without building a new proof — true only for
+	// BySigning/BySigningConnectionKey (derived from their held privkey).
+	// BySecret has no pubkey at all, and ByProof holds a captured proof but
+	// never the private key behind it. Used only by CashConsolidateParams.
+	// ParseResult, to tell a self-targeted pubkey consolidate (decryptable)
+	// apart from a third-party one (structurally not — see that method's
+	// own doc comment).
+	ownIdentityPubkey() (pubkey string, ok bool)
 }

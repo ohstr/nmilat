@@ -109,13 +109,22 @@ type CashConsolidateResult struct {
 	ExpiresAt       *int64
 }
 
-// ParseResult parses cash_consolidate's wire response, decrypting
-// NewWalletToken with the first source's own Credential — any source's
-// decryptDelivery derives the identical key, since the inner delivery layer
-// is keyed to the caller's own real identity privkey and the new wallet's
-// pubkey, not to any one specific source. Exported for nipcash/client's
-// use; a caller using nipcash/client's CashConsolidate method never calls
-// this directly.
+// ParseResult parses cash_consolidate's wire response. Unlike cash_transfer,
+// cash_consolidate keys new_wallet_token's delivery to the TARGET (p.To),
+// not the caller: a bearer/connection_key target has no real pubkey yet, so
+// the Hub sends the token in the clear; a pubkey target gets it encrypted to
+// THAT pubkey. A source's Credential can only ever derive the caller's own
+// delivery key, so decrypting only makes sense when the target IS the
+// caller's own pubkey (the ordinary "merge my own slices" case) — anything
+// else is handled without attempting decryption:
+//   - bearer/connection_key target: NewWalletToken is already plaintext.
+//   - third-party pubkey target: the caller structurally cannot decrypt this
+//     (it's encrypted to the recipient, not them) — the raw ciphertext is
+//     preserved as-is rather than erroring, since the merge itself already
+//     succeeded; only the real target's own client can read it.
+//
+// Exported for nipcash/client's use; a caller using nipcash/client's
+// CashConsolidate method never calls this directly.
 func (p CashConsolidateParams) ParseResult(data []byte) (*CashConsolidateResult, error) {
 	var wire cashConsolidateResponseWire
 	if err := json.Unmarshal(data, &wire); err != nil {
@@ -126,12 +135,23 @@ func (p CashConsolidateParams) ParseResult(data []byte) (*CashConsolidateResult,
 		NewWalletPubkey: wire.NewWalletPubkey,
 		ExpiresAt:       wire.ExpiresAt,
 	}
-	if wire.NewWalletToken != "" && len(p.Sources) > 0 {
-		token, err := p.Sources[0].Credential.decryptDelivery(wire.NewWalletPubkey, wire.NewWalletToken)
-		if err != nil {
-			return nil, err
-		}
-		result.NewWalletToken = token
+	if wire.NewWalletToken == "" || len(p.Sources) == 0 {
+		return result, nil
 	}
+	result.NewWalletToken = wire.NewWalletToken
+
+	if !IsPubkeyTarget(p.To) {
+		return result, nil
+	}
+	targetPubkey := p.To.(targetFields).identityValue()
+	ownPubkey, ok := p.Sources[0].Credential.ownIdentityPubkey()
+	if !ok || ownPubkey != targetPubkey {
+		return result, nil
+	}
+	token, err := p.Sources[0].Credential.decryptDelivery(wire.NewWalletPubkey, wire.NewWalletToken)
+	if err != nil {
+		return nil, err
+	}
+	result.NewWalletToken = token
 	return result, nil
 }

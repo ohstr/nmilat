@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.1]
+
+### Fixed
+
+- `nipcash.CashConsolidateParams.ParseResult` always decrypted
+  `new_wallet_token` as if it were keyed to the caller, like
+  `cash_transfer`. `cash_consolidate` actually keys it to the target:
+  plaintext for a bearer/connection_key target, encrypted to that pubkey
+  for a third-party target. Both cases failed with a decrypt error even
+  though the merge itself succeeded. `ParseResult` now only decrypts when
+  the target is the caller's own pubkey, and otherwise passes the token
+  through as received.
+
 ## [0.3.0]
 
 ### Added
