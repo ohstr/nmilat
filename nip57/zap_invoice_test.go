@@ -29,14 +29,14 @@ func TestRequestZapInvoice_HappyPath(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/.well-known/lnurlp/alice":
-			_, _ = w.Write([]byte(fmt.Sprintf(`{
+			_, _ = fmt.Fprintf(w, `{
 				"callback": "%s/callback",
 				"minSendable": 1000,
 				"maxSendable": 100000000,
 				"metadata": "[[\"chain/flokicoin\",\"\"]]",
 				"allowsNostr": true,
 				"nostrPubkey": "%s"
-			}`, "http://"+r.Host, recipientPubkey)))
+			}`, "http://"+r.Host, recipientPubkey)
 		case "/callback":
 			nostrEvent := r.URL.Query().Get("nostr")
 			var event struct {
@@ -94,13 +94,13 @@ func TestRequestZapInvoice_RecipientDoesNotAcceptZaps(t *testing.T) {
 func TestRequestZapInvoice_AmountOutOfRange(t *testing.T) {
 	recipientPubkey := "0000000000000000000000000000000000000000000000000000000000000001"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(fmt.Sprintf(`{
+		_, _ = fmt.Fprintf(w, `{
 			"callback": "https://example.com/callback",
 			"minSendable": 10000,
 			"maxSendable": 100000,
 			"allowsNostr": true,
 			"nostrPubkey": "%s"
-		}`, recipientPubkey)))
+		}`, recipientPubkey)
 	}))
 	defer server.Close()
 
@@ -122,11 +122,11 @@ func TestRequestZapInvoice_CallbackError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/.well-known/lnurlp/alice":
-			_, _ = w.Write([]byte(fmt.Sprintf(`{
+			_, _ = fmt.Fprintf(w, `{
 				"callback": "%s/callback",
 				"allowsNostr": true,
 				"nostrPubkey": "%s"
-			}`, "http://"+r.Host, recipientPubkey)))
+			}`, "http://"+r.Host, recipientPubkey)
 		case "/callback":
 			_, _ = w.Write([]byte(`{"status":"ERROR","reason":"amount too small"}`))
 		}
