@@ -1,6 +1,9 @@
 package nipcash
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestCashConsolidateParams_Request_TooFewSources(t *testing.T) {
 	privKeyHex, _ := generateTestKeypair(t)
@@ -144,5 +147,120 @@ func TestByProof_ParsesIdentityValueFromEvent(t *testing.T) {
 func TestByProof_MalformedJSON(t *testing.T) {
 	if _, err := ByProof([]byte("not json")); err == nil {
 		t.Fatal("expected an error for malformed captured proof JSON")
+	}
+}
+
+// cash_consolidate keys new_wallet_token's delivery to the target, not the
+// caller — ParseResult must only decrypt when the target is the caller's
+// own pubkey, and otherwise return the wire value as-is (plaintext for
+// bearer/connection_key targets, still-opaque ciphertext for a third
+// party's pubkey) without erroring.
+
+func TestCashConsolidateParams_ParseResult_SelfTarget_Decrypts(t *testing.T) {
+	callerPrivHex, callerPubHex := generateTestKeypair(t)
+	newWalletPrivHex, newWalletPubHex := generateTestKeypair(t)
+
+	// Self-consolidate: new_identity == the caller's own pubkey, so the Hub
+	// encrypts to the same pubkey the caller's own credential can decrypt
+	// with.
+	ciphertext := encryptForTest(t, newWalletPrivHex, callerPubHex, "lokicash1thetoken")
+
+	p := CashConsolidateParams{
+		Sources: []Source{From(randomKeyHex(t), 1000, BySigning(callerPrivHex))},
+		To:      Pubkey(callerPubHex),
+	}
+	raw, err := json.Marshal(cashConsolidateResponseWire{
+		AmountMillis:    1000,
+		NewWalletPubkey: newWalletPubHex,
+		NewWalletToken:  ciphertext,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := p.ParseResult(raw)
+	if err != nil {
+		t.Fatalf("ParseResult: %v", err)
+	}
+	if result.NewWalletToken != "lokicash1thetoken" {
+		t.Fatalf("NewWalletToken: got %q, want decrypted plaintext", result.NewWalletToken)
+	}
+}
+
+func TestCashConsolidateParams_ParseResult_ThirdPartyPubkeyTarget_NoDecryptAttempt(t *testing.T) {
+	callerPrivHex, _ := generateTestKeypair(t)
+	_, carolPubHex := generateTestKeypair(t)
+	newWalletPrivHex, newWalletPubHex := generateTestKeypair(t)
+
+	// Encrypted to Carol (the target), not the caller — the caller's own
+	// credential cannot derive this key, so ParseResult must not even try.
+	ciphertext := encryptForTest(t, newWalletPrivHex, carolPubHex, "lokicash1forcarol")
+
+	p := CashConsolidateParams{
+		Sources: []Source{From(randomKeyHex(t), 1000, BySigning(callerPrivHex))},
+		To:      Pubkey(carolPubHex),
+	}
+	raw, err := json.Marshal(cashConsolidateResponseWire{
+		AmountMillis:    1000,
+		NewWalletPubkey: newWalletPubHex,
+		NewWalletToken:  ciphertext,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := p.ParseResult(raw)
+	if err != nil {
+		t.Fatalf("ParseResult must not error on an undecryptable third-party delivery: %v", err)
+	}
+	if result.NewWalletToken != ciphertext {
+		t.Fatalf("NewWalletToken: got %q, want the raw ciphertext preserved as-is", result.NewWalletToken)
+	}
+}
+
+func TestCashConsolidateParams_ParseResult_BearerTarget_PassesThroughPlaintext(t *testing.T) {
+	callerPrivHex, _ := generateTestKeypair(t)
+	bt := NewBearerTarget()
+
+	p := CashConsolidateParams{
+		Sources: []Source{From(randomKeyHex(t), 1000, BySigning(callerPrivHex))},
+		To:      bt,
+	}
+	raw, err := json.Marshal(cashConsolidateResponseWire{
+		AmountMillis:    1000,
+		NewWalletPubkey: randomKeyHex(t),
+		NewWalletToken:  "lokicash1plaintext",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := p.ParseResult(raw)
+	if err != nil {
+		t.Fatalf("ParseResult: %v", err)
+	}
+	if result.NewWalletToken != "lokicash1plaintext" {
+		t.Fatalf("NewWalletToken: got %q, want the plaintext value passed through unchanged", result.NewWalletToken)
+	}
+}
+
+func TestCashConsolidateParams_ParseResult_ConnectionKeyTarget_PassesThroughPlaintext(t *testing.T) {
+	callerPrivHex, _ := generateTestKeypair(t)
+
+	p := CashConsolidateParams{
+		Sources: []Source{From(randomKeyHex(t), 1000, BySigning(callerPrivHex))},
+		To:      ConnectionKey("discord", "someone", "iapub"),
+	}
+	raw, err := json.Marshal(cashConsolidateResponseWire{
+		AmountMillis:    1000,
+		NewWalletPubkey: randomKeyHex(t),
+		NewWalletToken:  "lokicash1plaintext",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := p.ParseResult(raw)
+	if err != nil {
+		t.Fatalf("ParseResult: %v", err)
+	}
+	if result.NewWalletToken != "lokicash1plaintext" {
+		t.Fatalf("NewWalletToken: got %q, want the plaintext value passed through unchanged", result.NewWalletToken)
 	}
 }
