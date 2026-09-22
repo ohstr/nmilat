@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.2]
+
+### Fixed
+
+- The relay could freeze until restarted. A `REQ` kept its database read
+  open while sending events to the client, so when a write needed to grow
+  the database file, every other `REQ` and `EVENT` on the relay hung —
+  even with healthy clients, and while health checks stayed green. The
+  relay now finishes each read before sending events. (#29)
+
+### Changed
+
+- Removed debug logging from busy relay paths, so each request does less
+  work. Warnings and errors are unchanged. (#29)
+
 ## [0.3.1]
 
 ### Added
