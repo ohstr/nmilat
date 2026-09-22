@@ -11,15 +11,15 @@ import (
 // live against list_recipients rather than gated on tok's own
 // identity_required TLV (a stale-prone hint, not a live guarantee — see
 // MatchClaimAuto). asPubkeyHex is the caller's own local pubkey if it
-// has one; a bearer match is always attempted regardless. Returns
+// has one; a cash-mode match is always attempted regardless. Returns
 // nipcash.ErrClaimNotFound, not one of its own, if nothing matches.
 //
-// For a bearer token, a match only proves *some* unclaimed bearer
+// For a cash-mode token, a match only proves *some* unclaimed cash-mode
 // recipient exists — list_recipients carries no identity_value for a
-// bearer entry, so this can never confirm the *specific* secret the
+// cash-mode entry, so this can never confirm the *specific* secret the
 // caller holds is the one still valid (only redemption itself proves
 // that). Don't read a successful CheckClaim as a stronger guarantee than
-// the protocol actually gives for the bearer case.
+// the protocol actually gives for the cash-mode case.
 //
 // Deliberately a method, not a self-dialing package function: several
 // callers (a transfer/consolidate/redeem already mid-flow) already hold
@@ -46,7 +46,7 @@ func (c *Client) CheckClaim(ctx context.Context, tok nipcash.Token, asPubkeyHex 
 	}
 
 	return &nipcash.CheckClaimResult{
-		IsBearer:            recipient.IsBearer(),
+		IsCash:              recipient.IsCash(),
 		AmountMillis:        recipient.AmountMillis,
 		MinterPubkey:        minterPubkey,
 		RedeemFeeMillis:     recipient.RedeemFeeMillis,

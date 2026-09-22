@@ -3,11 +3,11 @@ package client
 import "github.com/ohstr/nmilat/nipcash"
 
 // PartialProgressError is returned by both TransferFromSources and
-// RekeyBearerSlice when their first wire call landed for real but their
+// RekeyCashSlice when their first wire call landed for real but their
 // second then failed — exactly one of Transferred/Consolidated is set,
 // whichever call type actually succeeded (the two composites run the
 // same two calls in opposite order: TransferFromSources consolidates
-// then transfers, RekeyBearerSlice reassigns [a transfer] then
+// then transfers, RekeyCashSlice reassigns [a transfer] then
 // consolidates). Both nipcash.CashTransferResult and
 // nipcash.CashConsolidateResult already carry AmountMillis/
 // NewWalletPubkey/NewWalletToken, so the caller can update its own

@@ -46,23 +46,23 @@ func TestMintCashParams_Request_ZeroExpiry(t *testing.T) {
 	}
 }
 
-func TestMintCashParams_Request_SingleBearerAllowed(t *testing.T) {
+func TestMintCashParams_Request_SingleCashAllowed(t *testing.T) {
 	p := MintCashParams{Recipients: []Allocation{Send(Anyone(), 3000)}}
 	req, err := p.Request()
 	if err != nil {
 		t.Fatalf("Request: %v", err)
 	}
-	if req.Recipients[0].IdentityType != identityTypeBearer {
-		t.Fatalf("got %s, want bearer", req.Recipients[0].IdentityType)
+	if req.Recipients[0].IdentityType != identityTypeCash {
+		t.Fatalf("got %s, want cash", req.Recipients[0].IdentityType)
 	}
 }
 
-func TestMintCashParams_Request_MixedBearerRejected(t *testing.T) {
+func TestMintCashParams_Request_MixedCashRejected(t *testing.T) {
 	p := MintCashParams{Recipients: []Allocation{
 		Send(Anyone(), 1000),
 		Send(Pubkey("aa"), 1000),
 	}}
-	if _, err := p.Request(); err != ErrMixedBearerAllocation {
-		t.Fatalf("got %v, want ErrMixedBearerAllocation", err)
+	if _, err := p.Request(); err != ErrMixedCashAllocation {
+		t.Fatalf("got %v, want ErrMixedCashAllocation", err)
 	}
 }

@@ -10,10 +10,10 @@ import (
 // Sources — a single source transfers (or splits) directly; more than
 // one consolidates first into InterimIdentity, then transfers onward
 // from there. Sources must already be consolidate-eligible if there's
-// more than one (same-minter, non-bearer) — this is an app-level
+// more than one (same-minter, identity-bound) — this is an app-level
 // curation choice (a caller's own bookkeeping decides "same minter";
 // nipcash has no such concept), not a nipcash-enforced rule:
-// CashConsolidateParams itself only checks ≥2 sources and rejects bearer
+// CashConsolidateParams itself only checks ≥2 sources and rejects cash-mode
 // sources/nil targets, nothing about minters. This function doesn't
 // second-guess the caller's own selection either way.
 type TransferFromSourcesParams struct {
@@ -22,7 +22,7 @@ type TransferFromSourcesParams struct {
 	To      nipcash.Target
 	// InterimIdentity MUST be a pubkey target, required iff
 	// len(Sources) > 1. No client-side validation needed here (unlike
-	// RekeyBearerSlice's own InterimIdentity): this composite's *first*
+	// RekeyCashSlice's own InterimIdentity): this composite's *first*
 	// call is the interim CashConsolidate, and
 	// CashConsolidateParams.Request() already rejects a nil To before any
 	// network call at all — a bad value is caught for free, before
@@ -58,9 +58,9 @@ type transferConsolidaterCloser interface {
 // the newly-consolidated wallet through the *original* client would
 // therefore bind the final transfer's proof to the wrong wallet pubkey
 // entirely, and the Hub would reject it (confirmed live: NOT_FOUND).
-// RekeyBearerSlice never needs this — its own interim step is a
+// RekeyCashSlice never needs this — its own interim step is a
 // CashTransfer, which (per NIP-CASH's own rules) is always in-place for
-// a bearer source, so its Client binding never goes stale.
+// a cash-mode source, so its Client binding never goes stale.
 type transferFromSourcesClient interface {
 	transferConsolidater
 	reconnect(ctx context.Context, walletToken string) (transferConsolidaterCloser, error)

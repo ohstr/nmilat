@@ -2,7 +2,7 @@ package nipcash
 
 import "testing"
 
-func TestSplitBearerSliceString(t *testing.T) {
+func TestSplitCashSliceString(t *testing.T) {
 	tests := []struct {
 		name       string
 		in         string
@@ -16,9 +16,9 @@ func TestSplitBearerSliceString(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotToken, gotSecret := SplitBearerSliceString(tt.in)
+			gotToken, gotSecret := SplitCashSliceString(tt.in)
 			if gotToken != tt.wantToken || gotSecret != tt.wantSecret {
-				t.Errorf("SplitBearerSliceString(%q) = (%q, %q), want (%q, %q)", tt.in, gotToken, gotSecret, tt.wantToken, tt.wantSecret)
+				t.Errorf("SplitCashSliceString(%q) = (%q, %q), want (%q, %q)", tt.in, gotToken, gotSecret, tt.wantToken, tt.wantSecret)
 			}
 		})
 	}

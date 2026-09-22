@@ -7,17 +7,17 @@ import (
 )
 
 // Compile-time checks of the Recipient/Target split (see Target's own doc
-// comment): namedIdentity (Pubkey/ConnectionKey) satisfies both; bearerRecipient
-// (Anyone()) satisfies only Recipient; *BearerTarget satisfies only Target.
-// There's no way to assert the NEGATIVE ("bearerRecipient does NOT satisfy
+// comment): namedIdentity (Pubkey/ConnectionKey) satisfies both; cashRecipient
+// (Anyone()) satisfies only Recipient; *CashTarget satisfies only Target.
+// There's no way to assert the NEGATIVE ("cashRecipient does NOT satisfy
 // Target") in Go's type system directly — the real guarantee is that
 // mint_cash.go/cash_transfer.go's own field types (Recipient vs. Target)
 // simply won't compile against the wrong constructor's return value.
 var (
 	_ Recipient = namedIdentity{}
 	_ Target    = namedIdentity{}
-	_ Recipient = bearerRecipient{}
-	_ Target    = (*BearerTarget)(nil)
+	_ Recipient = cashRecipient{}
+	_ Target    = (*CashTarget)(nil)
 )
 
 func TestPubkeyConnectionKeyAnyone_IdentityTypes(t *testing.T) {
@@ -38,7 +38,7 @@ func TestPubkeyConnectionKeyAnyone_IdentityTypes(t *testing.T) {
 	}
 
 	anyone := Anyone().(targetFields)
-	if anyone.identityType() != identityTypeBearer {
+	if anyone.identityType() != identityTypeCash {
 		t.Fatalf("Anyone: got type=%s", anyone.identityType())
 	}
 }
@@ -64,10 +64,10 @@ func TestResolvedConnectionKey_MatchesConnectionKeyWithoutRehashing(t *testing.T
 	}
 }
 
-func TestNewBearerTarget_SecretAndCommitmentDiffer(t *testing.T) {
-	bt := NewBearerTarget()
+func TestNewCashTarget_SecretAndCommitmentDiffer(t *testing.T) {
+	bt := NewCashTarget()
 	f := Target(bt).(targetFields)
-	if f.identityType() != identityTypeBearer {
+	if f.identityType() != identityTypeCash {
 		t.Fatalf("identityType: got %s", f.identityType())
 	}
 	if bt.Secret() == f.identityValue() {
@@ -78,9 +78,9 @@ func TestNewBearerTarget_SecretAndCommitmentDiffer(t *testing.T) {
 	}
 
 	// Two calls must never collide.
-	other := NewBearerTarget()
+	other := NewCashTarget()
 	if bt.Secret() == other.Secret() {
-		t.Fatal("NewBearerTarget must generate a fresh secret every call")
+		t.Fatal("NewCashTarget must generate a fresh secret every call")
 	}
 }
 

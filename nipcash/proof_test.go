@@ -1,6 +1,8 @@
 package nipcash
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"testing"
 	"time"
@@ -122,5 +124,18 @@ func TestNewIdentityHash_Deterministic(t *testing.T) {
 	c := newIdentityHash(Pubkey("bb"))
 	if a == c {
 		t.Fatal("different targets must hash differently")
+	}
+}
+
+// TestNewIdentityHash_CashTargetPreimage pins the exact preimage a cash-mode
+// target's new_identity_hash is computed over — "cash:" + commitment + ":"
+// (NIP-CASH §Transferring and Splitting a Slice). The Hub recomputes this
+// from the request's own new_identity fields, so any drift here (e.g. a
+// stale "bearer:" prefix) fails every cash-mode transfer's proof check.
+func TestNewIdentityHash_CashTargetPreimage(t *testing.T) {
+	ct := NewCashTarget()
+	sum := sha256.Sum256([]byte("cash:" + ct.identityValue() + ":"))
+	if got, want := newIdentityHash(ct), hex.EncodeToString(sum[:]); got != want {
+		t.Fatalf("newIdentityHash(NewCashTarget()) = %s, want sha256(\"cash:<commit>:\") = %s", got, want)
 	}
 }

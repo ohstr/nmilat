@@ -7,7 +7,7 @@ import (
 )
 
 // transferConsolidater is the narrow slice of *Client that
-// RekeyBearerSlice/TransferFromSources actually call — *Client already
+// RekeyCashSlice/TransferFromSources actually call — *Client already
 // satisfies this. Factored out purely so their own call-sequencing logic
 // (which call, in what order, on what condition) is unit-testable against
 // a hand-built fake, without a live Cash Hub or a fake NWC relay: this
