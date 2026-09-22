@@ -7,7 +7,7 @@ import (
 )
 
 // fakeTransferConsolidater is a hand-built transferConsolidater for
-// exercising RekeyBearerSlice/TransferFromSources' own call-sequencing
+// exercising RekeyCashSlice/TransferFromSources' own call-sequencing
 // logic without a network — see transferConsolidater's own doc comment.
 // closed counts Close calls (transferFromSources must release whatever
 // reconnect hands it); reconnectCalls records every walletToken

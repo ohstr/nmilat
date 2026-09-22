@@ -20,9 +20,9 @@ type Recipient interface {
 
 // Target is who CashTransfer/CashConsolidate reassigns a slice to: a
 // pubkey- or connection_key-identified Recipient built with Pubkey/
-// ConnectionKey, or a *BearerTarget for the bearer case. Anyone() does NOT
-// satisfy Target — see BearerTarget's own doc comment for why mint_cash's
-// and cash_transfer's bearer cases need genuinely different credential-
+// ConnectionKey, or a *CashTarget for the cash-mode case. Anyone() does NOT
+// satisfy Target — see CashTarget's own doc comment for why mint_cash's
+// and cash_transfer's cash-mode cases need genuinely different credential-
 // generation semantics, not just a naming difference. Passing Anyone()
 // where a Target is expected is a compile error, not a runtime one.
 type Target interface {
@@ -33,9 +33,9 @@ type Target interface {
 
 // namedIdentity is Pubkey's and ConnectionKey's concrete Recipient/Target —
 // a Nostr pubkey or a nipIC.ConnectionKey (via nipAZ.Identity), never
-// bearer. It's the only concrete type that satisfies both Recipient (valid
+// cash mode. It's the only concrete type that satisfies both Recipient (valid
 // as a mint_cash allocation) and Target (valid as a cash_transfer/
-// cash_consolidate new_identity) — unlike bearerRecipient (Anyone()), which
+// cash_consolidate new_identity) — unlike cashRecipient (Anyone()), which
 // only ever satisfies Recipient.
 type namedIdentity struct {
 	identity nipAZ.Identity
@@ -79,47 +79,47 @@ func ResolvedConnectionKey(key nipIC.ConnectionKey, platform nipIC.WebIdentity, 
 	return namedIdentity{identity: nipAZ.ResolvedConnection(key, platform), ia: iaPubkey}
 }
 
-// bearerRecipient is Anyone()'s concrete Recipient — plain cash, no
+// cashRecipient is Anyone()'s concrete Recipient — plain cash, no
 // registered identity, redeemable by whoever holds the wallet's secret.
-// Deliberately satisfies only Recipient, not Target: see BearerTarget.
-type bearerRecipient struct{}
+// Deliberately satisfies only Recipient, not Target: see CashTarget.
+type cashRecipient struct{}
 
-func (bearerRecipient) recipient()            {}
-func (bearerRecipient) identityType() string  { return identityTypeBearer }
-func (bearerRecipient) identityValue() string { return "" }
-func (bearerRecipient) iaPubkey() string      { return "" }
+func (cashRecipient) recipient()            {}
+func (cashRecipient) identityType() string  { return identityTypeCash }
+func (cashRecipient) identityValue() string { return "" }
+func (cashRecipient) iaPubkey() string      { return "" }
 
 // Anyone builds a Recipient for plain, unbound cash — the Hub mints its
-// bearer secret and returns it once, in MintCash's own response
-// (MintCashResult.Recipients[i].BearerSecret). Not usable as a
-// CashTransfer/CashConsolidate Target — use NewBearerTarget for that case
+// cash secret and returns it once, in MintCash's own response
+// (MintCashResult.Recipients[i].CashSecret). Not usable as a
+// CashTransfer/CashConsolidate Target — use NewCashTarget for that case
 // instead, which has different, caller-side secret-generation requirements.
-func Anyone() Recipient { return bearerRecipient{} }
+func Anyone() Recipient { return cashRecipient{} }
 
-// BearerTarget is a not-yet-realized bearer identity, used only as a
+// CashTarget is a not-yet-realized cash-mode identity, used only as a
 // CashTransfer/CashConsolidate Target. It is NOT the same as Anyone():
-// mint_cash's bearer recipient gets its secret minted by the Hub, over the
+// mint_cash's cash-mode recipient gets its secret minted by the Hub, over the
 // Hub's own single-owner connection — safe to return in that response.
-// cash_transfer's bearer target is the opposite: NIP-CASH requires the
+// cash_transfer's cash-mode target is the opposite: NIP-CASH requires the
 // *caller* to generate the secret and submit only its commitment, because
 // the response travels back over the shared *source* connection,
 // decryptable by every co-recipient it's ever had (NIP-CASH §Security
 // Considerations — an implementation that minted a fresh secret here and
 // handed it back would leak it to exactly the audience this mechanism
-// exists to keep it from). NewBearerTarget generates that secret locally —
+// exists to keep it from). NewCashTarget generates that secret locally —
 // it never appears in any request or response — and exposes it via Secret
 // so the caller can hand it to whoever they're transferring to, alongside
 // the returned wallet token.
-type BearerTarget struct {
+type CashTarget struct {
 	secret string
 	commit string // hex sha256(secret) — the value actually sent on the wire
 }
 
-func (*BearerTarget) target() {}
+func (*CashTarget) target() {}
 
-// NewBearerTarget generates a fresh, high-entropy bearer secret locally and
+// NewCashTarget generates a fresh, high-entropy cash secret locally and
 // its commitment, ready to use as a CashTransfer/CashConsolidate Target.
-func NewBearerTarget() *BearerTarget {
+func NewCashTarget() *CashTarget {
 	var raw [32]byte
 	// crypto/rand.Read never returns a partial read without an error on any
 	// platform Go supports; a non-nil error here means the platform's CSPRNG
@@ -128,20 +128,20 @@ func NewBearerTarget() *BearerTarget {
 		panic("nipcash: crypto/rand unavailable: " + err.Error())
 	}
 	sum := sha256.Sum256(raw[:])
-	return &BearerTarget{secret: hex.EncodeToString(raw[:]), commit: hex.EncodeToString(sum[:])}
+	return &CashTarget{secret: hex.EncodeToString(raw[:]), commit: hex.EncodeToString(sum[:])}
 }
 
-// Secret returns the bearer secret to hand to whoever this target's
+// Secret returns the cash secret to hand to whoever this target's
 // CashTransfer/CashConsolidate call is for — alongside the call's own
 // returned wallet token, since neither alone is redeemable.
-func (t *BearerTarget) Secret() string { return t.secret }
+func (t *CashTarget) Secret() string { return t.secret }
 
-func (t *BearerTarget) identityType() string  { return identityTypeBearer }
-func (t *BearerTarget) identityValue() string { return t.commit }
-func (t *BearerTarget) iaPubkey() string      { return "" }
+func (t *CashTarget) identityType() string  { return identityTypeCash }
+func (t *CashTarget) identityValue() string { return t.commit }
+func (t *CashTarget) iaPubkey() string      { return "" }
 
 // IsPubkeyTarget reports whether t identifies a bare Nostr pubkey — never
-// bearer, never connection_key. Exported so nipcash/client composites
+// cash mode, never connection_key. Exported so nipcash/client composites
 // that need to validate a Target's own type before making a wire call
 // (e.g. rejecting a bad value before it can cause a real, partial
 // side effect) don't need targetFields' otherwise-unexported shape.
@@ -165,7 +165,7 @@ func Send(recipient Recipient, amountMillis uint64) Allocation {
 // Source pairs a source wallet with its own current committed amount and
 // the Credential proving control over it, for CashConsolidate. Build one
 // with From — a live Credential (BySigning; pubkey and connection_key both
-// work, bearer sources are rejected, see ErrBearerSource), or one built
+// work, cash-mode sources are rejected, see ErrCashSource), or one built
 // from a proof captured earlier via ByProof. Authorization is per-source,
 // not per-connection, so a relayer holding only captured proofs can still
 // consolidate on someone else's behalf (NIP-CASH §Consolidating Tokens).
@@ -186,30 +186,30 @@ func From(walletPubkey string, amount uint64, cred Credential) Source {
 }
 
 // Credential proves the caller's control over a slice's current registered
-// identity (or, for a bearer slice, presents its secret) when redeeming,
+// identity (or, for a cash-mode slice, presents its secret) when redeeming,
 // transferring, or consolidating. Build one with BySecret, BySigning, or
 // BySigningConnectionKey — never implement this interface directly.
 type Credential interface {
 	// buildProof produces this credential's identity_type/identity_value
-	// (empty for a bearer credential — the server looks the slice up by
-	// bearer_secret instead) and its proof for one specific call, bound via
+	// (empty for a cash credential — the server looks the slice up by
+	// cash_secret instead) and its proof for one specific call, bound via
 	// binding to that call's own wallet/invoice/target/amount.
-	// identityEvent is the kind-23198 claim proof (nil for a bearer
+	// identityEvent is the kind-23198 claim proof (nil for a cash
 	// credential, which has no identity to sign with); attestationEvent is
 	// the kind-35522 IA attestation to send alongside it (only for
-	// connection_key mode); bearerSecret is the plaintext secret (only for
-	// a bearer credential). Exactly one of {identityEvent, bearerSecret} is
+	// connection_key mode); cashSecret is the plaintext secret (only for
+	// a cash credential). Exactly one of {identityEvent, cashSecret} is
 	// ever set.
-	buildProof(binding proofBinding) (identityType, identityValue string, identityEvent, attestationEvent []byte, bearerSecret string, err error)
+	buildProof(binding proofBinding) (identityType, identityValue string, identityEvent, attestationEvent []byte, cashSecret string, err error)
 
 	// decryptDelivery decrypts a spun-off wallet's *_wallet_token field
 	// (NIP-CASH §Spinning a Slice Off Into a Dedicated Wallet): a NIP-44
 	// payload keyed to this credential's own real identity privkey and
 	// newWalletPubkey (the spun-off wallet's own pubkey). Only signing
-	// credentials have a privkey to derive that key from; a bearer
-	// credential returns ciphertext unchanged (a bearer-current caller's
+	// credentials have a privkey to derive that key from; a cash
+	// credential returns ciphertext unchanged (a cash-mode caller's
 	// proof carries no pubkey to derive a delivery key from, so the spec
 	// requires this case deliver in the clear instead — see NIP-CASH
-	// §Spinning a Slice Off's own "bearer-current caller" paragraph).
+	// §Spinning a Slice Off's own "cash-mode caller" paragraph).
 	decryptDelivery(newWalletPubkey, ciphertext string) (string, error)
 }

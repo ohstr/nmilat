@@ -6,7 +6,7 @@ import "errors"
 // call sites — same pattern as the stdlib's http.NoBody: the underlying
 // type is still a plain string ("" can never be a valid hex pubkey, so
 // it's already an unambiguous sentinel on its own, the same convention
-// bearerRecipient.identityValue() already uses for "not applicable"),
+// cashRecipient.identityValue() already uses for "not applicable"),
 // this just gives call sites a name instead of an unexplained "".
 const NoLocalIdentity = ""
 
@@ -18,7 +18,7 @@ var ErrClaimNotFound = errors.New("nipcash: no matching, unclaimed recipient on 
 // act on a cash bill, resolved by actually asking its Cash Hub — no
 // local storage concept; that's entirely the caller's own.
 type CheckClaimResult struct {
-	IsBearer     bool
+	IsCash       bool
 	AmountMillis uint64  // authoritative, from list_recipients
 	MinterPubkey *string // non-nil only if a verified mint-provenance signature is present
 	// RedeemFeeMillis/NetRedeemableMillis/ExpiresAt mirror the matched
@@ -34,21 +34,21 @@ type CheckClaimResult struct {
 // unit-testable with a hand-built []RecipientStatus, no dial needed,
 // mirroring VerifyProvenance's own split (protocol logic lives in
 // nipcash, not nipcash/client). Only ever considers an unclaimed
-// recipient a match: bearer matches any unclaimed bearer entry,
-// non-bearer matches only an unclaimed entry whose IdentityValue equals
+// recipient a match: cash-mode matches any unclaimed cash-mode entry,
+// non-cash-mode matches only an unclaimed entry whose IdentityValue equals
 // asPubkeyHex exactly. asPubkeyHex == NoLocalIdentity never matches a
-// non-bearer entry (no local identity to compare against).
+// non-cash-mode entry (no local identity to compare against).
 //
 // connection_key matching isn't implemented — a caller checking a
 // connection_key-bound token gets no match today, same as before this
 // existed.
-func MatchClaim(recipients []RecipientStatus, isBearer bool, asPubkeyHex string) (amountMillis uint64, ok bool) {
+func MatchClaim(recipients []RecipientStatus, isCash bool, asPubkeyHex string) (amountMillis uint64, ok bool) {
 	for _, r := range recipients {
 		if r.Claimed {
 			continue
 		}
-		matched := (isBearer && r.IdentityType == identityTypeBearer) ||
-			(!isBearer && r.IdentityType == identityTypePubkey && asPubkeyHex != NoLocalIdentity && r.IdentityValue == asPubkeyHex)
+		matched := (isCash && r.IdentityType == identityTypeCash) ||
+			(!isCash && r.IdentityType == identityTypePubkey && asPubkeyHex != NoLocalIdentity && r.IdentityValue == asPubkeyHex)
 		if matched {
 			return r.AmountMillis, true
 		}
@@ -58,11 +58,11 @@ func MatchClaim(recipients []RecipientStatus, isBearer bool, asPubkeyHex string)
 
 // MatchClaimAuto is MatchClaim's caller-friendly wrapper: a caller
 // checking a bill doesn't reliably know in advance whether it's
-// bearer-mode or identity-bound — a token's identity_required TLV is
+// cash-mode or identity-bound — a token's identity_required TLV is
 // only "a best-effort hint... NOT a live guarantee" (§Redemption
 // Metadata), since it can go stale after the wallet it describes is
 // reassigned. Tries a pubkey match (if asPubkeyHex is given) then a
-// bearer match, live. Safe, not ambiguous: a wallet is always all-bearer
+// cash-mode match, live. Safe, not ambiguous: a wallet is always all-cash-mode
 // or all identity-bound, never mixed, so at most one attempt can match.
 //
 // Returns the full matched RecipientStatus row, not just its amount, so
@@ -73,7 +73,7 @@ func MatchClaimAuto(recipients []RecipientStatus, asPubkeyHex string) (recipient
 		if r.Claimed {
 			continue
 		}
-		matched := r.IsBearer() ||
+		matched := r.IsCash() ||
 			(r.IdentityType == identityTypePubkey && asPubkeyHex != NoLocalIdentity && r.IdentityValue == asPubkeyHex)
 		if matched {
 			return r, true

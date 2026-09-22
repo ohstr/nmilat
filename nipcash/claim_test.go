@@ -2,9 +2,9 @@ package nipcash
 
 import "testing"
 
-func TestMatchClaim_BearerUnclaimedMatches(t *testing.T) {
+func TestMatchClaim_CashUnclaimedMatches(t *testing.T) {
 	recipients := []RecipientStatus{
-		{IdentityType: identityTypeBearer, AmountMillis: 5000, Claimed: false},
+		{IdentityType: identityTypeCash, AmountMillis: 5000, Claimed: false},
 	}
 	amount, ok := MatchClaim(recipients, true, NoLocalIdentity)
 	if !ok || amount != 5000 {
@@ -12,15 +12,15 @@ func TestMatchClaim_BearerUnclaimedMatches(t *testing.T) {
 	}
 }
 
-func TestMatchClaim_BearerAlreadyClaimedDoesNotMatch(t *testing.T) {
+func TestMatchClaim_CashAlreadyClaimedDoesNotMatch(t *testing.T) {
 	// The exact regression independent review caught: an already-redeemed
-	// bearer recipient must not be reported as a live match just because
-	// its identity_type still says "bearer".
+	// cash-mode recipient must not be reported as a live match just because
+	// its identity_type still says "cash".
 	recipients := []RecipientStatus{
-		{IdentityType: identityTypeBearer, AmountMillis: 5000, Claimed: true},
+		{IdentityType: identityTypeCash, AmountMillis: 5000, Claimed: true},
 	}
 	if _, ok := MatchClaim(recipients, true, NoLocalIdentity); ok {
-		t.Fatal("MatchClaim() matched an already-claimed bearer recipient")
+		t.Fatal("MatchClaim() matched an already-claimed cash-mode recipient")
 	}
 }
 
@@ -67,39 +67,39 @@ func TestMatchClaim_NoRecipientsNoMatch(t *testing.T) {
 	}
 }
 
-func TestMatchClaimAuto_BearerWalletMatchesRegardlessOfSuppliedPubkey(t *testing.T) {
-	// A pubkey is supplied but the wallet is actually bearer-mode —
-	// must still find the real bearer recipient.
+func TestMatchClaimAuto_CashWalletMatchesRegardlessOfSuppliedPubkey(t *testing.T) {
+	// A pubkey is supplied but the wallet is actually cash-mode —
+	// must still find the real cash-mode recipient.
 	recipients := []RecipientStatus{
-		{IdentityType: identityTypeBearer, AmountMillis: 7000, Claimed: false},
+		{IdentityType: identityTypeCash, AmountMillis: 7000, Claimed: false},
 	}
 	recipient, ok := MatchClaimAuto(recipients, "some-caller-pubkey")
-	if !ok || !recipient.IsBearer() || recipient.AmountMillis != 7000 {
-		t.Fatalf("MatchClaimAuto() = (%+v, %v), want (amount 7000, bearer, true)", recipient, ok)
+	if !ok || !recipient.IsCash() || recipient.AmountMillis != 7000 {
+		t.Fatalf("MatchClaimAuto() = (%+v, %v), want (amount 7000, cash, true)", recipient, ok)
 	}
 }
 
-func TestMatchClaimAuto_PubkeyWalletMatchesWithoutNeedingABearerHint(t *testing.T) {
+func TestMatchClaimAuto_PubkeyWalletMatchesWithoutNeedingACashHint(t *testing.T) {
 	recipients := []RecipientStatus{
 		{IdentityType: identityTypePubkey, IdentityValue: "abc123", AmountMillis: 4000, Claimed: false},
 	}
 	recipient, ok := MatchClaimAuto(recipients, "abc123")
-	if !ok || recipient.IsBearer() || recipient.AmountMillis != 4000 {
-		t.Fatalf("MatchClaimAuto() = (%+v, %v), want (amount 4000, not bearer, true)", recipient, ok)
+	if !ok || recipient.IsCash() || recipient.AmountMillis != 4000 {
+		t.Fatalf("MatchClaimAuto() = (%+v, %v), want (amount 4000, not cash, true)", recipient, ok)
 	}
 }
 
-func TestMatchClaimAuto_NoLocalIdentitySkipsPubkeyAttemptButStillFindsBearer(t *testing.T) {
+func TestMatchClaimAuto_NoLocalIdentitySkipsPubkeyAttemptButStillFindsCash(t *testing.T) {
 	recipients := []RecipientStatus{
-		{IdentityType: identityTypeBearer, AmountMillis: 2500, Claimed: false},
+		{IdentityType: identityTypeCash, AmountMillis: 2500, Claimed: false},
 	}
 	recipient, ok := MatchClaimAuto(recipients, NoLocalIdentity)
-	if !ok || !recipient.IsBearer() || recipient.AmountMillis != 2500 {
-		t.Fatalf("MatchClaimAuto() = (%+v, %v), want (amount 2500, bearer, true)", recipient, ok)
+	if !ok || !recipient.IsCash() || recipient.AmountMillis != 2500 {
+		t.Fatalf("MatchClaimAuto() = (%+v, %v), want (amount 2500, cash, true)", recipient, ok)
 	}
 }
 
-func TestMatchClaimAuto_WrongPubkeyAndNoBearerRecipientNoMatch(t *testing.T) {
+func TestMatchClaimAuto_WrongPubkeyAndNoCashRecipientNoMatch(t *testing.T) {
 	recipients := []RecipientStatus{
 		{IdentityType: identityTypePubkey, IdentityValue: "abc123", AmountMillis: 4000, Claimed: false},
 	}
@@ -110,7 +110,7 @@ func TestMatchClaimAuto_WrongPubkeyAndNoBearerRecipientNoMatch(t *testing.T) {
 
 func TestMatchClaimAuto_AlreadyClaimedRecipientNoMatch(t *testing.T) {
 	recipients := []RecipientStatus{
-		{IdentityType: identityTypeBearer, AmountMillis: 5000, Claimed: true},
+		{IdentityType: identityTypeCash, AmountMillis: 5000, Claimed: true},
 	}
 	if _, ok := MatchClaimAuto(recipients, NoLocalIdentity); ok {
 		t.Fatal("MatchClaimAuto() matched an already-claimed recipient")

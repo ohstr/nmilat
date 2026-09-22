@@ -537,12 +537,12 @@ func main() {
 }
 ```
 
-### Mint, verify, and secure a bearer-mode cash slice (NIP-CASH)
+### Mint, verify, and secure a cash-mode slice (NIP-CASH)
 
-A **bearer-mode** slice (`nipcash.Anyone()` as the recipient) has no
-Nostr identity attached — whoever holds its `bearer_secret` can spend it.
+A **cash-mode** slice (`nipcash.Anyone()` as the recipient) has no
+Nostr identity attached — whoever holds its `cash_secret` can spend it.
 `CheckClaim` confirms a received slice is real before trusting it;
-`RekeyBearerSlice` then re-keys it under a fresh secret only the new
+`RekeyCashSlice` then re-keys it under a fresh secret only the new
 holder knows, so the old one stops working:
 
 ```go
@@ -575,12 +575,12 @@ func main() {
 		panic(err)
 	}
 
-	// One string to hand over: the combined "<token>#<bearer_secret>"
+	// One string to hand over: the combined "<token>#<cash_secret>"
 	// presentation.
-	billString := minted.CashToken + "#" + minted.Recipients[0].BearerSecret
+	billString := minted.CashToken + "#" + minted.Recipients[0].CashSecret
 
 	// Recipient's side: split it, then verify it's real.
-	token, secret := nipcash.SplitBearerSliceString(billString)
+	token, secret := nipcash.SplitCashSliceString(billString)
 	tok, err := nipcash.Decode(token)
 	if err != nil {
 		panic(err)
@@ -598,11 +598,11 @@ func main() {
 	} else if err != nil {
 		panic(err)
 	}
-	fmt.Println("verified:", check.AmountMillis, "millis, bearer:", check.IsBearer)
+	fmt.Println("verified:", check.AmountMillis, "millis, cash:", check.IsCash)
 
 	// Re-key it: secured.NewSecret is the only copy, persist it now.
-	secured, err := recipient.RekeyBearerSlice(ctx, cashclient.RekeyBearerSliceParams{
-		BearerSlice: nipcash.Source{
+	secured, err := recipient.RekeyCashSlice(ctx, cashclient.RekeyCashSliceParams{
+		CashSlice: nipcash.Source{
 			WalletPubkey: tok.WalletPubkey,
 			Amount:       check.AmountMillis,
 			Credential:   nipcash.BySecret(secret),

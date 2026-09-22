@@ -6,7 +6,7 @@
 // while keeping the rest, or combine with other tokens from the same Hub.
 //
 // This package is the protocol layer only: the Recipient/Credential/
-// BearerTarget/Source abstractions, the cash-token TLV codec, mint-provenance
+// CashTarget/Source abstractions, the cash-token TLV codec, mint-provenance
 // verification, and the request/response shapes NIP-CASH defines on top of
 // raw NIP-47. It makes no network calls and has no opinion on how a caller
 // dials out — see nipcash/client for the NWC transport built on top of it.
@@ -48,43 +48,43 @@ const (
 const (
 	identityTypePubkey        = "pubkey"
 	identityTypeConnectionKey = "connection_key"
-	identityTypeBearer        = "bearer"
+	identityTypeCash          = "cash"
 )
 
 var (
-	// ErrMixedBearerAllocation is returned by MintCash when a bearer
-	// allocation is mixed with any other entry in the same call — a bearer
+	// ErrMixedCashAllocation is returned by MintCash when a cash-mode
+	// allocation is mixed with any other entry in the same call — a cash-mode
 	// slice's wallet MUST always be single-recipient (NIP-CASH §Minting
 	// Cash), so this is rejected client-side before ever reaching the wire.
-	ErrMixedBearerAllocation = errors.New("nipcash: a bearer allocation must be the only entry in a mint_cash call")
+	ErrMixedCashAllocation = errors.New("nipcash: a cash-mode allocation must be the only entry in a mint_cash call")
 
 	// ErrTooFewSources is returned by CashConsolidate when fewer than two
 	// sources are given — consolidating fewer than two slices isn't a
 	// combine operation (NIP-CASH §Consolidating Tokens).
 	ErrTooFewSources = errors.New("nipcash: cash_consolidate requires at least two sources")
 
-	// ErrBearerSource is returned by CashConsolidate when a source is
-	// bearer-identified. Unlike cash_transfer/cash_redeem, cash_consolidate
-	// can name a source wallet other than the caller's own, so a bearer
+	// ErrCashSource is returned by CashConsolidate when a source is
+	// cash-mode. Unlike cash_transfer/cash_redeem, cash_consolidate
+	// can name a source wallet other than the caller's own, so a cash-mode
 	// source's secret would transit over a connection with no claim on it
 	// (NIP-CASH §Security Considerations) — rejected client-side, not just
 	// deferred to the server.
-	ErrBearerSource = errors.New("nipcash: cash_consolidate does not accept a bearer-identified source")
+	ErrCashSource = errors.New("nipcash: cash_consolidate does not accept a cash-mode source")
 
 	// ErrConsolidateTargetInvalid is returned by CashConsolidate when To is
 	// nil — cash_consolidate itself now accepts a pubkey, connection_key,
-	// or bearer new_identity alike (previously pubkey-only; NIP-CASH's
-	// 2026-09-14 revision added bearer/connection_key consolidate targets
+	// or cash-mode new_identity alike (previously pubkey-only; NIP-CASH's
+	// 2026-09-14 revision added cash/connection_key consolidate targets
 	// server-side), so nothing about a real Target's own type is rejected
 	// here anymore, only a target that was never set at all.
 	ErrConsolidateTargetInvalid = errors.New("nipcash: cash_consolidate requires a new_identity target")
 
-	// ErrWrongCredentialForTarget is returned when a BearerTarget is used
-	// where a Recipient is expected, or vice versa — mint_cash's bearer
+	// ErrWrongCredentialForTarget is returned when a CashTarget is used
+	// where a Recipient is expected, or vice versa — mint_cash's cash-mode
 	// recipient gets its secret minted by the Hub (safe, since it travels
 	// over the Hub's own single-owner connection), while cash_transfer's
-	// bearer target requires the caller to generate the secret themselves
+	// cash-mode target requires the caller to generate the secret themselves
 	// (the response travels back over a shared connection every
-	// co-recipient can decrypt) — see BearerTarget's own doc comment.
-	ErrWrongCredentialForTarget = errors.New("nipcash: Anyone() cannot be used where a BearerTarget is required")
+	// co-recipient can decrypt) — see CashTarget's own doc comment.
+	ErrWrongCredentialForTarget = errors.New("nipcash: Anyone() cannot be used where a CashTarget is required")
 )

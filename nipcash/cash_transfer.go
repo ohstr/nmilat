@@ -13,7 +13,7 @@ type CashTransferParams struct {
 	Credential Credential
 	// To is who the slice (or the split-off piece) goes to: a
 	// pubkey/connection_key Target (Pubkey/ConnectionKey) or a
-	// *BearerTarget.
+	// *CashTarget.
 	To Target
 	// CurrentAmount is the slice's exact current committed amount, in
 	// millis — REQUIRED even for a full transfer: NIP-CASH's proof must
@@ -29,7 +29,7 @@ type CashTransferParams struct {
 	SplitAmount *uint64
 	// MintSignature opts a spun-off wallet's token into mint provenance —
 	// only meaningful when this call actually spins one off (a split, or a
-	// full transfer to bearer on a multi-recipient-history wallet);
+	// full transfer to cash mode on a multi-recipient-history wallet);
 	// harmless no-op on an in-place reassignment.
 	MintSignature bool
 }
@@ -48,7 +48,7 @@ type CashTransferRequest struct {
 	IdentityValue    string                       `json:"identity_value,omitempty"`
 	IdentityEvent    string                       `json:"identity_event,omitempty"`
 	AttestationEvent string                       `json:"attestation_event,omitempty"`
-	BearerSecret     string                       `json:"bearer_secret,omitempty"`
+	CashSecret       string                       `json:"cash_secret,omitempty"`
 	NewIdentity      cashTransferNewIdentityParam `json:"new_identity"`
 	AmountMillis     *uint64                      `json:"amount_millis,omitempty"`
 	MintSignature    bool                         `json:"mint_signature,omitempty"`
@@ -68,14 +68,14 @@ func (p CashTransferParams) Request(walletPubkey string) (CashTransferRequest, e
 		NewIdentityHash: newIdentityHash(p.To),
 		AmountMillis:    &amountBound,
 	}
-	identityType, identityValue, identityEvent, attestationEvent, bearerSecret, err := p.Credential.buildProof(binding)
+	identityType, identityValue, identityEvent, attestationEvent, cashSecret, err := p.Credential.buildProof(binding)
 	if err != nil {
 		return CashTransferRequest{}, err
 	}
 	req := CashTransferRequest{
 		IdentityType:  identityType,
 		IdentityValue: identityValue,
-		BearerSecret:  bearerSecret,
+		CashSecret:    cashSecret,
 		NewIdentity: cashTransferNewIdentityParam{
 			IdentityType:  f.identityType(),
 			IdentityValue: f.identityValue(),
@@ -114,9 +114,9 @@ type cashTransferResponseWire struct {
 // reassigned in place — the recipient already has everything they need via
 // the SAME cash token the caller originally held, now registered to the new
 // identity. NewWalletToken != "" and RemainderWalletToken == "" means a
-// full transfer spun off one new wallet (a bearer target on a
-// multi-recipient-history wallet) — hand NewWalletToken (and, for a bearer
-// target, the BearerTarget's own Secret()) to the recipient. Both set means
+// full transfer spun off one new wallet (a cash-mode target on a
+// multi-recipient-history wallet) — hand NewWalletToken (and, for a cash-mode
+// target, the CashTarget's own Secret()) to the recipient. Both set means
 // a partial split: RemainderWalletToken is the caller's own new token (the
 // old one is now dead), NewWalletToken is the carved-off piece for the
 // recipient.
@@ -134,8 +134,8 @@ type CashTransferResult struct {
 // RecipientToken resolves the three-way NewWalletToken ambiguity above:
 // the cash token string the recipient needs to receive/redeem what was
 // sent. originalToken is the token this transfer was placed from — the
-// answer for the in-place-reassignment case. For a bearer target, still
-// combine with BearerTarget.Secret(); this only resolves the token half.
+// answer for the in-place-reassignment case. For a cash-mode target, still
+// combine with CashTarget.Secret(); this only resolves the token half.
 func (r *CashTransferResult) RecipientToken(originalToken string) string {
 	if r.NewWalletToken != "" {
 		return r.NewWalletToken
@@ -145,7 +145,7 @@ func (r *CashTransferResult) RecipientToken(originalToken string) string {
 
 // ParseResult parses cash_transfer's wire response, decrypting any
 // *_wallet_token field with p.Credential's own privkey (see Credential's
-// decryptDelivery doc comment for why a bearer credential's tokens instead
+// decryptDelivery doc comment for why a cash credential's tokens instead
 // pass through unchanged). Exported for nipcash/client's use; a caller
 // using nipcash/client's CashTransfer method never calls this directly.
 func (p CashTransferParams) ParseResult(data []byte) (*CashTransferResult, error) {
