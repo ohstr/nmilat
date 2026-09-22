@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.4.0]
+
+### Breaking
+
+- NIP-CASH's "bearer" mode is now called **cash mode**, on the wire and in
+  the Go API (#30). Slices with no registered identity send
+  `identity_type: "cash"` instead of `"bearer"`, and their secret travels
+  as `cash_secret` instead of `bearer_secret`. The `new_identity_hash`
+  bound into a transfer or consolidate proof for such a target is now
+  computed over `"cash:" + commitment + ":"`. This release only works
+  with a Hub that speaks the renamed protocol (lokihub 0.5.0-rc.6 or
+  later); older Hubs reject its cash-mode requests, and older nmilat
+  releases don't work against the renamed Hub. Existing tokens and
+  `<token>#<secret>` strings are unaffected.
+- Renamed Go identifiers, with no deprecated aliases:
+
+  | Before | After |
+  |---|---|
+  | `nipcash.BearerTarget`, `nipcash.NewBearerTarget` | `nipcash.CashTarget`, `nipcash.NewCashTarget` |
+  | `.BearerSecret` on `RecipientResult`, `CashRedeemRequest`, `CashTransferRequest` | `.CashSecret` |
+  | `RecipientStatus.IsBearer()`, `CheckClaimResult.IsBearer` | `RecipientStatus.IsCash()`, `CheckClaimResult.IsCash` |
+  | `nipcash.ErrMixedBearerAllocation`, `nipcash.ErrBearerSource` | `nipcash.ErrMixedCashAllocation`, `nipcash.ErrCashSource` |
+  | `nipcash.SplitBearerSliceString` | `nipcash.SplitCashSliceString` |
+  | `client.RekeyBearerSlice`, `RekeyBearerSliceParams`, `RekeyBearerSliceResult` | `client.RekeyCashSlice`, `RekeyCashSliceParams`, `RekeyCashSliceResult` |
+  | `RekeyBearerSliceParams.BearerSlice` | `RekeyCashSliceParams.CashSlice` |
+
 ## [0.3.2]
 
 ### Fixed

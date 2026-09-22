@@ -16,7 +16,7 @@ func TestCashConsolidateParams_Request_TooFewSources(t *testing.T) {
 	}
 }
 
-func TestCashConsolidateParams_Request_BearerSourceRejected(t *testing.T) {
+func TestCashConsolidateParams_Request_CashSourceRejected(t *testing.T) {
 	p := CashConsolidateParams{
 		Sources: []Source{
 			From(randomKeyHex(t), 1000, BySecret("s1")),
@@ -24,8 +24,8 @@ func TestCashConsolidateParams_Request_BearerSourceRejected(t *testing.T) {
 		},
 		To: Pubkey("merged"),
 	}
-	if _, err := p.Request(); err != ErrBearerSource {
-		t.Fatalf("got %v, want ErrBearerSource", err)
+	if _, err := p.Request(); err != ErrCashSource {
+		t.Fatalf("got %v, want ErrCashSource", err)
 	}
 }
 
@@ -43,9 +43,9 @@ func TestCashConsolidateParams_Request_NilTargetRejected(t *testing.T) {
 	}
 }
 
-func TestCashConsolidateParams_Request_BearerTargetAccepted(t *testing.T) {
+func TestCashConsolidateParams_Request_CashTargetAccepted(t *testing.T) {
 	privKeyHex, _ := generateTestKeypair(t)
-	bt := NewBearerTarget()
+	bt := NewCashTarget()
 	p := CashConsolidateParams{
 		Sources: []Source{
 			From(randomKeyHex(t), 1000, BySigning(privKeyHex)),
@@ -57,8 +57,8 @@ func TestCashConsolidateParams_Request_BearerTargetAccepted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Request: %v", err)
 	}
-	if req.NewIdentity.IdentityType != identityTypeBearer || req.NewIdentity.IdentityValue != bt.identityValue() {
-		t.Fatalf("NewIdentity: %+v, want bearer/%s", req.NewIdentity, bt.identityValue())
+	if req.NewIdentity.IdentityType != identityTypeCash || req.NewIdentity.IdentityValue != bt.identityValue() {
+		t.Fatalf("NewIdentity: %+v, want cash/%s", req.NewIdentity, bt.identityValue())
 	}
 }
 
@@ -153,7 +153,7 @@ func TestByProof_MalformedJSON(t *testing.T) {
 // cash_consolidate keys new_wallet_token's delivery to the target, not the
 // caller — ParseResult must only decrypt when the target is the caller's
 // own pubkey, and otherwise return the wire value as-is (plaintext for
-// bearer/connection_key targets, still-opaque ciphertext for a third
+// cash/connection_key targets, still-opaque ciphertext for a third
 // party's pubkey) without erroring.
 
 func TestCashConsolidateParams_ParseResult_SelfTarget_Decrypts(t *testing.T) {
@@ -248,9 +248,9 @@ func TestCashConsolidateParams_ParseResult_UndecryptableDelivery_FallsBackToRawV
 	}
 }
 
-func TestCashConsolidateParams_ParseResult_BearerTarget_PassesThroughPlaintext(t *testing.T) {
+func TestCashConsolidateParams_ParseResult_CashTarget_PassesThroughPlaintext(t *testing.T) {
 	callerPrivHex, _ := generateTestKeypair(t)
-	bt := NewBearerTarget()
+	bt := NewCashTarget()
 
 	p := CashConsolidateParams{
 		Sources: []Source{From(randomKeyHex(t), 1000, BySigning(callerPrivHex))},

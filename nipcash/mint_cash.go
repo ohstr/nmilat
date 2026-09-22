@@ -39,12 +39,12 @@ type MintCashRequest struct {
 // nipcash/client's use; a caller using nipcash/client's MintCash method
 // never calls this directly.
 func (p MintCashParams) Request() (MintCashRequest, error) {
-	hasBearer := false
+	hasCash := false
 	recipients := make([]RecipientParam, len(p.Recipients))
 	for i, a := range p.Recipients {
 		f := a.Recipient.(targetFields)
-		if f.identityType() == identityTypeBearer {
-			hasBearer = true
+		if f.identityType() == identityTypeCash {
+			hasCash = true
 		}
 		recipients[i] = RecipientParam{
 			IdentityType:  f.identityType(),
@@ -53,8 +53,8 @@ func (p MintCashParams) Request() (MintCashRequest, error) {
 			AmountMillis:  a.AmountMillis,
 		}
 	}
-	if hasBearer && len(recipients) > 1 {
-		return MintCashRequest{}, ErrMixedBearerAllocation
+	if hasCash && len(recipients) > 1 {
+		return MintCashRequest{}, ErrMixedCashAllocation
 	}
 	return MintCashRequest{
 		Recipients:    recipients,
@@ -64,16 +64,16 @@ func (p MintCashParams) Request() (MintCashRequest, error) {
 }
 
 // RecipientResult is one entry of mint_cash's wire "recipients" response
-// array — the same shape as RecipientParam plus BearerSecret, present only
-// for a bearer recipient's response entry.
+// array — the same shape as RecipientParam plus CashSecret, present only
+// for a cash-mode recipient's response entry.
 type RecipientResult struct {
 	IdentityType  string `json:"identity_type"`
 	IdentityValue string `json:"identity_value,omitempty"`
 	AmountMillis  uint64 `json:"amount_millis"`
-	// BearerSecret appears in this response and nowhere else, ever
-	// (NIP-CASH §Bearer Slices) — the only place a bearer recipient's
+	// CashSecret appears in this response and nowhere else, ever
+	// (NIP-CASH §Cash-Mode Slices) — the only place a cash-mode recipient's
 	// secret is returned.
-	BearerSecret string `json:"bearer_secret,omitempty"`
+	CashSecret string `json:"cash_secret,omitempty"`
 }
 
 // MintCashResult is mint_cash's response.

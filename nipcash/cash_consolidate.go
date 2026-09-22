@@ -7,13 +7,13 @@ import "encoding/json"
 // (NIP-CASH §Consolidating Tokens).
 type CashConsolidateParams struct {
 	// Sources MUST contain at least two distinct sources (ErrTooFewSources),
-	// none bearer-identified (ErrBearerSource — bearer sources remain
-	// rejected: a bearer secret has no signature and no binding to the
+	// none cash-mode (ErrCashSource — cash-mode sources remain
+	// rejected: a cash secret has no signature and no binding to the
 	// request carrying it, unlike a connection_key source's signed
 	// identity_event + attestation_event, which this revision does accept).
 	Sources []Source
 	// To is who the merged wallet belongs to — any Target (pubkey,
-	// connection_key, or a *BearerTarget) is accepted; ErrConsolidateTargetInvalid
+	// connection_key, or a *CashTarget) is accepted; ErrConsolidateTargetInvalid
 	// only if left nil.
 	To Target
 	// MintSignature opts the merged wallet's token into mint provenance —
@@ -29,7 +29,7 @@ type consolidateSourceParam struct {
 	IdentityValue    string `json:"identity_value,omitempty"`
 	IdentityEvent    string `json:"identity_event,omitempty"`
 	AttestationEvent string `json:"attestation_event,omitempty"`
-	BearerSecret     string `json:"bearer_secret,omitempty"`
+	CashSecret       string `json:"cash_secret,omitempty"`
 }
 
 // CashConsolidateRequest is cash_consolidate's wire request shape.
@@ -59,12 +59,12 @@ func (p CashConsolidateParams) Request() (CashConsolidateRequest, error) {
 			NewIdentityHash: newIdentityHash(p.To),
 			AmountMillis:    &amount,
 		}
-		identityType, identityValue, identityEvent, attestationEvent, bearerSecret, err := src.Credential.buildProof(binding)
+		identityType, identityValue, identityEvent, attestationEvent, cashSecret, err := src.Credential.buildProof(binding)
 		if err != nil {
 			return CashConsolidateRequest{}, err
 		}
-		if identityType == identityTypeBearer || bearerSecret != "" {
-			return CashConsolidateRequest{}, ErrBearerSource
+		if identityType == identityTypeCash || cashSecret != "" {
+			return CashConsolidateRequest{}, ErrCashSource
 		}
 		sources[i] = consolidateSourceParam{
 			WalletPubkey:  src.WalletPubkey,
@@ -112,7 +112,7 @@ type CashConsolidateResult struct {
 // ParseResult parses cash_consolidate's wire response, decrypting
 // NewWalletToken with the first source's own Credential when the target is
 // a pubkey — the Hub encrypts it to the caller, same as cash_transfer's own
-// delivery. A bearer/connection_key target has no real pubkey yet, so the
+// delivery. A cash/connection_key target has no real pubkey yet, so the
 // Hub sends the token in the clear instead; ParseResult passes it through
 // unchanged rather than attempting decryption. If decryption ever fails
 // (e.g. an older Hub still keying pubkey-target delivery some other way),

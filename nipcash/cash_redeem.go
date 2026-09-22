@@ -16,7 +16,7 @@ type CashRedeemParams struct {
 	// behalf.
 	Invoice string
 	// Credential proves control of the slice being redeemed. BySecret for
-	// a bearer slice; BySigning/BySigningConnectionKey for an
+	// a cash-mode slice; BySigning/BySigningConnectionKey for an
 	// identity-bound one.
 	Credential Credential
 	// Amount OPTIONALLY overrides an amountless invoice's amount, mirroring
@@ -32,7 +32,7 @@ type CashRedeemRequest struct {
 	IdentityValue    string  `json:"identity_value,omitempty"`
 	IdentityEvent    string  `json:"identity_event,omitempty"`
 	AttestationEvent string  `json:"attestation_event,omitempty"`
-	BearerSecret     string  `json:"bearer_secret,omitempty"`
+	CashSecret       string  `json:"cash_secret,omitempty"`
 }
 
 // Request builds cash_redeem's wire request from p, bound to walletPubkey
@@ -45,7 +45,7 @@ func (p CashRedeemParams) Request(walletPubkey string) (CashRedeemRequest, error
 		return CashRedeemRequest{}, fmt.Errorf("nipcash: decode invoice: %w", err)
 	}
 	binding := proofBinding{WalletPubkey: walletPubkey, Bolt11Hash: invoice.PaymentHash}
-	identityType, identityValue, identityEvent, attestationEvent, bearerSecret, err := p.Credential.buildProof(binding)
+	identityType, identityValue, identityEvent, attestationEvent, cashSecret, err := p.Credential.buildProof(binding)
 	if err != nil {
 		return CashRedeemRequest{}, err
 	}
@@ -54,7 +54,7 @@ func (p CashRedeemParams) Request(walletPubkey string) (CashRedeemRequest, error
 		Amount:        p.Amount,
 		IdentityType:  identityType,
 		IdentityValue: identityValue,
-		BearerSecret:  bearerSecret,
+		CashSecret:    cashSecret,
 	}
 	if identityEvent != nil {
 		req.IdentityEvent = string(identityEvent)

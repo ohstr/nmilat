@@ -87,7 +87,7 @@ func (b proofBinding) tags() [][]string {
 
 // targetFields narrows a Target (or Recipient) back to its identity_type/
 // identity_value/ia_pubkey triple — every concrete implementer (namedIdentity,
-// bearerRecipient, *BearerTarget) implements this unexported shape
+// cashRecipient, *CashTarget) implements this unexported shape
 // internally; the type assertion is safe because neither interface has an
 // implementer outside this package (their marker methods are unexported).
 type targetFields interface {
@@ -106,19 +106,19 @@ func newIdentityHash(t Target) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// --- BySecret: bearer credential ---
+// --- BySecret: cash credential ---
 
 type secretCredential struct{ secret string }
 
-// BySecret proves control of a bearer slice by presenting its secret — the
-// entire proof, exactly as NIP-CASH's own bearer redemption model requires.
+// BySecret proves control of a cash-mode slice by presenting its secret — the
+// entire proof, exactly as NIP-CASH's own cash-mode redemption model requires.
 func BySecret(secret string) Credential { return secretCredential{secret: secret} }
 
-func (c secretCredential) buildProof(proofBinding) (identityType, identityValue string, identityEvent, attestationEvent []byte, bearerSecret string, err error) {
+func (c secretCredential) buildProof(proofBinding) (identityType, identityValue string, identityEvent, attestationEvent []byte, cashSecret string, err error) {
 	return "", "", nil, nil, c.secret, nil
 }
 
-// decryptDelivery is a pass-through: a bearer-current caller's proof is
+// decryptDelivery is a pass-through: a cash-mode caller's proof is
 // their raw secret, which carries no pubkey to derive a delivery key from,
 // so NIP-CASH requires this case be delivered in the clear instead — see
 // Credential's own doc comment.
@@ -135,7 +135,7 @@ type signingCredential struct{ privKeyHex string }
 // builds or signs an event themselves.
 func BySigning(privKeyHex string) Credential { return signingCredential{privKeyHex: privKeyHex} }
 
-func (c signingCredential) buildProof(binding proofBinding) (identityType, identityValue string, identityEvent, attestationEvent []byte, bearerSecret string, err error) {
+func (c signingCredential) buildProof(binding proofBinding) (identityType, identityValue string, identityEvent, attestationEvent []byte, cashSecret string, err error) {
 	pubkey, err := utils.GetPublicKey(c.privKeyHex)
 	if err != nil {
 		return "", "", nil, nil, "", fmt.Errorf("nipcash: derive pubkey: %w", err)
@@ -176,7 +176,7 @@ func BySigningConnectionKey(privKeyHex string, platform nipIC.WebIdentity, exter
 	return connectionKeyCredential{privKeyHex: privKeyHex, platform: platform, externalID: externalID, attestation: attestation}
 }
 
-func (c connectionKeyCredential) buildProof(binding proofBinding) (identityType, identityValue string, identityEvent, attestationEvent []byte, bearerSecret string, err error) {
+func (c connectionKeyCredential) buildProof(binding proofBinding) (identityType, identityValue string, identityEvent, attestationEvent []byte, cashSecret string, err error) {
 	if c.attestation == nil || c.attestation.ExpiresAt == nil || time.Now().After(*c.attestation.ExpiresAt) {
 		return "", "", nil, nil, "", ErrAttestationExpired
 	}
@@ -233,7 +233,7 @@ func ByProof(identityEventJSON []byte) (Credential, error) {
 	return proofCredential{identityEvent: identityEventJSON, identityValue: ev.PubKey}, nil
 }
 
-func (c proofCredential) buildProof(proofBinding) (identityType, identityValue string, identityEvent, attestationEvent []byte, bearerSecret string, err error) {
+func (c proofCredential) buildProof(proofBinding) (identityType, identityValue string, identityEvent, attestationEvent []byte, cashSecret string, err error) {
 	return identityTypePubkey, c.identityValue, c.identityEvent, nil, "", nil
 }
 
