@@ -2,7 +2,7 @@
 
 ## Summary
 
-`relay.EventStore`'s query path (`storeScan.scan`) runs the *entire*
+Before the fix below, `relay.EventStore`'s query path (`storeScan.scan`) ran the *entire*
 collection-and-delivery loop for a `REQ` — including the network write to
 the subscriber — inside a single, long-lived `bolt.DB.View` read
 transaction. If delivery to that one subscriber stalls (a slow or
@@ -17,8 +17,8 @@ makes this silent under a simple TCP-socket health probe.
 
 This was root-caused live against a real deployment (downstream project:
 `bzzsocial/bzz-feed`) — see "Live incident" below for the exact commands
-and output — and has since been **reproduced in-tree**. See
-"Reproduction" below for the tests and their output.
+and output — and has since been **reproduced in-tree** and **fixed**. See
+"Reproduction" for the tests and their output, and "Fix" for the change.
 
 The in-tree work also turned up something worse than this summary
 originally claimed: the stall does **not** actually require a slow
@@ -176,16 +176,16 @@ exactly this, and delivers **0 of 200** events.
 ## Reproduction
 
 `relay/store_scan_transaction_test.go`. The first three tests assert the
-invariant that *should* hold, so they fail against the current scan; that
-failure is the reproduction, and they go green once the fix below lands.
-The fourth pins bbolt's own semantics and passes today.
+invariant that *should* hold. They failed against the original scan —
+that failure was the reproduction, recorded below — and pass with the fix.
+The fourth pins bbolt's own semantics and passes either way.
 
 ```
 GOWORK=off go test ./relay/ -run 'TestScanDoesNotHold|TestGrowingWrite|TestDeliveryLoopDoesNot|TestBoltNewRead' -race -count=3
 ```
 
-Verbatim output (identical across 3 race-enabled runs — this is
-deterministic, not timing-dependent):
+Verbatim output against the original scan (identical across 3
+race-enabled runs — this is deterministic, not timing-dependent):
 
 ```
 --- FAIL: TestScanDoesNotHoldReadTransactionAcrossDelivery (3.33s)
@@ -220,29 +220,46 @@ Notes on method:
   actually grew, so they fail loudly rather than passing vacuously if the
   write ever stops being large enough to force a remap.
 
-## Suggested fix direction
+## Fix
 
-Don't hold the read transaction open across delivery. Collect the
-matching event IDs/bytes for a batch inside `db.View`, close the
-transaction, *then* hand the batch off to the per-connection delivery
-loop. `relay/store.go`'s own `04b4543` (`fix(relay): copy FindEventBytes'
-result out of its bbolt transaction`) already established this pattern
-for a single lookup; the same principle needs to apply to the whole scan,
-not just one call inside it. Bounding `runScan`'s own `ctx` with a
-deadline independent of the parent subscription/session context (rather
-than relying solely on the session write-failure path to propagate
-cancellation) would also shrink the exposure window.
+The read transaction no longer spans delivery. `storeScan.scan` still
+runs in passes, with the same cursor order, limit accounting and
+recency interleaving as before, but each pass now:
 
-Doing that also resolves the self-deadlock above, since transaction A
-stops existing during delivery. Worth folding in while there: the
-delivery loop re-reads each event with `FindEventBytes`
-(`handlers.go:154`) right after the scan already had it in hand, so
-carrying the bytes through on the `PotentialEvent` would remove a whole
-second read transaction per event from the hot path regardless.
+1. opens its own short `db.View`;
+2. collects from every cursor, then loads and filters the matched events
+   (`collectBatch`) — bounded work that never blocks on a channel;
+3. closes the transaction;
+4. only then hands the pass's events to the subscription
+   (`deliverBatch`), blocking for as long as the consumer takes.
 
-The three failing tests in `relay/store_scan_transaction_test.go` are the
-acceptance criteria — they turn green when the transaction no longer
-spans delivery.
+Resume keys are now copied out of each pass (`bytes.Clone`): `Collect`
+returns a key straight out of bolt's mmap, which is only valid inside the
+transaction it came from. A key deleted between passes is handled by the
+existing `Seek`-then-`Prev` resume, which lands on the next lower key
+either way. A caller that supplies its own transaction (`findEvents`)
+still has every pass run in it: it owns that transaction's lifetime, and
+its consumer is a local goroutine that can't stall.
+
+This also removes the self-deadlock above, since transaction A no longer
+exists while the delivery loop's `FindEventBytes` runs. The same applied
+to the NIP-05 handler, whose consumer calls `store.FindEvent` during
+delivery (`handler_nip05.go`).
+
+Results with the fix, same command as above:
+
+```
+--- PASS: TestScanDoesNotHoldReadTransactionAcrossDelivery (3.32s)
+--- PASS: TestGrowingWriteDuringStalledScanDoesNotBlockUnrelatedReaders (3.94s)
+--- PASS: TestDeliveryLoopDoesNotDeadlockWhenAWriteGrowsTheStore (3.63s)
+--- PASS: TestBoltNewReadTransactionBlocksBehindAGrowingWrite (1.42s)
+```
+
+Not done, and worth considering separately: the delivery loop still
+re-reads each event with `FindEventBytes` (`handlers.go:154`) right after
+the scan loaded it. Carrying the bytes through on the `PotentialEvent`
+would drop one short read transaction per event from the hot path, at the
+cost of holding event bodies in the batch and the subscription channel.
 
 ## Live incident (downstream: `bzzsocial/bzz-feed`, 2026-09-22)
 
@@ -290,6 +307,6 @@ sustained write volume against ordinary `REQ` traffic suffices.)
 
 Checked `nmilat` history through `v0.3.1` and current `origin/main`
 (`d33a931`), and `ncli` through `v0.5.0` and its current `origin/main`:
-no lock/deadlock/bbolt fix addressing this exists yet in either repo. The
-regression tests added alongside this write-up cover the behavior but do
-not change it — the scan is still transaction-bound across delivery.
+no lock/deadlock/bbolt fix addressed this in either repo before the fix
+described above. Downstream projects need an `nmilat` release containing
+it — `ncli` pins this module, so it must be bumped as well.

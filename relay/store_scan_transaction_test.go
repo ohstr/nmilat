@@ -19,20 +19,20 @@ import (
 )
 
 // These tests cover the failure mode written up in
-// docs/relay-scan-transaction-blocks-under-load.md: storeScan.scan runs the
-// whole collect-and-deliver loop for a REQ inside one bolt.DB.View
-// (store.go's `ss.store.db.View(func(tx *bolt.Tx) error { return runScan(tx) })`),
-// so the read transaction stays open for as long as delivery takes. bbolt
-// cannot re-mmap the file while a read transaction is open, and Go's
-// sync.RWMutex blocks new readers once a writer is waiting on that remap --
-// so one parked scan plus one file-growing write stalls the whole store.
+// docs/relay-scan-transaction-blocks-under-load.md: storeScan.scan used to run
+// the whole collect-and-deliver loop for a REQ inside one bolt.DB.View, so the
+// read transaction stayed open for as long as delivery took. bbolt cannot
+// re-mmap the file while a read transaction is open, and Go's sync.RWMutex
+// blocks new readers once a writer is waiting on that remap -- so one parked
+// scan plus one file-growing write stalled the whole store.
 //
 // TestScanDoesNotHoldReadTransactionAcrossDelivery,
 // TestGrowingWriteDuringStalledScanDoesNotBlockUnrelatedReaders and
 // TestDeliveryLoopDoesNotDeadlockWhenAWriteGrowsTheStore assert the invariant
-// that *should* hold. They FAIL against the current scan implementation --
-// that failure is the reproduction. They go green once the scan collects its
-// batch inside db.View, closes the transaction, and only then delivers.
+// the fix established: each pass is batched inside a short db.View and only
+// delivered once that transaction has closed (see collectBatch and
+// deliverBatch). All three failed deterministically against the old scan --
+// that is how the report was reproduced -- and now guard against regressing.
 //
 // TestBoltNewReadTransactionBlocksBehindAGrowingWrite instead pins bbolt's own
 // locking semantics, independent of this package. It passes today, and exists
@@ -159,8 +159,7 @@ type parkedScan struct {
 // parkScan starts a scan writing into a subscription-sized channel (see
 // subscription.go's eventBufferCapacity, which is exactly what a real REQ
 // gets) and returns once that channel is full -- i.e. once the scan is parked
-// inside handleEvents' `potEvents <- potEvent` send, which sits inside the
-// db.View closure.
+// mid-delivery on its `potEvents <- potEvent` send.
 //
 // Nothing drains the channel, which is what a slow subscriber looks like from
 // the store's side.
@@ -195,11 +194,11 @@ func parkScan(t *testing.T, store *EventStore, filters *nip01.SubscriptionFilter
 	return ps
 }
 
-// release unwinds the parked scan. Cancelling frees handleEvents' blocked send
-// through its `case <-ctx.Done()` branch, the db.View closure returns, and the
-// read transaction closes -- which is also what lets any write blocked on the
-// remap finally proceed. Draining alongside that covers sends already in
-// flight.
+// release unwinds the parked scan. Cancelling frees its blocked send through
+// the `case <-ctx.Done()` branch, so the scan returns -- which, before the fix,
+// was also the only thing that closed its read transaction and let a write
+// blocked on the remap proceed. Draining alongside that covers sends already
+// in flight.
 //
 // Tests must register this before anything that waits on the store, and must
 // run it on the failure path too: these tests intentionally create blocked
@@ -257,10 +256,9 @@ func TestScanDoesNotHoldReadTransactionAcrossDelivery(t *testing.T) {
 	if held := minOpenTxNOver(store, 500*time.Millisecond); held > 0 {
 		t.Fatalf("scan held %d bolt read transaction(s) open continuously for 500ms while %d "+
 			"event(s) sat undelivered in the subscription buffer.\n"+
-			"storeScan.scan wraps the entire collect-and-deliver loop in db.View, so the "+
-			"transaction stays open for as long as the subscriber takes to drain -- "+
-			"blocking bbolt from re-mmapping the file, and so blocking every other "+
-			"connection on the relay.",
+			"Delivery is running inside the scan's db.View again, so the transaction "+
+			"stays open for as long as the subscriber takes to drain -- blocking bbolt "+
+			"from re-mmapping the file, and so blocking every other connection on the relay.",
 			held, len(ps.outgoing))
 	}
 }
