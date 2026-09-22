@@ -1323,19 +1323,39 @@ func (ss *storeScan) Scan(ctx context.Context, potEvents chan<- *PotentialEvent,
 	return ss.scan(ctx, nil, potEvents, wg, fetchUntilEmpty)
 }
 
+// scan runs the filter's cursors in passes. Each pass collects from every
+// cursor, then loads and filters the matched events, all inside one short read
+// transaction; only once that transaction has closed are the pass's events
+// handed to potEvents.
+//
+// That ordering is the point. potEvents is usually a subscription's small
+// outgoing channel, drained one network write at a time (see handlers.go), so
+// delivery can take arbitrarily long. A read transaction held open across it
+// stops bbolt from re-mmapping the file, which parks any write that needs to
+// grow it; and because sync.RWMutex stops admitting readers once a writer is
+// waiting, that in turn blocks every new read transaction in the process --
+// including the delivery loop's own FindEventBytes, which then can't drain the
+// very channel this scan would be blocked on. See
+// docs/relay-scan-transaction-blocks-under-load.md.
+//
+// A caller-supplied tx (findEvents) is used for every pass instead: the caller
+// owns its lifetime, and its consumer is a local goroutine that can't stall.
 func (ss *storeScan) scan(ctx context.Context, tx *bolt.Tx, potEvents chan<- *PotentialEvent, wg *sync.WaitGroup, fetchUntilEmpty bool) error {
 	if len(ss.cursors) == 0 {
 		return nil
 	}
 
-	runScan := func(tx *bolt.Tx) error {
+	resumeKeys, limit, refill := ss.initializeScan()
 
-		resumeKeys, limit, refill := ss.initializeScan()
+	var totalCollected int
+	activeCursors := true
 
-		var totalCollected int
-		activeCursors := true
+	for activeCursors {
 
-		for activeCursors {
+		var batch []*PotentialEvent
+		var storeClosed bool
+
+		runPass := func(tx *bolt.Tx) error {
 
 			cursorLimit := limit * refill
 			activeCursors = false
@@ -1344,6 +1364,7 @@ func (ss *storeScan) scan(ctx context.Context, tx *bolt.Tx, potEvents chan<- *Po
 
 				select {
 				case <-ss.store.closeCh:
+					storeClosed = true
 					return nil
 
 				case <-ctx.Done():
@@ -1355,36 +1376,34 @@ func (ss *storeScan) scan(ctx context.Context, tx *bolt.Tx, potEvents chan<- *Po
 						cursorLimit = ss.filter.Limit - totalCollected
 					}
 
-					var collected int
-					var err error
-					resumeKeys[ci], collected, err = cursor.Collect(ctx, tx, ss.scanContext, resumeKeys[ci], cursorLimit, fetchUntilEmpty)
+					resumeKey, collected, err := cursor.Collect(ctx, tx, ss.scanContext, resumeKeys[ci], cursorLimit, fetchUntilEmpty)
 					if err != nil {
 						return err
 					}
+					// Collect hands back a key straight out of bolt's mmap,
+					// only valid for this transaction -- and the next pass
+					// runs in a new one.
+					resumeKeys[ci] = bytes.Clone(resumeKey)
 
 					if collected > 0 {
 						if fetchUntilEmpty {
-							// Deliver once per pass, after every cursor
-							// has collected -- see this func's own doc
-							// comment below. Draining per-cursor here
-							// (the !fetchUntilEmpty branch's behavior)
-							// would force a burst on one busy cursor to
-							// fully flush through potEvents, which for a
-							// live subscription is a small, backpressured,
-							// per-subscription channel (see
-							// subscription.go's eventBufferCapacity) --
-							// starving every other cursor sharing this
-							// same combined-kind filter until a slow
-							// consumer fully drains the busy one's whole
-							// batch.
+							// Batch once per pass, after every cursor has
+							// collected -- see the flush below. Every cursor
+							// feeds the one shared ss.queueEvents heap, so
+							// draining it per cursor here (the
+							// !fetchUntilEmpty branch's behavior) would put a
+							// burst on one busy cursor ahead of every other
+							// cursor sharing this same combined-kind filter,
+							// instead of interleaving them by recency.
 							activeCursors = activeCursors || collected == cursorLimit
 						} else {
-							sent, err := ss.handleEvents(ctx, potEvents, tx, wg, fetchUntilEmpty)
+							var added int
+							batch, added, err = ss.collectBatch(tx, batch, fetchUntilEmpty)
 							if err != nil {
 								return err
 							}
 
-							totalCollected += sent
+							totalCollected += added
 							activeCursors = collected == cursorLimit
 						}
 					}
@@ -1398,36 +1417,45 @@ func (ss *storeScan) scan(ctx context.Context, tx *bolt.Tx, potEvents chan<- *Po
 			}
 
 			// fetchUntilEmpty: every cursor has now collected everything
-			// newly available for this pass into the shared
-			// ss.queueEvents heap (ordered newest-first by CreatedAt, see
-			// eventQueue.Less) -- flush it in one shot so cursors sharing
-			// one combined-kind filter interleave by recency instead of
-			// one cursor's whole batch blocking every other cursor's
-			// turn. The bounded (!fetchUntilEmpty) path is untouched: it
-			// keeps sending per-cursor so totalCollected's accounting
-			// against ss.filter.Limit -- which only that path uses --
-			// stays exactly as before.
+			// newly available for this pass into the shared ss.queueEvents
+			// heap (ordered newest-first by CreatedAt, see eventQueue.Less)
+			// -- batch it in one shot so cursors sharing one combined-kind
+			// filter interleave by recency. The bounded (!fetchUntilEmpty)
+			// path keeps batching per cursor so totalCollected's accounting
+			// against ss.filter.Limit -- which only that path uses -- stays
+			// exactly as before.
 			if fetchUntilEmpty {
-				if _, err := ss.handleEvents(ctx, potEvents, tx, wg, fetchUntilEmpty); err != nil {
+				var err error
+				if batch, _, err = ss.collectBatch(tx, batch, fetchUntilEmpty); err != nil {
 					return err
 				}
 			}
 
-			refill = 10
+			return nil
 		}
 
-		return nil
+		var err error
+		if tx != nil {
+			err = runPass(tx)
+		} else {
+			err = ss.store.db.View(runPass)
+		}
+		if err != nil {
+			return err
+		}
+
+		if err := deliverBatch(ctx, potEvents, wg, batch); err != nil {
+			return err
+		}
+
+		if storeClosed {
+			return nil
+		}
+
+		refill = 10
 	}
 
-	if tx != nil {
-		return runScan(tx)
-	}
-
-	err := ss.store.db.View(func(tx *bolt.Tx) error {
-		return runScan(tx)
-	})
-
-	return err
+	return nil
 }
 
 func (s *EventStore) QueryNip77Items(ctx context.Context, filter *nip01.SubscriptionFilter) ([]nip77.Item, error) {
@@ -1472,15 +1500,21 @@ func (s *EventStore) QueryNip77Items(ctx context.Context, filter *nip01.Subscrip
 	return items, nil
 }
 
-func (ss *storeScan) handleEvents(ctx context.Context, potEvents chan<- *PotentialEvent, tx *bolt.Tx, wg *sync.WaitGroup, fetchUntilEmpty bool) (int, error) {
+// collectBatch drains ss.queueEvents into batch: it pops every queued event,
+// loads it from tx for the checks the index alone can't answer, and appends
+// the ones that pass. It never blocks, which is what makes it safe to run
+// inside a transaction; deliverBatch does the handoff afterwards. added counts
+// only the events appended, which is what the bounded path's limit accounting
+// needs.
+func (ss *storeScan) collectBatch(tx *bolt.Tx, batch []*PotentialEvent, fetchUntilEmpty bool) ([]*PotentialEvent, int, error) {
 
-	var sent int
+	var added int
 	for ss.queueEvents.Len() > 0 {
 
 		potEvent := ss.queueEvents.PopEvent()
 		event, err := ss.store.findEventUsingTx(tx, potEvent.Evsid)
 		if err != nil {
-			return sent, err
+			return batch, added, err
 		}
 
 		// NIP-16: Ephemeral events should not be sent for historical requests
@@ -1492,20 +1526,29 @@ func (ss *storeScan) handleEvents(ctx context.Context, potEvents chan<- *Potenti
 			continue
 		}
 
-		wg.Add(1)
-
 		potEvent.EventID = event.ID
+		batch = append(batch, potEvent)
+		added++
+	}
+
+	return batch, added, nil
+}
+
+// deliverBatch hands a pass's events to potEvents, blocking for as long as the
+// consumer takes. It must run with no transaction open -- see scan.
+func deliverBatch(ctx context.Context, potEvents chan<- *PotentialEvent, wg *sync.WaitGroup, batch []*PotentialEvent) error {
+	for _, potEvent := range batch {
+		wg.Add(1)
 
 		select {
 		case potEvents <- potEvent:
 		case <-ctx.Done():
 			wg.Done()
-			return sent, ctx.Err()
+			return ctx.Err()
 		}
-		sent++
 	}
 
-	return sent, nil
+	return nil
 }
 
 //////
