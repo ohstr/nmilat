@@ -114,13 +114,11 @@ func (h *StandardRequestHandler) Handle(ctx context.Context, s *Session, rp *wir
 	sub, exists := s.subscriptions.Get(rp.SubscriptionID)
 	if exists {
 		if sub.query.filters.Equals(rp.Filters) {
-			s.config.Logger.Debug().Msgf("filters are equals")
 			return true, nil
 		}
 		s.subscriptions.Close(sub.id)
 	}
 
-	s.config.Logger.Info().Msgf("processing request for subscription %s", rp.SubscriptionID)
 	query, err := NewStoreQuery(s.store, rp.Filters)
 	if err != nil {
 		return true, wire.NewPacketError("failed to create query", err)
@@ -147,8 +145,6 @@ func (h *StandardRequestHandler) Handle(ctx context.Context, s *Session, rp *wir
 
 		var wg sync.WaitGroup
 		go sub.Start(ctx, &wg)
-
-		s.config.Logger.Info().Msgf("subscription %s started", sub.id)
 
 		for {
 			select {
