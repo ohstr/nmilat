@@ -181,7 +181,7 @@ func TestSubscriptionCombinedKindBurstDoesNotStarveFreshEvent(t *testing.T) {
 
 // TestSubscriptionBackpressureDelaysButNeverLosesEvents reproduces the
 // no-timeout blocking-send mechanism behind the delivery stall fixed in
-// PR #19: storeScan.handleEvents' send into a subscription's outgoing
+// PR #19: the scan's send (now deliverBatch) into a subscription's outgoing
 // channel (eventBufferCapacity, 55 slots) has no timeout, and
 // Subscription.Start's poll loop calls Fetch synchronously on every tick --
 // so once the channel is full, the next poll tick blocks inside Fetch until
@@ -202,8 +202,14 @@ func TestSubscriptionBackpressureDelaysButNeverLosesEvents(t *testing.T) {
 	store := newStore(t)
 	defer store.Close()
 
-	filters := nip01.NewSubscriptionFilterGroup()
-	filters.Add(&nip01.SubscriptionFilter{Kinds: []int{1}, Limit: 500})
+	// Each subscription gets its own filter group, as every real REQ does:
+	// NewStoreQuery clamps filter.Limit in place, so a group can't be reused
+	// for a new query while another one built from it is still scanning.
+	newFilters := func() *nip01.SubscriptionFilterGroup {
+		filters := nip01.NewSubscriptionFilterGroup()
+		filters.Add(&nip01.SubscriptionFilter{Kinds: []int{1}, Limit: 500})
+		return filters
+	}
 
 	// The "stalled" subscription: opened first (while the store is still
 	// empty, so its own EOSE arrives immediately), its outgoing channel is
@@ -212,7 +218,7 @@ func TestSubscriptionBackpressureDelaysButNeverLosesEvents(t *testing.T) {
 	var stalledWG sync.WaitGroup
 	stalledCtx, stalledCancel := context.WithCancel(context.Background())
 	defer stalledCancel()
-	stalledSub, stalledEvents, stalledErrs, stalledEOSE := NewSubscription("sub-stalled", newQuery(t, store, filters))
+	stalledSub, stalledEvents, stalledErrs, stalledEOSE := NewSubscription("sub-stalled", newQuery(t, store, newFilters()))
 	go stalledSub.Start(stalledCtx, &stalledWG)
 	select {
 	case <-stalledEOSE:
@@ -248,7 +254,7 @@ func TestSubscriptionBackpressureDelaysButNeverLosesEvents(t *testing.T) {
 	var freshWG sync.WaitGroup
 	freshCtx, freshCancel := context.WithCancel(context.Background())
 	defer freshCancel()
-	freshSub, freshEvents, freshErrs, freshEOSE := NewSubscription("sub-fresh-retry", newQuery(t, store, filters))
+	freshSub, freshEvents, freshErrs, freshEOSE := NewSubscription("sub-fresh-retry", newQuery(t, store, newFilters()))
 	go freshSub.Start(freshCtx, &freshWG)
 
 	foundOnFreshSub := false

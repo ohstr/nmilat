@@ -1053,7 +1053,7 @@ func readEventsCollecting(t testing.TB, query *StoreQuery, fetchUntilEmpty bool)
 }
 
 // TestStoreFetchCombinedKindNoEventsDroppedAcrossManyKinds guards
-// correctness, not just ordering: deferring delivery to one handleEvents
+// correctness, not just ordering: deferring batching to one collectBatch
 // call per pass (see TestStoreFetchCombinedKindDeliversByRecencyNotCursorOrder)
 // must still deliver every matching event exactly once, and in strict
 // recency order, when several kinds' events are genuinely interleaved in
@@ -1104,7 +1104,7 @@ func TestStoreFetchCombinedKindNoEventsDroppedAcrossManyKinds(t *testing.T) {
 }
 
 // TestStoreFetchCombinedKindMultipleTicksDeliverOnlyNewEvents guards the
-// deferred, pass-wide handleEvents call against a live subscription's real
+// deferred, pass-wide collectBatch call against a live subscription's real
 // usage pattern: StoreQuery.Fetch called repeatedly (once per tick, see
 // subscription.go's Start) on the SAME *StoreQuery, whose cursors carry
 // firstCollect/lastKey state across calls. A second tick must not
@@ -1150,7 +1150,7 @@ func TestStoreFetchCombinedKindMultipleTicksDeliverOnlyNewEvents(t *testing.T) {
 // TestStoreFetchBoundedCombinedKindRespectsLimitExactly guards the
 // !fetchUntilEmpty (bounded/historical) path, which the fairness fix
 // deliberately leaves untouched -- it keeps its original per-cursor
-// handleEvents call and totalCollected accounting. A combined-kind bounded
+// collectBatch call and totalCollected accounting. A combined-kind bounded
 // query must still return exactly Limit events, not more, not fewer, even
 // though one kind alone has far more than Limit matching events available.
 func TestStoreFetchBoundedCombinedKindRespectsLimitExactly(t *testing.T) {
@@ -1177,7 +1177,7 @@ func TestStoreFetchBoundedCombinedKindRespectsLimitExactly(t *testing.T) {
 }
 
 // TestStoreScanCombinedKindCancelledContextReturnsPromptly guards the new
-// deferred-handleEvents structure against a hang or panic when ctx is
+// deferred-collectBatch structure against a hang or panic when ctx is
 // already cancelled before a pass's per-cursor loop reaches its
 // end-of-pass flush -- the flush must simply never run, not block forever
 // waiting on cursors that will never finish collecting.
@@ -1733,7 +1733,8 @@ func TestStoreSimpleCursor(b *testing.T) {
 					}
 				}()
 
-				sent, _ := ss.handleEvents(context.Background(), potEvents, tx, &wg, false)
+				batch, sent, _ := ss.collectBatch(tx, nil, false)
+				_ = deliverBatch(context.Background(), potEvents, &wg, batch)
 				b.Logf("sent=%d", sent)
 
 				wg.Wait()
