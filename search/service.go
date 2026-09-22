@@ -129,8 +129,6 @@ func (s *ServiceImpl) workerLoop() {
 		if len(buffer) > 0 {
 			if err := s.client.BulkIndex(buffer); err != nil {
 				log.Error().Err(err).Int("batch_size", len(buffer)).Msg("failed to bulk index profiles")
-			} else {
-				log.Debug().Int("count", len(buffer)).Msg("bulk indexed profiles")
 			}
 			// Reset buffer (keep capacity)
 			buffer = buffer[:0]

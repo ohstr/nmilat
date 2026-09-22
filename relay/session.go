@@ -466,13 +466,6 @@ func (s *Session) sendPacket(packet wire.SubscriptionResponse) error {
 				Str("packet_type", packetType).
 				Err(err).
 				Msg("sendPacket failed")
-		} else {
-			s.config.Logger.Debug().
-				Int64("session", s.id).
-				Str("remote", s.info.RemoteAddr).
-				Str("packet_type", packetType).
-				Err(err).
-				Msg("sendPacket error (suppressed)")
 		}
 		return err
 	}
@@ -501,13 +494,6 @@ func (s *Session) writeControl(messageType int, data []byte) error {
 				Str("frame", controlFrameName(messageType)).
 				Err(err).
 				Msg("writeControl failed")
-		} else {
-			s.config.Logger.Debug().
-				Int64("session", s.id).
-				Str("remote", s.info.RemoteAddr).
-				Str("frame", controlFrameName(messageType)).
-				Err(err).
-				Msg("writeControl error (suppressed)")
 		}
 		return err
 	}
@@ -586,13 +572,6 @@ func (s *Session) awaitPeerClose() error {
 				websocket.CloseAbnormalClosure):
 				return nil
 			default:
-				if shouldLogError(err) {
-					s.config.Logger.Debug().
-						Int64("session", s.id).
-						Str("remote", s.info.RemoteAddr).
-						Err(err).
-						Msg("awaitPeerClose read error")
-				}
 				return err
 			}
 		}
