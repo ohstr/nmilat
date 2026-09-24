@@ -615,40 +615,16 @@ func (s *EventStore) deleteByEvsid(tx *bolt.Tx, pe *PotentialEvent) error {
 	return nil
 }
 func (s *EventStore) delete(tx *bolt.Tx, evsid uint64, ev *nip01.Event) error { // pass Event instead of PotentialEvent to optimize the delete process
-
-	eventIDBytes, _ := hex.DecodeString(ev.ID)
-	pubkeyBytes, _ := hex.DecodeString(ev.PubKey)
-	evsidBytes := itob(evsid)
-	kindBytes := itob(uint64(ev.Kind))
-
-	_ = tx.Bucket(indexEvents).Delete(evsidBytes)
-	_ = tx.Bucket(indexID).Delete(makeKey(eventIDBytes, evsidBytes))
-
-	_ = tx.Bucket(indexPubkey).Delete(makeKey(pubkeyBytes, evsidBytes))
-	_ = tx.Bucket(indexKind).Delete(makeKey(kindBytes, evsidBytes))
-	_ = tx.Bucket(indexKindPubkey).Delete(makeKey(kindBytes, pubkeyBytes, evsidBytes))
-
-	// createdAt: 8+32+8
-	createdAtKey := make([]byte, 0, 8+32+8)
-	createdAtKey = append(createdAtKey, itob(ev.CreatedAt)...)
-	createdAtKey = append(createdAtKey, eventIDBytes...)
-	createdAtKey = append(createdAtKey, evsidBytes...)
-	_ = tx.Bucket(indexCreatedAt).Delete(createdAtKey)
-
-	if exp, _ := getExpiration(ev.Tags); exp > 0 {
-		expBytes := itob(exp)
-		_ = tx.Bucket(indexExpiration).Delete(makeKey(expBytes, evsidBytes))
+	if err := tx.Bucket(indexEvents).Delete(itob(evsid)); err != nil {
+		return err
 	}
 
-	tagEntries, err := prepareIndexableTags(ev.Tags, s.limitation.MaxIndexableTags)
+	keys, err := indexKeysFor(ev, evsid, s.limitation.MaxIndexableTags)
 	if err != nil {
 		return err
 	}
-	for _, entry := range tagEntries {
-		_ = tx.Bucket(indexTag).Delete(makeKey(entry, evsidBytes))
-	}
 
-	return nil
+	return delEventIndexes(tx, keys)
 }
 
 func (s *EventStore) insertEvent(tx *bolt.Tx, event *nip01.Event) (uint64, error) {
@@ -683,81 +659,165 @@ func (s *EventStore) insertWithIndexes(tx *bolt.Tx, event *nip01.Event) error {
 	return s.insertIndexes(tx, event, evsid)
 }
 
-func (s *EventStore) insertIndexes(tx *bolt.Tx, event *nip01.Event, evsid uint64) error {
+// indexKeys holds every index key for one event, derived in one place so
+// the insert and delete paths cannot disagree about the layout. A mismatch
+// is otherwise silent: a key that was never written under that exact
+// spelling is simply not removed, and the stale entry stays in the index.
+type indexKeys struct {
+	evsid      []byte
+	createdAt  []byte // the value every query index stores
+	id         []byte
+	pubkey     []byte
+	kind       []byte
+	kindPubkey []byte
+	createdAtK []byte
+	expiration []byte // nil when the event never expires
+	tags       [][]byte
+}
 
+// concatKey builds a key from its parts. Unlike makeKey it never writes
+// into a part's spare capacity, so callers can reuse the parts freely.
+func concatKey(parts ...[]byte) []byte {
+	n := 0
+	for _, p := range parts {
+		n += len(p)
+	}
+	key := make([]byte, 0, n)
+	for _, p := range parts {
+		key = append(key, p...)
+	}
+	return key
+}
+
+// indexKeysFor derives the index keys for event at sequence id evsid.
+func indexKeysFor(event *nip01.Event, evsid uint64, maxIndexableTags int) (*indexKeys, error) {
 	pubkeyBytes, err := hex.DecodeString(event.PubKey)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	eventIDBytes, err := hex.DecodeString(event.ID)
 	if err != nil {
-		return err
+		return nil, err
 	}
+
 	evsidBytes := itob(evsid)
 	createdAtBytes := itob(event.CreatedAt)
 	kindBytes := itob(uint64(event.Kind))
 
-	// id: 32+8
-	if err := tx.Bucket(indexID).Put(makeKey(eventIDBytes, evsidBytes), createdAtBytes); err != nil {
-		return err
+	k := &indexKeys{
+		evsid:      evsidBytes,
+		createdAt:  createdAtBytes,
+		id:         concatKey(eventIDBytes, evsidBytes),
+		pubkey:     concatKey(pubkeyBytes, evsidBytes),
+		kind:       concatKey(kindBytes, evsidBytes),
+		kindPubkey: concatKey(kindBytes, pubkeyBytes, evsidBytes),
+		// createdAt is keyed timestamp-first: this index exists for NIP-77
+		// and general time-based sorting.
+		createdAtK: concatKey(createdAtBytes, eventIDBytes, evsidBytes),
 	}
 
-	// pubkey: 32+8
-	if err := tx.Bucket(indexPubkey).Put(makeKey(pubkeyBytes, evsidBytes), createdAtBytes); err != nil {
-		return err
-	}
-
-	// kind: 8+8
-	if err := tx.Bucket(indexKind).Put(makeKey(kindBytes, evsidBytes), createdAtBytes); err != nil {
-		return err
-	}
-
-	// tags
-	tagEntries, err := prepareIndexableTags(event.Tags, s.limitation.MaxIndexableTags)
-	if err != nil {
-		return err
-	}
-	tagBucket := tx.Bucket(indexTag)
-	for _, entry := range tagEntries {
-		if err := tagBucket.Put(makeKey(entry, evsidBytes), createdAtBytes); err != nil {
-			return err
-		}
-	}
-
-	// createdAt: 8+32+8 -> value: 8 (timestamp)
-	// We optimize this index for NIP-77 and general time-based sorting
-	createdAtKey := make([]byte, 0, 8+32+8)
-	createdAtKey = append(createdAtKey, createdAtBytes...)
-	createdAtKey = append(createdAtKey, eventIDBytes...)
-	createdAtKey = append(createdAtKey, evsidBytes...)
-
-	if err := tx.Bucket(indexCreatedAt).Put(createdAtKey, createdAtBytes); err != nil {
-		return err
-	}
-
-	// kind_pubkey: 8+32+8
-	if err := tx.Bucket(indexKindPubkey).Put(makeKey(kindBytes, pubkeyBytes, evsidBytes), createdAtBytes); err != nil {
-		return err
-	}
-
-	// expiration: 8+8
+	// An ephemeral event with no explicit expiration tag still gets a
+	// default retention window on insert, so the delete path has to derive
+	// the same value or its expiration entry outlives the event.
 	exp, _ := getExpiration(event.Tags)
 	if exp == 0 && nip16.IsEphemeralKind(event.Kind) {
-		exp = uint64(event.CreatedAt + 600) // Default 10 minutes retention for ephemeral
+		exp = event.CreatedAt + 600 // default 10 minutes retention for ephemeral
+	}
+	if exp > 0 {
+		k.expiration = concatKey(itob(exp), evsidBytes)
 	}
 
-	if exp > 0 {
-		expBytes := itob(exp)
-		if err := tx.Bucket(indexExpiration).Put(makeKey(expBytes, evsidBytes), createdAtBytes); err != nil {
+	tagEntries, err := prepareIndexableTags(event.Tags, maxIndexableTags)
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range tagEntries {
+		k.tags = append(k.tags, concatKey(entry, evsidBytes))
+	}
+
+	return k, nil
+}
+
+// fixedIndexEntries pairs each fixed-width index with this event's key in
+// it, so put and del iterate exactly the same set.
+func (k *indexKeys) fixedIndexEntries() []struct {
+	bucket []byte
+	key    []byte
+} {
+	return []struct {
+		bucket []byte
+		key    []byte
+	}{
+		{indexID, k.id},
+		{indexPubkey, k.pubkey},
+		{indexKind, k.kind},
+		{indexKindPubkey, k.kindPubkey},
+		{indexCreatedAt, k.createdAtK},
+	}
+}
+
+// putEventIndexes writes every index entry for one event. It takes no
+// receiver so the same code runs from the live insert path and from a
+// migration rebuilding the indexes from scratch.
+func putEventIndexes(tx *bolt.Tx, k *indexKeys) error {
+	for _, e := range k.fixedIndexEntries() {
+		if err := tx.Bucket(e.bucket).Put(e.key, k.createdAt); err != nil {
 			return err
 		}
 	}
 
-	if err := s.IndexZap(tx, event, evsid); err != nil {
-		return err
+	tagBucket := tx.Bucket(indexTag)
+	for _, key := range k.tags {
+		if err := tagBucket.Put(key, k.createdAt); err != nil {
+			return err
+		}
+	}
+
+	if k.expiration != nil {
+		if err := tx.Bucket(indexExpiration).Put(k.expiration, k.createdAt); err != nil {
+			return err
+		}
 	}
 
 	return nil
+}
+
+// delEventIndexes removes exactly what putEventIndexes wrote. Errors are
+// propagated rather than discarded: a failure here means the index no
+// longer matches the events bucket.
+func delEventIndexes(tx *bolt.Tx, k *indexKeys) error {
+	for _, e := range k.fixedIndexEntries() {
+		if err := tx.Bucket(e.bucket).Delete(e.key); err != nil {
+			return err
+		}
+	}
+
+	tagBucket := tx.Bucket(indexTag)
+	for _, key := range k.tags {
+		if err := tagBucket.Delete(key); err != nil {
+			return err
+		}
+	}
+
+	if k.expiration != nil {
+		if err := tx.Bucket(indexExpiration).Delete(k.expiration); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *EventStore) insertIndexes(tx *bolt.Tx, event *nip01.Event, evsid uint64) error {
+	keys, err := indexKeysFor(event, evsid, s.limitation.MaxIndexableTags)
+	if err != nil {
+		return err
+	}
+	if err := putEventIndexes(tx, keys); err != nil {
+		return err
+	}
+
+	return s.IndexZap(tx, event, evsid)
 }
 
 func (s *EventStore) findEventUsingTx(tx *bolt.Tx, evsid uint64) (*nip01.Event, error) {

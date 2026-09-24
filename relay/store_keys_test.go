@@ -305,3 +305,43 @@ func TestReplaceableEventLeavesNoStaleIndexEntries(t *testing.T) {
 	got := readEventsCollecting(t, q, false)
 	assertIDsInOrder(t, got, []*nip01.Event{newer})
 }
+
+// An ephemeral event with no expiration tag still gets a default retention
+// window written to the expiration index on insert. The delete path derived
+// the expiration from the tags alone, so that entry outlived the event.
+func TestEphemeralEventExpirationEntryIsRemoved(t *testing.T) {
+	store := newStore(t)
+
+	ev := CreateEventWithTimestamp(t, 20001, uint64(time.Now().Unix()))
+	InsertTestEvents(t, store, []*nip01.Event{ev})
+
+	if got := countBucket(t, store, indexExpiration); got != 1 {
+		t.Fatalf("expiration index: got %d entries after inserting an ephemeral event, want 1", got)
+	}
+
+	deleteEvents(t, store, ev)
+
+	if got := countBucket(t, store, indexExpiration); got != 0 {
+		t.Errorf("expiration index: %d stale entries after deleting the event", got)
+	}
+}
+
+// An explicit NIP-40 expiration tag must round-trip the same way.
+func TestExpirationTagEntryIsRemoved(t *testing.T) {
+	store := newStore(t)
+
+	exp := uint64(time.Now().Add(time.Hour).Unix())
+	ev := CreateEventWithTimestamp(t, 1, uint64(time.Now().Unix()),
+		[]string{"expiration", fmt.Sprintf("%d", exp)})
+	InsertTestEvents(t, store, []*nip01.Event{ev})
+
+	if got := countBucket(t, store, indexExpiration); got != 1 {
+		t.Fatalf("expiration index: got %d entries, want 1", got)
+	}
+
+	deleteEvents(t, store, ev)
+
+	if got := countBucket(t, store, indexExpiration); got != 0 {
+		t.Errorf("expiration index: %d stale entries after delete", got)
+	}
+}
