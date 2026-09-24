@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"strconv"
 	"sync"
 	"time"
@@ -55,6 +54,12 @@ const (
 	defaultMaxLimit         = 10_000_000 // 500
 	defaultMaxIndexableTags = 5
 	filterMinLimit          = 1
+
+	// maxCursorChunk caps how many index entries one cursor contributes to
+	// a single pass. An absent filter limit is clamped to MaxLimit, so
+	// without a cap one pass could pull the entire store onto the heap
+	// inside a single read transaction.
+	maxCursorChunk = 4096
 )
 
 //////
@@ -876,10 +881,11 @@ func (s *EventStore) findEventEvsidByEventID(ctx context.Context, tx *bolt.Tx, e
 		queueEvents: newEventQueue(),
 		filter:      &nip01.SubscriptionFilter{},
 		sentEvents:  map[uint64]bool{},
+		queued:      map[uint64]bool{},
 	}
 
 	for _, c := range cursors {
-		if _, _, err := c.Collect(ctx, tx, sc, nil, len(eventsID), false); err != nil {
+		if _, err := c.Collect(ctx, tx, sc, nil, len(eventsID), false); err != nil {
 			return nil, err
 		}
 	}
@@ -1190,6 +1196,15 @@ func (eq *eventQueue) PopEvent() *PotentialEvent {
 	return heap.Pop(eq).(*PotentialEvent)
 }
 
+// Peek returns the newest queued event without removing it, or nil when
+// the queue is empty.
+func (eq *eventQueue) Peek() *PotentialEvent {
+	if len(eq.events) == 0 {
+		return nil
+	}
+	return eq.events[0]
+}
+
 func (eq *eventQueue) AddEvent(ev *PotentialEvent) {
 	heap.Push(eq, ev)
 }
@@ -1214,24 +1229,30 @@ func newStoreCursor(maxKey []byte, matchKey func(k []byte) bool, parseKey func([
 	}
 }
 
-func (sc *storeCursor) match(ss *scanContext, k, v []byte) (bool, error) {
+// match reports whether the entry was queued as a candidate, and whether
+// the walk has left this cursor's range and should stop.
+func (sc *storeCursor) match(ss *scanContext, k, v []byte) (queued bool, done bool, err error) {
 
 	if !sc.matchKey(k) {
-		return true, nil
+		return false, true, nil
 	}
 
 	idBytes, evsid, err := sc.parseKey(k)
 	if err != nil {
-		return true, err
+		return false, true, err
 	}
 
-	if _, ok := ss.sentEvents[evsid]; ok {
-		return false, nil
+	// queued is scan-local and tracks candidates already on the heap;
+	// sentEvents is query-wide and tracks what was actually delivered.
+	// Keeping them apart means over-collecting for the merge cannot hide
+	// events from another filter in the same REQ.
+	if ss.queued[evsid] || ss.sentEvents[evsid] {
+		return false, false, nil
 	}
 
 	created := btoi(v)
 	if (ss.filter.Since > 0 && created < ss.filter.Since) || (ss.filter.Until > 0 && created > ss.filter.Until) {
-		return false, nil
+		return false, false, nil
 	}
 
 	var idHex string
@@ -1240,17 +1261,37 @@ func (sc *storeCursor) match(ss *scanContext, k, v []byte) (bool, error) {
 	}
 
 	ss.queueEvents.AddEvent(&PotentialEvent{evsid, created, idHex})
-	ss.sentEvents[evsid] = true
+	ss.queued[evsid] = true
 
-	return false, nil
+	return true, false, nil
 }
 
-func (sc *storeCursor) Collect(ctx context.Context, tx *bolt.Tx, ss *scanContext, resumeKey []byte, limit int, fetchUntilEmpty bool) ([]byte, int, error) {
+// collectResult reports what one cursor pass did.
+//
+// Queued counts entries actually pushed onto the shared heap. Scanned
+// counts entries examined, including those skipped by dedup or the
+// since/until window, so a pass that queues nothing still shows forward
+// progress. LastCreated is the created_at of the last entry examined, which
+// bounds everything this cursor has not yet returned. Exhausted is true
+// only when the walk ran out of matching keys, never when it ran out of
+// budget -- that distinction is what tells the merge whether more is
+// coming.
+type collectResult struct {
+	ResumeKey   []byte
+	Queued      int
+	Scanned     int
+	LastCreated uint64
+	Exhausted   bool
+}
+
+func (sc *storeCursor) Collect(ctx context.Context, tx *bolt.Tx, ss *scanContext, resumeKey []byte, limit int, fetchUntilEmpty bool) (collectResult, error) {
+
+	res := collectResult{ResumeKey: resumeKey}
 
 	// Nothing to do, and nothing may touch the bucket: a cursor with no
 	// budget must not advance any scan state either.
 	if limit <= 0 && !fetchUntilEmpty {
-		return resumeKey, 0, nil
+		return res, nil
 	}
 
 	b := tx.Bucket(ss.index)
@@ -1265,8 +1306,6 @@ func (sc *storeCursor) Collect(ctx context.Context, tx *bolt.Tx, ss *scanContext
 		c.Seek(sc.maxKey)
 		k, v = c.Prev()
 	}
-
-	var collected int
 
 loop:
 	for ; k != nil && (limit > 0 || fetchUntilEmpty); k, v = c.Prev() {
@@ -1289,21 +1328,45 @@ loop:
 				}
 			}
 
-			done, err := sc.match(ss, k, v)
-			if err != nil {
-				return nil, 0, err
-			}
-			if done {
+			created := btoi(v)
+
+			// created_at leads the key suffix, so once the walk drops
+			// below the filter's window every remaining entry under this
+			// prefix is older still.
+			if ss.filter.Since > 0 && created < ss.filter.Since {
+				res.Exhausted = true
 				break loop
 			}
 
-			collected++
-			resumeKey = k
-			limit--
+			queued, done, err := sc.match(ss, k, v)
+			if err != nil {
+				return res, err
+			}
+			if done {
+				res.Exhausted = true
+				break loop
+			}
+
+			res.Scanned++
+			res.LastCreated = created
+			res.ResumeKey = k
+
+			// Budget is spent on entries that actually became candidates.
+			// Charging it for a dedup hit or a since/until miss would let
+			// a filter run out of limit without returning that many
+			// events.
+			if queued {
+				res.Queued++
+				limit--
+			}
 		}
 	}
 
-	return resumeKey, collected, nil
+	if k == nil {
+		res.Exhausted = true
+	}
+
+	return res, nil
 }
 
 //////
@@ -1313,6 +1376,10 @@ type scanContext struct {
 	queueEvents *eventQueue
 	filter      *nip01.SubscriptionFilter
 	sentEvents  map[uint64]bool
+	// queued tracks candidates already on the heap for this scan, kept
+	// apart from sentEvents so over-collecting for the merge cannot hide
+	// events from another filter sharing the query.
+	queued map[uint64]bool
 	// boundaryEvsid is the store's max evsid as of the previous scan.
 	// Entries at or below it were already accounted for, so the live tail
 	// skips them. Zero on a first scan, when nothing has been delivered
@@ -1337,6 +1404,7 @@ func newStoreScan(store *EventStore, filter *nip01.SubscriptionFilter, sentEvent
 			filter:      filter,
 			queueEvents: newEventQueue(),
 			sentEvents:  sentEvents,
+			queued:      make(map[uint64]bool),
 		},
 	}
 
@@ -1370,11 +1438,16 @@ func newStoreScan(store *EventStore, filter *nip01.SubscriptionFilter, sentEvent
 	return ss, nil
 }
 
-func (ss *storeScan) initializeScan() (map[int][]byte, int, int) {
+// initializeScan prepares per-cursor resume state and snapshots the
+// arrival watermark this scan will treat as "already accounted for".
+//
+// There is deliberately no per-cursor share of the filter's limit: which
+// cursor holds the newest N is unknowable before walking them, so every
+// cursor is offered the whole remaining budget and the merge decides.
+func (ss *storeScan) initializeScan() map[int][]byte {
 	resumeKeys := make(map[int][]byte, len(ss.cursors))
-	limit := int(math.Ceil(float64(ss.filter.Limit) / float64(len(ss.cursors))))
 	ss.boundaryEvsid = ss.lastMaxEvsid
-	return resumeKeys, limit, 5
+	return resumeKeys
 }
 
 func (ss *storeScan) Scan(ctx context.Context, potEvents chan<- *PotentialEvent, wg *sync.WaitGroup, fetchUntilEmpty bool) error {
@@ -1403,16 +1476,17 @@ func (ss *storeScan) scan(ctx context.Context, tx *bolt.Tx, potEvents chan<- *Po
 		return nil
 	}
 
-	resumeKeys, limit, refill := ss.initializeScan()
+	resumeKeys := ss.initializeScan()
 
-	var totalCollected int
-	activeCursors := true
+	exhausted := make([]bool, len(ss.cursors))
+	var emitted int
 	firstPass := true
 
-	for activeCursors {
+	for {
 
 		var batch []*PotentialEvent
 		var storeClosed bool
+		var progressed bool
 
 		runPass := func(tx *bolt.Tx) error {
 
@@ -1426,8 +1500,13 @@ func (ss *storeScan) scan(ctx context.Context, tx *bolt.Tx, potEvents chan<- *Po
 				firstPass = false
 			}
 
-			cursorLimit := limit * refill
-			activeCursors = false
+			// frontier is the newest created_at that a cursor which has
+			// not finished might still return. It is a maximum, not a
+			// minimum: an entry is only safe to emit when it is newer than
+			// every unfinished cursor's stopping point, because any one of
+			// them could still yield something newer than that entry.
+			var frontier uint64
+			var anyActive bool
 
 			for ci, cursor := range ss.cursors {
 
@@ -1440,64 +1519,68 @@ func (ss *storeScan) scan(ctx context.Context, tx *bolt.Tx, potEvents chan<- *Po
 					return ctx.Err()
 
 				default:
-
-					if !fetchUntilEmpty && cursorLimit > ss.filter.Limit-totalCollected {
-						cursorLimit = ss.filter.Limit - totalCollected
-					}
-
-					resumeKey, collected, err := cursor.Collect(ctx, tx, ss.scanContext, resumeKeys[ci], cursorLimit, fetchUntilEmpty)
-					if err != nil {
-						return err
-					}
-					// Collect hands back a key straight out of bolt's mmap,
-					// only valid for this transaction -- and the next pass
-					// runs in a new one.
-					resumeKeys[ci] = bytes.Clone(resumeKey)
-
-					if collected > 0 {
-						if fetchUntilEmpty {
-							// Batch once per pass, after every cursor has
-							// collected -- see the flush below. Every cursor
-							// feeds the one shared ss.queueEvents heap, so
-							// draining it per cursor here (the
-							// !fetchUntilEmpty branch's behavior) would put a
-							// burst on one busy cursor ahead of every other
-							// cursor sharing this same combined-kind filter,
-							// instead of interleaving them by recency.
-							activeCursors = activeCursors || collected == cursorLimit
-						} else {
-							var added int
-							batch, added, err = ss.collectBatch(tx, batch, fetchUntilEmpty)
-							if err != nil {
-								return err
-							}
-
-							totalCollected += added
-							activeCursors = collected == cursorLimit
-						}
-					}
-
-					if !fetchUntilEmpty && totalCollected >= ss.filter.Limit {
-						activeCursors = false
-					}
-
 				}
 
-			}
+				if exhausted[ci] {
+					continue
+				}
 
-			// fetchUntilEmpty: every cursor has now collected everything
-			// newly available for this pass into the shared ss.queueEvents
-			// heap (ordered newest-first by CreatedAt, see eventQueue.Less)
-			// -- batch it in one shot so cursors sharing one combined-kind
-			// filter interleave by recency. The bounded (!fetchUntilEmpty)
-			// path keeps batching per cursor so totalCollected's accounting
-			// against ss.filter.Limit -- which only that path uses -- stays
-			// exactly as before.
-			if fetchUntilEmpty {
-				var err error
-				if batch, _, err = ss.collectBatch(tx, batch, fetchUntilEmpty); err != nil {
+				// Every cursor is offered the whole remaining budget:
+				// which of them holds the newest events is exactly what
+				// the merge is there to work out. The per-pass cap keeps
+				// an absent filter limit -- clamped to MaxLimit, ten
+				// million by default -- from pulling the entire store onto
+				// the heap inside one read transaction.
+				chunk := maxCursorChunk
+				if !fetchUntilEmpty {
+					remaining := ss.filter.Limit - emitted
+					if remaining <= 0 {
+						break
+					}
+					if remaining < chunk {
+						chunk = remaining
+					}
+				}
+
+				res, err := cursor.Collect(ctx, tx, ss.scanContext, resumeKeys[ci], chunk, fetchUntilEmpty)
+				if err != nil {
 					return err
 				}
+				// Collect hands back a key straight out of bolt's mmap,
+				// only valid for this transaction -- and the next pass
+				// runs in a new one.
+				resumeKeys[ci] = bytes.Clone(res.ResumeKey)
+				exhausted[ci] = res.Exhausted
+
+				if res.Scanned > 0 {
+					progressed = true
+				}
+				if !res.Exhausted {
+					anyActive = true
+					if res.LastCreated > frontier {
+						frontier = res.LastCreated
+					}
+				}
+			}
+
+			// Nothing left to come, so the whole heap is safe to drain.
+			if !anyActive {
+				frontier = 0
+			}
+
+			remaining := -1
+			if !fetchUntilEmpty {
+				remaining = ss.filter.Limit - emitted
+			}
+
+			var added int
+			var err error
+			if batch, added, err = ss.collectBatch(tx, batch, fetchUntilEmpty, frontier, remaining); err != nil {
+				return err
+			}
+			emitted += added
+			if added > 0 {
+				progressed = true
 			}
 
 			return nil
@@ -1521,7 +1604,33 @@ func (ss *storeScan) scan(ctx context.Context, tx *bolt.Tx, potEvents chan<- *Po
 			return nil
 		}
 
-		refill = 10
+		if !fetchUntilEmpty && emitted >= ss.filter.Limit {
+			break
+		}
+
+		allExhausted := true
+		for _, e := range exhausted {
+			if !e {
+				allExhausted = false
+				break
+			}
+		}
+		if allExhausted && ss.queueEvents.Len() == 0 {
+			break
+		}
+
+		// A pass that neither examined an entry nor delivered one cannot
+		// make progress on the next either.
+		if !progressed {
+			break
+		}
+	}
+
+	if !fetchUntilEmpty {
+		// Candidates left over are older than everything delivered, and
+		// this heap outlives the scan on a reused query -- leaving them
+		// would re-deliver events the limit excluded on the next tick.
+		ss.queueEvents.Clear()
 	}
 
 	return nil
@@ -1575,10 +1684,23 @@ func (s *EventStore) QueryNip77Items(ctx context.Context, filter *nip01.Subscrip
 // inside a transaction; deliverBatch does the handoff afterwards. added counts
 // only the events appended, which is what the bounded path's limit accounting
 // needs.
-func (ss *storeScan) collectBatch(tx *bolt.Tx, batch []*PotentialEvent, fetchUntilEmpty bool) ([]*PotentialEvent, int, error) {
+// frontier is the newest created_at any still-unfinished cursor might yet
+// return; only heap entries strictly newer than it are safe to emit.
+// remaining caps how many may be appended, or is negative for no cap.
+func (ss *storeScan) collectBatch(tx *bolt.Tx, batch []*PotentialEvent, fetchUntilEmpty bool, frontier uint64, remaining int) ([]*PotentialEvent, int, error) {
 
 	var added int
 	for ss.queueEvents.Len() > 0 {
+
+		if remaining >= 0 && added >= remaining {
+			break
+		}
+
+		// A cursor that stopped at frontier may still hold entries at or
+		// below it, so anything down there has to wait for the next pass.
+		if top := ss.queueEvents.Peek(); frontier > 0 && top != nil && top.CreatedAt <= frontier {
+			break
+		}
 
 		potEvent := ss.queueEvents.PopEvent()
 		event, err := ss.store.findEventUsingTx(tx, potEvent.Evsid)
@@ -1596,6 +1718,7 @@ func (ss *storeScan) collectBatch(tx *bolt.Tx, batch []*PotentialEvent, fetchUnt
 		}
 
 		potEvent.EventID = event.ID
+		ss.sentEvents[potEvent.Evsid] = true
 		batch = append(batch, potEvent)
 		added++
 	}
