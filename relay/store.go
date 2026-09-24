@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -1674,6 +1675,15 @@ func (s *EventStore) QueryNip77Items(ctx context.Context, filter *nip01.Subscrip
 			})
 		}()
 	}
+
+	// nip77.New requires a total order on (Timestamp, ID), and the caller
+	// reverses this slice to get it ascending. Delivery order only orders
+	// by timestamp -- the heap does not look at ids -- so same-second
+	// events would otherwise arrive in an arbitrary order that reconciles
+	// incorrectly against a peer that sorted them properly.
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].Compare(items[j]) > 0
+	})
 
 	return items, nil
 }
