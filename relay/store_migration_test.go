@@ -80,12 +80,14 @@ func writeOldLayoutIndexes(t testing.TB, path string) {
 				}
 			}
 
-			entries, err := prepareIndexableTags(ev.Tags, defaultMaxIndexableTags)
-			if err != nil {
-				return err
-			}
-			for _, entry := range entries {
-				if err := tx.Bucket(indexTag).Put(concatKey(entry, evsidBytes), createdAt); err != nil {
+			// Pre-v2 tag entries were a bare name+value with no length
+			// prefix and no created_at in the suffix.
+			for _, tagSet := range ev.Tags {
+				if len(tagSet) < 2 || len(tagSet[0]) != 1 {
+					continue
+				}
+				legacy := []byte(tagSet[0] + tagSet[1])
+				if err := tx.Bucket(indexTag).Put(concatKey(legacy, evsidBytes), createdAt); err != nil {
 					return err
 				}
 			}
@@ -181,14 +183,14 @@ func TestMigrationV2ProducesTheCurrentKeyLayout(t *testing.T) {
 	path, events := seedStoreForMigration(t)
 	store := reopenStore(t, path)
 
-	const tagEntryLen = len("t") + len("probe")
+	const tagValueLen = len("probe")
 	for _, idx := range queryIndexes {
 		keys := bucketKeys(t, store, idx.bucket)
 		if len(keys) != len(events) {
 			t.Errorf("%s index: got %d keys, want %d", idx.name, len(keys), len(events))
 			continue
 		}
-		want := idx.keyLen(tagEntryLen)
+		want := idx.keyLen(tagValueLen)
 		for _, k := range keys {
 			if len(k) != want {
 				t.Errorf("%s index: key is %d bytes, want %d", idx.name, len(k), want)
