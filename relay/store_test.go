@@ -1148,11 +1148,14 @@ func TestStoreFetchCombinedKindMultipleTicksDeliverOnlyNewEvents(t *testing.T) {
 }
 
 // TestStoreFetchBoundedCombinedKindRespectsLimitExactly guards the
-// !fetchUntilEmpty (bounded/historical) path, which the fairness fix
-// deliberately leaves untouched -- it keeps its original per-cursor
-// collectBatch call and totalCollected accounting. A combined-kind bounded
-// query must still return exactly Limit events, not more, not fewer, even
-// though one kind alone has far more than Limit matching events available.
+// !fetchUntilEmpty (bounded/historical) path: a combined-kind bounded query
+// must return exactly Limit events, and they must be the newest Limit
+// across every kind in the filter.
+//
+// The fixture is deliberately lopsided -- every kind-7 event is newer than
+// every kind-1 event -- so counting alone cannot tell a correct answer from
+// a cursor that monopolised the whole budget. Asserting the count only is
+// what let the bounded path return the oldest 30 unnoticed.
 func TestStoreFetchBoundedCombinedKindRespectsLimitExactly(t *testing.T) {
 	store := newStore(t)
 	defer store.Close()
@@ -1162,18 +1165,29 @@ func TestStoreFetchBoundedCombinedKindRespectsLimitExactly(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		all = append(all, CreateEventWithTimestamp(t, 1, base+uint64(i)))
 	}
+	var kind7 []*nip01.Event
 	for i := 0; i < 100; i++ {
-		all = append(all, CreateEventWithTimestamp(t, 7, base+2000+uint64(i)))
+		kind7 = append(kind7, CreateEventWithTimestamp(t, 7, base+2000+uint64(i)))
 	}
+	all = append(all, kind7...)
 	InsertTestEvents(t, store, all)
 
 	filters := nip01.NewSubscriptionFilterGroup()
 	filters.Add(&nip01.SubscriptionFilter{Kinds: []int{1, 7}, Limit: 30})
 	q := newQuery(t, store, filters)
 
-	if got := readEvents(t, q, false); got != 30 {
-		t.Fatalf("bounded combined-kind fetch returned %d events, want exactly 30 (Limit)", got)
+	got := readEventsCollecting(t, q, false)
+	if len(got) != 30 {
+		t.Fatalf("bounded combined-kind fetch returned %d events, want exactly 30 (Limit)", len(got))
 	}
+
+	// kind7 is ascending by created_at, so the newest 30 are its last 30,
+	// delivered newest-first.
+	want := make([]*nip01.Event, 0, 30)
+	for i := len(kind7) - 1; i >= len(kind7)-30; i-- {
+		want = append(want, kind7[i])
+	}
+	assertIDsInOrder(t, got, want)
 }
 
 // TestStoreScanCombinedKindCancelledContextReturnsPromptly guards the new
