@@ -9,12 +9,12 @@
   should: every MUST-level rule in NIP-57 is enforced, while the rules the
   spec states as SHOULD or optional are tolerated. `ValidateZapRequest` and
   `ValidateZapReceipt` are unchanged and remain the right choice when
-  settling or accounting for your own zaps.
+  settling or accounting for your own zaps. (#35)
 - `nip57.ErrMissingDescriptionHash`, returned when a receipt's invoice
   carries no description hash at all. That case previously surfaced as
   `ErrDescriptionHashMismatch` with an empty `want=`, which reads as
   evidence the receipt belongs to a different zap when it is nothing of the
-  sort.
+  sort. (#35)
 
 ### Fixed
 
@@ -28,9 +28,9 @@
   silently truncated zap totals, top-zapped ranking and
   `relay reindex --zaps`. Relays now store these receipts and still reject
   genuinely malformed ones. AltZap (NIP-AZ) is unaffected and stays
-  stricter, as its spec requires.
+  stricter, as its spec requires. (#35)
 - The `have=` and `want=` values reported in a description-hash mismatch
-  were the wrong way round. `have=` is now the hash the invoice carries.
+  were the wrong way round. `have=` is now the hash the invoice carries. (#35)
 
 ## [0.4.0]
 
