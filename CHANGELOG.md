@@ -2,6 +2,30 @@
 
 ## [0.4.1]
 
+### Added
+
+- `nip57.ValidateZapRequestForRelay` and `nip57.ValidateZapReceiptForRelay`
+  validate zap events the way a relay ingesting someone else's traffic
+  should: every MUST-level rule in NIP-57 is enforced, while the rules the
+  spec states as SHOULD or optional are tolerated. `ValidateZapRequest` and
+  `ValidateZapReceipt` are unchanged and remain the right choice when
+  settling or accounting for your own zaps. (#35)
+- `nip57.ErrMissingDescriptionHash`, returned when a receipt's invoice
+  carries no description hash at all. That case previously surfaced as
+  `ErrDescriptionHashMismatch` with an empty `want=`, which reads as
+  evidence the receipt belongs to a different zap when it is nothing of the
+  sort. (#35)
+
+### Changed
+
+- **The event store upgrades its indexes on first open, and the upgrade is
+  one way.** A store written by this release cannot be read by an earlier
+  one: the older binary misreads every index key, so writes appear to
+  succeed while queries fail. Take a copy of the database file before
+  starting this version. The rebuild runs at startup, before the relay
+  accepts connections, and costs roughly a second per 20,000 stored events
+  (2.3s for 50,000 on a development machine); progress is logged. (#37)
+
 ### Fixed
 
 - A filter's `limit` returned the oldest matching events instead of the
@@ -23,16 +47,19 @@
 - Deleting an ephemeral event left its entry in the expiration index,
   because the insert and delete paths derived the retention window
   differently. (#37)
-
-### Changed
-
-- **The event store upgrades its indexes on first open, and the upgrade is
-  one way.** A store written by this release cannot be read by an earlier
-  one: the older binary misreads every index key, so writes appear to
-  succeed while queries fail. Take a copy of the database file before
-  starting this version. The rebuild runs at startup, before the relay
-  accepts connections, and costs roughly a second per 20,000 stored events
-  (2.3s for 50,000 on a development machine); progress is logged. (#37)
+- A relay declaring NIP-57 rejected most real zap receipts. Sampling two
+  public relays, 73% of kind-9735 events were refused at ingest: most
+  because the embedded zap request carried a lightning address in its
+  `lnurl` tag rather than the bech32 encoding, the rest over the invoice's
+  description hash. NIP-57 makes the `lnurl` tag optional and matching it a
+  SHOULD, and specifies no description-hash check for validating a receipt.
+  A zap receipt is the record that a payment happened, so refusing one
+  silently truncated zap totals, top-zapped ranking and
+  `relay reindex --zaps`. Relays now store these receipts and still reject
+  genuinely malformed ones. AltZap (NIP-AZ) is unaffected and stays
+  stricter, as its spec requires. (#35)
+- The `have=` and `want=` values reported in a description-hash mismatch
+  were the wrong way round. `have=` is now the hash the invoice carries. (#35)
 
 ## [0.4.0]
 
