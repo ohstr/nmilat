@@ -20,10 +20,16 @@ import (
 func init() {
 	relay.RegisterNIP(57)
 
+	// The *ForRelay validators enforce NIP-57's MUST-level rules and
+	// tolerate its SHOULD-level ones. A relay stores zap events settled by
+	// someone else, so rejecting a correctly signed receipt over an
+	// optional tag's encoding would silently drop the record of a payment
+	// that happened. Callers settling or accounting for their own zaps
+	// should use nip57.ValidateZapRequest/ValidateZapReceipt directly.
 	relay.RegisterEventValidator(nip57.KindZapRequest, func(_ context.Context, event *nip01.Event) error {
-		return nip57.ValidateZapRequest(event, 0)
+		return nip57.ValidateZapRequestForRelay(event)
 	})
 	relay.RegisterEventValidator(nip57.KindZapReceipt, func(_ context.Context, event *nip01.Event) error {
-		return nip57.ValidateZapReceipt(event)
+		return nip57.ValidateZapReceiptForRelay(event)
 	})
 }
