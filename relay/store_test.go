@@ -480,6 +480,12 @@ func createStoreCases() []StoreTestCase {
 		},
 
 		{
+			// Events tagged h=1 through h=10. A filter for #h=1 must match
+			// the h=1 event and nothing else. This used to return zero:
+			// without a length in the key, the entry for "h"+"1" is a byte
+			// prefix of the entry for "h"+"10", so the cursor seeking the
+			// top of its range landed on an h=10 key, failed its own
+			// length check and stopped before reaching anything.
 			"case_tags_5",
 			func(t *testing.T, store *EventStore) {
 				events := []*nip01.Event{}
@@ -490,14 +496,18 @@ func createStoreCases() []StoreTestCase {
 			},
 			func(t *testing.T, store *EventStore) {},
 			func(filter *nip01.SubscriptionFilterGroup) {
+				// An explicit limit: TestStoreScan drives newStoreScan
+				// directly, which unlike NewStoreQuery does not clamp a
+				// zero limit up to MaxLimit.
 				f := &nip01.SubscriptionFilter{
 					Kinds: []int{1},
 					Tags:  make(map[string][]string),
+					Limit: 10,
 				}
 				f.Tags["h"] = []string{"1"}
 				filter.Add(f)
 			},
-			0,
+			1,
 			0,
 		},
 

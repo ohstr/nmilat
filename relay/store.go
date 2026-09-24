@@ -1812,7 +1812,11 @@ func prepareIndexableTags(tags [][]string, maxIndexableTags int) ([][]byte, erro
 			continue
 		}
 
-		entries = append(entries, []byte(tagName+tagFirstVal))
+		entry, ok := tagIndexPrefix(tagName, tagFirstVal)
+		if !ok {
+			continue
+		}
+		entries = append(entries, entry)
 
 		if len(entries) == maxIndexableTags {
 			break
@@ -1820,6 +1824,30 @@ func prepareIndexableTags(tags [][]string, maxIndexableTags int) ([][]byte, erro
 	}
 
 	return entries, nil
+}
+
+// tagIndexPrefix encodes a tag name and value as the prefix of a tag index
+// key: name(1) + uint16 length + value.
+//
+// The explicit length is what makes the prefix unambiguous. Without it the
+// entry for ["h", "1"] is a byte-prefix of the entry for ["h", "10"], so a
+// cursor seeking the top of its own range lands on a longer value's key
+// instead and stops before reaching anything it wanted -- a filter for
+// #h=1 would return nothing at all when an h=10 event exists. With the
+// length in the key the prefix set is contiguous, so leaving it really
+// does mean the range is finished.
+//
+// A value too long for a uint16 is not indexed; bolt's key ceiling is far
+// below that anyway.
+func tagIndexPrefix(name, value string) ([]byte, bool) {
+	if len(name) != 1 || len(value) > 0xFFFF {
+		return nil, false
+	}
+	b := make([]byte, 0, 1+2+len(value))
+	b = append(b, name[0])
+	b = append(b, byte(len(value)>>8), byte(len(value)))
+	b = append(b, value...)
+	return b, true
 }
 
 func itob(v uint64) []byte {
@@ -1913,13 +1941,18 @@ func createCursorsByTags(tags map[string][]string) ([]*storeCursor, error) {
 	var cursors []*storeCursor
 	for tagName, tagValues := range tags {
 		for _, tagVal := range tagValues {
-			prefix := []byte(tagName + tagVal)
+			prefix, ok := tagIndexPrefix(tagName, tagVal)
+			if !ok {
+				continue
+			}
 			cursors = append(cursors, newStoreCursor(
 				concatKey(prefix, maxSuffixBytes),
 				func(k []byte) bool {
-					// tag's value must be size fixed. reminder : ["h", "1"] && ["h", "10"]
-					// check test case: case_tags_5
-					return len(k) == len(prefix)+8+8 && bytes.HasPrefix(k, prefix)
+					// The length prefix makes this cursor's key set
+					// contiguous, so a key that fails the prefix test is
+					// genuinely past the end of its range rather than just
+					// a longer value that sorts in between.
+					return bytes.HasPrefix(k, prefix)
 				},
 				func(k []byte) ([]byte, uint64, error) {
 					if len(k) != len(prefix)+8+8 {

@@ -21,9 +21,9 @@ import (
 var queryIndexes = []struct {
 	name   string
 	bucket []byte
-	// keyLen is the expected key size, given the tag entry length for the
-	// tag index (0 for the fixed-width ones).
-	keyLen func(tagEntryLen int) int
+	// keyLen is the expected key size, given the tag value length for
+	// the tag index (ignored by the fixed-width ones).
+	keyLen func(tagValueLen int) int
 }{
 	// Every query index carries created_at ahead of evsid, so reverse
 	// iteration is newest-first. indexCreatedAt already led with the
@@ -33,7 +33,8 @@ var queryIndexes = []struct {
 	{"kind", indexKind, func(int) int { return 8 + 8 + 8 }},
 	{"kindPubkey", indexKindPubkey, func(int) int { return 8 + 32 + 8 + 8 }},
 	{"createdAt", indexCreatedAt, func(int) int { return 8 + 32 + 8 }},
-	{"tag", indexTag, func(entry int) int { return entry + 8 + 8 }},
+	// A tag key is name(1) + uint16 length + value, then the suffix.
+	{"tag", indexTag, func(valueLen int) int { return 1 + 2 + valueLen + 8 + 8 }},
 }
 
 func bucketKeys(t testing.TB, store *EventStore, bucket []byte) [][]byte {
@@ -101,7 +102,7 @@ func TestIndexKeyLayout(t *testing.T) {
 	ev := CreateEventWithTimestamp(t, 1, uint64(time.Now().Unix()), []string{"t", "abc"})
 	InsertTestEvents(t, store, []*nip01.Event{ev})
 
-	const tagEntryLen = len("t") + len("abc")
+	const tagValueLen = len("abc")
 
 	for _, idx := range queryIndexes {
 		keys := bucketKeys(t, store, idx.bucket)
@@ -109,7 +110,7 @@ func TestIndexKeyLayout(t *testing.T) {
 			t.Errorf("%s index: got %d keys, want 1", idx.name, len(keys))
 			continue
 		}
-		if want := idx.keyLen(tagEntryLen); len(keys[0]) != want {
+		if want := idx.keyLen(tagValueLen); len(keys[0]) != want {
 			t.Errorf("%s index: key is %d bytes, want %d", idx.name, len(keys[0]), want)
 		}
 	}
