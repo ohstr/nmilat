@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -46,12 +46,21 @@ var (
 	indexProfileMetrics = []byte{11}
 
 	maxUint64Bytes = itob(0xFFFFFFFFFFFFFFFF)
+	// maxSuffixBytes is the largest possible created_at+evsid suffix on a
+	// query index key, used to seek past the top of a prefix's range.
+	maxSuffixBytes = bytes.Repeat([]byte{0xFF}, 8+8)
 )
 
 const (
 	defaultMaxLimit         = 10_000_000 // 500
 	defaultMaxIndexableTags = 5
 	filterMinLimit          = 1
+
+	// maxCursorChunk caps how many index entries one cursor contributes to
+	// a single pass. An absent filter limit is clamped to MaxLimit, so
+	// without a cap one pass could pull the entire store onto the heap
+	// inside a single read transaction.
+	maxCursorChunk = 4096
 )
 
 //////
@@ -191,10 +200,36 @@ func NewEventStore(path string, limitation *nip11.Limitation, opts ...EventStore
 		return nil, fmt.Errorf("failed to open db:%s reason: %w", path, err)
 	}
 
+	// MaxIndexableTags has to be settled before migrations run: the index
+	// rebuild writes tag entries with the same limit the live insert path
+	// uses, and it runs before the store value below exists.
+	if limitation.MaxIndexableTags == 0 {
+		limitation.MaxIndexableTags = defaultMaxIndexableTags
+	}
+
 	// Run migrations
 	mgr := migrations.NewManager(db, migrations.WithLogger(cfg.Logger))
 	mgr.Register(&migrations.ResetVerificationCacheMigration{
 		MetricsBucket: indexProfileMetrics,
+	})
+	mgr.Register(&migrations.RebuildTimeOrderedIndexes{
+		EventsBucket:   indexEvents,
+		RebuildBuckets: [][]byte{indexID, indexPubkey, indexKind, indexTag, indexKindPubkey},
+		BatchSize:      1000,
+		IndexEvent: func(tx *bolt.Tx, evsid uint64, raw []byte) error {
+			var event nip01.Event
+			if err := json.Unmarshal(raw, &event); err != nil {
+				// A row that can't be decoded can't be indexed; skipping
+				// it keeps the rebuild moving rather than wedging the
+				// store shut on one bad record.
+				return nil
+			}
+			keys, err := indexKeysFor(&event, evsid, limitation.MaxIndexableTags)
+			if err != nil {
+				return nil
+			}
+			return putEventIndexes(tx, keys)
+		},
 	})
 
 	if err := mgr.Run(); err != nil {
@@ -219,10 +254,6 @@ func NewEventStore(path string, limitation *nip11.Limitation, opts ...EventStore
 
 	if limitation.MaxLimit == 0 {
 		limitation.MaxLimit = defaultMaxLimit
-	}
-
-	if limitation.MaxIndexableTags == 0 {
-		limitation.MaxIndexableTags = defaultMaxIndexableTags
 	}
 
 	es := &EventStore{
@@ -477,7 +508,7 @@ func (s *EventStore) checkEventDuplication(tx *bolt.Tx, ev *nip01.Event) error {
 
 	c := tx.Bucket(indexID).Cursor()
 
-	c.Seek(makeKey(eventIDBytes, maxUint64Bytes))
+	c.Seek(concatKey(eventIDBytes, maxSuffixBytes))
 	k, _ := c.Prev()
 	if k != nil && bytes.HasPrefix(k, eventIDBytes) {
 		return ErrEventDuplicated
@@ -615,40 +646,16 @@ func (s *EventStore) deleteByEvsid(tx *bolt.Tx, pe *PotentialEvent) error {
 	return nil
 }
 func (s *EventStore) delete(tx *bolt.Tx, evsid uint64, ev *nip01.Event) error { // pass Event instead of PotentialEvent to optimize the delete process
-
-	eventIDBytes, _ := hex.DecodeString(ev.ID)
-	pubkeyBytes, _ := hex.DecodeString(ev.PubKey)
-	evsidBytes := itob(evsid)
-	kindBytes := itob(uint64(ev.Kind))
-
-	_ = tx.Bucket(indexEvents).Delete(evsidBytes)
-	_ = tx.Bucket(indexID).Delete(makeKey(eventIDBytes, evsidBytes))
-
-	_ = tx.Bucket(indexPubkey).Delete(makeKey(pubkeyBytes, evsidBytes))
-	_ = tx.Bucket(indexKind).Delete(makeKey(kindBytes, evsidBytes))
-	_ = tx.Bucket(indexKindPubkey).Delete(makeKey(kindBytes, pubkeyBytes, evsidBytes))
-
-	// createdAt: 8+32+8
-	createdAtKey := make([]byte, 0, 8+32+8)
-	createdAtKey = append(createdAtKey, itob(ev.CreatedAt)...)
-	createdAtKey = append(createdAtKey, eventIDBytes...)
-	createdAtKey = append(createdAtKey, evsidBytes...)
-	_ = tx.Bucket(indexCreatedAt).Delete(createdAtKey)
-
-	if exp, _ := getExpiration(ev.Tags); exp > 0 {
-		expBytes := itob(exp)
-		_ = tx.Bucket(indexExpiration).Delete(makeKey(expBytes, evsidBytes))
+	if err := tx.Bucket(indexEvents).Delete(itob(evsid)); err != nil {
+		return err
 	}
 
-	tagEntries, err := prepareIndexableTags(ev.Tags, s.limitation.MaxIndexableTags)
+	keys, err := indexKeysFor(ev, evsid, s.limitation.MaxIndexableTags)
 	if err != nil {
 		return err
 	}
-	for _, entry := range tagEntries {
-		_ = tx.Bucket(indexTag).Delete(makeKey(entry, evsidBytes))
-	}
 
-	return nil
+	return delEventIndexes(tx, keys)
 }
 
 func (s *EventStore) insertEvent(tx *bolt.Tx, event *nip01.Event) (uint64, error) {
@@ -683,81 +690,169 @@ func (s *EventStore) insertWithIndexes(tx *bolt.Tx, event *nip01.Event) error {
 	return s.insertIndexes(tx, event, evsid)
 }
 
-func (s *EventStore) insertIndexes(tx *bolt.Tx, event *nip01.Event, evsid uint64) error {
+// indexKeys holds every index key for one event, derived in one place so
+// the insert and delete paths cannot disagree about the layout. A mismatch
+// is otherwise silent: a key that was never written under that exact
+// spelling is simply not removed, and the stale entry stays in the index.
+type indexKeys struct {
+	evsid      []byte
+	createdAt  []byte // the value every query index stores
+	id         []byte
+	pubkey     []byte
+	kind       []byte
+	kindPubkey []byte
+	createdAtK []byte
+	expiration []byte // nil when the event never expires
+	tags       [][]byte
+}
 
+// concatKey builds a key from its parts into a fresh slice, so it never
+// writes into a part's spare capacity and callers can reuse the parts.
+func concatKey(parts ...[]byte) []byte {
+	n := 0
+	for _, p := range parts {
+		n += len(p)
+	}
+	key := make([]byte, 0, n)
+	for _, p := range parts {
+		key = append(key, p...)
+	}
+	return key
+}
+
+// indexKeysFor derives the index keys for event at sequence id evsid.
+func indexKeysFor(event *nip01.Event, evsid uint64, maxIndexableTags int) (*indexKeys, error) {
 	pubkeyBytes, err := hex.DecodeString(event.PubKey)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	eventIDBytes, err := hex.DecodeString(event.ID)
 	if err != nil {
-		return err
+		return nil, err
 	}
+
 	evsidBytes := itob(evsid)
 	createdAtBytes := itob(event.CreatedAt)
 	kindBytes := itob(uint64(event.Kind))
 
-	// id: 32+8
-	if err := tx.Bucket(indexID).Put(makeKey(eventIDBytes, evsidBytes), createdAtBytes); err != nil {
-		return err
+	k := &indexKeys{
+		evsid:     evsidBytes,
+		createdAt: createdAtBytes,
+		// created_at sits ahead of evsid in every query index so that
+		// walking a prefix backwards yields events newest-first. evsid
+		// stays on the end to keep keys unique and to break ties by
+		// arrival order.
+		id:         concatKey(eventIDBytes, createdAtBytes, evsidBytes),
+		pubkey:     concatKey(pubkeyBytes, createdAtBytes, evsidBytes),
+		kind:       concatKey(kindBytes, createdAtBytes, evsidBytes),
+		kindPubkey: concatKey(kindBytes, pubkeyBytes, createdAtBytes, evsidBytes),
+		// createdAt is keyed timestamp-first: this index exists for NIP-77
+		// and general time-based sorting.
+		createdAtK: concatKey(createdAtBytes, eventIDBytes, evsidBytes),
 	}
 
-	// pubkey: 32+8
-	if err := tx.Bucket(indexPubkey).Put(makeKey(pubkeyBytes, evsidBytes), createdAtBytes); err != nil {
-		return err
-	}
-
-	// kind: 8+8
-	if err := tx.Bucket(indexKind).Put(makeKey(kindBytes, evsidBytes), createdAtBytes); err != nil {
-		return err
-	}
-
-	// tags
-	tagEntries, err := prepareIndexableTags(event.Tags, s.limitation.MaxIndexableTags)
-	if err != nil {
-		return err
-	}
-	tagBucket := tx.Bucket(indexTag)
-	for _, entry := range tagEntries {
-		if err := tagBucket.Put(makeKey(entry, evsidBytes), createdAtBytes); err != nil {
-			return err
-		}
-	}
-
-	// createdAt: 8+32+8 -> value: 8 (timestamp)
-	// We optimize this index for NIP-77 and general time-based sorting
-	createdAtKey := make([]byte, 0, 8+32+8)
-	createdAtKey = append(createdAtKey, createdAtBytes...)
-	createdAtKey = append(createdAtKey, eventIDBytes...)
-	createdAtKey = append(createdAtKey, evsidBytes...)
-
-	if err := tx.Bucket(indexCreatedAt).Put(createdAtKey, createdAtBytes); err != nil {
-		return err
-	}
-
-	// kind_pubkey: 8+32+8
-	if err := tx.Bucket(indexKindPubkey).Put(makeKey(kindBytes, pubkeyBytes, evsidBytes), createdAtBytes); err != nil {
-		return err
-	}
-
-	// expiration: 8+8
+	// An ephemeral event with no explicit expiration tag still gets a
+	// default retention window on insert, so the delete path has to derive
+	// the same value or its expiration entry outlives the event.
 	exp, _ := getExpiration(event.Tags)
 	if exp == 0 && nip16.IsEphemeralKind(event.Kind) {
-		exp = uint64(event.CreatedAt + 600) // Default 10 minutes retention for ephemeral
+		exp = event.CreatedAt + 600 // default 10 minutes retention for ephemeral
+	}
+	if exp > 0 {
+		k.expiration = concatKey(itob(exp), evsidBytes)
 	}
 
-	if exp > 0 {
-		expBytes := itob(exp)
-		if err := tx.Bucket(indexExpiration).Put(makeKey(expBytes, evsidBytes), createdAtBytes); err != nil {
+	tagEntries, err := prepareIndexableTags(event.Tags, maxIndexableTags)
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range tagEntries {
+		k.tags = append(k.tags, concatKey(entry, createdAtBytes, evsidBytes))
+	}
+
+	return k, nil
+}
+
+// fixedIndexEntries pairs each fixed-width index with this event's key in
+// it, so put and del iterate exactly the same set.
+func (k *indexKeys) fixedIndexEntries() []struct {
+	bucket []byte
+	key    []byte
+} {
+	return []struct {
+		bucket []byte
+		key    []byte
+	}{
+		{indexID, k.id},
+		{indexPubkey, k.pubkey},
+		{indexKind, k.kind},
+		{indexKindPubkey, k.kindPubkey},
+		{indexCreatedAt, k.createdAtK},
+	}
+}
+
+// putEventIndexes writes every index entry for one event. It takes no
+// receiver so the same code runs from the live insert path and from a
+// migration rebuilding the indexes from scratch.
+func putEventIndexes(tx *bolt.Tx, k *indexKeys) error {
+	for _, e := range k.fixedIndexEntries() {
+		if err := tx.Bucket(e.bucket).Put(e.key, k.createdAt); err != nil {
 			return err
 		}
 	}
 
-	if err := s.IndexZap(tx, event, evsid); err != nil {
-		return err
+	tagBucket := tx.Bucket(indexTag)
+	for _, key := range k.tags {
+		if err := tagBucket.Put(key, k.createdAt); err != nil {
+			return err
+		}
+	}
+
+	if k.expiration != nil {
+		if err := tx.Bucket(indexExpiration).Put(k.expiration, k.createdAt); err != nil {
+			return err
+		}
 	}
 
 	return nil
+}
+
+// delEventIndexes removes exactly what putEventIndexes wrote. Errors are
+// propagated rather than discarded: a failure here means the index no
+// longer matches the events bucket.
+func delEventIndexes(tx *bolt.Tx, k *indexKeys) error {
+	for _, e := range k.fixedIndexEntries() {
+		if err := tx.Bucket(e.bucket).Delete(e.key); err != nil {
+			return err
+		}
+	}
+
+	tagBucket := tx.Bucket(indexTag)
+	for _, key := range k.tags {
+		if err := tagBucket.Delete(key); err != nil {
+			return err
+		}
+	}
+
+	if k.expiration != nil {
+		if err := tx.Bucket(indexExpiration).Delete(k.expiration); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *EventStore) insertIndexes(tx *bolt.Tx, event *nip01.Event, evsid uint64) error {
+	keys, err := indexKeysFor(event, evsid, s.limitation.MaxIndexableTags)
+	if err != nil {
+		return err
+	}
+	if err := putEventIndexes(tx, keys); err != nil {
+		return err
+	}
+
+	return s.IndexZap(tx, event, evsid)
 }
 
 func (s *EventStore) findEventUsingTx(tx *bolt.Tx, evsid uint64) (*nip01.Event, error) {
@@ -787,10 +882,11 @@ func (s *EventStore) findEventEvsidByEventID(ctx context.Context, tx *bolt.Tx, e
 		queueEvents: newEventQueue(),
 		filter:      &nip01.SubscriptionFilter{},
 		sentEvents:  map[uint64]bool{},
+		queued:      map[uint64]bool{},
 	}
 
 	for _, c := range cursors {
-		if _, _, err := c.Collect(ctx, tx, sc, nil, len(eventsID), false); err != nil {
+		if _, err := c.Collect(ctx, tx, sc, nil, len(eventsID), false); err != nil {
 			return nil, err
 		}
 	}
@@ -1101,6 +1197,15 @@ func (eq *eventQueue) PopEvent() *PotentialEvent {
 	return heap.Pop(eq).(*PotentialEvent)
 }
 
+// Peek returns the newest queued event without removing it, or nil when
+// the queue is empty.
+func (eq *eventQueue) Peek() *PotentialEvent {
+	if len(eq.events) == 0 {
+		return nil
+	}
+	return eq.events[0]
+}
+
 func (eq *eventQueue) AddEvent(ev *PotentialEvent) {
 	heap.Push(eq, ev)
 }
@@ -1112,12 +1217,9 @@ func (eq *eventQueue) Clear() {
 //////
 
 type storeCursor struct {
-	matchKey     func([]byte) bool
-	parseKey     func([]byte) ([]byte, uint64, error)
-	maxKey       []byte
-	lastKey      []byte
-	lastMaxEvsid uint64
-	firstCollect bool
+	matchKey func([]byte) bool
+	parseKey func([]byte) ([]byte, uint64, error)
+	maxKey   []byte
 }
 
 func newStoreCursor(maxKey []byte, matchKey func(k []byte) bool, parseKey func([]byte) ([]byte, uint64, error)) *storeCursor {
@@ -1128,38 +1230,30 @@ func newStoreCursor(maxKey []byte, matchKey func(k []byte) bool, parseKey func([
 	}
 }
 
-func (sc *storeCursor) SaveLastKey(key []byte) []byte {
-	if !sc.firstCollect {
-		return sc.lastKey
-	}
-
-	lastKey := sc.lastKey
-
-	sc.lastKey = make([]byte, len(key))
-	copy(sc.lastKey, key)
-
-	sc.firstCollect = false
-	return lastKey
-}
-
-func (sc *storeCursor) match(ss *scanContext, k, v []byte) (bool, error) {
+// match reports whether the entry was queued as a candidate, and whether
+// the walk has left this cursor's range and should stop.
+func (sc *storeCursor) match(ss *scanContext, k, v []byte) (queued bool, done bool, err error) {
 
 	if !sc.matchKey(k) {
-		return true, nil
+		return false, true, nil
 	}
 
 	idBytes, evsid, err := sc.parseKey(k)
 	if err != nil {
-		return true, err
+		return false, true, err
 	}
 
-	if _, ok := ss.sentEvents[evsid]; ok {
-		return false, nil
+	// queued is scan-local and tracks candidates already on the heap;
+	// sentEvents is query-wide and tracks what was actually delivered.
+	// Keeping them apart means over-collecting for the merge cannot hide
+	// events from another filter in the same REQ.
+	if ss.queued[evsid] || ss.sentEvents[evsid] {
+		return false, false, nil
 	}
 
 	created := btoi(v)
 	if (ss.filter.Since > 0 && created < ss.filter.Since) || (ss.filter.Until > 0 && created > ss.filter.Until) {
-		return false, nil
+		return false, false, nil
 	}
 
 	var idHex string
@@ -1168,12 +1262,38 @@ func (sc *storeCursor) match(ss *scanContext, k, v []byte) (bool, error) {
 	}
 
 	ss.queueEvents.AddEvent(&PotentialEvent{evsid, created, idHex})
-	ss.sentEvents[evsid] = true
+	ss.queued[evsid] = true
 
-	return false, nil
+	return true, false, nil
 }
 
-func (sc *storeCursor) Collect(ctx context.Context, tx *bolt.Tx, ss *scanContext, resumeKey []byte, limit int, fetchUntilEmpty bool) ([]byte, int, error) {
+// collectResult reports what one cursor pass did.
+//
+// Queued counts entries actually pushed onto the shared heap. Scanned
+// counts entries examined, including those skipped by dedup or the
+// since/until window, so a pass that queues nothing still shows forward
+// progress. LastCreated is the created_at of the last entry examined, which
+// bounds everything this cursor has not yet returned. Exhausted is true
+// only when the walk ran out of matching keys, never when it ran out of
+// budget -- that distinction is what tells the merge whether more is
+// coming.
+type collectResult struct {
+	ResumeKey   []byte
+	Queued      int
+	Scanned     int
+	LastCreated uint64
+	Exhausted   bool
+}
+
+func (sc *storeCursor) Collect(ctx context.Context, tx *bolt.Tx, ss *scanContext, resumeKey []byte, limit int, fetchUntilEmpty bool) (collectResult, error) {
+
+	res := collectResult{ResumeKey: resumeKey}
+
+	// Nothing to do, and nothing may touch the bucket: a cursor with no
+	// budget must not advance any scan state either.
+	if limit <= 0 && !fetchUntilEmpty {
+		return res, nil
+	}
 
 	b := tx.Bucket(ss.index)
 	c := b.Cursor()
@@ -1188,36 +1308,6 @@ func (sc *storeCursor) Collect(ctx context.Context, tx *bolt.Tx, ss *scanContext
 		k, v = c.Prev()
 	}
 
-	wasFirstCollect := sc.firstCollect
-	lastKey := sc.SaveLastKey(k)
-
-	// The lastKey boundary is a scan-efficiency optimization: it assumes newly
-	// inserted entries always sort above previously seen ones, which holds for
-	// indexes whose key ends in the monotonically increasing evsid (kind, pubkey,
-	// id, tag, ...), so an early exit on raw key order is safe there. The
-	// default/created_at index is keyed by timestamp first, and client-supplied
-	// created_at values aren't guaranteed monotonic with insertion order, so a
-	// newly inserted event can sort behind the boundary key. For that index,
-	// snapshot the store-wide max evsid at the start of each fresh scan pass and
-	// use it (instead of raw key/position order) to tell "old, already accounted
-	// for" entries from newly inserted ones, scanning past out-of-order entries
-	// rather than stopping early.
-	isDefaultIndex := bytes.Equal(ss.index, indexCreatedAt)
-	var boundaryEvsid uint64
-	var hasBoundaryEvsid bool
-	if isDefaultIndex {
-		if wasFirstCollect {
-			boundaryEvsid = sc.lastMaxEvsid
-			hasBoundaryEvsid = boundaryEvsid > 0
-			sc.lastMaxEvsid = tx.Bucket(indexEvents).Sequence()
-		} else {
-			boundaryEvsid = sc.lastMaxEvsid
-			hasBoundaryEvsid = true
-		}
-	}
-
-	var collected int
-
 loop:
 	for ; k != nil && (limit > 0 || fetchUntilEmpty); k, v = c.Prev() {
 
@@ -1226,33 +1316,58 @@ loop:
 			break loop
 
 		default:
-			if fetchUntilEmpty && lastKey != nil {
-				if isDefaultIndex {
-					if hasBoundaryEvsid {
-						if _, evsid, err := sc.parseKey(k); err == nil && evsid <= boundaryEvsid {
-							continue
-						}
-					}
-				} else if bytes.Compare(k, lastKey) <= 0 {
-					break loop
+			// Every query index carries created_at ahead of evsid, so a
+			// newly inserted event can sort anywhere within its prefix
+			// rather than always above what was seen last. Key position is
+			// therefore not a usable "already delivered" boundary; the
+			// store-wide evsid watermark is, because evsid is arrival
+			// order by construction. Scan past older entries rather than
+			// stopping, so a backdated insert is still picked up.
+			if fetchUntilEmpty && ss.boundaryEvsid > 0 {
+				if _, evsid, err := sc.parseKey(k); err == nil && evsid <= ss.boundaryEvsid {
+					continue
 				}
 			}
 
-			done, err := sc.match(ss, k, v)
-			if err != nil {
-				return nil, 0, err
-			}
-			if done {
+			created := btoi(v)
+
+			// created_at leads the key suffix, so once the walk drops
+			// below the filter's window every remaining entry under this
+			// prefix is older still.
+			if ss.filter.Since > 0 && created < ss.filter.Since {
+				res.Exhausted = true
 				break loop
 			}
 
-			collected++
-			resumeKey = k
-			limit--
+			queued, done, err := sc.match(ss, k, v)
+			if err != nil {
+				return res, err
+			}
+			if done {
+				res.Exhausted = true
+				break loop
+			}
+
+			res.Scanned++
+			res.LastCreated = created
+			res.ResumeKey = k
+
+			// Budget is spent on entries that actually became candidates.
+			// Charging it for a dedup hit or a since/until miss would let
+			// a filter run out of limit without returning that many
+			// events.
+			if queued {
+				res.Queued++
+				limit--
+			}
 		}
 	}
 
-	return resumeKey, collected, nil
+	if k == nil {
+		res.Exhausted = true
+	}
+
+	return res, nil
 }
 
 //////
@@ -1262,11 +1377,24 @@ type scanContext struct {
 	queueEvents *eventQueue
 	filter      *nip01.SubscriptionFilter
 	sentEvents  map[uint64]bool
+	// queued tracks candidates already on the heap for this scan, kept
+	// apart from sentEvents so over-collecting for the merge cannot hide
+	// events from another filter sharing the query.
+	queued map[uint64]bool
+	// boundaryEvsid is the store's max evsid as of the previous scan.
+	// Entries at or below it were already accounted for, so the live tail
+	// skips them. Zero on a first scan, when nothing has been delivered
+	// yet.
+	boundaryEvsid uint64
 }
 
 type storeScan struct {
 	store   *EventStore
 	cursors []*storeCursor
+	// lastMaxEvsid is the watermark carried between scans on a reused
+	// query: each scan reads it as boundaryEvsid, then advances it to the
+	// store's current sequence.
+	lastMaxEvsid uint64
 	*scanContext
 }
 
@@ -1277,6 +1405,7 @@ func newStoreScan(store *EventStore, filter *nip01.SubscriptionFilter, sentEvent
 			filter:      filter,
 			queueEvents: newEventQueue(),
 			sentEvents:  sentEvents,
+			queued:      make(map[uint64]bool),
 		},
 	}
 
@@ -1310,13 +1439,16 @@ func newStoreScan(store *EventStore, filter *nip01.SubscriptionFilter, sentEvent
 	return ss, nil
 }
 
-func (ss *storeScan) initializeScan() (map[int][]byte, int, int) {
+// initializeScan prepares per-cursor resume state and snapshots the
+// arrival watermark this scan will treat as "already accounted for".
+//
+// There is deliberately no per-cursor share of the filter's limit: which
+// cursor holds the newest N is unknowable before walking them, so every
+// cursor is offered the whole remaining budget and the merge decides.
+func (ss *storeScan) initializeScan() map[int][]byte {
 	resumeKeys := make(map[int][]byte, len(ss.cursors))
-	limit := int(math.Ceil(float64(ss.filter.Limit) / float64(len(ss.cursors))))
-	for ci := range ss.cursors {
-		ss.cursors[ci].firstCollect = true
-	}
-	return resumeKeys, limit, 5
+	ss.boundaryEvsid = ss.lastMaxEvsid
+	return resumeKeys
 }
 
 func (ss *storeScan) Scan(ctx context.Context, potEvents chan<- *PotentialEvent, wg *sync.WaitGroup, fetchUntilEmpty bool) error {
@@ -1345,20 +1477,37 @@ func (ss *storeScan) scan(ctx context.Context, tx *bolt.Tx, potEvents chan<- *Po
 		return nil
 	}
 
-	resumeKeys, limit, refill := ss.initializeScan()
+	resumeKeys := ss.initializeScan()
 
-	var totalCollected int
-	activeCursors := true
+	exhausted := make([]bool, len(ss.cursors))
+	var emitted int
+	firstPass := true
 
-	for activeCursors {
+	for {
 
 		var batch []*PotentialEvent
 		var storeClosed bool
+		var progressed bool
 
 		runPass := func(tx *bolt.Tx) error {
 
-			cursorLimit := limit * refill
-			activeCursors = false
+			if firstPass {
+				// Snapshot the arrival watermark before collecting
+				// anything. Everything at or below it is what this scan is
+				// about to account for, so the next scan treats only
+				// higher evsids as new -- regardless of where their
+				// created_at places them in the index.
+				ss.lastMaxEvsid = tx.Bucket(indexEvents).Sequence()
+				firstPass = false
+			}
+
+			// frontier is the newest created_at that a cursor which has
+			// not finished might still return. It is a maximum, not a
+			// minimum: an entry is only safe to emit when it is newer than
+			// every unfinished cursor's stopping point, because any one of
+			// them could still yield something newer than that entry.
+			var frontier uint64
+			var anyActive bool
 
 			for ci, cursor := range ss.cursors {
 
@@ -1371,64 +1520,68 @@ func (ss *storeScan) scan(ctx context.Context, tx *bolt.Tx, potEvents chan<- *Po
 					return ctx.Err()
 
 				default:
-
-					if !fetchUntilEmpty && cursorLimit > ss.filter.Limit-totalCollected {
-						cursorLimit = ss.filter.Limit - totalCollected
-					}
-
-					resumeKey, collected, err := cursor.Collect(ctx, tx, ss.scanContext, resumeKeys[ci], cursorLimit, fetchUntilEmpty)
-					if err != nil {
-						return err
-					}
-					// Collect hands back a key straight out of bolt's mmap,
-					// only valid for this transaction -- and the next pass
-					// runs in a new one.
-					resumeKeys[ci] = bytes.Clone(resumeKey)
-
-					if collected > 0 {
-						if fetchUntilEmpty {
-							// Batch once per pass, after every cursor has
-							// collected -- see the flush below. Every cursor
-							// feeds the one shared ss.queueEvents heap, so
-							// draining it per cursor here (the
-							// !fetchUntilEmpty branch's behavior) would put a
-							// burst on one busy cursor ahead of every other
-							// cursor sharing this same combined-kind filter,
-							// instead of interleaving them by recency.
-							activeCursors = activeCursors || collected == cursorLimit
-						} else {
-							var added int
-							batch, added, err = ss.collectBatch(tx, batch, fetchUntilEmpty)
-							if err != nil {
-								return err
-							}
-
-							totalCollected += added
-							activeCursors = collected == cursorLimit
-						}
-					}
-
-					if !fetchUntilEmpty && totalCollected >= ss.filter.Limit {
-						activeCursors = false
-					}
-
 				}
 
-			}
+				if exhausted[ci] {
+					continue
+				}
 
-			// fetchUntilEmpty: every cursor has now collected everything
-			// newly available for this pass into the shared ss.queueEvents
-			// heap (ordered newest-first by CreatedAt, see eventQueue.Less)
-			// -- batch it in one shot so cursors sharing one combined-kind
-			// filter interleave by recency. The bounded (!fetchUntilEmpty)
-			// path keeps batching per cursor so totalCollected's accounting
-			// against ss.filter.Limit -- which only that path uses -- stays
-			// exactly as before.
-			if fetchUntilEmpty {
-				var err error
-				if batch, _, err = ss.collectBatch(tx, batch, fetchUntilEmpty); err != nil {
+				// Every cursor is offered the whole remaining budget:
+				// which of them holds the newest events is exactly what
+				// the merge is there to work out. The per-pass cap keeps
+				// an absent filter limit -- clamped to MaxLimit, ten
+				// million by default -- from pulling the entire store onto
+				// the heap inside one read transaction.
+				chunk := maxCursorChunk
+				if !fetchUntilEmpty {
+					remaining := ss.filter.Limit - emitted
+					if remaining <= 0 {
+						break
+					}
+					if remaining < chunk {
+						chunk = remaining
+					}
+				}
+
+				res, err := cursor.Collect(ctx, tx, ss.scanContext, resumeKeys[ci], chunk, fetchUntilEmpty)
+				if err != nil {
 					return err
 				}
+				// Collect hands back a key straight out of bolt's mmap,
+				// only valid for this transaction -- and the next pass
+				// runs in a new one.
+				resumeKeys[ci] = bytes.Clone(res.ResumeKey)
+				exhausted[ci] = res.Exhausted
+
+				if res.Scanned > 0 {
+					progressed = true
+				}
+				if !res.Exhausted {
+					anyActive = true
+					if res.LastCreated > frontier {
+						frontier = res.LastCreated
+					}
+				}
+			}
+
+			// Nothing left to come, so the whole heap is safe to drain.
+			if !anyActive {
+				frontier = 0
+			}
+
+			remaining := -1
+			if !fetchUntilEmpty {
+				remaining = ss.filter.Limit - emitted
+			}
+
+			var added int
+			var err error
+			if batch, added, err = ss.collectBatch(tx, batch, fetchUntilEmpty, frontier, remaining); err != nil {
+				return err
+			}
+			emitted += added
+			if added > 0 {
+				progressed = true
 			}
 
 			return nil
@@ -1452,7 +1605,33 @@ func (ss *storeScan) scan(ctx context.Context, tx *bolt.Tx, potEvents chan<- *Po
 			return nil
 		}
 
-		refill = 10
+		if !fetchUntilEmpty && emitted >= ss.filter.Limit {
+			break
+		}
+
+		allExhausted := true
+		for _, e := range exhausted {
+			if !e {
+				allExhausted = false
+				break
+			}
+		}
+		if allExhausted && ss.queueEvents.Len() == 0 {
+			break
+		}
+
+		// A pass that neither examined an entry nor delivered one cannot
+		// make progress on the next either.
+		if !progressed {
+			break
+		}
+	}
+
+	if !fetchUntilEmpty {
+		// Candidates left over are older than everything delivered, and
+		// this heap outlives the scan on a reused query -- leaving them
+		// would re-deliver events the limit excluded on the next tick.
+		ss.queueEvents.Clear()
 	}
 
 	return nil
@@ -1497,6 +1676,15 @@ func (s *EventStore) QueryNip77Items(ctx context.Context, filter *nip01.Subscrip
 		}()
 	}
 
+	// nip77.New requires a total order on (Timestamp, ID), and the caller
+	// reverses this slice to get it ascending. Delivery order only orders
+	// by timestamp -- the heap does not look at ids -- so same-second
+	// events would otherwise arrive in an arbitrary order that reconciles
+	// incorrectly against a peer that sorted them properly.
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].Compare(items[j]) > 0
+	})
+
 	return items, nil
 }
 
@@ -1506,10 +1694,23 @@ func (s *EventStore) QueryNip77Items(ctx context.Context, filter *nip01.Subscrip
 // inside a transaction; deliverBatch does the handoff afterwards. added counts
 // only the events appended, which is what the bounded path's limit accounting
 // needs.
-func (ss *storeScan) collectBatch(tx *bolt.Tx, batch []*PotentialEvent, fetchUntilEmpty bool) ([]*PotentialEvent, int, error) {
+// frontier is the newest created_at any still-unfinished cursor might yet
+// return; only heap entries strictly newer than it are safe to emit.
+// remaining caps how many may be appended, or is negative for no cap.
+func (ss *storeScan) collectBatch(tx *bolt.Tx, batch []*PotentialEvent, fetchUntilEmpty bool, frontier uint64, remaining int) ([]*PotentialEvent, int, error) {
 
 	var added int
 	for ss.queueEvents.Len() > 0 {
+
+		if remaining >= 0 && added >= remaining {
+			break
+		}
+
+		// A cursor that stopped at frontier may still hold entries at or
+		// below it, so anything down there has to wait for the next pass.
+		if top := ss.queueEvents.Peek(); frontier > 0 && top != nil && top.CreatedAt <= frontier {
+			break
+		}
 
 		potEvent := ss.queueEvents.PopEvent()
 		event, err := ss.store.findEventUsingTx(tx, potEvent.Evsid)
@@ -1527,6 +1728,7 @@ func (ss *storeScan) collectBatch(tx *bolt.Tx, batch []*PotentialEvent, fetchUnt
 		}
 
 		potEvent.EventID = event.ID
+		ss.sentEvents[potEvent.Evsid] = true
 		batch = append(batch, potEvent)
 		added++
 	}
@@ -1620,7 +1822,11 @@ func prepareIndexableTags(tags [][]string, maxIndexableTags int) ([][]byte, erro
 			continue
 		}
 
-		entries = append(entries, []byte(tagName+tagFirstVal))
+		entry, ok := tagIndexPrefix(tagName, tagFirstVal)
+		if !ok {
+			continue
+		}
+		entries = append(entries, entry)
 
 		if len(entries) == maxIndexableTags {
 			break
@@ -1628,6 +1834,30 @@ func prepareIndexableTags(tags [][]string, maxIndexableTags int) ([][]byte, erro
 	}
 
 	return entries, nil
+}
+
+// tagIndexPrefix encodes a tag name and value as the prefix of a tag index
+// key: name(1) + uint16 length + value.
+//
+// The explicit length is what makes the prefix unambiguous. Without it the
+// entry for ["h", "1"] is a byte-prefix of the entry for ["h", "10"], so a
+// cursor seeking the top of its own range lands on a longer value's key
+// instead and stops before reaching anything it wanted -- a filter for
+// #h=1 would return nothing at all when an h=10 event exists. With the
+// length in the key the prefix set is contiguous, so leaving it really
+// does mean the range is finished.
+//
+// A value too long for a uint16 is not indexed; bolt's key ceiling is far
+// below that anyway.
+func tagIndexPrefix(name, value string) ([]byte, bool) {
+	if len(name) != 1 || len(value) > 0xFFFF {
+		return nil, false
+	}
+	b := make([]byte, 0, 1+2+len(value))
+	b = append(b, name[0])
+	b = append(b, byte(len(value)>>8), byte(len(value)))
+	b = append(b, value...)
+	return b, true
 }
 
 func itob(v uint64) []byte {
@@ -1641,13 +1871,6 @@ func btoi(b []byte) uint64 {
 		panic("byte slice is too short to convert to int")
 	}
 	return binary.BigEndian.Uint64(b)
-}
-
-func makeKey(key []byte, vals ...[]byte) []byte {
-	for _, val := range vals {
-		key = append(key, val...)
-	}
-	return key
 }
 
 func clamp(value, min, max int) int {
@@ -1706,15 +1929,17 @@ func createCursorsByID(ids []string) ([]*storeCursor, error) {
 			return nil, fmt.Errorf("bad eid size")
 		}
 		cursors = append(cursors, newStoreCursor(
-			makeKey(prefix, maxUint64Bytes),
+			concatKey(prefix, maxSuffixBytes),
 			func(k []byte) bool {
 				return bytes.HasPrefix(k, prefix)
 			},
 			func(k []byte) ([]byte, uint64, error) {
-				if len(k) != 32+8 {
+				if len(k) != 32+8+8 {
 					return nil, 0, fmt.Errorf("id cursor: bad key size got=%d", len(k))
 				}
-				return nil, btoi(k[32:]), nil
+				// The event id is the prefix, so hand it back: it lets
+				// match populate PotentialEvent.EventID for this index.
+				return k[:32], btoi(k[40:]), nil
 			},
 		))
 	}
@@ -1726,16 +1951,21 @@ func createCursorsByTags(tags map[string][]string) ([]*storeCursor, error) {
 	var cursors []*storeCursor
 	for tagName, tagValues := range tags {
 		for _, tagVal := range tagValues {
-			prefix := []byte(tagName + tagVal)
+			prefix, ok := tagIndexPrefix(tagName, tagVal)
+			if !ok {
+				continue
+			}
 			cursors = append(cursors, newStoreCursor(
-				makeKey(prefix, maxUint64Bytes),
+				concatKey(prefix, maxSuffixBytes),
 				func(k []byte) bool {
-					// tag's value must be size fixed. reminder : ["h", "1"] && ["h", "10"]
-					// check test case: case_tags_5
-					return len(k) == len(prefix)+8 && bytes.HasPrefix(k, prefix)
+					// The length prefix makes this cursor's key set
+					// contiguous, so a key that fails the prefix test is
+					// genuinely past the end of its range rather than just
+					// a longer value that sorts in between.
+					return bytes.HasPrefix(k, prefix)
 				},
 				func(k []byte) ([]byte, uint64, error) {
-					if len(k) != len(prefix)+8 {
+					if len(k) != len(prefix)+8+8 {
 						return nil, 0, fmt.Errorf("tag cursor: bad key size got=%d", len(k))
 					}
 					return nil, btoi(k[len(k)-8:]), nil
@@ -1758,15 +1988,15 @@ func createCursorsByAuthors(authors []string) ([]*storeCursor, error) {
 			return nil, fmt.Errorf("bad pubkey size")
 		}
 		cursors = append(cursors, newStoreCursor(
-			makeKey(prefix, maxUint64Bytes),
+			concatKey(prefix, maxSuffixBytes),
 			func(k []byte) bool {
 				return bytes.HasPrefix(k, prefix)
 			},
 			func(k []byte) ([]byte, uint64, error) {
-				if len(k) != 32+8 {
+				if len(k) != 32+8+8 {
 					return nil, 0, fmt.Errorf("pubkey cursor: bad key size got=%d", len(k))
 				}
-				return nil, btoi(k[32:]), nil
+				return nil, btoi(k[40:]), nil
 			},
 		))
 	}
@@ -1779,15 +2009,15 @@ func createCursorsByKinds(kinds []int) ([]*storeCursor, error) {
 	for _, kind := range kinds {
 		prefix := itob(uint64(kind))
 		cursors = append(cursors, newStoreCursor(
-			makeKey(prefix, maxUint64Bytes),
+			concatKey(prefix, maxSuffixBytes),
 			func(k []byte) bool {
 				return bytes.HasPrefix(k, prefix)
 			},
 			func(k []byte) ([]byte, uint64, error) {
-				if len(k) != 8+8 {
+				if len(k) != 8+8+8 {
 					return nil, 0, fmt.Errorf("kind cursor: bad key size got=%d", len(k))
 				}
-				return nil, btoi(k[8:]), nil
+				return nil, btoi(k[16:]), nil
 			},
 		))
 	}
@@ -1807,17 +2037,17 @@ func createCursorsByKindsAndAuthors(kinds []int, authors []string) ([]*storeCurs
 			if len(pubKeyBytes) != 32 {
 				return nil, fmt.Errorf("bad pubkey size")
 			}
-			prefix := append(prefixKind, pubKeyBytes...)
+			prefix := concatKey(prefixKind, pubKeyBytes)
 			cursors = append(cursors, newStoreCursor(
-				makeKey(prefix, maxUint64Bytes),
+				concatKey(prefix, maxSuffixBytes),
 				func(k []byte) bool {
 					return bytes.HasPrefix(k, prefix)
 				},
 				func(k []byte) ([]byte, uint64, error) {
-					if len(k) != 8+32+8 {
+					if len(k) != 8+32+8+8 {
 						return nil, 0, fmt.Errorf("kind,pubkeys cursor: bad key size got=%d", len(k))
 					}
-					return nil, btoi(k[40:]), nil
+					return nil, btoi(k[48:]), nil
 				},
 			))
 		}
@@ -1827,7 +2057,7 @@ func createCursorsByKindsAndAuthors(kinds []int, authors []string) ([]*storeCurs
 
 func defaultCursor() *storeCursor {
 	return newStoreCursor(
-		makeKey(maxUint64Bytes),
+		concatKey(maxUint64Bytes),
 		func(k []byte) bool {
 			return true
 		},
