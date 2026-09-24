@@ -22,9 +22,11 @@ import (
 
 // Failure modes for the New*/Parse*/Validate* functions in this package,
 // for callers that need to distinguish them (e.g. via errors.Is) rather
-// than match on message text. Some of these (documented per-value below)
-// are also used by github.com/ohstr/nmilat/nipAZ, which builds on this
-// package.
+// than match on message text. Many of these are also returned by
+// github.com/ohstr/nmilat/nipAZ, which reuses the values rather than
+// defining parallel ones, so errors.Is works the same way across both
+// packages. nipAZ enforces some of them more strictly than NIP-57 requires
+// — see that package for which.
 var (
 	ErrWrongKind               = errors.New("nip57: wrong kind")
 	ErrInvalidRelayURL         = errors.New("nip57: invalid relay url")
@@ -46,6 +48,7 @@ var (
 	ErrInvalidAmountValue      = errors.New("nip57: amount must be positive")
 	ErrAmountMismatch          = errors.New("nip57: amount mismatch")
 	ErrDescriptionHashMismatch = errors.New("nip57: description hash mismatch")
+	ErrMissingDescriptionHash  = errors.New("nip57: invoice has no description hash")
 	ErrRecipientMismatch       = errors.New("nip57: recipient mismatch")
 	ErrBolt11DecodeFailed      = errors.New("nip57: failed to decode bolt11")
 	ErrMissingRecipientTag     = errors.New("nip57: missing p tag")
@@ -56,6 +59,37 @@ const (
 	// Appendix A and E, respectively.
 	KindZapRequest = 9734
 	KindZapReceipt = 9735
+)
+
+// zapPolicy selects which of NIP-57's non-MUST rules a Parse*/Validate*
+// call enforces. Everything MUST-level — kind, signatures, the required
+// tags, amount and recipient cross-checks — is enforced under every policy
+// and isn't represented here.
+type zapPolicy struct {
+	// strictLNURL requires the lnurl tag to carry the bech32 "lnurl1…"
+	// form. NIP-57 Appendix A calls the tag "recommended, but optional"
+	// and Appendix F makes matching it a SHOULD; in practice clients put a
+	// LUD-16 lightning address there instead.
+	strictLNURL bool
+	// requireRelaysTag rejects a zap request carrying no relays tag.
+	requireRelaysTag bool
+	// requireDescriptionHash cross-checks sha256(description) against the
+	// invoice's description hash. Appendix F lists no such rule for
+	// validating a receipt — Appendix E only recommends the binding when
+	// creating one — and a description re-serialized by the provider
+	// legitimately fails it.
+	requireDescriptionHash bool
+}
+
+var (
+	// policyStrict is for callers building or settling their own zaps.
+	policyStrict = zapPolicy{
+		strictLNURL:            true,
+		requireRelaysTag:       true,
+		requireDescriptionHash: true,
+	}
+	// policyRelay is for relays ingesting someone else's zap events.
+	policyRelay = zapPolicy{}
 )
 
 // ZapRequest is a parsed and validated NIP-57 zap request event (kind 9734).
@@ -74,6 +108,10 @@ type ZapRequest struct {
 // ParseZapRequest parses and validates a NIP-57 zap request event (kind 9734)
 // per Appendix A/D.
 func ParseZapRequest(event *nip01.Event) (*ZapRequest, error) {
+	return parseZapRequest(event, policyStrict)
+}
+
+func parseZapRequest(event *nip01.Event, policy zapPolicy) (*ZapRequest, error) {
 	if event.Kind != KindZapRequest {
 		return nil, fmt.Errorf("%w: got %d, want %d", ErrWrongKind, event.Kind, KindZapRequest)
 	}
@@ -108,8 +146,10 @@ func ParseZapRequest(event *nip01.Event) (*ZapRequest, error) {
 			}
 			zr.Amount = a
 		case "lnurl":
-			if err := utils.ValidateLNURL(tag[1]); err != nil {
-				return nil, fmt.Errorf("%w %q: %w", ErrInvalidLNURL, tag[1], err)
+			if policy.strictLNURL {
+				if err := utils.ValidateLNURL(tag[1]); err != nil {
+					return nil, fmt.Errorf("%w %q: %w", ErrInvalidLNURL, tag[1], err)
+				}
 			}
 			zr.Lnurl = tag[1]
 		case "e":
@@ -146,7 +186,7 @@ func ParseZapRequest(event *nip01.Event) (*ZapRequest, error) {
 	if eTagCount > 1 {
 		return nil, ErrTooManyEventTags
 	}
-	if len(zr.Relays) == 0 {
+	if policy.requireRelaysTag && len(zr.Relays) == 0 {
 		return nil, ErrMissingRelaysTag
 	}
 
@@ -158,11 +198,28 @@ func ParseZapRequest(event *nip01.Event) (*ZapRequest, error) {
 // tag, the two must match — NIP-57 Appendix D: "If there is an amount tag,
 // it MUST be equal to the amount query parameter."
 func ValidateZapRequest(event *nip01.Event, expectedAmountMsat int64) error {
+	return validateZapRequest(event, expectedAmountMsat, policyStrict)
+}
+
+// ValidateZapRequestForRelay checks a zap request (kind 9734) for relay
+// ingest. It enforces every MUST-level rule in NIP-57 Appendix A/D — kind,
+// signature, a single valid "p" tag, well-formed relay URLs and a positive
+// amount — but tolerates the rules the spec states as SHOULD or optional:
+// an "lnurl" tag in any form (clients commonly send a LUD-16 lightning
+// address rather than the bech32 encoding), and a missing "relays" tag.
+//
+// Use ValidateZapRequest instead when building or settling your own zap,
+// where the stricter reading is the useful one.
+func ValidateZapRequestForRelay(event *nip01.Event) error {
+	return validateZapRequest(event, 0, policyRelay)
+}
+
+func validateZapRequest(event *nip01.Event, expectedAmountMsat int64, policy zapPolicy) error {
 	if err := event.Verify(); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidSignature, err)
 	}
 
-	zr, err := ParseZapRequest(event)
+	zr, err := parseZapRequest(event, policy)
 	if err != nil {
 		return err
 	}
@@ -191,6 +248,10 @@ type ZapReceipt struct {
 // ParseZapReceipt parses and validates a NIP-57 zap receipt event (kind
 // 9735) per Appendix E.
 func ParseZapReceipt(event *nip01.Event) (*ZapReceipt, error) {
+	return parseZapReceipt(event, policyStrict)
+}
+
+func parseZapReceipt(event *nip01.Event, policy zapPolicy) (*ZapReceipt, error) {
 	if event.Kind != KindZapReceipt {
 		return nil, fmt.Errorf("%w: got %d, want %d", ErrWrongKind, event.Kind, KindZapReceipt)
 	}
@@ -238,7 +299,7 @@ func ParseZapReceipt(event *nip01.Event) (*ZapReceipt, error) {
 	if err := reqEvent.Verify(); err != nil {
 		return nil, fmt.Errorf("%w: embedded request signature invalid: %w", ErrInvalidEmbeddedRequest, err)
 	}
-	req, err := ParseZapRequest(&reqEvent)
+	req, err := parseZapRequest(&reqEvent, policy)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidEmbeddedRequest, err)
 	}
@@ -253,11 +314,35 @@ func ParseZapReceipt(event *nip01.Event) (*ZapReceipt, error) {
 // matches the recipient's LNURL-declared nostrPubkey — that check requires
 // external LNURL data and is the caller's responsibility.
 func ValidateZapReceipt(receipt *nip01.Event) error {
+	return validateZapReceipt(receipt, policyStrict)
+}
+
+// ValidateZapReceiptForRelay checks a zap receipt (kind 9735) for relay
+// ingest. It enforces every MUST-level rule in NIP-57 Appendix E/F — kind,
+// the receipt's own signature, the required "p", "bolt11" and "description"
+// tags, a decodable invoice, the embedded request's signature and structure,
+// and the amount and recipient cross-checks — but tolerates the rules the
+// spec states as SHOULD or optional:
+//
+//   - the embedded request's "lnurl" tag in any form, or absent;
+//   - the embedded request's "relays" tag being absent;
+//   - the invoice's description hash being absent or not matching
+//     sha256(description).
+//
+// A relay stores receipts settled by someone else, and a receipt is the
+// record that a payment happened; rejecting one at ingest over a
+// SHOULD-level deviation silently loses that record. Use ValidateZapReceipt
+// instead when checking a zap you are settling or accounting for yourself.
+func ValidateZapReceiptForRelay(receipt *nip01.Event) error {
+	return validateZapReceipt(receipt, policyRelay)
+}
+
+func validateZapReceipt(receipt *nip01.Event, policy zapPolicy) error {
 	if err := receipt.Verify(); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidSignature, err)
 	}
 
-	zr, err := ParseZapReceipt(receipt)
+	zr, err := parseZapReceipt(receipt, policy)
 	if err != nil {
 		return err
 	}
@@ -267,10 +352,10 @@ func ValidateZapReceipt(receipt *nip01.Event) error {
 		return fmt.Errorf("%w: %w", ErrBolt11DecodeFailed, err)
 	}
 
-	descHash := sha256.Sum256([]byte(zr.Description))
-	descHashHex := hex.EncodeToString(descHash[:])
-	if invoice.DescriptionHash != descHashHex {
-		return fmt.Errorf("%w: have=%s want=%s", ErrDescriptionHashMismatch, descHashHex, invoice.DescriptionHash)
+	if policy.requireDescriptionHash {
+		if err := checkDescriptionHash(zr.Description, invoice); err != nil {
+			return err
+		}
 	}
 
 	if zr.Request.Amount > 0 && invoice.AmountMloki != zr.Request.Amount {
@@ -281,6 +366,21 @@ func ValidateZapReceipt(receipt *nip01.Event) error {
 		return fmt.Errorf("%w: receipt=%s request_author=%s", ErrRecipientMismatch, zr.Recipient, zr.Request.Author)
 	}
 
+	return nil
+}
+
+// checkDescriptionHash verifies that the invoice's description hash binds
+// the receipt's description tag, i.e. the zap request it claims to have
+// paid.
+func checkDescriptionHash(description string, invoice *Invoice) error {
+	descHash := sha256.Sum256([]byte(description))
+	descHashHex := hex.EncodeToString(descHash[:])
+	if invoice.DescriptionHash == "" {
+		return fmt.Errorf("%w: want=%s", ErrMissingDescriptionHash, descHashHex)
+	}
+	if invoice.DescriptionHash != descHashHex {
+		return fmt.Errorf("%w: have=%s want=%s", ErrDescriptionHashMismatch, invoice.DescriptionHash, descHashHex)
+	}
 	return nil
 }
 
