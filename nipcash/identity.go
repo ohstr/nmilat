@@ -175,7 +175,7 @@ type Source struct {
 	// REQUIRED: like CashTransferParams.CurrentAmount, each source's proof
 	// must bind to its own concrete amount, which this package can't infer
 	// on its own. Get this from a prior mint_cash/cash_transfer response or
-	// ListRecipients.
+	// CashStatus.
 	Amount     uint64
 	Credential Credential
 }
