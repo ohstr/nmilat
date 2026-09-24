@@ -13,16 +13,16 @@
   altogether — and for tags the affected cursor varied between runs. Every
   index is now ordered by `created_at` and the cursors are merged by
   recency before the limit is applied. `COUNT` and NIP-77 reconciliation
-  share the same path and are fixed with it.
+  share the same path and are fixed with it. (#37)
 - A `#<tag>` filter matched nothing when a longer tag value shared its
   prefix: `#h=1` returned no events once anything was tagged `h=10`. Tag
-  index keys now carry the value's length.
+  index keys now carry the value's length. (#37)
 - NIP-77 reconciliation could disagree with a peer over events sharing a
   timestamp. Items are now totally ordered by timestamp and id, as the
-  negentropy implementation requires.
+  negentropy implementation requires. (#37)
 - Deleting an ephemeral event left its entry in the expiration index,
   because the insert and delete paths derived the retention window
-  differently.
+  differently. (#37)
 
 ### Changed
 
@@ -31,7 +31,7 @@
   one: the older binary misreads every index key, so writes appear to
   succeed while queries fail. Take a copy of the database file before
   starting this version. The rebuild runs during startup and takes time
-  proportional to the number of stored events; progress is logged.
+  proportional to the number of stored events; progress is logged. (#37)
 
 ## [0.4.0]
 
