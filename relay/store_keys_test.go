@@ -25,12 +25,15 @@ var queryIndexes = []struct {
 	// tag index (0 for the fixed-width ones).
 	keyLen func(tagEntryLen int) int
 }{
-	{"id", indexID, func(int) int { return 32 + 8 }},
-	{"pubkey", indexPubkey, func(int) int { return 32 + 8 }},
-	{"kind", indexKind, func(int) int { return 8 + 8 }},
-	{"kindPubkey", indexKindPubkey, func(int) int { return 8 + 32 + 8 }},
+	// Every query index carries created_at ahead of evsid, so reverse
+	// iteration is newest-first. indexCreatedAt already led with the
+	// timestamp and is unchanged.
+	{"id", indexID, func(int) int { return 32 + 8 + 8 }},
+	{"pubkey", indexPubkey, func(int) int { return 32 + 8 + 8 }},
+	{"kind", indexKind, func(int) int { return 8 + 8 + 8 }},
+	{"kindPubkey", indexKindPubkey, func(int) int { return 8 + 32 + 8 + 8 }},
 	{"createdAt", indexCreatedAt, func(int) int { return 8 + 32 + 8 }},
-	{"tag", indexTag, func(entry int) int { return entry + 8 }},
+	{"tag", indexTag, func(entry int) int { return entry + 8 + 8 }},
 }
 
 func bucketKeys(t testing.TB, store *EventStore, bucket []byte) [][]byte {

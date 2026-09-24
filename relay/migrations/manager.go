@@ -19,11 +19,16 @@ var (
 	VERSION_KEY = []byte("version")
 )
 
+// Migration owns its own transactions rather than running inside one the
+// manager opens. bbolt holds every dirty page of a write transaction in
+// memory until commit, so a migration that rewrites whole buckets has to be
+// free to commit in batches instead of building the entire result set up
+// front.
 type Migration interface {
 	Version() uint64
 	Description() string
-	Up(tx *bolt.Tx) error
-	Down(tx *bolt.Tx) error
+	Up(db *bolt.DB) error
+	Down(db *bolt.DB) error
 }
 
 type Manager struct {
@@ -115,15 +120,18 @@ func (m *Manager) Run() error {
 			migration := m.migrations[v]
 			m.logger.Info().Msgf("applying migration %d: %s", migration.Version(), migration.Description())
 
-			err := m.db.Update(func(tx *bolt.Tx) error {
-				if err := migration.Up(tx); err != nil {
-					return err
-				}
-				return m.SetVersion(tx, v)
-			})
-
-			if err != nil {
+			// The version is bumped only once Up has fully succeeded, in a
+			// transaction of its own. A crash part-way through therefore
+			// re-runs the migration from the top on the next open, which
+			// is why every migration has to be idempotent.
+			if err := migration.Up(m.db); err != nil {
 				return fmt.Errorf("failed to apply migration %d: %w", v, err)
+			}
+
+			if err := m.db.Update(func(tx *bolt.Tx) error {
+				return m.SetVersion(tx, v)
+			}); err != nil {
+				return fmt.Errorf("failed to record migration %d: %w", v, err)
 			}
 
 			m.logger.Info().Msgf("migration %d applied successfully", v)

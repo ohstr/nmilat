@@ -1,6 +1,7 @@
 package migrations
 
 import (
+	"errors"
 	"os"
 	"testing"
 
@@ -32,13 +33,13 @@ type fakeMigration struct {
 
 func (m *fakeMigration) Version() uint64     { return m.version }
 func (m *fakeMigration) Description() string { return m.description }
-func (m *fakeMigration) Up(tx *bolt.Tx) error {
+func (m *fakeMigration) Up(db *bolt.DB) error {
 	if m.applied != nil {
 		*m.applied = true
 	}
 	return nil
 }
-func (m *fakeMigration) Down(tx *bolt.Tx) error { return nil }
+func (m *fakeMigration) Down(db *bolt.DB) error { return nil }
 
 func TestManager_GetCurrentVersion_DefaultsToZero(t *testing.T) {
 	db := newTestDB(t)
@@ -119,11 +120,11 @@ type countingFakeMigration struct {
 
 func (m *countingFakeMigration) Version() uint64     { return m.version }
 func (m *countingFakeMigration) Description() string { return m.description }
-func (m *countingFakeMigration) Up(tx *bolt.Tx) error {
+func (m *countingFakeMigration) Up(db *bolt.DB) error {
 	m.calls++
 	return nil
 }
-func (m *countingFakeMigration) Down(tx *bolt.Tx) error { return nil }
+func (m *countingFakeMigration) Down(db *bolt.DB) error { return nil }
 
 func TestResetVerificationCacheMigration(t *testing.T) {
 	db := newTestDB(t)
@@ -148,10 +149,7 @@ func TestResetVerificationCacheMigration(t *testing.T) {
 		t.Error("expected a non-empty description")
 	}
 
-	err = db.Update(func(tx *bolt.Tx) error {
-		return migration.Up(tx)
-	})
-	if err != nil {
+	if err := migration.Up(db); err != nil {
 		t.Fatalf("unexpected error running Up: %v", err)
 	}
 
@@ -170,7 +168,7 @@ func TestResetVerificationCacheMigration(t *testing.T) {
 	}
 
 	// Down is a no-op; just make sure it doesn't error.
-	if err := db.Update(func(tx *bolt.Tx) error { return migration.Down(tx) }); err != nil {
+	if err := migration.Down(db); err != nil {
 		t.Fatalf("unexpected error running Down: %v", err)
 	}
 }
@@ -179,10 +177,37 @@ func TestResetVerificationCacheMigration_NoBucket(t *testing.T) {
 	db := newTestDB(t)
 	migration := &ResetVerificationCacheMigration{MetricsBucket: []byte("does-not-exist")}
 
-	err := db.Update(func(tx *bolt.Tx) error {
-		return migration.Up(tx)
-	})
-	if err != nil {
+	if err := migration.Up(db); err != nil {
 		t.Fatalf("expected no error when the bucket doesn't exist, got: %v", err)
+	}
+}
+
+type failingMigration struct{ version uint64 }
+
+func (m *failingMigration) Version() uint64      { return m.version }
+func (m *failingMigration) Description() string  { return "always fails" }
+func (m *failingMigration) Up(db *bolt.DB) error { return errors.New("boom") }
+func (m *failingMigration) Down(db *bolt.DB) error {
+	return nil
+}
+
+// A migration owns its own transactions, so the version must be recorded
+// only once Up has fully succeeded -- otherwise a partial rebuild would be
+// treated as done and never re-run.
+func TestManager_Run_DoesNotRecordVersionWhenUpFails(t *testing.T) {
+	db := newTestDB(t)
+	mgr := NewManager(db)
+	mgr.Register(&failingMigration{version: 1})
+
+	if err := mgr.Run(); err == nil {
+		t.Fatal("expected Run to fail")
+	}
+
+	v, err := mgr.GetCurrentVersion()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if v != 0 {
+		t.Errorf("version = %d after a failed migration, want 0 so it re-runs", v)
 	}
 }

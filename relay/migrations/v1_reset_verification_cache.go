@@ -18,7 +18,13 @@ func (m *ResetVerificationCacheMigration) Description() string {
 	return "Reset verification cache to force re-verification of all profiles with latest logic"
 }
 
-func (m *ResetVerificationCacheMigration) Up(tx *bolt.Tx) error {
+func (m *ResetVerificationCacheMigration) Up(db *bolt.DB) error {
+	return db.Update(func(tx *bolt.Tx) error {
+		return m.up(tx)
+	})
+}
+
+func (m *ResetVerificationCacheMigration) up(tx *bolt.Tx) error {
 	b := tx.Bucket(m.MetricsBucket)
 	if b == nil {
 		return nil
@@ -54,6 +60,6 @@ func (m *ResetVerificationCacheMigration) Up(tx *bolt.Tx) error {
 	return nil
 }
 
-func (m *ResetVerificationCacheMigration) Down(tx *bolt.Tx) error {
+func (m *ResetVerificationCacheMigration) Down(db *bolt.DB) error {
 	return nil
 }
