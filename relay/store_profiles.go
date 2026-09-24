@@ -10,6 +10,14 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
+// The kind+pubkey index key is Kind(8) + Pubkey(32) + CreatedAt(8) +
+// Evsid(8). These are named so a layout change has to update them here
+// too, rather than leaving byte offsets to drift silently.
+const (
+	profilePrefixLen = 8 + 32
+	profileKeyLen    = profilePrefixLen + 8 + 8
+)
+
 // FetchProfileEvents retrieves the latest Kind 0 (Metadata) events for the given pubkeys.
 // It bypasses the standard subscription query mechanism for performance.
 func (s *EventStore) FetchProfileEvents(ctx context.Context, pubkeys []string) ([]*nip01.Event, error) {
@@ -33,20 +41,22 @@ func (s *EventStore) FetchProfileEvents(ctx context.Context, pubkeys []string) (
 			}
 
 			// We want the LATEST event. In BoltDB, keys are sorted.
-			// Our Key structure: [Kind (8)] [Pubkey (32)] [Evsid (8)]
-			// Evsid increases with time/insertion.
+			// Our Key structure: [Kind (8)] [Pubkey (32)] [CreatedAt (8)] [Evsid (8)]
+			// CreatedAt leads the suffix, so the largest key under this
+			// prefix is the newest event by timestamp -- not merely the
+			// last one inserted.
 			// To find the latest, we seek to a key that is conceptually "after" the last possible
 			// key for this Kind+Pubkey, then step back.
 
 			// Construct Prefix: Kind (8) + Pubkey (32)
-			prefix := make([]byte, 40)
+			prefix := make([]byte, profilePrefixLen)
 			copy(prefix[0:8], kindBytes)
 			copy(prefix[8:40], pkBytes)
 
-			// Construct Seek Key: Prefix + MaxUint64 (0xFF...)
-			seekKey := make([]byte, 48)
+			// Construct Seek Key: Prefix + max CreatedAt/Evsid suffix (0xFF...)
+			seekKey := make([]byte, profileKeyLen)
 			copy(seekKey, prefix)
-			for i := 40; i < 48; i++ {
+			for i := profilePrefixLen; i < profileKeyLen; i++ {
 				seekKey[i] = 0xFF
 			}
 
@@ -64,9 +74,12 @@ func (s *EventStore) FetchProfileEvents(ctx context.Context, pubkeys []string) (
 			// Verify we are still on the correct prefix
 			if k != nil && bytes.HasPrefix(k, prefix) {
 				// Found the latest entry!
-				// Extract Evsid from the last 8 bytes of the Key
-				if len(k) >= 48 {
-					evsid := binary.BigEndian.Uint64(k[40:48])
+				// Extract Evsid from the last 8 bytes of the Key. The
+				// length must match exactly: a longer key means the layout
+				// changed under us, and reading a fixed offset out of it
+				// would silently yield a nonexistent evsid.
+				if len(k) == profileKeyLen {
+					evsid := binary.BigEndian.Uint64(k[profilePrefixLen+8 : profileKeyLen])
 					ev, err := s.findEventUsingTx(tx, evsid)
 					if err == nil {
 						events = append(events, ev)

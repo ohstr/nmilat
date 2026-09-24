@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -12,8 +11,6 @@ import (
 	"time"
 
 	"github.com/ohstr/nmilat/nip01"
-
-	bolt "go.etcd.io/bbolt"
 )
 
 type KindTable struct {
@@ -483,6 +480,12 @@ func createStoreCases() []StoreTestCase {
 		},
 
 		{
+			// Events tagged h=1 through h=10. A filter for #h=1 must match
+			// the h=1 event and nothing else. This used to return zero:
+			// without a length in the key, the entry for "h"+"1" is a byte
+			// prefix of the entry for "h"+"10", so the cursor seeking the
+			// top of its range landed on an h=10 key, failed its own
+			// length check and stopped before reaching anything.
 			"case_tags_5",
 			func(t *testing.T, store *EventStore) {
 				events := []*nip01.Event{}
@@ -493,14 +496,18 @@ func createStoreCases() []StoreTestCase {
 			},
 			func(t *testing.T, store *EventStore) {},
 			func(filter *nip01.SubscriptionFilterGroup) {
+				// An explicit limit: TestStoreScan drives newStoreScan
+				// directly, which unlike NewStoreQuery does not clamp a
+				// zero limit up to MaxLimit.
 				f := &nip01.SubscriptionFilter{
 					Kinds: []int{1},
 					Tags:  make(map[string][]string),
+					Limit: 10,
 				}
 				f.Tags["h"] = []string{"1"}
 				filter.Add(f)
 			},
-			0,
+			1,
 			0,
 		},
 
@@ -1148,11 +1155,14 @@ func TestStoreFetchCombinedKindMultipleTicksDeliverOnlyNewEvents(t *testing.T) {
 }
 
 // TestStoreFetchBoundedCombinedKindRespectsLimitExactly guards the
-// !fetchUntilEmpty (bounded/historical) path, which the fairness fix
-// deliberately leaves untouched -- it keeps its original per-cursor
-// collectBatch call and totalCollected accounting. A combined-kind bounded
-// query must still return exactly Limit events, not more, not fewer, even
-// though one kind alone has far more than Limit matching events available.
+// !fetchUntilEmpty (bounded/historical) path: a combined-kind bounded query
+// must return exactly Limit events, and they must be the newest Limit
+// across every kind in the filter.
+//
+// The fixture is deliberately lopsided -- every kind-7 event is newer than
+// every kind-1 event -- so counting alone cannot tell a correct answer from
+// a cursor that monopolised the whole budget. Asserting the count only is
+// what let the bounded path return the oldest 30 unnoticed.
 func TestStoreFetchBoundedCombinedKindRespectsLimitExactly(t *testing.T) {
 	store := newStore(t)
 	defer store.Close()
@@ -1162,18 +1172,29 @@ func TestStoreFetchBoundedCombinedKindRespectsLimitExactly(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		all = append(all, CreateEventWithTimestamp(t, 1, base+uint64(i)))
 	}
+	var kind7 []*nip01.Event
 	for i := 0; i < 100; i++ {
-		all = append(all, CreateEventWithTimestamp(t, 7, base+2000+uint64(i)))
+		kind7 = append(kind7, CreateEventWithTimestamp(t, 7, base+2000+uint64(i)))
 	}
+	all = append(all, kind7...)
 	InsertTestEvents(t, store, all)
 
 	filters := nip01.NewSubscriptionFilterGroup()
 	filters.Add(&nip01.SubscriptionFilter{Kinds: []int{1, 7}, Limit: 30})
 	q := newQuery(t, store, filters)
 
-	if got := readEvents(t, q, false); got != 30 {
-		t.Fatalf("bounded combined-kind fetch returned %d events, want exactly 30 (Limit)", got)
+	got := readEventsCollecting(t, q, false)
+	if len(got) != 30 {
+		t.Fatalf("bounded combined-kind fetch returned %d events, want exactly 30 (Limit)", len(got))
 	}
+
+	// kind7 is ascending by created_at, so the newest 30 are its last 30,
+	// delivered newest-first.
+	want := make([]*nip01.Event, 0, 30)
+	for i := len(kind7) - 1; i >= len(kind7)-30; i-- {
+		want = append(want, kind7[i])
+	}
+	assertIDsInOrder(t, got, want)
 }
 
 // TestStoreScanCombinedKindCancelledContextReturnsPromptly guards the new
@@ -1593,160 +1614,74 @@ func BenchmarkStoreScan(b *testing.B) {
 	}
 }
 
+// BenchmarkStoreCursor measures a bounded, limited scan through the real
+// query path. It used to hand-reimplement the pass loop -- per-cursor
+// budget arithmetic and all -- which meant it stopped representing the code
+// under test the moment that loop changed.
 func BenchmarkStoreCursor(b *testing.B) {
 
 	store := OpenBenchStore(b)
 	defer store.Close()
 
+	base := uint64(time.Now().Unix())
+	kinds := []int{0, 1, 3, 7}
+	var events []*nip01.Event
+	for i := 0; i < 5_000; i++ {
+		events = append(events, signEventAt(b, probeKeyA, kinds[i%len(kinds)], base+uint64(i),
+			fmt.Sprintf("bench %d", i)))
+	}
+	InsertTestEvents(b, store, events)
+
 	tests := []struct {
 		name   string
 		filter *nip01.SubscriptionFilter
 	}{
 		{
-			"case_1",
+			"combined_kinds",
 			&nip01.SubscriptionFilter{
 				Kinds: []int{0, 1, 3, 7},
-				Limit: 500_000,
+				Limit: 500,
 			},
 		},
 		{
-			"case_2",
+			"no_kinds",
 			&nip01.SubscriptionFilter{
-				Kinds: []int{},
-				Limit: 500_000,
+				Limit: 500,
 			},
 		},
 	}
 
 	for _, test := range tests {
 		filter := test.filter
-		b.Run(test.name, func(t *testing.B) {
-			for i := 0; i < t.N; i++ {
-
-				ss, err := newStoreScan(store, filter, make(map[uint64]bool))
-				if err != nil {
-					t.Fatal(err)
+		b.Run(test.name, func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				q := newQuery(b, store, filterGroup(filter))
+				if got := readEvents(b, q, false); got != filter.Limit {
+					b.Fatalf("got %d events, want %d", got, filter.Limit)
 				}
-
-				resumeKeys := make(map[int][]byte, len(ss.cursors))
-				limit := int(math.Ceil(float64(ss.filter.Limit) / float64(len(ss.cursors))))
-				// for ci := range ss.cursors {
-				// 	ss.cursors[ci].firstCollect = true
-				// }
-
-				var totalCollected int
-
-				_ = store.db.View(func(tx *bolt.Tx) error {
-					for {
-						for ci, cursor := range ss.cursors {
-
-							var cursorLimit = limit
-							if ss.filter.Limit-totalCollected < cursorLimit {
-								cursorLimit = ss.filter.Limit - totalCollected
-							}
-
-							resumeKeys[ci], _, _ = cursor.Collect(context.Background(), tx, ss.scanContext, resumeKeys[ci], cursorLimit, false)
-							totalCollected += ss.queueEvents.Len()
-							ss.queueEvents.Clear()
-							// for ss.queueEvents.Len() > 0 {
-							// 	ss.queueEvents.PopEvent()
-							// }
-						}
-						if totalCollected == filter.Limit {
-							break
-						}
-					}
-
-					// log.Debug().Msgf("totalCollected=%d", totalCollected)
-
-					return nil
-				})
-
 			}
-
 		})
 	}
 }
 
-func TestStoreSimpleCursor(b *testing.T) {
+// TestStoreSimpleCursor drives one bounded scan end to end and checks it
+// returns the newest Limit events. It used to walk the cursors by hand and
+// only log how many it had sent.
+func TestStoreSimpleCursor(t *testing.T) {
 
-	store := OpenBenchStore(b)
-	defer store.Close()
+	store := newStore(t)
 
-	tests := []struct {
-		name   string
-		filter *nip01.SubscriptionFilter
-	}{
-		{
-			"case_1",
-			&nip01.SubscriptionFilter{
-				Kinds: []int{},
-				Limit: 1_000,
-			},
-		},
-		{
-			"case_2",
-			&nip01.SubscriptionFilter{
-				Kinds: []int{},
-				Limit: 1_000,
-			},
-		},
+	base := uint64(time.Now().Unix())
+	// Built newest-first and inserted in that order, so arrival order is
+	// the exact reverse of time order.
+	var events []*nip01.Event
+	for i := 0; i < 200; i++ {
+		events = append(events, signEventAt(t, probeKeyA, 1, base-uint64(i), fmt.Sprintf("simple %d", i)))
 	}
+	insertInOrder(t, store, events, newestFirst)
 
-	for _, test := range tests {
-		filter := test.filter
-		b.Run(test.name, func(t *testing.T) {
-			// for i := 0; i < t.N; i++ {
-
-			ss, err := newStoreScan(store, filter, make(map[uint64]bool))
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			_ = store.db.View(func(tx *bolt.Tx) error {
-			loop:
-				for _, cursor := range ss.cursors {
-
-					c := tx.Bucket(ss.index).Cursor()
-
-					c.Seek(cursor.maxKey)
-
-					for k, v := c.Prev(); k != nil; k, _ = c.Prev() {
-						completed, err := cursor.match(ss.scanContext, k, v)
-
-						if completed || err != nil {
-							break
-						}
-
-						if ss.queueEvents.Len() >= filter.Limit {
-							break loop
-						}
-					}
-				}
-
-				potEvents := make(chan *PotentialEvent)
-				wg := sync.WaitGroup{}
-
-				go func() {
-					for range potEvents {
-						wg.Done()
-					}
-				}()
-
-				batch, sent, _ := ss.collectBatch(tx, nil, false)
-				_ = deliverBatch(context.Background(), potEvents, &wg, batch)
-				b.Logf("sent=%d", sent)
-
-				wg.Wait()
-				close(potEvents)
-
-				return nil
-			})
-
-			// }
-
-		})
-	}
+	q := newQuery(t, store, filterGroup(&nip01.SubscriptionFilter{Kinds: []int{1}, Limit: 50}))
+	assertIDsInOrder(t, readEventsCollecting(t, q, false), events[:50])
 }
 
 func TestStoreUnsortedEvents(t *testing.T) {
