@@ -9,6 +9,7 @@ import (
 	"time"
 
 	bolt "go.etcd.io/bbolt"
+	bolterrors "go.etcd.io/bbolt/errors"
 
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip11"
@@ -34,7 +35,7 @@ func writeOldLayoutIndexes(t testing.TB, path string) {
 
 	err = db.Update(func(tx *bolt.Tx) error {
 		for _, name := range [][]byte{indexID, indexPubkey, indexKind, indexTag, indexKindPubkey} {
-			if err := tx.DeleteBucket(name); err != nil && err != bolt.ErrBucketNotFound {
+			if err := tx.DeleteBucket(name); err != nil && err != bolterrors.ErrBucketNotFound {
 				return err
 			}
 			if _, err := tx.CreateBucket(name); err != nil {

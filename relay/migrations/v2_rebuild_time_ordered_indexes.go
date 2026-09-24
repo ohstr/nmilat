@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	bolt "go.etcd.io/bbolt"
+	bolterrors "go.etcd.io/bbolt/errors"
 )
 
 // RebuildTimeOrderedIndexes rewrites the query indexes after created_at
@@ -128,7 +129,7 @@ func (m *RebuildTimeOrderedIndexes) sourceIsEmpty(db *bolt.DB) (bool, error) {
 func (m *RebuildTimeOrderedIndexes) resetBuckets(db *bolt.DB) error {
 	return db.Update(func(tx *bolt.Tx) error {
 		for _, name := range m.RebuildBuckets {
-			if err := tx.DeleteBucket(name); err != nil && err != bolt.ErrBucketNotFound {
+			if err := tx.DeleteBucket(name); err != nil && err != bolterrors.ErrBucketNotFound {
 				return fmt.Errorf("rebuild indexes: drop bucket %v: %w", name, err)
 			}
 			if _, err := tx.CreateBucket(name); err != nil {
