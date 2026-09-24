@@ -30,8 +30,9 @@
   one way.** A store written by this release cannot be read by an earlier
   one: the older binary misreads every index key, so writes appear to
   succeed while queries fail. Take a copy of the database file before
-  starting this version. The rebuild runs during startup and takes time
-  proportional to the number of stored events; progress is logged. (#37)
+  starting this version. The rebuild runs at startup, before the relay
+  accepts connections, and costs roughly a second per 20,000 stored events
+  (2.3s for 50,000 on a development machine); progress is logged. (#37)
 
 ## [0.4.0]
 
