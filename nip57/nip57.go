@@ -46,6 +46,7 @@ var (
 	ErrInvalidAmountValue      = errors.New("nip57: amount must be positive")
 	ErrAmountMismatch          = errors.New("nip57: amount mismatch")
 	ErrDescriptionHashMismatch = errors.New("nip57: description hash mismatch")
+	ErrMissingDescriptionHash  = errors.New("nip57: invoice has no description hash")
 	ErrRecipientMismatch       = errors.New("nip57: recipient mismatch")
 	ErrBolt11DecodeFailed      = errors.New("nip57: failed to decode bolt11")
 	ErrMissingRecipientTag     = errors.New("nip57: missing p tag")
@@ -269,8 +270,11 @@ func ValidateZapReceipt(receipt *nip01.Event) error {
 
 	descHash := sha256.Sum256([]byte(zr.Description))
 	descHashHex := hex.EncodeToString(descHash[:])
+	if invoice.DescriptionHash == "" {
+		return fmt.Errorf("%w: want=%s", ErrMissingDescriptionHash, descHashHex)
+	}
 	if invoice.DescriptionHash != descHashHex {
-		return fmt.Errorf("%w: have=%s want=%s", ErrDescriptionHashMismatch, descHashHex, invoice.DescriptionHash)
+		return fmt.Errorf("%w: have=%s want=%s", ErrDescriptionHashMismatch, invoice.DescriptionHash, descHashHex)
 	}
 
 	if zr.Request.Amount > 0 && invoice.AmountMloki != zr.Request.Amount {
