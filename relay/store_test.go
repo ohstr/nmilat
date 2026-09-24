@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -12,8 +11,6 @@ import (
 	"time"
 
 	"github.com/ohstr/nmilat/nip01"
-
-	bolt "go.etcd.io/bbolt"
 )
 
 type KindTable struct {
@@ -1607,160 +1604,74 @@ func BenchmarkStoreScan(b *testing.B) {
 	}
 }
 
+// BenchmarkStoreCursor measures a bounded, limited scan through the real
+// query path. It used to hand-reimplement the pass loop -- per-cursor
+// budget arithmetic and all -- which meant it stopped representing the code
+// under test the moment that loop changed.
 func BenchmarkStoreCursor(b *testing.B) {
 
 	store := OpenBenchStore(b)
 	defer store.Close()
 
+	base := uint64(time.Now().Unix())
+	kinds := []int{0, 1, 3, 7}
+	var events []*nip01.Event
+	for i := 0; i < 5_000; i++ {
+		events = append(events, signEventAt(b, probeKeyA, kinds[i%len(kinds)], base+uint64(i),
+			fmt.Sprintf("bench %d", i)))
+	}
+	InsertTestEvents(b, store, events)
+
 	tests := []struct {
 		name   string
 		filter *nip01.SubscriptionFilter
 	}{
 		{
-			"case_1",
+			"combined_kinds",
 			&nip01.SubscriptionFilter{
 				Kinds: []int{0, 1, 3, 7},
-				Limit: 500_000,
+				Limit: 500,
 			},
 		},
 		{
-			"case_2",
+			"no_kinds",
 			&nip01.SubscriptionFilter{
-				Kinds: []int{},
-				Limit: 500_000,
+				Limit: 500,
 			},
 		},
 	}
 
 	for _, test := range tests {
 		filter := test.filter
-		b.Run(test.name, func(t *testing.B) {
-			for i := 0; i < t.N; i++ {
-
-				ss, err := newStoreScan(store, filter, make(map[uint64]bool))
-				if err != nil {
-					t.Fatal(err)
+		b.Run(test.name, func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				q := newQuery(b, store, filterGroup(filter))
+				if got := readEvents(b, q, false); got != filter.Limit {
+					b.Fatalf("got %d events, want %d", got, filter.Limit)
 				}
-
-				resumeKeys := make(map[int][]byte, len(ss.cursors))
-				limit := int(math.Ceil(float64(ss.filter.Limit) / float64(len(ss.cursors))))
-				// for ci := range ss.cursors {
-				// 	ss.cursors[ci].firstCollect = true
-				// }
-
-				var totalCollected int
-
-				_ = store.db.View(func(tx *bolt.Tx) error {
-					for {
-						for ci, cursor := range ss.cursors {
-
-							var cursorLimit = limit
-							if ss.filter.Limit-totalCollected < cursorLimit {
-								cursorLimit = ss.filter.Limit - totalCollected
-							}
-
-							resumeKeys[ci], _, _ = cursor.Collect(context.Background(), tx, ss.scanContext, resumeKeys[ci], cursorLimit, false)
-							totalCollected += ss.queueEvents.Len()
-							ss.queueEvents.Clear()
-							// for ss.queueEvents.Len() > 0 {
-							// 	ss.queueEvents.PopEvent()
-							// }
-						}
-						if totalCollected == filter.Limit {
-							break
-						}
-					}
-
-					// log.Debug().Msgf("totalCollected=%d", totalCollected)
-
-					return nil
-				})
-
 			}
-
 		})
 	}
 }
 
-func TestStoreSimpleCursor(b *testing.T) {
+// TestStoreSimpleCursor drives one bounded scan end to end and checks it
+// returns the newest Limit events. It used to walk the cursors by hand and
+// only log how many it had sent.
+func TestStoreSimpleCursor(t *testing.T) {
 
-	store := OpenBenchStore(b)
-	defer store.Close()
+	store := newStore(t)
 
-	tests := []struct {
-		name   string
-		filter *nip01.SubscriptionFilter
-	}{
-		{
-			"case_1",
-			&nip01.SubscriptionFilter{
-				Kinds: []int{},
-				Limit: 1_000,
-			},
-		},
-		{
-			"case_2",
-			&nip01.SubscriptionFilter{
-				Kinds: []int{},
-				Limit: 1_000,
-			},
-		},
+	base := uint64(time.Now().Unix())
+	// Built newest-first and inserted in that order, so arrival order is
+	// the exact reverse of time order.
+	var events []*nip01.Event
+	for i := 0; i < 200; i++ {
+		events = append(events, signEventAt(t, probeKeyA, 1, base-uint64(i), fmt.Sprintf("simple %d", i)))
 	}
+	insertInOrder(t, store, events, newestFirst)
 
-	for _, test := range tests {
-		filter := test.filter
-		b.Run(test.name, func(t *testing.T) {
-			// for i := 0; i < t.N; i++ {
-
-			ss, err := newStoreScan(store, filter, make(map[uint64]bool))
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			_ = store.db.View(func(tx *bolt.Tx) error {
-			loop:
-				for _, cursor := range ss.cursors {
-
-					c := tx.Bucket(ss.index).Cursor()
-
-					c.Seek(cursor.maxKey)
-
-					for k, v := c.Prev(); k != nil; k, _ = c.Prev() {
-						completed, err := cursor.match(ss.scanContext, k, v)
-
-						if completed || err != nil {
-							break
-						}
-
-						if ss.queueEvents.Len() >= filter.Limit {
-							break loop
-						}
-					}
-				}
-
-				potEvents := make(chan *PotentialEvent)
-				wg := sync.WaitGroup{}
-
-				go func() {
-					for range potEvents {
-						wg.Done()
-					}
-				}()
-
-				batch, sent, _ := ss.collectBatch(tx, nil, false)
-				_ = deliverBatch(context.Background(), potEvents, &wg, batch)
-				b.Logf("sent=%d", sent)
-
-				wg.Wait()
-				close(potEvents)
-
-				return nil
-			})
-
-			// }
-
-		})
-	}
+	q := newQuery(t, store, filterGroup(&nip01.SubscriptionFilter{Kinds: []int{1}, Limit: 50}))
+	assertIDsInOrder(t, readEventsCollecting(t, q, false), events[:50])
 }
 
 func TestStoreUnsortedEvents(t *testing.T) {

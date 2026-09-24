@@ -215,6 +215,12 @@ func TestLimitZeroReturnsEverythingNewestFirst(t *testing.T) {
 	assertIDsInOrder(t, readEventsCollecting(t, q, false), events)
 }
 
+// regularKinds are kinds the store keeps verbatim. Kinds 0 and 3 are
+// replaceable, 5 is a deletion request, and 20000+ are ephemeral -- using
+// any of those would have the store rewrite the fixture underneath the
+// assertion.
+var regularKinds = []int{1, 2, 4, 6, 7, 8}
+
 // TestLimitMultiCursorReturnsGlobalNewest covers the second cause: the
 // per-cursor budget. Each case puts the newest events somewhere different
 // relative to cursor order.
@@ -228,20 +234,22 @@ func TestLimitMultiCursorReturnsGlobalNewest(t *testing.T) {
 		store := newStore(t)
 
 		var newestFirstAll []*nip01.Event
-		// kind 5 holds the newest, kinds 1..4 hold older events.
+		// The last kind in the filter holds the newest events; the rest
+		// hold only older ones.
+		last := regularKinds[4]
 		for i := 0; i < 10; i++ {
 			newestFirstAll = append(newestFirstAll,
-				signEventAt(t, probeKeyA, 5, base-uint64(i), fmt.Sprintf("fresh %d", i)))
+				signEventAt(t, probeKeyA, last, base-uint64(i), fmt.Sprintf("fresh %d", i)))
 		}
 		for i := 0; i < 40; i++ {
-			kind := 1 + i%4
+			kind := regularKinds[i%4]
 			newestFirstAll = append(newestFirstAll,
 				signEventAt(t, probeKeyA, kind, base-100-uint64(i), fmt.Sprintf("stale %d", i)))
 		}
 		insertInOrder(t, store, newestFirstAll, newestFirst)
 
 		q := newQuery(t, store, filterGroup(&nip01.SubscriptionFilter{
-			Kinds: []int{1, 2, 3, 4, 5},
+			Kinds: regularKinds[:5],
 			Limit: 5,
 		}))
 		assertIDsInOrder(t, readEventsCollecting(t, q, false), newestFirstAll[:5])
@@ -254,17 +262,18 @@ func TestLimitMultiCursorReturnsGlobalNewest(t *testing.T) {
 		// The five newest events are one per kind, interleaved.
 		for i := 0; i < 5; i++ {
 			newestFirstAll = append(newestFirstAll,
-				signEventAt(t, probeKeyA, 1+i, base-uint64(i), fmt.Sprintf("fresh kind %d", 1+i)))
+				signEventAt(t, probeKeyA, regularKinds[i], base-uint64(i),
+					fmt.Sprintf("fresh kind %d", regularKinds[i])))
 		}
 		for i := 0; i < 40; i++ {
-			kind := 1 + i%5
+			kind := regularKinds[i%5]
 			newestFirstAll = append(newestFirstAll,
 				signEventAt(t, probeKeyA, kind, base-100-uint64(i), fmt.Sprintf("stale %d", i)))
 		}
 		insertInOrder(t, store, newestFirstAll, newestFirst)
 
 		q := newQuery(t, store, filterGroup(&nip01.SubscriptionFilter{
-			Kinds: []int{1, 2, 3, 4, 5},
+			Kinds: regularKinds[:5],
 			Limit: 5,
 		}))
 		assertIDsInOrder(t, readEventsCollecting(t, q, false), newestFirstAll[:5])
@@ -279,17 +288,18 @@ func TestLimitMultiCursorReturnsGlobalNewest(t *testing.T) {
 		var newestFirstAll []*nip01.Event
 		for i := 0; i < 6; i++ {
 			newestFirstAll = append(newestFirstAll,
-				signEventAt(t, probeKeyA, 1+i, base-uint64(i), fmt.Sprintf("fresh kind %d", 1+i)))
+				signEventAt(t, probeKeyA, regularKinds[i], base-uint64(i),
+					fmt.Sprintf("fresh kind %d", regularKinds[i])))
 		}
 		for i := 0; i < 60; i++ {
-			kind := 1 + i%6
+			kind := regularKinds[i%6]
 			newestFirstAll = append(newestFirstAll,
 				signEventAt(t, probeKeyA, kind, base-100-uint64(i), fmt.Sprintf("stale %d", i)))
 		}
 		insertInOrder(t, store, newestFirstAll, newestFirst)
 
 		q := newQuery(t, store, filterGroup(&nip01.SubscriptionFilter{
-			Kinds: []int{1, 2, 3, 4, 5, 6},
+			Kinds: regularKinds,
 			Limit: 3,
 		}))
 		assertIDsInOrder(t, readEventsCollecting(t, q, false), newestFirstAll[:3])
@@ -353,14 +363,14 @@ func TestLimitMultiCursorReturnsGlobalNewest(t *testing.T) {
 		for i := 0; i < 10; i++ {
 			all = append(all, signEventAt(t, probeKeyA, 1, base-uint64(i), fmt.Sprintf("fresh %d", i)))
 		}
-		// Kind 2 exists but is entirely older.
+		// Kind 4 exists but is entirely older.
 		for i := 0; i < 10; i++ {
-			all = append(all, signEventAt(t, probeKeyA, 2, base-100-uint64(i), fmt.Sprintf("stale %d", i)))
+			all = append(all, signEventAt(t, probeKeyA, 4, base-100-uint64(i), fmt.Sprintf("stale %d", i)))
 		}
 		insertInOrder(t, store, all, newestFirst)
 
 		q := newQuery(t, store, filterGroup(&nip01.SubscriptionFilter{
-			Kinds: []int{1, 2},
+			Kinds: []int{1, 4},
 			Limit: 4,
 		}))
 		assertIDsInOrder(t, readEventsCollecting(t, q, false), all[:4])
