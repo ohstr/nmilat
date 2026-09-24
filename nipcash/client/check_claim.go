@@ -8,14 +8,14 @@ import (
 
 // CheckClaim confirms a matching, unclaimed recipient actually exists on
 // c's own Cash Hub connection for tok — via nipcash.MatchClaimAuto, tried
-// live against list_recipients rather than gated on tok's own
+// live against cash_status rather than gated on tok's own
 // identity_required TLV (a stale-prone hint, not a live guarantee — see
 // MatchClaimAuto). asPubkeyHex is the caller's own local pubkey if it
 // has one; a cash-mode match is always attempted regardless. Returns
 // nipcash.ErrClaimNotFound, not one of its own, if nothing matches.
 //
 // For a cash-mode token, a match only proves *some* unclaimed cash-mode
-// recipient exists — list_recipients carries no identity_value for a
+// recipient exists — cash_status carries no identity_value for a
 // cash-mode entry, so this can never confirm the *specific* secret the
 // caller holds is the one still valid (only redemption itself proves
 // that). Don't read a successful CheckClaim as a stronger guarantee than
@@ -28,7 +28,7 @@ import (
 // connection. Connect remains the only place a raw token/pairing string
 // is ever consumed.
 func (c *Client) CheckClaim(ctx context.Context, tok nipcash.Token, asPubkeyHex string) (*nipcash.CheckClaimResult, error) {
-	result, err := c.ListRecipients(ctx)
+	result, err := c.CashStatus(ctx)
 	if err != nil {
 		return nil, err
 	}

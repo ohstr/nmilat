@@ -19,7 +19,7 @@ var ErrClaimNotFound = errors.New("nipcash: no matching, unclaimed recipient on 
 // local storage concept; that's entirely the caller's own.
 type CheckClaimResult struct {
 	IsCash       bool
-	AmountMillis uint64  // authoritative, from list_recipients
+	AmountMillis uint64  // authoritative, from cash_status
 	MinterPubkey *string // non-nil only if a verified mint-provenance signature is present
 	// RedeemFeeMillis/NetRedeemableMillis/ExpiresAt mirror the matched
 	// RecipientStatus row's own fields — surfaced here so a caller
