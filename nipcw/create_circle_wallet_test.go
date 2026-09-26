@@ -80,21 +80,27 @@ func TestCreateCircleWalletParams_Request(t *testing.T) {
 	}
 }
 
-func TestCreateCircleWalletParams_ParseResult_DecryptsPairingURI(t *testing.T) {
+const testPairingURI = "nostr+walletconnect://walletpubkey?relay=wss://r&secret=abc"
+
+func TestCreateCircleWalletParams_ParseResult_DecryptsDetails(t *testing.T) {
 	memberPrivHex, memberPubHex := generateTestKeypair(t)
 	hubPrivHex, hubPubHex := generateTestKeypair(t)
 
-	// Simulate the server side: encrypt the pairing URI to the member's own
-	// pubkey using the Hub's own privkey.
-	ciphertext := encryptForTest(t, hubPrivHex, memberPubHex, "nostr+walletconnect://walletpubkey?relay=wss://r&secret=abc")
+	// Simulate the server side: the whole result, not just the pairing URI, is
+	// encrypted to the member's own pubkey using the Hub's own privkey.
+	details, err := json.Marshal(circleWalletDetailsWire{
+		PairingURI:    testPairingURI,
+		WalletPubkey:  "walletpubkey",
+		ExpiresAt:     1234,
+		BudgetRenewal: "never",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ciphertext := encryptForTest(t, hubPrivHex, memberPubHex, string(details))
 
 	p := CreateCircleWalletParams{Credential: BySigning(memberPrivHex), MaxAmountMillis: 1000}
-	raw, err := json.Marshal(createCircleWalletResponseWire{
-		EncryptedPairingURI: ciphertext,
-		WalletPubkey:        "walletpubkey",
-		ExpiresAt:           1234,
-		BudgetRenewal:       "never",
-	})
+	raw, err := json.Marshal(createCircleWalletResponseWire{EncryptedDetails: ciphertext})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,11 +108,52 @@ func TestCreateCircleWalletParams_ParseResult_DecryptsPairingURI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseResult: %v", err)
 	}
-	if resp.PairingURI != "nostr+walletconnect://walletpubkey?relay=wss://r&secret=abc" {
+	if resp.PairingURI != testPairingURI {
 		t.Fatalf("PairingURI: got %q", resp.PairingURI)
 	}
-	if resp.WalletPubkey != "walletpubkey" || resp.ExpiresAt != 1234 {
+	if resp.WalletPubkey != "walletpubkey" || resp.ExpiresAt != 1234 || resp.BudgetRenewal != "never" {
 		t.Fatalf("resp: %+v", resp)
+	}
+}
+
+// TestCreateCircleWalletParams_ParseResult_NoDetailsIsAnError pins that a
+// response with nothing to decrypt fails loudly. Returning a zero-valued
+// CreateCircleWalletResponse would hand the caller a blank wallet pubkey and
+// blank terms that read exactly like real ones.
+func TestCreateCircleWalletParams_ParseResult_NoDetailsIsAnError(t *testing.T) {
+	memberPrivHex, _ := generateTestKeypair(t)
+	_, hubPubHex := generateTestKeypair(t)
+
+	p := CreateCircleWalletParams{Credential: BySigning(memberPrivHex)}
+	if _, err := p.ParseResult(hubPubHex, []byte(`{}`)); err == nil {
+		t.Fatal("expected an error for a response with no encrypted_details")
+	}
+}
+
+// TestCreateCircleWalletParams_ParseResult_CoMemberCannotDecrypt is the reason
+// the details are nested at all: a circle join goes over the SHARED circlehub
+// connection, so another member sees this exact response.
+func TestCreateCircleWalletParams_ParseResult_CoMemberCannotDecrypt(t *testing.T) {
+	_, memberPubHex := generateTestKeypair(t)
+	coMemberPrivHex, _ := generateTestKeypair(t)
+	hubPrivHex, hubPubHex := generateTestKeypair(t)
+
+	details, err := json.Marshal(circleWalletDetailsWire{
+		PairingURI:   testPairingURI,
+		WalletPubkey: "walletpubkey",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ciphertext := encryptForTest(t, hubPrivHex, memberPubHex, string(details))
+	raw, err := json.Marshal(createCircleWalletResponseWire{EncryptedDetails: ciphertext})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	coMember := CreateCircleWalletParams{Credential: BySigning(coMemberPrivHex)}
+	if _, err := coMember.ParseResult(hubPubHex, raw); err == nil {
+		t.Fatal("a co-member of the circle must not be able to decrypt another member's details")
 	}
 }
 
