@@ -4,6 +4,16 @@
 
 ### Added
 
+- `nip71` implements NIP-71 (Video Events): normal (kind 21) and short (22)
+  videos plus their addressable counterparts (34235/34236), with the NIP-92
+  `imeta` variants that carry each rendition and audio track. A variant
+  keeps unmodelled imeta properties in `Extra`, so round-tripping an event
+  never silently drops information NIP-92 or NIP-94 defines.
+- `nip71.Video.HasPlayableVariant` answers whether any variant has a url a
+  client could play. Parsing does not require one: the spec calls imeta the
+  primary source of video information but never states it as a MUST.
+- `nip71/relayreg` declares NIP-71 in a relay's NIP-11 document and
+  validates video events on ingest.
 - `nipA0` implements NIP-A0 (Voice Messages): root voice notes (kind 1222)
   and replies (1244), plus the optional NIP-92 `imeta` preview carrying a
   waveform and duration so a client can draw one without downloading the

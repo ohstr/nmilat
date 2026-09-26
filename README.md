@@ -55,6 +55,7 @@ go get github.com/ohstr/nmilat
 - **[`nip53`](https://github.com/nostr-protocol/nips/blob/master/53.md)** — Live streaming and spaces: live streams, meeting spaces and their rooms, listener presence, live chat
 - **[`nip57`](https://github.com/nostr-protocol/nips/blob/master/57.md)** — Lightning zaps
 - **[`nip65`](https://github.com/nostr-protocol/nips/blob/master/65.md)** — Relay list metadata
+- **[`nip71`](https://github.com/nostr-protocol/nips/blob/master/71.md)** — Video events: normal, short and addressable videos with imeta variants
 - **[`nip77`](https://github.com/nostr-protocol/nips/blob/master/77.md)** — Negentropy sync
 - **[`nip88`](https://github.com/nostr-protocol/nips/blob/master/88.md)** — Polls
 - **[`nip90`](https://github.com/nostr-protocol/nips/blob/master/90.md)** — Data Vending Machines
