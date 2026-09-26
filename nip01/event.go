@@ -112,7 +112,36 @@ func (ev *Event) HashID() ([]byte, error) {
 type VerifyOption func(*verifyConfig)
 
 type verifyConfig struct {
-	skipPow bool
+	skipPow          bool
+	minPowDifficulty int
+}
+
+// InsufficientPowError reports an event whose ID does not meet a required
+// NIP-13 difficulty. Callers match it with errors.As to render their own
+// rejection message.
+type InsufficientPowError struct {
+	Got  int
+	Want int
+}
+
+func (e *InsufficientPowError) Error() string {
+	return fmt.Sprintf("pow: difficulty %d is less than %d", e.Got, e.Want)
+}
+
+// WithMinPowDifficulty enforces a minimum NIP-13 difficulty on the event's ID.
+//
+// The check runs as soon as the ID is known to match the event's own contents
+// and BEFORE the schnorr signature is verified. That ordering is the whole
+// point: signature verification is the most expensive step in Verify (hundreds
+// of microseconds of secp256k1), so a PoW floor checked after it cannot protect
+// against anyone flooding cheap junk. Checked before it, the floor makes the
+// flooder do the work instead.
+//
+// It cannot be checked any earlier than the ID match, because difficulty is a
+// property of the ID — and an unvalidated ID is just a claim, so a flooder could
+// otherwise assert an ID full of leading zeros that its content does not hash to.
+func WithMinPowDifficulty(bits int) VerifyOption {
+	return func(c *verifyConfig) { c.minPowDifficulty = bits }
 }
 
 // WithoutPowCheck skips NIP-13 proof-of-work validation: an event carrying
@@ -164,6 +193,19 @@ func (ev *Event) Verify(opts ...VerifyOption) error {
 	genID := hex.EncodeToString(genEventIDBytes)
 	if ev.ID != genID {
 		return fmt.Errorf("event ID mismatch generated ID=%s", genID)
+	}
+
+	// The ID is now known to be the event's own hash, so its difficulty is a
+	// fact rather than a claim — and this is still ahead of the signature
+	// verify below, which is the expensive step worth protecting.
+	if cfg.minPowDifficulty > 0 {
+		difficulty, err := nip13.Difficulty(genID)
+		if err != nil {
+			return fmt.Errorf("failed to measure pow difficulty: %w", err)
+		}
+		if difficulty < cfg.minPowDifficulty {
+			return &InsufficientPowError{Got: difficulty, Want: cfg.minPowDifficulty}
+		}
 	}
 
 	publicKeyBytes, err := hex.DecodeString(ev.PubKey)
