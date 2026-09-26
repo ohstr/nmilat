@@ -69,6 +69,15 @@ func TestLimits_Validate(t *testing.T) {
 			func(l *Limits) { l.PadBucketBytes = l.MaxEnvelopeBytes + 1 },
 			ErrLimitsPadTooLarge,
 		},
+		"consolidate cap below the two-source minimum": {
+			func(l *Limits) { l.MaxConsolidateSources = 1 },
+			ErrConsolidateCapTooLow,
+		},
+		// The one that caught NIP-CASH's own cap of 100.
+		"consolidate cap whose maximal item cannot be encrypted": {
+			func(l *Limits) { l.MaxConsolidateSources = 100 },
+			ErrConsolidateCapTooHigh,
+		},
 	}
 
 	for name, tc := range tests {
@@ -130,6 +139,40 @@ func TestLimits_PaddedSize_SmallEnvelopesLookLikeBatches(t *testing.T) {
 	}
 }
 
+// TestEstimatedConsolidateItemBytes_MatchesMeasurements pins the cost model the
+// consolidate cap is validated against. The three figures are from encoding real
+// items; if the item shape changes, this fails and the cap must be re-derived
+// rather than silently drifting out of step with reality.
+func TestEstimatedConsolidateItemBytes_MatchesMeasurements(t *testing.T) {
+	for sources, want := range map[int]int{2: 2914, 10: 10530, 100: 96210} {
+		if got := EstimatedConsolidateItemBytes(sources); got != want {
+			t.Errorf("EstimatedConsolidateItemBytes(%d) = %d, measured %d", sources, got, want)
+		}
+	}
+}
+
+// TestDefaultConsolidateCap_IsTheLargestThatComfortablyFits documents why 48 and
+// not some other number, and pins that NIP-CASH's standard-path cap of 100 is
+// genuinely impossible here — not merely over the configured limit, but over
+// NIP-44's hard ceiling, so no envelope size could accommodate it.
+func TestDefaultConsolidateCap_IsTheLargestThatComfortablyFits(t *testing.T) {
+	l := DefaultLimits()
+
+	atDefault := EstimatedConsolidateItemBytes(l.MaxConsolidateSources)
+	if atDefault > l.MaxEnvelopeBytes {
+		t.Fatalf("the default cap does not fit: %d bytes > %d", atDefault, l.MaxEnvelopeBytes)
+	}
+	t.Logf("%d sources is ~%d bytes of a %d byte envelope, leaving ~%d spare",
+		l.MaxConsolidateSources, atDefault, l.MaxEnvelopeBytes, l.MaxEnvelopeBytes-atDefault)
+
+	// NIP-CASH's standard cap cannot be encrypted at all.
+	if at100 := EstimatedConsolidateItemBytes(100); at100 <= MaxNIP44Plaintext {
+		t.Errorf("100 sources is %d bytes, which would fit NIP-44's %d ceiling — "+
+			"the whole reason for a lower private-mode cap has gone away",
+			at100, MaxNIP44Plaintext)
+	}
+}
+
 func TestLimits_PaddedSize_RejectsOversize(t *testing.T) {
 	l := DefaultLimits()
 
@@ -150,11 +193,14 @@ func TestLimits_PaddedSize_RejectsOversize(t *testing.T) {
 // TestLimits_PaddedSize_HonoursCustomPolicy checks the knobs are actually knobs —
 // a hub configuring a tighter policy gets that policy, not the default.
 func TestLimits_PaddedSize_HonoursCustomPolicy(t *testing.T) {
+	// Note the consolidate cap: an 8 KiB envelope only affords 7 sources
+	// (1010 + 7*952 = 7674), which is the coherence Validate enforces.
 	tight := Limits{
-		MaxEnvelopeBytes: 8 * 1024,
-		MaxItems:         4,
-		PadBucketBytes:   1024,
-		MaxVerifyBudget:  10,
+		MaxEnvelopeBytes:      8 * 1024,
+		MaxItems:              4,
+		PadBucketBytes:        1024,
+		MaxVerifyBudget:       10,
+		MaxConsolidateSources: 7,
 	}
 	if err := tight.Validate(); err != nil {
 		t.Fatalf("a tighter policy must be valid: %v", err)
