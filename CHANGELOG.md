@@ -4,6 +4,23 @@
 
 ### Added
 
+- `nip53` implements NIP-53 (Live Streaming and Spaces): the live
+  streaming event (kind 30311), the meeting space that hosts audio/video
+  rooms (30312) and the meetings held in one (30313), listener presence
+  (10312) and live chat (1311), with parse/validate/construct for each.
+  A space's `service` tag is transport-neutral, so a room can be reached
+  over any media transport rather than a single vendor's.
+- `nip53.IsStale` and `nip53.IsPresenceFresh` implement the spec's two
+  liveness heuristics -- a `live` activity with no update for an hour may
+  be treated as ended, and presence older than a window should be
+  filtered -- so callers stop reinventing them inconsistently.
+- `nip53.SignParticipationProof` and `nip53.VerifyParticipationProof`
+  implement proof of agreement to participate, the signature over an
+  activity's `a` tag that stops an event owner listing accounts who never
+  agreed to join.
+- `nip53/relayreg` declares NIP-53 in a relay's NIP-11 document and
+  auto-validates all five kinds on ingest, so a relay hosting rooms
+  rejects structurally broken ones instead of storing them.
 - `nip57.ValidateZapRequestForRelay` and `nip57.ValidateZapReceiptForRelay`
   validate zap events the way a relay ingesting someone else's traffic
   should: every MUST-level rule in NIP-57 is enforced, while the rules the

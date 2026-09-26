@@ -51,6 +51,7 @@ go get github.com/ohstr/nmilat
 - **[`nip46`](https://github.com/nostr-protocol/nips/blob/master/46.md)** — Nostr Connect (remote signing)
 - **[`nip47`](https://github.com/nostr-protocol/nips/blob/master/47.md)** — Wallet Connect (NWC): info/request/response/notification events, encryption negotiation, pairing URI
 - **[`nip48`](https://github.com/nostr-protocol/nips/blob/master/48.md)** — Proxy tags
+- **[`nip53`](https://github.com/nostr-protocol/nips/blob/master/53.md)** — Live streaming and spaces: live streams, meeting spaces and their rooms, listener presence, live chat
 - **[`nip57`](https://github.com/nostr-protocol/nips/blob/master/57.md)** — Lightning zaps
 - **[`nip65`](https://github.com/nostr-protocol/nips/blob/master/65.md)** — Relay list metadata
 - **[`nip77`](https://github.com/nostr-protocol/nips/blob/master/77.md)** — Negentropy sync
