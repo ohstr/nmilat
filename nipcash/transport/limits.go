@@ -45,11 +45,16 @@ const (
 	DefaultMaxEnvelopeBytes = 56 * 1024
 
 	// DefaultMaxItems is a cheap pre-check, not the real constraint. Bytes are
-	// the real constraint (see MaxEnvelopeBytes) because items vary hugely: an
-	// item is ~900-1100 bytes once it carries a signed proof event, but one
-	// cash_consolidate item can legitimately carry 100 nested source proofs. A
-	// count cap alone cannot express that, so it exists only to reject an absurd
-	// item count before anything is parsed or hashed.
+	// the real constraint (see MaxEnvelopeBytes) because items vary hugely:
+	// measured, a cash_status item is 865 bytes and a cash_redeem 1155, while one
+	// cash_consolidate item carrying nested source proofs runs to tens of
+	// kilobytes. A count cap cannot express that, so it exists only to reject an
+	// absurd item count before anything is parsed or hashed.
+	//
+	// 32 is deliberately below what the byte budget allows (32 redeems is ~37 KB
+	// of 56 KB): it also bounds worst-case CPU per envelope independently of size,
+	// and a client needing more sends a second envelope for one extra ~166us
+	// unwrap.
 	DefaultMaxItems = 32
 
 	// DefaultPadBucketBytes is the padding granularity. Ciphertext length leaks
@@ -64,7 +69,41 @@ const (
 	// verifications — at ~373us each (measured) that is over a second of CPU
 	// from a single envelope, which is a denial of service with valid syntax.
 	DefaultMaxVerifyBudget = 200
+
+	// DefaultMaxConsolidateSources caps the sources in one cash_consolidate item,
+	// and it is LOWER than NIP-CASH's own cap of 100 on the standard transport.
+	//
+	// That is not a preference, it is arithmetic: a source carries its own signed
+	// kind-23198 proof, so 100 sources is a ~96 KB item — past NIP-44's 65535-byte
+	// ceiling, meaning a maximal consolidate cannot be encrypted AT ALL on this
+	// transport, at any configured envelope size. 48 sources is ~46 KB, which fits
+	// a default envelope with room to spare. See EstimatedConsolidateItemBytes.
+	DefaultMaxConsolidateSources = 48
 )
+
+// Measured cost of a cash_consolidate item, used to check a configured source cap
+// against the envelope ceiling rather than trusting it.
+//
+// Both figures come from encoding real items: 2 sources is 2914 bytes and 10 is
+// 10530, giving 952 bytes per source over a 1010-byte base. 100 sources lands at
+// 96210, which is how the ceiling problem was found in the first place.
+const (
+	consolidateItemBaseBytes      = 1010
+	consolidateItemPerSourceBytes = 952
+	// minConsolidateSources is NIP-CASH's own floor: consolidating fewer than two
+	// slices is not a consolidation.
+	minConsolidateSources = 2
+)
+
+// EstimatedConsolidateItemBytes reports roughly how large a cash_consolidate item
+// with n sources encodes to. Deliberately an estimate: params vary a little, so
+// use it to size caps with margin, not to admit one specific item.
+func EstimatedConsolidateItemBytes(n int) int {
+	if n < 0 {
+		n = 0
+	}
+	return consolidateItemBaseBytes + n*consolidateItemPerSourceBytes
+}
 
 // Limits is a hub's configured envelope policy. The hub enforces its own values
 // on receipt; a client should ask the hub for them rather than assume, because a
@@ -77,25 +116,32 @@ type Limits struct {
 	MaxItems         int
 	PadBucketBytes   int
 	MaxVerifyBudget  int
+	// MaxConsolidateSources caps sources in one cash_consolidate item. Validate
+	// refuses a value whose maximal item could not fit MaxEnvelopeBytes, so a hub
+	// cannot advertise a cap that is impossible to honour.
+	MaxConsolidateSources int
 }
 
 // DefaultLimits returns the policy a hub gets when it configures nothing.
 func DefaultLimits() Limits {
 	return Limits{
-		MaxEnvelopeBytes: DefaultMaxEnvelopeBytes,
-		MaxItems:         DefaultMaxItems,
-		PadBucketBytes:   DefaultPadBucketBytes,
-		MaxVerifyBudget:  DefaultMaxVerifyBudget,
+		MaxEnvelopeBytes:      DefaultMaxEnvelopeBytes,
+		MaxItems:              DefaultMaxItems,
+		PadBucketBytes:        DefaultPadBucketBytes,
+		MaxVerifyBudget:       DefaultMaxVerifyBudget,
+		MaxConsolidateSources: DefaultMaxConsolidateSources,
 	}
 }
 
 var (
-	ErrLimitsNotPositive    = errors.New("transport: every envelope limit must be positive")
-	ErrLimitsAboveCeiling   = errors.New("transport: MaxEnvelopeBytes exceeds NIP-44's plaintext ceiling")
-	ErrLimitsPadTooLarge    = errors.New("transport: PadBucketBytes exceeds MaxEnvelopeBytes")
-	ErrEnvelopeTooLarge     = errors.New("transport: envelope exceeds the configured size limit")
-	ErrTooManyItems         = errors.New("transport: envelope exceeds the configured item limit")
-	ErrVerifyBudgetExceeded = errors.New("transport: envelope exceeds the configured verification budget")
+	ErrLimitsNotPositive     = errors.New("transport: every envelope limit must be positive")
+	ErrLimitsAboveCeiling    = errors.New("transport: MaxEnvelopeBytes exceeds NIP-44's plaintext ceiling")
+	ErrLimitsPadTooLarge     = errors.New("transport: PadBucketBytes exceeds MaxEnvelopeBytes")
+	ErrConsolidateCapTooLow  = errors.New("transport: MaxConsolidateSources below NIP-CASH's two-source minimum")
+	ErrConsolidateCapTooHigh = errors.New("transport: MaxConsolidateSources allows an item too large to encrypt")
+	ErrEnvelopeTooLarge      = errors.New("transport: envelope exceeds the configured size limit")
+	ErrTooManyItems          = errors.New("transport: envelope exceeds the configured item limit")
+	ErrVerifyBudgetExceeded  = errors.New("transport: envelope exceeds the configured verification budget")
 )
 
 // Validate rejects a policy that cannot be honoured. A hub calls this on the
@@ -104,6 +150,18 @@ var (
 func (l Limits) Validate() error {
 	if l.MaxEnvelopeBytes <= 0 || l.MaxItems <= 0 || l.PadBucketBytes <= 0 || l.MaxVerifyBudget <= 0 {
 		return fmt.Errorf("%w: %+v", ErrLimitsNotPositive, l)
+	}
+	// NIP-CASH requires at least two sources for a consolidate to mean anything,
+	// so a cap below that would forbid the method outright rather than bound it.
+	if l.MaxConsolidateSources < minConsolidateSources {
+		return fmt.Errorf("%w: %d < %d", ErrConsolidateCapTooLow, l.MaxConsolidateSources, minConsolidateSources)
+	}
+	// The check that matters: a cap whose maximal item cannot be encrypted is a
+	// promise the hub cannot keep. This is exactly how NIP-CASH's own cap of 100
+	// turned out to be impossible here (~96 KB, past NIP-44's ceiling).
+	if got := EstimatedConsolidateItemBytes(l.MaxConsolidateSources); got > l.MaxEnvelopeBytes {
+		return fmt.Errorf("%w: %d sources is ~%d bytes, over the %d envelope limit",
+			ErrConsolidateCapTooHigh, l.MaxConsolidateSources, got, l.MaxEnvelopeBytes)
 	}
 	if l.MaxEnvelopeBytes > MaxNIP44Plaintext {
 		return fmt.Errorf("%w: %d > %d", ErrLimitsAboveCeiling, l.MaxEnvelopeBytes, MaxNIP44Plaintext)
