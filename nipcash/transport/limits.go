@@ -105,6 +105,28 @@ func EstimatedConsolidateItemBytes(n int) int {
 	return consolidateItemBaseBytes + n*consolidateItemPerSourceBytes
 }
 
+// MaxSourcesForEnvelope returns the largest consolidate source count whose item
+// still fits an envelope of maxEnvelopeBytes, never below NIP-CASH's two-source
+// minimum.
+//
+// This exists so a smaller envelope yields a coherent source cap on its own. A
+// hub that lowers MaxEnvelopeBytes and leaves MaxConsolidateSources at its
+// default would otherwise hold a policy Validate rejects outright — the cap and
+// the envelope size are not independent, and making the caller notice that by
+// hand is how the NIP-CASH cap-of-100 problem happened in the first place.
+//
+// The floor is deliberate: it can return a count that does NOT fit, when the
+// envelope is too small for even two sources. Validate then rejects the policy,
+// which is the honest outcome — such a hub cannot serve consolidate at all and
+// should be told, not silently configured into a cap of zero.
+func MaxSourcesForEnvelope(maxEnvelopeBytes int) int {
+	fits := (maxEnvelopeBytes - consolidateItemBaseBytes) / consolidateItemPerSourceBytes
+	if fits < minConsolidateSources {
+		return minConsolidateSources
+	}
+	return fits
+}
+
 // Limits is a hub's configured envelope policy. The hub enforces its own values
 // on receipt; a client should ask the hub for them rather than assume, because a
 // client that builds to its own idea of the limits gets a rejection it could
