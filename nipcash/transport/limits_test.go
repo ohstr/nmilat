@@ -173,6 +173,47 @@ func TestDefaultConsolidateCap_IsTheLargestThatComfortablyFits(t *testing.T) {
 	}
 }
 
+// TestMaxSourcesForEnvelope_DerivesACoherentCap covers the reason the helper
+// exists: the source cap and the envelope size are not independent, so a hub that
+// shrinks one must get a matching value for the other without doing the
+// arithmetic itself.
+func TestMaxSourcesForEnvelope_DerivesACoherentCap(t *testing.T) {
+	for _, envelopeBytes := range []int{8 * 1024, 16 * 1024, 32 * 1024, DefaultMaxEnvelopeBytes, MaxNIP44Plaintext} {
+		got := MaxSourcesForEnvelope(envelopeBytes)
+
+		if fits := EstimatedConsolidateItemBytes(got); fits > envelopeBytes {
+			t.Errorf("MaxSourcesForEnvelope(%d) = %d, whose item is %d bytes — does not fit",
+				envelopeBytes, got, fits)
+		}
+		// And it must be the LARGEST that fits, not merely a safe one.
+		if oneMore := EstimatedConsolidateItemBytes(got + 1); oneMore <= envelopeBytes {
+			t.Errorf("MaxSourcesForEnvelope(%d) = %d, but %d would also fit (%d bytes)",
+				envelopeBytes, got, got+1, oneMore)
+		}
+		t.Logf("a %6d byte envelope affords %2d consolidate sources", envelopeBytes, got)
+	}
+}
+
+// TestMaxSourcesForEnvelope_FloorsAtTheProtocolMinimum pins the honest failure
+// mode: an envelope too small for two sources yields the minimum rather than
+// zero, so Validate rejects the policy and the operator is told, instead of the
+// hub silently forbidding consolidate.
+func TestMaxSourcesForEnvelope_FloorsAtTheProtocolMinimum(t *testing.T) {
+	tiny := 1024 // far too small for even two sources
+	got := MaxSourcesForEnvelope(tiny)
+	if got != minConsolidateSources {
+		t.Fatalf("MaxSourcesForEnvelope(%d) = %d, want the %d-source floor", tiny, got, minConsolidateSources)
+	}
+
+	bad := DefaultLimits()
+	bad.MaxEnvelopeBytes = tiny
+	bad.PadBucketBytes = 256
+	bad.MaxConsolidateSources = got
+	if err := bad.Validate(); err == nil {
+		t.Error("a policy whose envelope cannot hold two sources must be rejected, not accepted")
+	}
+}
+
 func TestLimits_PaddedSize_RejectsOversize(t *testing.T) {
 	l := DefaultLimits()
 
