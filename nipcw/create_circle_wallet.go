@@ -64,15 +64,29 @@ func (p CreateCircleWalletParams) Request(hubPubkey string) (CreateCircleWalletR
 	}, nil
 }
 
-// createCircleWalletResponseWire is create_circle_wallet's raw wire
-// response — EncryptedPairingURI is still NIP-44 encrypted at this point;
-// ParseResult decrypts it into CreateCircleWalletResponse's PairingURI.
+// createCircleWalletResponseWire is create_circle_wallet's raw wire response.
+//
+// It carries exactly one field, and that is the security property, not an
+// accident: a circle join is made over the *shared* circlehub connection, so the
+// NIP-47 response envelope is encrypted only to a key every member of the circle
+// holds. Any field placed outside EncryptedDetails is therefore readable by every
+// other member — and the worst of those is the joiner's own wallet pubkey, which
+// appears in the clear `p` tag of every subsequent call that wallet makes, so a
+// co-member who learned it could follow that member for the wallet's whole life.
+//
+// Nothing may be added here. New fields belong in circleWalletDetailsWire.
 type createCircleWalletResponseWire struct {
-	EncryptedPairingURI string `json:"encrypted_pairing_uri"`
-	WalletPubkey        string `json:"wallet_pubkey"`
-	ExpiresAt           int64  `json:"expires_at"`
-	FeesPpm             int    `json:"fees_ppm"`
-	BudgetRenewal       string `json:"budget_renewal"`
+	EncryptedDetails string `json:"encrypted_details"`
+}
+
+// circleWalletDetailsWire is the plaintext inside EncryptedDetails — the
+// joining member's own wallet identity and terms, readable only by them.
+type circleWalletDetailsWire struct {
+	PairingURI    string `json:"pairing_uri"`
+	WalletPubkey  string `json:"wallet_pubkey"`
+	ExpiresAt     int64  `json:"expires_at"`
+	FeesPpm       int    `json:"fees_ppm"`
+	BudgetRenewal string `json:"budget_renewal"`
 }
 
 // CreateCircleWalletResponse is create_circle_wallet's response, with
@@ -86,27 +100,44 @@ type CreateCircleWalletResponse struct {
 }
 
 // ParseResult parses create_circle_wallet's wire response, decrypting
-// encrypted_pairing_uri with p.Credential's own privkey (the response is
-// NIP-44 encrypted to the requester's own pubkey — NIP-CW §Creating a
-// Circle Wallet — so no other holder of the shared Hub connection,
-// including the Hub owner, can read it). Exported for nipcw/client's use;
-// a caller using nipcw/client's CreateCircleWallet method never calls this
-// directly.
+// encrypted_details with p.Credential's own privkey (NIP-44 to the requester's
+// own pubkey — NIP-CW §Creating a Circle Wallet — so no other holder of the
+// shared Hub connection can read it).
+//
+// That guarantee now covers the whole result. It previously covered only the
+// pairing URI: wallet_pubkey, expires_at, fees_ppm and budget_renewal travelled
+// beside the ciphertext, where every other member of the circle could read them.
+// The returned CreateCircleWalletResponse is unchanged, so callers see nothing
+// of this.
+//
+// Exported for nipcw/client's use; a caller using nipcw/client's
+// CreateCircleWallet method never calls this directly.
 func (p CreateCircleWalletParams) ParseResult(hubPubkey string, data []byte) (*CreateCircleWalletResponse, error) {
 	var wire createCircleWalletResponseWire
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return nil, err
 	}
-	pairingURI, err := decryptFromPubkey(p.Credential.privKeyHex, hubPubkey, wire.EncryptedPairingURI)
+	if wire.EncryptedDetails == "" {
+		// Either a hub that predates nested details, or a stripped response.
+		// Both are indeterminate rather than empty: returning a zero-valued
+		// response here would hand the caller a blank wallet pubkey and blank
+		// terms that read as real values.
+		return nil, fmt.Errorf("nipcw: response carries no encrypted_details")
+	}
+	plaintext, err := decryptFromPubkey(p.Credential.privKeyHex, hubPubkey, wire.EncryptedDetails)
 	if err != nil {
-		return nil, fmt.Errorf("nipcw: decrypt pairing uri: %w", err)
+		return nil, fmt.Errorf("nipcw: decrypt wallet details: %w", err)
+	}
+	var details circleWalletDetailsWire
+	if err := json.Unmarshal([]byte(plaintext), &details); err != nil {
+		return nil, fmt.Errorf("nipcw: parse wallet details: %w", err)
 	}
 	return &CreateCircleWalletResponse{
-		PairingURI:    pairingURI,
-		WalletPubkey:  wire.WalletPubkey,
-		ExpiresAt:     wire.ExpiresAt,
-		FeesPpm:       wire.FeesPpm,
-		BudgetRenewal: wire.BudgetRenewal,
+		PairingURI:    details.PairingURI,
+		WalletPubkey:  details.WalletPubkey,
+		ExpiresAt:     details.ExpiresAt,
+		FeesPpm:       details.FeesPpm,
+		BudgetRenewal: details.BudgetRenewal,
 	}, nil
 }
 
