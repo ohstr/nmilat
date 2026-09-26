@@ -1,0 +1,172 @@
+package transport
+
+import (
+	"errors"
+	"testing"
+)
+
+func TestDefaultLimits_AreValid(t *testing.T) {
+	if err := DefaultLimits().Validate(); err != nil {
+		t.Fatalf("the defaults must be a usable policy: %v", err)
+	}
+}
+
+// TestDefaultLimits_StayUnderTheNIP44Ceiling pins the constraint that actually
+// applies to MaxEnvelopeBytes: it is a PLAINTEXT size, so NIP-44 bounds it.
+func TestDefaultLimits_StayUnderTheNIP44Ceiling(t *testing.T) {
+	l := DefaultLimits()
+	if l.MaxEnvelopeBytes > MaxNIP44Plaintext {
+		t.Fatalf("MaxEnvelopeBytes %d exceeds NIP-44's plaintext ceiling %d",
+			l.MaxEnvelopeBytes, MaxNIP44Plaintext)
+	}
+}
+
+// TestLimits_EstimatedWireBytes_ExpandsPastThePlaintextCeiling documents the
+// ceiling that is easy to conflate with NIP-44's. The base64 ciphertext is ~4/3
+// of the plaintext and it is bounded by the RELAY's max message length, not by
+// NIP-44 — so a full envelope legitimately exceeds 65535 bytes ON THE WIRE while
+// being a perfectly valid NIP-44 payload.
+//
+// The number matters operationally: a hub raising MaxEnvelopeBytes has to raise
+// its relays' max_message_length too, or the relay drops the event and the caller
+// sees silence.
+func TestLimits_EstimatedWireBytes_ExpandsPastThePlaintextCeiling(t *testing.T) {
+	l := DefaultLimits()
+	wire := l.EstimatedWireBytes()
+
+	if wire <= l.MaxEnvelopeBytes {
+		t.Errorf("EstimatedWireBytes() = %d, expected it to exceed the %d plaintext size",
+			wire, l.MaxEnvelopeBytes)
+	}
+	// Sanity on the ratio: base64 is 4/3, so expect ~1.33x, never 2x.
+	if wire > l.MaxEnvelopeBytes*3/2 {
+		t.Errorf("EstimatedWireBytes() = %d, more than 1.5x the plaintext %d — check the maths",
+			wire, l.MaxEnvelopeBytes)
+	}
+	t.Logf("a full default envelope is %d bytes of plaintext and ~%d bytes on the wire; "+
+		"relays must accept at least that", l.MaxEnvelopeBytes, wire)
+}
+
+func TestLimits_Validate(t *testing.T) {
+	valid := DefaultLimits()
+
+	tests := map[string]struct {
+		mutate func(*Limits)
+		want   error
+	}{
+		"zero envelope bytes": {func(l *Limits) { l.MaxEnvelopeBytes = 0 }, ErrLimitsNotPositive},
+		"zero items":          {func(l *Limits) { l.MaxItems = 0 }, ErrLimitsNotPositive},
+		"zero pad bucket":     {func(l *Limits) { l.PadBucketBytes = 0 }, ErrLimitsNotPositive},
+		"zero verify budget":  {func(l *Limits) { l.MaxVerifyBudget = 0 }, ErrLimitsNotPositive},
+		"negative items":      {func(l *Limits) { l.MaxItems = -1 }, ErrLimitsNotPositive},
+		// The one that matters most: a hub must not be able to configure itself
+		// past what NIP-44 will actually encrypt.
+		"above the NIP-44 ceiling": {
+			func(l *Limits) { l.MaxEnvelopeBytes = MaxNIP44Plaintext + 1 },
+			ErrLimitsAboveCeiling,
+		},
+		"pad bucket larger than the ceiling": {
+			func(l *Limits) { l.PadBucketBytes = l.MaxEnvelopeBytes + 1 },
+			ErrLimitsPadTooLarge,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			l := valid
+			tc.mutate(&l)
+			err := l.Validate()
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("Validate() = %v, want %v", err, tc.want)
+			}
+		})
+	}
+
+	// Exactly at the ceiling is allowed — it is a ceiling, not a bound to stay under.
+	atCeiling := valid
+	atCeiling.MaxEnvelopeBytes = MaxNIP44Plaintext
+	if err := atCeiling.Validate(); err != nil {
+		t.Errorf("MaxEnvelopeBytes exactly at the ceiling must be valid: %v", err)
+	}
+}
+
+// TestLimits_PaddedSize_OnlyLandsOnBuckets is the size-leak property: if padded
+// sizes were not multiples of the bucket, the ciphertext length would still
+// disclose roughly how much is inside.
+func TestLimits_PaddedSize_OnlyLandsOnBuckets(t *testing.T) {
+	l := DefaultLimits()
+	for n := 1; n <= l.MaxEnvelopeBytes; n += 97 { // stride is coprime-ish to the bucket
+		padded, err := l.PaddedSize(n)
+		if err != nil {
+			t.Fatalf("PaddedSize(%d): %v", n, err)
+		}
+		if padded%l.PadBucketBytes != 0 {
+			t.Fatalf("PaddedSize(%d) = %d, not a multiple of %d", n, padded, l.PadBucketBytes)
+		}
+		if padded < n {
+			t.Fatalf("PaddedSize(%d) = %d, smaller than the input", n, padded)
+		}
+		if padded-n >= l.PadBucketBytes {
+			t.Fatalf("PaddedSize(%d) = %d, padded by a whole bucket or more", n, padded)
+		}
+	}
+}
+
+// TestLimits_PaddedSize_SmallEnvelopesLookLikeBatches is the point of padding: a
+// one-item read and a several-item batch must be the same size on the wire.
+func TestLimits_PaddedSize_SmallEnvelopesLookLikeBatches(t *testing.T) {
+	l := DefaultLimits()
+	oneItem, err := l.PaddedSize(700) // a single cash_status with its proof
+	if err != nil {
+		t.Fatal(err)
+	}
+	fewItems, err := l.PaddedSize(3500) // three or four of them
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oneItem != fewItems {
+		t.Errorf("a 1-item envelope (%d) and a small batch (%d) are distinguishable by size",
+			oneItem, fewItems)
+	}
+}
+
+func TestLimits_PaddedSize_RejectsOversize(t *testing.T) {
+	l := DefaultLimits()
+
+	// Exactly at the limit is fine.
+	if _, err := l.PaddedSize(l.MaxEnvelopeBytes); err != nil {
+		t.Errorf("PaddedSize at exactly the limit must succeed: %v", err)
+	}
+	// One byte over pads into the next bucket, which is over the limit.
+	if _, err := l.PaddedSize(l.MaxEnvelopeBytes + 1); !errors.Is(err, ErrEnvelopeTooLarge) {
+		t.Errorf("PaddedSize(limit+1) = %v, want ErrEnvelopeTooLarge", err)
+	}
+	// And the error must arrive locally rather than as a silent truncation.
+	if _, err := l.PaddedSize(MaxNIP44Plaintext * 2); !errors.Is(err, ErrEnvelopeTooLarge) {
+		t.Errorf("PaddedSize(huge) = %v, want ErrEnvelopeTooLarge", err)
+	}
+}
+
+// TestLimits_PaddedSize_HonoursCustomPolicy checks the knobs are actually knobs —
+// a hub configuring a tighter policy gets that policy, not the default.
+func TestLimits_PaddedSize_HonoursCustomPolicy(t *testing.T) {
+	tight := Limits{
+		MaxEnvelopeBytes: 8 * 1024,
+		MaxItems:         4,
+		PadBucketBytes:   1024,
+		MaxVerifyBudget:  10,
+	}
+	if err := tight.Validate(); err != nil {
+		t.Fatalf("a tighter policy must be valid: %v", err)
+	}
+	padded, err := tight.PaddedSize(1025)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if padded != 2048 {
+		t.Errorf("PaddedSize(1025) = %d, want 2048 under a 1 KiB bucket", padded)
+	}
+	if _, err := tight.PaddedSize(9000); !errors.Is(err, ErrEnvelopeTooLarge) {
+		t.Errorf("a tighter ceiling must reject 9000 bytes, got %v", err)
+	}
+}
