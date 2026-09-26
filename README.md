@@ -43,6 +43,7 @@ go get github.com/ohstr/nmilat
 - **[`nip22`](https://github.com/nostr-protocol/nips/blob/master/22.md)** — Comment: generic kind:1111 threading note
 - **[`nip23`](https://github.com/nostr-protocol/nips/blob/master/23.md)** — Long-form content
 - **[`nip26`](https://github.com/nostr-protocol/nips/blob/master/26.md)** — Event delegation
+- **[`nip29`](https://github.com/nostr-protocol/nips/blob/master/29.md)** — Relay-based groups: moderation events, join/leave requests, relay-authored group metadata
 - **[`nip33`](https://github.com/nostr-protocol/nips/blob/master/33.md)** — Parameterized replaceable events (now called addressable events)
 - **[`nip34`](https://github.com/nostr-protocol/nips/blob/master/34.md)** — git stuff: code collaboration over Nostr
 - **[`nip40`](https://github.com/nostr-protocol/nips/blob/master/40.md)** — Event expiration

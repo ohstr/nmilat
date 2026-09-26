@@ -4,6 +4,27 @@
 
 ### Added
 
+- `nip29` implements NIP-29 (Relay-based Groups): the moderation events
+  that change group state (kinds 9000-9020), the join and leave requests
+  users send (9021/9022), and the relay-authored events that mirror the
+  result -- metadata, admins, members, roles, live AV participants and
+  pinned events (39000-39005). NIP-28 is unrecommended upstream in favour
+  of this, so there is no nip28.
+- `nip29.ModerationPolicy` lets a relay declare which roles may perform
+  which moderation kinds. The spec states the mapping is relay-specific
+  and that relays MUST check it, so this is a type to fill in rather than
+  a built-in guess at what "admin" means.
+- `nip29.GroupMetadata.SupportsKind` honours the absent-vs-empty
+  distinction on `supported_kinds`, which the spec gives opposite
+  meanings: no tag means every kind is supported, an empty tag means none
+  are -- the AV-only group case.
+- `nip29.TimelineReferences` parses the `previous` tag's 8-character event
+  prefixes, the hack that stops a group message being replayed into a fork
+  of that group out of context.
+- `nip29/relayreg` declares NIP-29 in a relay's NIP-11 document and
+  structurally validates group events on ingest. Role authorization and
+  the relay-`self` signer check stay in the relay, which has the state to
+  decide them.
 - `nip53` implements NIP-53 (Live Streaming and Spaces): the live
   streaming event (kind 30311), the meeting space that hosts audio/video
   rooms (30312) and the meetings held in one (30313), listener presence
