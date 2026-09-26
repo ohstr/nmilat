@@ -4,6 +4,17 @@
 
 ### Added
 
+- `nipA0` implements NIP-A0 (Voice Messages): root voice notes (kind 1222)
+  and replies (1244), plus the optional NIP-92 `imeta` preview carrying a
+  waveform and duration so a client can draw one without downloading the
+  audio. `DurationSet` separates an absent duration from a zero-second
+  one, and the spec's 60-second guidance is reported by
+  `ExceedsRecommendedDuration` rather than enforced, since it is a SHOULD
+  for publishers and not grounds for a relay to reject anything.
+- `nipA0.ReplyScopes` returns a 1244 reply's NIP-22 root and parent by
+  delegating to `nip22`, so the pointer-tag rules are not duplicated.
+- `nipA0/relayreg` declares NIP-A0 in a relay's NIP-11 document and
+  validates voice messages on ingest.
 - `nip29` implements NIP-29 (Relay-based Groups): the moderation events
   that change group state (kinds 9000-9020), the join and leave requests
   users send (9021/9022), and the relay-authored events that mirror the

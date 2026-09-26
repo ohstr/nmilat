@@ -58,6 +58,7 @@ go get github.com/ohstr/nmilat
 - **[`nip77`](https://github.com/nostr-protocol/nips/blob/master/77.md)** — Negentropy sync
 - **[`nip88`](https://github.com/nostr-protocol/nips/blob/master/88.md)** — Polls
 - **[`nip90`](https://github.com/nostr-protocol/nips/blob/master/90.md)** — Data Vending Machines
+- **[`nipA0`](https://github.com/nostr-protocol/nips/blob/master/A0.md)** — Voice messages
 - **[`nipAA`](https://github.com/block/buzz/blob/main/docs/nips/NIP-AA.md)** — Agent Auth
 - **[`nipAZ`](https://github.com/ohstr/zapf-nips/blob/main/NIP-AZ.md)** — AltZap: zaps for energy-backed coins
 - **[`nipB0`](https://github.com/nostr-protocol/nips/blob/master/B0.md)** — Web bookmarks
