@@ -77,6 +77,7 @@ go get github.com/ohstr/nmilat
 - **`search`** — Profile search indexing/ranking
 - **`config`** — Embedded YAML config for search
 - **`wire`** — Relay wire-protocol packet types
+- **`huddle/wire`** — Huddle audio frame codec: per-frame header and relay routing prefix (binary, separate from the Nostr socket)
 - **`utils`** — Shared event/key/logging helpers
 
 NIP packages with relay-side concerns (NIP-22/34/47/48/57/65/88/90/B0/B7) stay
