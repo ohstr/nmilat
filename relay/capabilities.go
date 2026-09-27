@@ -1,6 +1,9 @@
 package relay
 
 import (
+	"errors"
+	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/ohstr/nmilat/nip11"
@@ -32,10 +35,52 @@ func RegisterNIP(n int) {
 	registerNIPID(nip11.NIP(n))
 }
 
-// RegisterLetteredNIP declares support for a letter-suffixed NIP (e.g. "B0",
-// "B7") whose ID isn't a plain number. See RegisterNIP.
+// RegisterLetteredNIP declares support for a NIP whose ID isn't a plain
+// number (e.g. "B0", "B7", "A0"). See RegisterNIP.
+//
+// The id is trimmed and upper-cased, so "b7" and "B7" declare the same NIP
+// rather than two entries that both reach the wire. Every id registered in
+// this SDK is upper-case, matching the upstream spec filenames.
+//
+// It panics on an id that cannot name a lettered NIP: empty, containing
+// anything but letters and digits, or all digits. Each is a programming error
+// in an init() that would otherwise serve a malformed supported_nips list to
+// every client for the life of the process, and the all-digit case is the
+// worst of the three -- "53" would serialize as a JSON string where every
+// other implementation expects the number 53. Panicking at registration
+// mirrors migrations.Register rejecting a duplicate version.
 func RegisterLetteredNIP(s string) {
-	registerNIPID(nip11.NIPLetter(s))
+	normalized, err := normalizeLetteredNIP(s)
+	if err != nil {
+		panic(fmt.Sprintf("relay: RegisterLetteredNIP(%q): %v", s, err))
+	}
+	registerNIPID(nip11.NIPLetter(normalized))
+}
+
+// normalizeLetteredNIP validates and canonicalizes a lettered NIP id. It is
+// separate from RegisterLetteredNIP so the rules can be tested without
+// mutating the process-wide registry, which has no unregister.
+func normalizeLetteredNIP(s string) (string, error) {
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" {
+		return "", errors.New("id is empty")
+	}
+
+	allDigits := true
+	for _, r := range trimmed {
+		switch {
+		case r >= '0' && r <= '9':
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z':
+			allDigits = false
+		default:
+			return "", fmt.Errorf("id must contain only letters and digits, found %q", r)
+		}
+	}
+	if allDigits {
+		return "", errors.New("id is all digits; use RegisterNIP for a numbered NIP")
+	}
+
+	return strings.ToUpper(trimmed), nil
 }
 
 func registerNIPID(id nip11.NIPID) {

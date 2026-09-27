@@ -43,6 +43,7 @@ go get github.com/ohstr/nmilat
 - **[`nip22`](https://github.com/nostr-protocol/nips/blob/master/22.md)** — Comment: generic kind:1111 threading note
 - **[`nip23`](https://github.com/nostr-protocol/nips/blob/master/23.md)** — Long-form content
 - **[`nip26`](https://github.com/nostr-protocol/nips/blob/master/26.md)** — Event delegation
+- **[`nip29`](https://github.com/nostr-protocol/nips/blob/master/29.md)** — Relay-based groups: moderation events, join/leave requests, relay-authored group metadata
 - **[`nip33`](https://github.com/nostr-protocol/nips/blob/master/33.md)** — Parameterized replaceable events (now called addressable events)
 - **[`nip34`](https://github.com/nostr-protocol/nips/blob/master/34.md)** — git stuff: code collaboration over Nostr
 - **[`nip40`](https://github.com/nostr-protocol/nips/blob/master/40.md)** — Event expiration
@@ -51,11 +52,14 @@ go get github.com/ohstr/nmilat
 - **[`nip46`](https://github.com/nostr-protocol/nips/blob/master/46.md)** — Nostr Connect (remote signing)
 - **[`nip47`](https://github.com/nostr-protocol/nips/blob/master/47.md)** — Wallet Connect (NWC): info/request/response/notification events, encryption negotiation, pairing URI
 - **[`nip48`](https://github.com/nostr-protocol/nips/blob/master/48.md)** — Proxy tags
+- **[`nip53`](https://github.com/nostr-protocol/nips/blob/master/53.md)** — Live streaming and spaces: live streams, meeting spaces and their rooms, listener presence, live chat
 - **[`nip57`](https://github.com/nostr-protocol/nips/blob/master/57.md)** — Lightning zaps
 - **[`nip65`](https://github.com/nostr-protocol/nips/blob/master/65.md)** — Relay list metadata
+- **[`nip71`](https://github.com/nostr-protocol/nips/blob/master/71.md)** — Video events: normal, short and addressable videos with imeta variants
 - **[`nip77`](https://github.com/nostr-protocol/nips/blob/master/77.md)** — Negentropy sync
 - **[`nip88`](https://github.com/nostr-protocol/nips/blob/master/88.md)** — Polls
 - **[`nip90`](https://github.com/nostr-protocol/nips/blob/master/90.md)** — Data Vending Machines
+- **[`nipA0`](https://github.com/nostr-protocol/nips/blob/master/A0.md)** — Voice messages
 - **[`nipAA`](https://github.com/block/buzz/blob/main/docs/nips/NIP-AA.md)** — Agent Auth
 - **[`nipAZ`](https://github.com/ohstr/zapf-nips/blob/main/NIP-AZ.md)** — AltZap: zaps for energy-backed coins
 - **[`nipB0`](https://github.com/nostr-protocol/nips/blob/master/B0.md)** — Web bookmarks
@@ -73,6 +77,9 @@ go get github.com/ohstr/nmilat
 - **`search`** — Profile search indexing/ranking
 - **`config`** — Embedded YAML config for search
 - **`wire`** — Relay wire-protocol packet types
+- **`huddle/wire`** — Huddle audio frame codec: per-frame header and relay routing prefix (binary, separate from the Nostr socket)
+- **`huddle/room`** — Huddle audio room: peer registry, routing-identity allocation, and real-time frame fan-out over a transport-agnostic `Sink`
+- **`huddle/wsaudio`** — Huddle audio WebSocket endpoint: NIP-42 handshake, room admission, frame relay, heartbeat
 - **`utils`** — Shared event/key/logging helpers
 
 NIP packages with relay-side concerns (NIP-22/34/47/48/57/65/88/90/B0/B7) stay
