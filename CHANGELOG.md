@@ -4,6 +4,16 @@
 
 ### Added
 
+- `huddle/wire` implements the huddle audio frame protocol: the 8-byte
+  per-frame header clients author (sequence, 48 kHz timestamp, dBov level,
+  DTX flag) and the routing prefix a relay prepends when fanning a frame
+  out -- one peer index, plus a per-index epoch from protocol v3 so a frame
+  from a departed peer cannot be mistaken for one from whoever reused its
+  index. The Opus payload stays opaque throughout, which is what lets a
+  relay carry audio without linking a codec.
+- `huddle/wire.ClampLevel` keeps the client-authored level in its canonical
+  -127..0 range without ever dropping the frame it came on. The level is
+  untrusted telemetry, and bad telemetry must not become audible loss.
 - `nip71` implements NIP-71 (Video Events): normal (kind 21) and short (22)
   videos plus their addressable counterparts (34235/34236), with the NIP-92
   `imeta` variants that carry each rendition and audio track. A variant
