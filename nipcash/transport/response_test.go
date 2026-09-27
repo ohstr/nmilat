@@ -160,11 +160,9 @@ func TestResponse_PaddingHidesResultCount(t *testing.T) {
 	sizes := map[int]struct{}{}
 	for count := 1; count <= 6; count++ {
 		results := make([]Result, 0, count)
-		ids := make([]string, 0, count)
 		for i := 1; i <= count; i++ {
 			id := string(rune('0' + i))
 			results = append(results, Result{ID: id, ResultType: "cash_status", Result: json.RawMessage(`{"amount_millis":1000}`)})
-			ids = append(ids, id)
 		}
 		plaintext, err := testResponse(t, nonce, results...).EncodeResponse(limits)
 		if err != nil {
