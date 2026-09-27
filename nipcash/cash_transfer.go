@@ -20,7 +20,7 @@ type CashTransferParams struct {
 	// bind to a concrete amount in every case, including an omitted
 	// request amount_millis, which still resolves to this exact value
 	// server-side (§Transferring and Splitting a Slice). Get this from a
-	// prior mint_cash/cash_transfer response or ListRecipients.
+	// prior mint_cash/cash_transfer response or CashStatus.
 	CurrentAmount uint64
 	// SplitAmount, if set, carves exactly that much off for To, leaving the
 	// remainder (CurrentAmount - *SplitAmount) behind under the caller's
