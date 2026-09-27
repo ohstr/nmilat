@@ -61,6 +61,7 @@ var (
 	ErrRoomEnded       = errors.New("room: huddle has ended")
 	ErrUpgradeRequired = errors.New("room: protocol version does not match the room")
 	ErrBadVersion      = errors.New("room: unsupported protocol version")
+	ErrNoSink          = errors.New("room: peer needs a sink to deliver to")
 )
 
 // PeerID identifies one occupancy of a room. It is distinct from a peer's
@@ -90,17 +91,12 @@ type Peer struct {
 	// of the index is distinguishable.
 	Epoch uint8
 
-	audio   chan []byte
-	ctrl    chan Control
+	sink    Sink
 	dropped atomic.Uint64
 }
 
-// Audio is the peer's outbound audio queue: relayed frames, already carrying
-// their routing prefix.
-func (p *Peer) Audio() <-chan []byte { return p.audio }
-
-// Control is the peer's outbound control queue.
-func (p *Peer) Control() <-chan Control { return p.ctrl }
+// Sink is where this peer's audio and control messages are delivered.
+func (p *Peer) Sink() Sink { return p.sink }
 
 // Dropped is how many frames were discarded because this peer's audio queue
 // was full. Non-zero means this peer is not keeping up; it is a diagnostic,
@@ -168,16 +164,24 @@ func (r *Room) Ended() bool {
 	return r.ended
 }
 
-// AddPeer admits a peer and returns it alongside the roster as of the moment it
-// joined -- including itself, so a client sees exactly the room it is in rather
-// than having to merge its own entry into a snapshot taken before it arrived.
+// AddPeer admits a peer, delivering its audio and control to sink, and returns
+// it alongside the roster as of the moment it joined -- including itself, so a
+// client sees exactly the room it is in rather than having to merge its own
+// entry into a snapshot taken before it arrived.
+//
+// sink is how this peer differs from any other: pass a ChannelSink for a
+// WebSocket peer, or any other implementation to bridge the audio elsewhere. It
+// is required -- a peer with nowhere to deliver would silently receive nothing.
 //
 // The first peer pins the room's protocol version. A later peer naming a
 // different one gets ErrUpgradeRequired: serving it would mean sending frames
 // it would misparse.
-func (r *Room) AddPeer(pubkey string, protocolVersion uint8) (*Peer, Roster, error) {
+func (r *Room) AddPeer(pubkey string, protocolVersion uint8, sink Sink) (*Peer, Roster, error) {
 	if !wire.SupportedProtocolVersion(protocolVersion) {
 		return nil, Roster{}, ErrBadVersion
+	}
+	if sink == nil {
+		return nil, Roster{}, ErrNoSink
 	}
 
 	r.mu.Lock()
@@ -208,8 +212,7 @@ func (r *Room) AddPeer(pubkey string, protocolVersion uint8) (*Peer, Roster, err
 		Pubkey: pubkey,
 		Index:  index,
 		Epoch:  r.epochs[index],
-		audio:  make(chan []byte, AudioQueueDepth),
-		ctrl:   make(chan Control, ControlQueueDepth),
+		sink:   sink,
 	}
 	r.nextID++
 	r.peers[peer.ID] = peer
@@ -286,15 +289,21 @@ func (r *Room) BroadcastFrame(author PeerID, frame []byte) (dropped int) {
 	if !ok {
 		return 0
 	}
-	out := wire.RelayFrame(r.version, sender.Index, sender.Epoch, frame)
+
+	// Built once and shared by every recipient: the prefix depends only on the
+	// author and the room's version, so it is identical for all of them.
+	delivery := Frame{
+		Author:  PeerInfo{Pubkey: sender.Pubkey, Index: sender.Index, Epoch: sender.Epoch},
+		Version: r.version,
+		Client:  frame,
+		Relayed: wire.RelayFrame(r.version, sender.Index, sender.Epoch, frame),
+	}
 
 	for id, peer := range r.peers {
 		if id == author {
 			continue
 		}
-		select {
-		case peer.audio <- out:
-		default:
+		if !peer.sink.SendFrame(delivery) {
 			peer.dropped.Add(1)
 			dropped++
 		}
@@ -318,9 +327,7 @@ func (r *Room) BroadcastControl(message string, skip PeerID) (dropped int) {
 		if id == skip {
 			continue
 		}
-		select {
-		case peer.ctrl <- Control{JSON: message}:
-		default:
+		if !peer.sink.SendControl(Control{JSON: message}) {
 			dropped++
 		}
 	}
@@ -337,12 +344,7 @@ func (r *Room) SendControl(id PeerID, message string) bool {
 	if !ok {
 		return false
 	}
-	select {
-	case peer.ctrl <- Control{JSON: message}:
-		return true
-	default:
-		return false
-	}
+	return peer.sink.SendControl(Control{JSON: message})
 }
 
 // End marks the room ended, asks every peer's writer to close, and clears the
@@ -356,10 +358,7 @@ func (r *Room) End() {
 	}
 	r.ended = true
 	for id, peer := range r.peers {
-		select {
-		case peer.ctrl <- Control{Close: true}:
-		default:
-		}
+		peer.sink.SendControl(Control{Close: true})
 		delete(r.peers, id)
 		delete(r.byIndex, peer.Index)
 	}

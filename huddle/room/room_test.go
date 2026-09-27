@@ -13,22 +13,31 @@ import (
 const v2 = 2
 const v3 = 3
 
-func addPeer(t *testing.T, r *Room, pubkey string, version uint8) *Peer {
+// testPeer bundles a peer with the sink it was admitted with, since the room
+// no longer owns the queues. Embedding *Peer keeps Index, Epoch, ID and
+// Dropped() reachable directly.
+type testPeer struct {
+	*Peer
+	sink *ChannelSink
+}
+
+func addPeer(t *testing.T, r *Room, pubkey string, version uint8) testPeer {
 	t.Helper()
-	peer, _, err := r.AddPeer(pubkey, version)
+	sink := NewChannelSink()
+	peer, _, err := r.AddPeer(pubkey, version, sink)
 	if err != nil {
 		t.Fatalf("AddPeer(%q): %v", pubkey, err)
 	}
-	return peer
+	return testPeer{Peer: peer, sink: sink}
 }
 
 // recvFrame reads one frame, failing if none arrives. The timeout is generous:
 // these are in-process channel sends, so anything approaching it means a real
 // hang rather than a slow machine.
-func recvFrame(t *testing.T, peer *Peer) []byte {
+func recvFrame(t *testing.T, peer testPeer) []byte {
 	t.Helper()
 	select {
-	case frame := <-peer.Audio():
+	case frame := <-peer.sink.Audio():
 		return frame
 	case <-time.After(5 * time.Second):
 		t.Fatalf("peer %d received no frame", peer.Index)
@@ -36,10 +45,10 @@ func recvFrame(t *testing.T, peer *Peer) []byte {
 	}
 }
 
-func assertNoFrame(t *testing.T, peer *Peer) {
+func assertNoFrame(t *testing.T, peer testPeer) {
 	t.Helper()
 	select {
-	case frame := <-peer.Audio():
+	case frame := <-peer.sink.Audio():
 		t.Fatalf("peer %d unexpectedly received %x", peer.Index, frame)
 	default:
 	}
@@ -70,7 +79,7 @@ func TestAddPeerRejectsBeyondCapacity(t *testing.T) {
 		addPeer(t, r, fmt.Sprintf("peer-%d", i), v3)
 	}
 
-	_, _, err := r.AddPeer("one-too-many", v3)
+	_, _, err := r.AddPeer("one-too-many", v3, NewChannelSink())
 	if !errors.Is(err, ErrRoomFull) {
 		t.Fatalf("err = %v, want ErrRoomFull", err)
 	}
@@ -91,7 +100,7 @@ func TestAddPeerPinsProtocolVersion(t *testing.T) {
 		t.Fatalf("ProtocolVersion() = %d, want %d", got, v2)
 	}
 
-	if _, _, err := r.AddPeer("mismatched", v3); !errors.Is(err, ErrUpgradeRequired) {
+	if _, _, err := r.AddPeer("mismatched", v3, NewChannelSink()); !errors.Is(err, ErrUpgradeRequired) {
 		t.Fatalf("err = %v, want ErrUpgradeRequired", err)
 	}
 	// A matching peer still joins.
@@ -104,7 +113,7 @@ func TestAddPeerPinsProtocolVersion(t *testing.T) {
 func TestAddPeerRejectsUnsupportedVersion(t *testing.T) {
 	r := New()
 	for _, v := range []uint8{0, wire.CurrentProtocolVersion + 1, 255} {
-		if _, _, err := r.AddPeer("peer", v); !errors.Is(err, ErrBadVersion) {
+		if _, _, err := r.AddPeer("peer", v, NewChannelSink()); !errors.Is(err, ErrBadVersion) {
 			t.Errorf("AddPeer(version %d) err = %v, want ErrBadVersion", v, err)
 		}
 	}
@@ -114,7 +123,7 @@ func TestAddPeerRosterIncludesTheJoiner(t *testing.T) {
 	r := New()
 	addPeer(t, r, "alice", v3)
 
-	peer, roster, err := r.AddPeer("bob", v3)
+	peer, roster, err := r.AddPeer("bob", v3, NewChannelSink())
 	if err != nil {
 		t.Fatalf("AddPeer: %v", err)
 	}
@@ -205,7 +214,7 @@ func TestBroadcastFrameReachesEveryoneElse(t *testing.T) {
 		t.Fatalf("dropped = %d, want 0", dropped)
 	}
 
-	for _, listener := range []*Peer{bob, carol} {
+	for _, listener := range []testPeer{bob, carol} {
 		got := recvFrame(t, listener)
 		index, epoch, payload, ok := wire.ParseRelayFrame(v3, got)
 		if !ok {
@@ -302,7 +311,7 @@ func TestFullAudioQueueDropsAndNeverBlocks(t *testing.T) {
 	if got := bob.Dropped(); got != 50 {
 		t.Errorf("bob.Dropped() = %d, want 50", got)
 	}
-	if got := len(bob.Audio()); got != AudioQueueDepth {
+	if got := len(bob.sink.Audio()); got != AudioQueueDepth {
 		t.Errorf("queue depth = %d, want it capped at %d", got, AudioQueueDepth)
 	}
 }
@@ -321,7 +330,7 @@ func TestBroadcastControlSkipsTheNamedPeer(t *testing.T) {
 	}
 
 	select {
-	case msg := <-bob.Control():
+	case msg := <-bob.sink.Control():
 		if msg.JSON != `{"type":"joined"}` {
 			t.Errorf("bob got %q", msg.JSON)
 		}
@@ -329,7 +338,7 @@ func TestBroadcastControlSkipsTheNamedPeer(t *testing.T) {
 		t.Error("bob received no control message")
 	}
 	select {
-	case msg := <-alice.Control():
+	case msg := <-alice.sink.Control():
 		t.Errorf("the skipped peer received %q", msg.JSON)
 	default:
 	}
@@ -421,14 +430,14 @@ func TestEnd(t *testing.T) {
 		t.Errorf("Len() = %d, want the registry cleared", r.Len())
 	}
 	select {
-	case msg := <-alice.Control():
+	case msg := <-alice.sink.Control():
 		if !msg.Close {
 			t.Errorf("peer got %+v, want a Close", msg)
 		}
 	default:
 		t.Error("End() did not ask the peer's writer to close")
 	}
-	if _, _, err := r.AddPeer("late", v3); !errors.Is(err, ErrRoomEnded) {
+	if _, _, err := r.AddPeer("late", v3, NewChannelSink()); !errors.Is(err, ErrRoomEnded) {
 		t.Errorf("err = %v, want ErrRoomEnded", err)
 	}
 	// Idempotent.
@@ -454,7 +463,7 @@ func TestConcurrentJoinLeaveAndBroadcast(t *testing.T) {
 		defer drain.Done()
 		for {
 			select {
-			case <-resident.Audio():
+			case <-resident.sink.Audio():
 			case <-stop:
 				return
 			}
@@ -467,7 +476,7 @@ func TestConcurrentJoinLeaveAndBroadcast(t *testing.T) {
 		go func(worker int) {
 			defer wg.Done()
 			for j := 0; j < 40; j++ {
-				peer, _, err := r.AddPeer(fmt.Sprintf("w%d-%d", worker, j), v3)
+				peer, _, err := r.AddPeer(fmt.Sprintf("w%d-%d", worker, j), v3, NewChannelSink())
 				if err != nil {
 					// ErrRoomFull is legitimate under contention.
 					continue

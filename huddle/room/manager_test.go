@@ -10,7 +10,7 @@ import (
 func TestManagerCreatesAndReusesRooms(t *testing.T) {
 	m := NewManager(0)
 
-	r1, alice, roster, err := m.Join("room-1", "alice", v3)
+	r1, alice, roster, err := m.Join("room-1", "alice", v3, NewChannelSink())
 	if err != nil {
 		t.Fatalf("Join: %v", err)
 	}
@@ -21,7 +21,7 @@ func TestManagerCreatesAndReusesRooms(t *testing.T) {
 		t.Errorf("roster = %+v, want just the joiner", roster.Peers)
 	}
 
-	r2, bob, _, err := m.Join("room-1", "bob", v3)
+	r2, bob, _, err := m.Join("room-1", "bob", v3, NewChannelSink())
 	if err != nil {
 		t.Fatalf("Join: %v", err)
 	}
@@ -38,8 +38,8 @@ func TestManagerCreatesAndReusesRooms(t *testing.T) {
 
 func TestManagerDropsTheRoomWhenTheLastPeerLeaves(t *testing.T) {
 	m := NewManager(0)
-	_, alice, _, _ := m.Join("room-1", "alice", v3)
-	_, bob, _, _ := m.Join("room-1", "bob", v3)
+	_, alice, _, _ := m.Join("room-1", "alice", v3, NewChannelSink())
+	_, bob, _, _ := m.Join("room-1", "bob", v3, NewChannelSink())
 
 	if !m.Leave("room-1", alice.ID) {
 		t.Fatal("Leave reported the peer absent")
@@ -62,7 +62,7 @@ func TestManagerLeaveOnUnknownRoomOrPeer(t *testing.T) {
 	if m.Leave("nope", PeerID(1)) {
 		t.Error("Leave on an unknown room returned true")
 	}
-	_, alice, _, _ := m.Join("room-1", "alice", v3)
+	_, alice, _, _ := m.Join("room-1", "alice", v3, NewChannelSink())
 	if m.Leave("room-1", PeerID(9999)) {
 		t.Error("Leave on an unknown peer returned true")
 	}
@@ -75,17 +75,17 @@ func TestManagerLeaveOnUnknownRoomOrPeer(t *testing.T) {
 
 func TestManagerRespectsTheRoomCap(t *testing.T) {
 	m := NewManager(2)
-	if _, _, _, err := m.Join("a", "alice", v3); err != nil {
+	if _, _, _, err := m.Join("a", "alice", v3, NewChannelSink()); err != nil {
 		t.Fatalf("Join a: %v", err)
 	}
-	if _, _, _, err := m.Join("b", "alice", v3); err != nil {
+	if _, _, _, err := m.Join("b", "alice", v3, NewChannelSink()); err != nil {
 		t.Fatalf("Join b: %v", err)
 	}
-	if _, _, _, err := m.Join("c", "alice", v3); !errors.Is(err, ErrTooManyRooms) {
+	if _, _, _, err := m.Join("c", "alice", v3, NewChannelSink()); !errors.Is(err, ErrTooManyRooms) {
 		t.Fatalf("err = %v, want ErrTooManyRooms", err)
 	}
 	// Joining an existing room is never blocked by the cap.
-	if _, _, _, err := m.Join("a", "bob", v3); err != nil {
+	if _, _, _, err := m.Join("a", "bob", v3, NewChannelSink()); err != nil {
 		t.Errorf("joining an existing room hit the cap: %v", err)
 	}
 }
@@ -95,7 +95,7 @@ func TestManagerRespectsTheRoomCap(t *testing.T) {
 func TestManagerDoesNotLeakARoomOnAFailedFirstJoin(t *testing.T) {
 	m := NewManager(0)
 
-	if _, _, _, err := m.Join("room-1", "alice", 99); err == nil {
+	if _, _, _, err := m.Join("room-1", "alice", 99, NewChannelSink()); err == nil {
 		t.Fatal("expected an unsupported-version error")
 	}
 	if m.Len() != 0 {
@@ -103,8 +103,8 @@ func TestManagerDoesNotLeakARoomOnAFailedFirstJoin(t *testing.T) {
 	}
 
 	// A pre-existing room survives a failed join against it.
-	m.Join("room-2", "alice", v2)
-	if _, _, _, err := m.Join("room-2", "bob", v3); !errors.Is(err, ErrUpgradeRequired) {
+	m.Join("room-2", "alice", v2, NewChannelSink())
+	if _, _, _, err := m.Join("room-2", "bob", v3, NewChannelSink()); !errors.Is(err, ErrUpgradeRequired) {
 		t.Fatalf("err = %v, want ErrUpgradeRequired", err)
 	}
 	if m.Len() != 1 {
@@ -114,7 +114,8 @@ func TestManagerDoesNotLeakARoomOnAFailedFirstJoin(t *testing.T) {
 
 func TestManagerEnd(t *testing.T) {
 	m := NewManager(0)
-	_, alice, _, _ := m.Join("room-1", "alice", v3)
+	sink := NewChannelSink()
+	_, _, _, _ = m.Join("room-1", "alice", v3, sink)
 
 	if !m.End("room-1") {
 		t.Fatal("End reported the room absent")
@@ -123,7 +124,7 @@ func TestManagerEnd(t *testing.T) {
 		t.Errorf("Len() = %d, want the room removed", m.Len())
 	}
 	select {
-	case msg := <-alice.Control():
+	case msg := <-sink.Control():
 		if !msg.Close {
 			t.Errorf("peer got %+v, want a Close", msg)
 		}
@@ -137,9 +138,9 @@ func TestManagerEnd(t *testing.T) {
 
 func TestManagerOccupancy(t *testing.T) {
 	m := NewManager(0)
-	m.Join("a", "alice", v3)
-	m.Join("a", "bob", v3)
-	m.Join("b", "carol", v3)
+	m.Join("a", "alice", v3, NewChannelSink())
+	m.Join("a", "bob", v3, NewChannelSink())
+	m.Join("b", "carol", v3, NewChannelSink())
 
 	got := m.Occupancy()
 	if got["a"] != 2 || got["b"] != 1 || len(got) != 2 {
@@ -166,7 +167,7 @@ func TestManagerConcurrentJoinAndLeave(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < 50; i++ {
 				id := fmt.Sprintf("room-%d", i%4)
-				_, peer, _, err := m.Join(id, fmt.Sprintf("w%d-%d", worker, i), v3)
+				_, peer, _, err := m.Join(id, fmt.Sprintf("w%d-%d", worker, i), v3, NewChannelSink())
 				if err != nil {
 					continue
 				}

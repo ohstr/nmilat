@@ -4,6 +4,17 @@
 
 ### Added
 
+- `huddle/room.Sink` is the seam that makes a room transport-agnostic: a
+  peer is admitted with a sink, and a WebSocket peer differs from one
+  bridged onto another transport only in which sink it has. `ChannelSink` is
+  the default -- bounded queues a writer goroutine drains -- and
+  `Room.AddPeer` / `Manager.Join` take the sink to deliver to.
+- `huddle/room.Frame` carries both shapes a sink might want: `Relayed`, the
+  wire-ready bytes a WebSocket peer writes straight out, and `Author` plus
+  `Client` for a sink that repacketizes, with `Frame.Payload` recovering the
+  sender's header and the opaque Opus. The room builds `Relayed` once per
+  broadcast and shares it, so adding the seam costs no extra allocation, and
+  it never parses a frame on the broadcast path.
 - `huddle/wsaudio` serves huddle audio over its own WebSocket: a NIP-42
   challenge/auth handshake, room admission, the binary frame relay, and a
   heartbeat that drops a peer which stops answering. It is a separate route
