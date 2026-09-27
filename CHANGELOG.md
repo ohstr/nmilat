@@ -4,6 +4,24 @@
 
 ### Added
 
+- `huddle/wsaudio` serves huddle audio over its own WebSocket: a NIP-42
+  challenge/auth handshake, room admission, the binary frame relay, and a
+  heartbeat that drops a peer which stops answering. It is a separate route
+  with its own upgrader because the Nostr socket decodes every frame as JSON
+  and a binary audio frame there is a parse error that tears the session
+  down.
+- Refusals carry a code a client can branch on -- `auth_failed`,
+  `join_rejected`, `room_full`, `room_ended`, `upgrade_required` (with the
+  room's actual version so a client can retry), `room_unavailable` and
+  `huddle_audio_unavailable`. A disabled deployment answers with the last of
+  those rather than an HTTP error that looks like a missing route.
+- Membership policy is a hook, not built in: `Config.Authorize` is where a
+  relay consults NIP-29 group state or NIP-43 relay access, so this package
+  holds no policy of its own.
+- The Origin header is not this endpoint's security boundary -- admission is
+  gated by a signed challenge -- so an unset `AllowedOrigins` allows any
+  origin. Defaulting the other way is what silently locks browsers out while
+  every CLI client keeps working.
 - `huddle/room.Manager` holds the live rooms by id, creating one on the
   first join and dropping it once the last peer leaves, so an idle process
   holds none. A join that fails against a room it had to create removes
