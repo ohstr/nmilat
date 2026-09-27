@@ -4,6 +4,19 @@
 
 ### Added
 
+- `huddle/room` implements a huddle audio room: the peer registry, the
+  routing identities it allocates, and the fan-out carrying one peer's
+  frames to everyone else. A sender never receives its own frame, and the
+  author's bytes are forwarded verbatim behind the routing prefix.
+- A peer's audio queue holds 160 ms and **drops when full rather than
+  blocking**, so one listener that stops draining cannot stall the peer who
+  is talking. Control messages get their own larger queue and a full one is
+  reported instead of swallowed: they carry the index-to-pubkey mapping a
+  client needs, so losing one misattributes every later frame.
+- Routing indices sweep forward through the whole 0..254 space instead of
+  recycling the lowest free one, and each index carries an epoch that
+  increments on reuse -- without it, a late frame from a departed peer is
+  indistinguishable from one sent by whoever took its index.
 - `huddle/wire` implements the huddle audio frame protocol: the 8-byte
   per-frame header clients author (sequence, 48 kHz timestamp, dBov level,
   DTX flag) and the routing prefix a relay prepends when fanning a frame
