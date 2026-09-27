@@ -77,6 +77,17 @@
 
 ### Changed
 
+- `relay.RegisterLetteredNIP` now trims and upper-cases the id it is given,
+  so `"b7"` and `"B7"` declare one NIP instead of two entries that both
+  reach `supported_nips`. Every id this SDK registers was already
+  upper-case, so nothing advertised changes.
+- `relay.RegisterLetteredNIP` now panics on an id that cannot name a
+  lettered NIP -- empty, containing anything but letters and digits, or all
+  digits. It is called from `init()`, so the alternative was serving a
+  malformed NIP-11 document for the life of the process. The all-digit case
+  is the one that motivated this: `RegisterLetteredNIP("53")` compiled
+  happily and advertised the JSON string `"53"` where every other
+  implementation expects the number `53` -- use `RegisterNIP` for those.
 - **The event store upgrades its indexes on first open, and the upgrade is
   one way.** A store written by this release cannot be read by an earlier
   one: the older binary misreads every index key, so writes appear to
