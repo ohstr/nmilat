@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to release (e.g. 0.1.0). Leave empty to use the top entry in CHANGELOG.md'
+        description: 'Version to release (e.g. 0.1.0, or 0.5.0-rc.1 for a pre-release). Leave empty to use the top entry in CHANGELOG.md'
         required: false
 
 permissions:
@@ -40,7 +40,20 @@ jobs:
             exit 1
           fi
 
-          NOTES=$(awk -v ver="$VERSION" '
+          # A pre-release (0.5.0-rc.1) documents the version it is a candidate
+          # for, so read the notes from that section rather than requiring a
+          # heading per candidate. PRERELEASE also flags the GitHub release,
+          # so an rc never displaces a stable one as "Latest".
+          NOTES_VERSION="$VERSION"
+          PRERELEASE=false
+          case "$VERSION" in
+            *-*)
+              NOTES_VERSION="${VERSION%%-*}"
+              PRERELEASE=true
+              ;;
+          esac
+
+          NOTES=$(awk -v ver="$NOTES_VERSION" '
             /^## \[/ {
               if (found) exit
               if (index($0, "[" ver "]") > 0) { found=1; next }
@@ -51,11 +64,12 @@ jobs:
           NOTES=$(printf '%s\n' "$NOTES" | sed -e '/./,$!d' -e ':a' -e '/^\n*$/{$d;N;ba' -e '}')
 
           if [ -z "$NOTES" ]; then
-            echo "::error::no CHANGELOG.md section found for version [$VERSION]"
+            echo "::error::no CHANGELOG.md section found for version [$NOTES_VERSION]"
             exit 1
           fi
 
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
           {
             echo "notes<<CHANGELOG_EOF"
             echo "$NOTES"
@@ -75,3 +89,4 @@ jobs:
           tag_name: v${{ steps.changelog.outputs.version }}
           name: v${{ steps.changelog.outputs.version }}
           body: ${{ steps.changelog.outputs.notes }}
+          prerelease: ${{ steps.changelog.outputs.prerelease }}
