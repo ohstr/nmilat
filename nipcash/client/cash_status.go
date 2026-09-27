@@ -27,5 +27,12 @@ func (c *Client) CashStatus(ctx context.Context) (*nipcash.CashStatusResult, err
 // Deprecated: use CashStatus. It still calls the old wire method, so it keeps
 // working against a Hub that has not been updated yet.
 func (c *Client) ListRecipients(ctx context.Context) (*nipcash.CashStatusResult, error) {
+	// Still sends the old wire method on purpose: MethodCashStatus is a
+	// different string ("cash_status" vs "list_recipients"), so switching it
+	// here would stop this client talking to a Hub that has not migrated. The
+	// deprecation is kept for one release precisely so the two sides can move
+	// independently, and which side moves first is a wire-compatibility
+	// decision rather than a lint fix.
+	//nolint:staticcheck // SA1019: deliberate during the compatibility window.
 	return call[nipcash.CashStatusResult](ctx, c, nipcash.MethodListRecipients, struct{}{})
 }
