@@ -1,9 +1,125 @@
 # Changelog
 
-## [0.4.1]
+## [0.5.0]
 
 ### Added
 
+- `huddle/room.Sink` is the seam that makes a room transport-agnostic: a
+  peer is admitted with a sink, and a WebSocket peer differs from one
+  bridged onto another transport only in which sink it has. `ChannelSink` is
+  the default -- bounded queues a writer goroutine drains -- and
+  `Room.AddPeer` / `Manager.Join` take the sink to deliver to. (#38)
+- `huddle/room.Frame` carries both shapes a sink might want: `Relayed`, the
+  wire-ready bytes a WebSocket peer writes straight out, and `Author` plus
+  `Client` for a sink that repacketizes, with `Frame.Payload` recovering the
+  sender's header and the opaque Opus. The room builds `Relayed` once per
+  broadcast and shares it, so adding the seam costs no extra allocation, and
+  it never parses a frame on the broadcast path. (#38)
+- `huddle/wsaudio` serves huddle audio over its own WebSocket: a NIP-42
+  challenge/auth handshake, room admission, the binary frame relay, and a
+  heartbeat that drops a peer which stops answering. It is a separate route
+  with its own upgrader because the Nostr socket decodes every frame as JSON
+  and a binary audio frame there is a parse error that tears the session
+  down. (#38)
+- Refusals carry a code a client can branch on -- `auth_failed`,
+  `join_rejected`, `room_full`, `room_ended`, `upgrade_required` (with the
+  room's actual version so a client can retry), `room_unavailable` and
+  `huddle_audio_unavailable`. A disabled deployment answers with the last of
+  those rather than an HTTP error that looks like a missing route. (#38)
+- Membership policy is a hook, not built in: `Config.Authorize` is where a
+  relay consults NIP-29 group state or NIP-43 relay access, so this package
+  holds no policy of its own. (#38)
+- The Origin header is not this endpoint's security boundary -- admission is
+  gated by a signed challenge -- so an unset `AllowedOrigins` allows any
+  origin. Defaulting the other way is what silently locks browsers out while
+  every CLI client keeps working. (#38)
+- `huddle/room.Manager` holds the live rooms by id, creating one on the
+  first join and dropping it once the last peer leaves, so an idle process
+  holds none. A join that fails against a room it had to create removes
+  that room again -- otherwise a client failing admission repeatedly would
+  leave an empty room per attempt until the cap was reached. (#38)
+- `huddle/room` implements a huddle audio room: the peer registry, the
+  routing identities it allocates, and the fan-out carrying one peer's
+  frames to everyone else. A sender never receives its own frame, and the
+  author's bytes are forwarded verbatim behind the routing prefix. (#38)
+- A peer's audio queue holds 160 ms and **drops when full rather than
+  blocking**, so one listener that stops draining cannot stall the peer who
+  is talking. Control messages get their own larger queue and a full one is
+  reported instead of swallowed: they carry the index-to-pubkey mapping a
+  client needs, so losing one misattributes every later frame. (#38)
+- Routing indices sweep forward through the whole 0..254 space instead of
+  recycling the lowest free one, and each index carries an epoch that
+  increments on reuse -- without it, a late frame from a departed peer is
+  indistinguishable from one sent by whoever took its index. (#38)
+- `huddle/wire` implements the huddle audio frame protocol: the 8-byte
+  per-frame header clients author (sequence, 48 kHz timestamp, dBov level,
+  DTX flag) and the routing prefix a relay prepends when fanning a frame
+  out -- one peer index, plus a per-index epoch from protocol v3 so a frame
+  from a departed peer cannot be mistaken for one from whoever reused its
+  index. The Opus payload stays opaque throughout, which is what lets a
+  relay carry audio without linking a codec. (#38)
+- `huddle/wire.ClampLevel` keeps the client-authored level in its canonical
+  -127..0 range without ever dropping the frame it came on. The level is
+  untrusted telemetry, and bad telemetry must not become audible loss. (#38)
+- `nip71` implements NIP-71 (Video Events): normal (kind 21) and short (22)
+  videos plus their addressable counterparts (34235/34236), with the NIP-92
+  `imeta` variants that carry each rendition and audio track. A variant
+  keeps unmodelled imeta properties in `Extra`, so round-tripping an event
+  never silently drops information NIP-92 or NIP-94 defines. (#38)
+- `nip71.Video.HasPlayableVariant` answers whether any variant has a url a
+  client could play. Parsing does not require one: the spec calls imeta the
+  primary source of video information but never states it as a MUST. (#38)
+- `nip71/relayreg` declares NIP-71 in a relay's NIP-11 document and
+  validates video events on ingest. (#38)
+- `nipA0` implements NIP-A0 (Voice Messages): root voice notes (kind 1222)
+  and replies (1244), plus the optional NIP-92 `imeta` preview carrying a
+  waveform and duration so a client can draw one without downloading the
+  audio. `DurationSet` separates an absent duration from a zero-second
+  one, and the spec's 60-second guidance is reported by
+  `ExceedsRecommendedDuration` rather than enforced, since it is a SHOULD
+  for publishers and not grounds for a relay to reject anything. (#38)
+- `nipA0.ReplyScopes` returns a 1244 reply's NIP-22 root and parent by
+  delegating to `nip22`, so the pointer-tag rules are not duplicated. (#38)
+- `nipA0/relayreg` declares NIP-A0 in a relay's NIP-11 document and
+  validates voice messages on ingest. (#38)
+- `nip29` implements NIP-29 (Relay-based Groups): the moderation events
+  that change group state (kinds 9000-9020), the join and leave requests
+  users send (9021/9022), and the relay-authored events that mirror the
+  result -- metadata, admins, members, roles, live AV participants and
+  pinned events (39000-39005). NIP-28 is unrecommended upstream in favour
+  of this, so there is no nip28. (#38)
+- `nip29.ModerationPolicy` lets a relay declare which roles may perform
+  which moderation kinds. The spec states the mapping is relay-specific
+  and that relays MUST check it, so this is a type to fill in rather than
+  a built-in guess at what "admin" means. (#38)
+- `nip29.GroupMetadata.SupportsKind` honours the absent-vs-empty
+  distinction on `supported_kinds`, which the spec gives opposite
+  meanings: no tag means every kind is supported, an empty tag means none
+  are -- the AV-only group case. (#38)
+- `nip29.TimelineReferences` parses the `previous` tag's 8-character event
+  prefixes, the hack that stops a group message being replayed into a fork
+  of that group out of context. (#38)
+- `nip29/relayreg` declares NIP-29 in a relay's NIP-11 document and
+  structurally validates group events on ingest. Role authorization and
+  the relay-`self` signer check stay in the relay, which has the state to
+  decide them. (#38)
+- `nip53` implements NIP-53 (Live Streaming and Spaces): the live
+  streaming event (kind 30311), the meeting space that hosts audio/video
+  rooms (30312) and the meetings held in one (30313), listener presence
+  (10312) and live chat (1311), with parse/validate/construct for each.
+  A space's `service` tag is transport-neutral, so a room can be reached
+  over any media transport rather than a single vendor's. (#38)
+- `nip53.IsStale` and `nip53.IsPresenceFresh` implement the spec's two
+  liveness heuristics -- a `live` activity with no update for an hour may
+  be treated as ended, and presence older than a window should be
+  filtered -- so callers stop reinventing them inconsistently. (#38)
+- `nip53.SignParticipationProof` and `nip53.VerifyParticipationProof`
+  implement proof of agreement to participate, the signature over an
+  activity's `a` tag that stops an event owner listing accounts who never
+  agreed to join. (#38)
+- `nip53/relayreg` declares NIP-53 in a relay's NIP-11 document and
+  auto-validates all five kinds on ingest, so a relay hosting rooms
+  rejects structurally broken ones instead of storing them. (#38)
 - `nip57.ValidateZapRequestForRelay` and `nip57.ValidateZapReceiptForRelay`
   validate zap events the way a relay ingesting someone else's traffic
   should: every MUST-level rule in NIP-57 is enforced, while the rules the
@@ -18,6 +134,17 @@
 
 ### Changed
 
+- `relay.RegisterLetteredNIP` now trims and upper-cases the id it is given,
+  so `"b7"` and `"B7"` declare one NIP instead of two entries that both
+  reach `supported_nips`. Every id this SDK registers was already
+  upper-case, so nothing advertised changes. (#38)
+- `relay.RegisterLetteredNIP` now panics on an id that cannot name a
+  lettered NIP -- empty, containing anything but letters and digits, or all
+  digits. It is called from `init()`, so the alternative was serving a
+  malformed NIP-11 document for the life of the process. The all-digit case
+  is the one that motivated this: `RegisterLetteredNIP("53")` compiled
+  happily and advertised the JSON string `"53"` where every other
+  implementation expects the number `53` -- use `RegisterNIP` for those. (#38)
 - **The event store upgrades its indexes on first open, and the upgrade is
   one way.** A store written by this release cannot be read by an earlier
   one: the older binary misreads every index key, so writes appear to

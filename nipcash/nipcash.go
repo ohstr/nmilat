@@ -38,7 +38,18 @@ const (
 	MethodCashRedeem      = "cash_redeem"
 	MethodCashTransfer    = "cash_transfer"
 	MethodCashConsolidate = "cash_consolidate"
-	MethodListRecipients  = "list_recipients"
+	// MethodCashStatus is the bill's only read method. Named for what a caller
+	// actually asks it — "what is this bill's state" — rather than for the
+	// roster it happens to return: its dominant use is a single yes/no about
+	// the caller's own slice, and an explicit "spent, retained until T"
+	// (CashStatusResult.Error) reads naturally here where it never did on the
+	// old name.
+	MethodCashStatus = "cash_status"
+	// MethodListRecipients is the former name of MethodCashStatus.
+	//
+	// Deprecated: use MethodCashStatus. Kept for one release so a client can
+	// be updated independently of the Hub it talks to.
+	MethodListRecipients = "list_recipients"
 )
 
 // Identity type strings used on the wire (a request/response's
