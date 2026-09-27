@@ -1,6 +1,6 @@
 package nipcash
 
-// RecipientStatus is one entry of list_recipients' response roster —
+// RecipientStatus is one entry of cash_status' response roster —
 // includes every recipient this wallet was ever created or split into,
 // claimed or not (NIP-CASH §Listing Recipients).
 type RecipientStatus struct {

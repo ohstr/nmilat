@@ -131,6 +131,26 @@
   `ErrDescriptionHashMismatch` with an empty `want=`, which reads as
   evidence the receipt belongs to a different zap when it is nothing of the
   sort. (#35)
+- `nipcash/transport` implements NIP-CASH's private transport: a batch
+  envelope that carries several requests under one encryption, per-item
+  proofs, a response envelope with its own reply-key derivation, and a
+  node-signed hub announcement so a client can find and authenticate a Hub's
+  inbox. Envelope size limits are configurable, and the consolidate source
+  cap is derived from them rather than fixed, so it cannot be set above what
+  an envelope can actually carry.
+- Padding hides how many items an envelope holds: a one-item request and a
+  six-item one are the same size on the wire, and an unserved item is
+  omitted from the response rather than answered with an error — an error
+  would confirm the existence of a wallet the caller could not prove it
+  holds.
+- `nipcash.BillState` gives the three-outcome bill read (live, spent,
+  indeterminate) one reusable representation, and `CashStatus`/
+  `CashStatusResult` replace the `list_recipients` naming throughout. The
+  old names remain as deprecated aliases for one release, and
+  `Client.ListRecipients` deliberately still sends the old wire method so
+  the client and the Hub can migrate independently.
+- `nip01.Event.Serialize` is exported, so a remote signer can produce the
+  exact preimage the signature covers.
 
 ### Changed
 
@@ -187,6 +207,25 @@
   stricter, as its spec requires. (#35)
 - The `have=` and `want=` values reported in a description-hash mismatch
   were the wrong way round. `have=` is now the hash the invoice carries. (#35)
+- A relay verified an event's signature before checking the proof-of-work
+  floor, so an under-difficulty event still cost a signature verification.
+  The floor is now enforced first, which is the cheaper check and the one
+  that makes the PoW requirement worth declaring.
+- NIP-59 gift wrapping assigned the sender's private key to the seal's
+  `PubKey` field and relied on the following `Sign` call to overwrite it.
+  Nothing leaked, because `Sign` does overwrite it — but the code was one
+  reordering, or one seal built without signing, away from publishing a
+  private key in a field designed to be public. `Sign` now owns that field
+  outright.
+- Neither the seal nor the gift wrap randomized `created_at`, so both
+  carried the true time — the correlation signal wrapping exists to remove.
+  Both now use `RandomizedCreatedAt` over NIP-59's two-day window. Two
+  consequences follow for callers: a `since` filter will silently drop a
+  fraction of legitimate wrapped events, and `created_at` is no longer
+  evidence of freshness, so replay protection has to live inside the
+  encrypted payload.
+- `nipcw` read a circle join result from the wrong place, missing the fields
+  the Hub returns under `encrypted_details`.
 
 ## [0.4.0]
 

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/ohstr/nmilat/nip01"
-	"github.com/ohstr/nmilat/nip13"
 	"github.com/ohstr/nmilat/nip42"
 	"github.com/ohstr/nmilat/nip43"
 	"github.com/ohstr/nmilat/nip77"
@@ -374,8 +373,34 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 	if !s.limitation.StrictPow {
 		verifyOpts = append(verifyOpts, nip01.WithoutPowCheck())
 	}
+	// Hand the difficulty floor to Verify rather than checking it afterwards.
+	// Verify applies it once the ID is known to match the event's contents but
+	// before the schnorr signature check, so an event that fails the floor no
+	// longer costs this relay a secp256k1 verification first. Checked after
+	// Verify — as this did — the floor could not defend against flooding at all.
+	if s.limitation.StrictPow && s.limitation.MinPowDifficulty > 0 {
+		verifyOpts = append(verifyOpts, nip01.WithMinPowDifficulty(s.limitation.MinPowDifficulty))
+	}
 
 	if err := ep.Event.Verify(verifyOpts...); err != nil {
+		// Preserve the distinct "pow: ..." rejection message; a client
+		// distinguishes "mine harder" from "your event is malformed".
+		var powErr *nip01.InsufficientPowError
+		if errors.As(err, &powErr) {
+			s.config.Logger.Info().
+				Str("id", ep.Event.ID).
+				Int("difficulty", powErr.Got).
+				Int("required", powErr.Want).
+				Msg("event rejected: insufficient proof of work")
+
+			s.reply(&wire.OkSubscriptionResponse{
+				EventID:  ep.Event.ID,
+				Accepted: false,
+				Message:  powErr.Error(),
+			})
+
+			return nil
+		}
 
 		s.config.Logger.Error().Err(err).Msgf("failed to verify, ID=%s", ep.Event.ID)
 
@@ -386,27 +411,6 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 		})
 
 		return nil
-	}
-
-	if s.limitation.StrictPow && s.limitation.MinPowDifficulty > 0 {
-		// ep.Event.ID is already a validated 32-byte hex string at this
-		// point (Validate, above, via Verify) -- Difficulty cannot fail.
-		difficulty, _ := nip13.Difficulty(ep.Event.ID)
-		if difficulty < s.limitation.MinPowDifficulty {
-			s.config.Logger.Info().
-				Str("id", ep.Event.ID).
-				Int("difficulty", difficulty).
-				Int("required", s.limitation.MinPowDifficulty).
-				Msg("event rejected: insufficient proof of work")
-
-			s.reply(&wire.OkSubscriptionResponse{
-				EventID:  ep.Event.ID,
-				Accepted: false,
-				Message:  fmt.Sprintf("pow: difficulty %d is less than %d", difficulty, s.limitation.MinPowDifficulty),
-			})
-
-			return nil
-		}
 	}
 
 	if err := runEventValidators(ctx, ep.Event); err != nil {
