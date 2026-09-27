@@ -83,8 +83,14 @@ func (ev *Event) Validate() error {
 	return nil
 }
 
-func (ev *Event) HashID() ([]byte, error) {
-
+// Serialize returns the canonical NIP-01 pre-image an event's ID is the sha256 of.
+//
+// Exported for remote signers. A signer that hashes its input for you — an LN
+// node's signrpc, a hardware device, NIP-46 — must be handed THIS, not the ID,
+// because it will compute the hash itself and signing the ID would sign the wrong
+// thing. A signer you hand a private key to signs HashID() directly instead. The
+// two paths agree because sha256(Serialize()) == HashID().
+func (ev *Event) Serialize() ([]byte, error) {
 	tagsBytes, err := utils.MarshalTags(ev.Tags)
 	if err != nil {
 		return nil, err
@@ -99,6 +105,16 @@ func (ev *Event) HashID() ([]byte, error) {
 	str = append(str, ',')
 	str = fmt.Appendf(str, `"%s"`, utils.EscapeJSONString(ev.Content))
 	str = append(str, ']')
+
+	return str, nil
+}
+
+func (ev *Event) HashID() ([]byte, error) {
+
+	str, err := ev.Serialize()
+	if err != nil {
+		return nil, err
+	}
 
 	hsh := sha256.Sum256(str)
 

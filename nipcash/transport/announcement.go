@@ -125,13 +125,38 @@ func NewAnnouncement(nodeXOnly, inbox string, limits Limits, relays []string) (*
 	return ev, nil
 }
 
-// AnnouncementDigest returns the 32 bytes the node must sign for ev.
+// AnnouncementDigest returns the 32 bytes that actually get signed: the event's
+// own ID. Use this with a signer you hand a private key to.
+//
+// Do NOT send this to a signer that hashes its input for you — see
+// AnnouncementSigningPayload.
 func AnnouncementDigest(ev *nip01.Event) ([]byte, error) {
 	id, err := hex.DecodeString(ev.ID)
 	if err != nil || len(id) != 32 {
 		return nil, fmt.Errorf("%w: event id is not 32 bytes of hex", ErrAnnouncementMalformed)
 	}
 	return id, nil
+}
+
+// AnnouncementSigningPayload returns what to hand a signer that hashes its own
+// input — which is the case for an LN node's signrpc.
+//
+// This distinction is easy to get wrong and fails silently when you do. flnd's
+// SignMessageSchnorr computes sha256(msg) and signs THAT, so passing the event ID
+// would have it sign sha256(id) — a perfectly valid signature over the wrong
+// digest, which then fails verification with nothing pointing at the cause. Pass
+// the serialization and the node arrives at the ID on its own.
+//
+// sha256(AnnouncementSigningPayload(ev)) == AnnouncementDigest(ev), always.
+func AnnouncementSigningPayload(ev *nip01.Event) ([]byte, error) {
+	if ev == nil {
+		return nil, fmt.Errorf("%w: no event", ErrAnnouncementMalformed)
+	}
+	payload, err := ev.Serialize()
+	if err != nil {
+		return nil, fmt.Errorf("transport: serialize announcement: %w", err)
+	}
+	return payload, nil
 }
 
 // ParseAnnouncement verifies an announcement and returns what it declares.

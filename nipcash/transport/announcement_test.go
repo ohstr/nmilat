@@ -1,6 +1,8 @@
 package transport
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -62,6 +64,59 @@ func TestAnnouncement_RoundTrip(t *testing.T) {
 	}
 	if len(got.Relays) != 1 || got.Relays[0] != "wss://relay.hub.example" {
 		t.Errorf("relays = %v", got.Relays)
+	}
+}
+
+// TestAnnouncement_NodeAndLocalSigningAgree pins the distinction that fails
+// silently when you get it wrong.
+//
+// A signer you hand a key to signs the event ID. A signer that hashes its own
+// input — flnd's signrpc computes sha256(msg) then signs — must be handed the
+// SERIALIZATION instead. Pass it the ID and it signs sha256(id): a perfectly valid
+// signature over the wrong digest, which fails verification with nothing pointing
+// at why.
+//
+// Both routes must yield a signature that verifies as the same event.
+func TestAnnouncement_NodeAndLocalSigningAgree(t *testing.T) {
+	nodePrivHex, nodeXOnly := testKeypair(t)
+	_, inbox := testKeypair(t)
+
+	privBytes, err := hex.DecodeString(nodePrivHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	priv, _ := btcec.PrivKeyFromBytes(privBytes)
+
+	ev, err := NewAnnouncement(nodeXOnly, inbox, DefaultLimits(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// What a local signer signs.
+	digest, err := AnnouncementDigest(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// What the node is handed; it hashes this itself.
+	payload, err := AnnouncementSigningPayload(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeComputed := sha256.Sum256(payload)
+
+	if !bytes.Equal(digest, nodeComputed[:]) {
+		t.Fatalf("the node would sign a different digest than a local signer:\n  local %x\n  node  %x",
+			digest, nodeComputed)
+	}
+
+	// And a signature produced the node's way verifies as this event.
+	sig, err := schnorr.Sign(priv, nodeComputed[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev.Sig = hex.EncodeToString(sig.Serialize())
+	if _, err := ParseAnnouncement(ev, nodeXOnly); err != nil {
+		t.Fatalf("a node-produced signature must verify: %v", err)
 	}
 }
 
