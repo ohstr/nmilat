@@ -4,6 +4,11 @@
 
 ### Added
 
+- `huddle/room.Manager` holds the live rooms by id, creating one on the
+  first join and dropping it once the last peer leaves, so an idle process
+  holds none. A join that fails against a room it had to create removes
+  that room again -- otherwise a client failing admission repeatedly would
+  leave an empty room per attempt until the cap was reached.
 - `huddle/room` implements a huddle audio room: the peer registry, the
   routing identities it allocates, and the fan-out carrying one peer's
   frames to everyone else. A sender never receives its own frame, and the
