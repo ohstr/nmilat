@@ -103,7 +103,7 @@ func TestManagerDoesNotLeakARoomOnAFailedFirstJoin(t *testing.T) {
 	}
 
 	// A pre-existing room survives a failed join against it.
-	m.Join("room-2", "alice", v2, NewChannelSink())
+	_, _, _, _ = m.Join("room-2", "alice", v2, NewChannelSink())
 	if _, _, _, err := m.Join("room-2", "bob", v3, NewChannelSink()); !errors.Is(err, ErrUpgradeRequired) {
 		t.Fatalf("err = %v, want ErrUpgradeRequired", err)
 	}
@@ -138,9 +138,9 @@ func TestManagerEnd(t *testing.T) {
 
 func TestManagerOccupancy(t *testing.T) {
 	m := NewManager(0)
-	m.Join("a", "alice", v3, NewChannelSink())
-	m.Join("a", "bob", v3, NewChannelSink())
-	m.Join("b", "carol", v3, NewChannelSink())
+	_, _, _, _ = m.Join("a", "alice", v3, NewChannelSink())
+	_, _, _, _ = m.Join("a", "bob", v3, NewChannelSink())
+	_, _, _, _ = m.Join("b", "carol", v3, NewChannelSink())
 
 	got := m.Occupancy()
 	if got["a"] != 2 || got["b"] != 1 || len(got) != 2 {
