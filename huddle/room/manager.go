@@ -42,12 +42,13 @@ func NewManager(maxRooms int) *Manager {
 
 // Join admits a peer to the room with this id, creating the room if it does not
 // exist yet, and returns the room, the peer, and the roster as of the join.
+// sink is where that peer's audio and control are delivered; see Room.AddPeer.
 //
 // A join that fails against a room this call had to create removes that room
 // again rather than leaving an empty one behind. Without that, a client
 // repeatedly failing admission -- wrong protocol version, say -- would leave a
 // room per attempt until the cap was hit.
-func (m *Manager) Join(id, pubkey string, protocolVersion uint8) (*Room, *Peer, Roster, error) {
+func (m *Manager) Join(id, pubkey string, protocolVersion uint8, sink Sink) (*Room, *Peer, Roster, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -60,7 +61,7 @@ func (m *Manager) Join(id, pubkey string, protocolVersion uint8) (*Room, *Peer, 
 		m.rooms[id] = r
 	}
 
-	peer, roster, err := r.AddPeer(pubkey, protocolVersion)
+	peer, roster, err := r.AddPeer(pubkey, protocolVersion, sink)
 	if err != nil {
 		if !existed {
 			delete(m.rooms, id)

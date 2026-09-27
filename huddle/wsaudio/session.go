@@ -28,6 +28,10 @@ type session struct {
 	version uint8
 	room    *room.Room
 	peer    *room.Peer
+	// sink is this session's own delivery queues. The room writes into it and
+	// writeLoop drains it; holding the concrete type here is what lets the
+	// writer read the channels without asking the room for them.
+	sink *room.ChannelSink
 
 	missedPongs atomic.Int32
 	done        chan struct{}
@@ -113,7 +117,8 @@ func (s *session) handshake(ctx context.Context) bool {
 		}
 	}
 
-	joinedRoom, peer, roster, err := s.cfg.Rooms.Join(s.roomID, s.pubkey, s.version)
+	s.sink = room.NewChannelSink()
+	joinedRoom, peer, roster, err := s.cfg.Rooms.Join(s.roomID, s.pubkey, s.version, s.sink)
 	if err != nil {
 		s.writeJoinError(err)
 		return false
@@ -267,12 +272,12 @@ func (s *session) writeLoop() {
 		select {
 		case <-s.done:
 			return
-		case frame := <-s.peer.Audio():
+		case frame := <-s.sink.Audio():
 			if err := s.writeBinary(frame); err != nil {
 				s.shutdown()
 				return
 			}
-		case control := <-s.peer.Control():
+		case control := <-s.sink.Control():
 			if control.Close {
 				s.shutdown()
 				return
