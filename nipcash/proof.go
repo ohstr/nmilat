@@ -59,6 +59,21 @@ func decryptFromPubkey(privKeyHex, pubKeyHex, ciphertext string) (string, error)
 // request that the server would reject anyway.
 var ErrAttestationExpired = errors.New("nipcash: attestation has no expiration, or has already expired")
 
+// ErrCapturedProofNotBatchable means a credential built from an already-signed
+// kind-23198 claim proof (ByProof) cannot be used on the private transport.
+//
+// That proof is sufficient for the standard transport, where it IS the
+// authorization. The private transport needs a kind-23192 bound to the specific
+// envelope, which only the identity's own key can produce — and ByProof holds a
+// finished event, not a key.
+//
+// Surfaced as a named error because the alternative is worse than an inconvenience:
+// a hub omits an item it cannot authorize, and omission is information-free by
+// design, so a caller who sent one would learn nothing about why it vanished.
+var ErrCapturedProofNotBatchable = errors.New(
+	"nipcash: a credential built from a captured proof cannot authorize an item on the private transport; " +
+		"use BySigning or BySigningConnectionKey with the identity's own key")
+
 // proofBinding carries the call-specific values a kind-23198 proof binds to,
 // beyond the wallet pubkey every proof binds to via its own d-tag. Exactly
 // one of Bolt11Hash (cash_redeem) or NewIdentityHash+AmountMillis
@@ -118,6 +133,12 @@ func (c secretCredential) buildProof(proofBinding) (identityType, identityValue 
 	return "", "", nil, nil, c.secret, nil
 }
 
+// itemAuthorization: cash-mode, so there is no key and no proof — the secret
+// itself authorizes the item (NIP-CASH §Bearer Items).
+func (c secretCredential) itemAuthorization() (privKeyHex, cashSecret string, err error) {
+	return "", c.secret, nil
+}
+
 // decryptDelivery is a pass-through: a cash-mode caller's proof is
 // their raw secret, which carries no pubkey to derive a delivery key from,
 // so NIP-CASH requires this case be delivered in the clear instead — see
@@ -153,6 +174,12 @@ func (c signingCredential) buildProof(binding proofBinding) (identityType, ident
 
 func (c signingCredential) decryptDelivery(newWalletPubkey, ciphertext string) (string, error) {
 	return decryptFromPubkey(c.privKeyHex, newWalletPubkey, ciphertext)
+}
+
+// itemAuthorization: a plain signing identity, so the transport signs a
+// kind-23192 with this key.
+func (c signingCredential) itemAuthorization() (privKeyHex, cashSecret string, err error) {
+	return c.privKeyHex, "", nil
 }
 
 // --- BySigningConnectionKey: connection_key credential ---
@@ -200,6 +227,19 @@ func (c connectionKeyCredential) buildProof(binding proofBinding) (identityType,
 	return identityTypeConnectionKey, connectionKey.String(), identityEvent, attestationEvent, "", nil
 }
 
+// itemAuthorization: a connection_key identity signs with its own real Nostr key,
+// exactly as it does for a claim proof. The IA attestation is NOT returned here — it
+// travels in the item's params alongside identity_type/identity_value, the same way
+// it does on the standard transport, because it authenticates the identity rather
+// than the envelope.
+//
+// The expiry check buildProof performs is deliberately not repeated. A stale
+// attestation must fail where it is actually used, against the request that carries
+// it, rather than here where the error could only say "some credential is stale".
+func (c connectionKeyCredential) itemAuthorization() (privKeyHex, cashSecret string, err error) {
+	return c.privKeyHex, "", nil
+}
+
 func (c connectionKeyCredential) decryptDelivery(newWalletPubkey, ciphertext string) (string, error) {
 	return decryptFromPubkey(c.privKeyHex, newWalletPubkey, ciphertext)
 }
@@ -231,6 +271,21 @@ func ByProof(identityEventJSON []byte) (Credential, error) {
 		return nil, fmt.Errorf("nipcash: captured proof has no pubkey")
 	}
 	return proofCredential{identityEvent: identityEventJSON, identityValue: ev.PubKey}, nil
+}
+
+// itemAuthorization: this credential cannot use the private transport.
+//
+// It was built from an already-signed kind-23198 claim proof, which is enough for
+// the standard transport — that proof IS the authorization there. The private
+// transport needs a kind-23192 bound to the envelope, a different event that only
+// the identity's own key can produce, and this credential does not hold one.
+//
+// Reported as an error rather than silently treated as bearer. A hub would omit such
+// an item, and omission is information-free by design, so the caller would learn
+// nothing whatsoever about why their request vanished. Better to refuse locally with
+// a reason.
+func (c proofCredential) itemAuthorization() (privKeyHex, cashSecret string, err error) {
+	return "", "", ErrCapturedProofNotBatchable
 }
 
 func (c proofCredential) buildProof(proofBinding) (identityType, identityValue string, identityEvent, attestationEvent []byte, cashSecret string, err error) {
