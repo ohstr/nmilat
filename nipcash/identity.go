@@ -202,6 +202,30 @@ type Credential interface {
 	// ever set.
 	buildProof(binding proofBinding) (identityType, identityValue string, identityEvent, attestationEvent []byte, cashSecret string, err error)
 
+	// itemAuthorization reports how this credential can authorize an item on the
+	// PRIVATE TRANSPORT, which needs something buildProof cannot give it: a
+	// kind-23192 item proof is a different event from the kind-23198 claim proof
+	// above, bound to an envelope rather than to a call, so the transport needs the
+	// signing key rather than a finished proof.
+	//
+	// Exactly one of the three outcomes holds, and they are genuinely three rather
+	// than a key-or-not pair:
+	//
+	//   privKeyHex set   — sign a kind-23192 for this item
+	//   cashSecret set   — cash-mode: no proof exists or is needed; the secret IS
+	//                      the authorization (NIP-CASH §Bearer Items)
+	//   err              — this credential cannot use the private transport at all
+	//
+	// The third case is real and belongs as an error rather than silence: a
+	// credential built from a captured proof (ByProof) is identity-bound yet holds
+	// no key, so it can neither sign a 23192 nor claim to be bearer. Treating it as
+	// bearer would send an item a hub must omit, and omission is
+	// information-free — the caller would be told nothing at all.
+	//
+	// Unexported, like buildProof, so a signing key never leaves this package. The
+	// transport layer receives a finished proof, never the key that made it.
+	itemAuthorization() (privKeyHex, cashSecret string, err error)
+
 	// decryptDelivery decrypts a spun-off wallet's *_wallet_token field
 	// (NIP-CASH §Spinning a Slice Off Into a Dedicated Wallet): a NIP-44
 	// payload keyed to this credential's own real identity privkey and
