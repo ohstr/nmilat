@@ -52,7 +52,26 @@ type ResponseEnvelope struct {
 	// Error is set only for an envelope-level rejection, where no item ran.
 	Error   *ResultError `json:"error,omitempty"`
 	Results []Result     `json:"results,omitempty"`
-	Pad     string       `json:"pad,omitempty"`
+	// Seq and Total let one request be answered by several events, all sharing the
+	// same reply_to tag (NIP-CASH §Chunked Replies). Seq counts from 1; a
+	// single-event reply is 1 of 1.
+	//
+	// Total is load-bearing rather than decorative, for a reason specific to this
+	// protocol: OMISSION is a valid final answer, so a client cannot simply collect
+	// until every id it sent has been answered — that waits forever for an omitted
+	// item, and is indistinguishable from waiting for a chunk still in flight.
+	// Without an explicit total, "omitted" and "not arrived yet" cannot be told
+	// apart, which would destroy the property the omission rule exists to provide.
+	//
+	// Relay end-of-stored-events cannot serve instead. A client subscribes BEFORE
+	// publishing (these kinds are ephemeral, so a late subscription misses the
+	// reply), and reply_to is fresh per envelope, so nothing stored can match it —
+	// the relay says "nothing stored" before the hub has even seen the request. It
+	// also describes the relay's storage rather than the hub's intent, and only the
+	// hub knows how many chunks it produced.
+	Seq   int    `json:"seq"`
+	Total int    `json:"total"`
+	Pad   string `json:"pad,omitempty"`
 }
 
 // DeriveReplyKey derives the key a response is encrypted under, from the
@@ -87,6 +106,16 @@ func (r ResponseEnvelope) EncodeResponse(limits Limits) ([]byte, error) {
 	if len(r.ReqNonce) != keyHexLen || !isLowerHex(r.ReqNonce) {
 		return nil, fmt.Errorf("%w: req_nonce must be %d lowercase hex characters",
 			ErrResponseMalformed, keyHexLen)
+	}
+	// A zero pair means the single-reply case, which is by far the common one —
+	// filled in rather than rejected so a hub answering in one event need not think
+	// about chunking at all.
+	if r.Seq == 0 && r.Total == 0 {
+		r.Seq, r.Total = 1, 1
+	}
+	if r.Total < 1 || r.Seq < 1 || r.Seq > r.Total {
+		return nil, fmt.Errorf("%w: seq %d of %d is not a position in a reply",
+			ErrResponseMalformed, r.Seq, r.Total)
 	}
 
 	r.Pad = ""
@@ -141,6 +170,15 @@ func DecodeResponse(plaintext []byte, reqNonce string, requestedIDs []string, li
 	}
 	if r.ReqNonce != reqNonce {
 		return nil, fmt.Errorf("%w: req_nonce %q", ErrResponseMismatch, r.ReqNonce)
+	}
+	// Tolerated on decode for the same reason it is filled in on encode: a hub that
+	// answers in one event and omits the pair is not malformed, just terse.
+	if r.Seq == 0 && r.Total == 0 {
+		r.Seq, r.Total = 1, 1
+	}
+	if r.Total < 1 || r.Seq < 1 || r.Seq > r.Total {
+		return nil, fmt.Errorf("%w: seq %d of %d is not a position in a reply",
+			ErrResponseMalformed, r.Seq, r.Total)
 	}
 
 	known := make(map[string]struct{}, len(requestedIDs))
