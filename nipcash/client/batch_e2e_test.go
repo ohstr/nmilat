@@ -3,8 +3,10 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -35,6 +37,14 @@ type fakeHub struct {
 	// decide says how to answer one item. Returning nil OMITS it, which is how a real
 	// hub answers an item it cannot serve.
 	decide func(item transport.Item) *transport.Result
+
+	// chunkSize, when > 0, makes the hub split its reply into events of that many
+	// results — the real behaviour when results outgrow one envelope.
+	chunkSize int
+	// dropChunk, when > 0, is a seq the hub declines to publish, simulating a lost
+	// chunk. The client must report the reply as incomplete rather than reading the
+	// missing items as omissions.
+	dropChunk int
 
 	mu   sync.Mutex
 	subs []chan *nip01.Event
@@ -98,30 +108,54 @@ func (h *fakeHub) handleRequest(t *testing.T, ev *nip01.Event) {
 		}
 	}
 
-	encoded, err := resp.EncodeResponse(h.limits)
-	if err != nil {
-		t.Errorf("hub: encode response: %v", err)
-		return
-	}
 	replyKey, err := transport.DeriveReplyKey(conversationKey, env.ReplyTo)
 	if err != nil {
 		t.Errorf("hub: reply key: %v", err)
 		return
 	}
-	sealed, err := nip44.Encrypt(string(encoded), replyKey[:])
-	if err != nil {
-		t.Errorf("hub: encrypt response: %v", err)
-		return
+
+	// Split into as many events as chunkSize dictates. A real hub decides this AFTER
+	// serving the items, since it cannot know result sizes in advance.
+	chunks := [][]transport.Result{resp.Results}
+	if h.chunkSize > 0 {
+		chunks = nil
+		for i := 0; i < len(resp.Results); i += h.chunkSize {
+			end := min(i+h.chunkSize, len(resp.Results))
+			chunks = append(chunks, resp.Results[i:end])
+		}
+	}
+	if len(chunks) == 0 {
+		chunks = [][]transport.Result{nil}
 	}
 
-	out := nip01.NewEvent(transport.KindPrivateResponse, sealed)
-	// Addressed by the envelope's reply_to, per NIP-CASH §Addressing the Response.
-	out.Tags = [][]string{{"p", env.ReplyTo}}
-	if err := out.Sign(h.hubPriv); err != nil {
-		t.Errorf("hub: sign response: %v", err)
-		return
+	for i, results := range chunks {
+		seq := i + 1
+		if seq == h.dropChunk {
+			continue // lost in transit
+		}
+		part := transport.ResponseEnvelope{
+			Version: transport.EnvelopeVersion, ReqNonce: env.Nonce,
+			Results: results, Seq: seq, Total: len(chunks),
+		}
+		encoded, err := part.EncodeResponse(h.limits)
+		if err != nil {
+			t.Errorf("hub: encode response chunk %d: %v", seq, err)
+			return
+		}
+		sealed, err := nip44.Encrypt(string(encoded), replyKey[:])
+		if err != nil {
+			t.Errorf("hub: encrypt response chunk %d: %v", seq, err)
+			return
+		}
+		out := nip01.NewEvent(transport.KindPrivateResponse, sealed)
+		// Addressed by the envelope's reply_to, per NIP-CASH §Addressing the Response.
+		out.Tags = [][]string{{"p", env.ReplyTo}}
+		if err := out.Sign(h.hubPriv); err != nil {
+			t.Errorf("hub: sign response chunk %d: %v", seq, err)
+			return
+		}
+		h.broadcast(out)
 	}
-	h.broadcast(out)
 }
 
 func startFakeHub(t *testing.T, h *fakeHub) string {
@@ -383,5 +417,105 @@ func newTestHub(t *testing.T, decide func(transport.Item) *transport.Result) *fa
 		inboxPriv: inboxPriv, inboxXOnly: inboxXOnly,
 		limits: transport.DefaultLimits(),
 		decide: decide,
+	}
+}
+
+// TestBatch_EndToEnd_ChunkedReplyReassembles: a hub that answers in several events must
+// be invisible to the caller. Same call, same outcomes, one per item.
+func TestBatch_EndToEnd_ChunkedReplyReassembles(t *testing.T) {
+	hub := newTestHub(t, alwaysSucceed)
+	hub.chunkSize = 2 // 9 items -> 5 reply events
+	relay := startFakeHub(t, hub)
+
+	items := make([]BatchStatus, 0, 9)
+	for i := 0; i < 9; i++ {
+		priv, target := sessionKeypair(t)
+		items = append(items, BatchStatus{Target: target, Credential: nipcash.BySigning(priv)})
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	c := &Client{}
+	s, err := c.NewBatchSession(ctx, hub.hubXOnly, []string{relay})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	outcomes, err := s.StatusMany(ctx, items)
+	if err != nil {
+		t.Fatalf("StatusMany() error = %v; a chunked reply must be reassembled transparently", err)
+	}
+	if len(outcomes) != 9 {
+		t.Fatalf("got %d outcomes, want 9", len(outcomes))
+	}
+	for _, o := range outcomes {
+		if !o.Succeeded() {
+			t.Errorf("item %s: state = %v, want result", o.ID, o.State)
+		}
+	}
+	// Still one request, however many replies it took.
+	if got := len(hub.envelopes()); got != 1 {
+		t.Errorf("hub received %d envelopes, want 1", got)
+	}
+}
+
+// TestBatch_EndToEnd_LostChunkIsIncompleteNotOmitted is the property that protects money.
+//
+// With 2 of 3 chunks received, reporting the missing items as omissions would claim the
+// hub said nothing about work it may well have performed. For cash_redeem that is a
+// redemption the caller is told nothing about — and since an omission is never safe to
+// resend, they would be stuck. So the answers that arrived are kept, the rest are
+// NotServed, and ErrIncompleteReply says plainly that this is ignorance rather than the
+// hub's final word.
+func TestBatch_EndToEnd_LostChunkIsIncompleteNotOmitted(t *testing.T) {
+	hub := newTestHub(t, alwaysSucceed)
+	hub.chunkSize = 2 // 6 items -> 3 chunks
+	hub.dropChunk = 2 // the middle one never arrives
+	relay := startFakeHub(t, hub)
+
+	items := make([]BatchStatus, 0, 6)
+	for i := 0; i < 6; i++ {
+		priv, target := sessionKeypair(t)
+		items = append(items, BatchStatus{ID: "b" + strconv.Itoa(i), Target: target,
+			Credential: nipcash.BySigning(priv)})
+	}
+
+	// Short deadline: the missing chunk is what we are waiting on, and it never comes.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	c := &Client{}
+	s, err := c.NewBatchSession(context.Background(), hub.hubXOnly, []string{relay})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	outcomes, err := s.StatusMany(ctx, items)
+	if !errors.Is(err, ErrIncompleteReply) {
+		t.Fatalf("StatusMany() error = %v, want ErrIncompleteReply", err)
+	}
+
+	// Outcomes must NOT be discarded just because the reply was partial.
+	if len(outcomes) != 6 {
+		t.Fatalf("got %d outcomes, want one per requested item even when incomplete", len(outcomes))
+	}
+	served, unknown := 0, 0
+	for _, o := range outcomes {
+		switch o.State {
+		case OutcomeResult:
+			served++
+		case OutcomeNotServed:
+			unknown++
+		}
+	}
+	if served == 0 {
+		t.Error("every answer was discarded; the chunks that DID arrive carry real results")
+	}
+	if unknown == 0 {
+		t.Error("the dropped chunk's items must be NotServed, not silently successful")
+	}
+	if served+unknown != 6 {
+		t.Errorf("served=%d unknown=%d, want 6 total", served, unknown)
 	}
 }

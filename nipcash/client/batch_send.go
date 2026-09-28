@@ -46,24 +46,47 @@ func (s *BatchSession) sendBatch(ctx context.Context, builders []itemBuilder) ([
 	}
 
 	outcomes := make([]ItemOutcome, 0, len(builders))
+	// Collected rather than returned immediately: one envelope arriving incompletely
+	// must not hide the other envelopes' results, and the caller needs both the
+	// outcomes and the knowledge that part of the picture is missing.
+	var incomplete []error
 	for i, p := range packed {
 		got, err := s.sendOne(ctx, p, i)
-		if err != nil {
+		if err != nil && isStalePolicy(err) {
 			// A refetch is worth exactly one retry, and only of the SEND: if the hub
 			// changed its limits or inbox, the cached policy is stale and the envelope
 			// was never served. Re-packing is not attempted here because the whole
 			// batch's envelopes were sized against the old limits; the caller reruns
 			// with a refreshed session instead, which is why the error surfaces.
-			if isStalePolicy(err) && s.Refresh(ctx) == nil {
+			if s.Refresh(ctx) == nil {
 				got, err = s.sendOne(ctx, p, i)
 			}
 		}
-		if err != nil {
-			// Still failed: everything this envelope carried is unknown, not failed.
-			outcomes = append(outcomes, notServedOutcomes(p.ItemIDs, i)...)
+
+		// An incomplete reply still carries real answers for the chunks that did
+		// arrive, so those are kept rather than thrown away and replaced with
+		// wholesale ignorance. Only when nothing usable came back is the whole
+		// envelope marked unserved.
+		if len(got) > 0 {
+			outcomes = append(outcomes, got...)
+			if err != nil {
+				incomplete = append(incomplete, err)
+			}
 			continue
 		}
-		outcomes = append(outcomes, got...)
+		if err != nil {
+			// Nothing came back at all: everything this envelope carried is unknown,
+			// which is not the same as failed.
+			outcomes = append(outcomes, notServedOutcomes(p.ItemIDs, i)...)
+			incomplete = append(incomplete, err)
+			continue
+		}
+	}
+	if len(incomplete) > 0 {
+		// Joined rather than first-wins: with several envelopes in flight, which one
+		// failed is part of the answer, and a caller reading only the first would
+		// under-report.
+		return outcomes, errors.Join(incomplete...)
 	}
 	return outcomes, nil
 }
@@ -107,26 +130,103 @@ func (s *BatchSession) sendOne(ctx context.Context, p packedEnvelope, index int)
 		return nil, fmt.Errorf("publish envelope %d: %w", index, err)
 	}
 
-	select {
-	case ev, ok := <-replies:
-		if !ok {
-			return nil, fmt.Errorf("reply channel closed for envelope %d", index)
-		}
-		plaintext, err := nip44.Decrypt(ev.Content, replyKey[:])
-		if err != nil {
-			// Addressed to us but not written by the hub: the p-tag addresses a
-			// response, it does not authenticate one. Anyone can publish an event
-			// carrying a tag they observed; only the derived key proves authorship.
-			return nil, fmt.Errorf("decrypt reply for envelope %d: %w", index, err)
-		}
-		resp, err := transport.DecodeResponse([]byte(plaintext), p.Envelope.Nonce, p.ItemIDs, limits)
-		if err != nil {
-			return nil, fmt.Errorf("decode reply for envelope %d: %w", index, err)
-		}
-		return joinOutcomes(p.ItemIDs, resp, index), nil
+	return s.collectReply(ctx, replies, replyKey, p, index)
+}
 
-	case <-ctx.Done():
-		return nil, ctx.Err()
+// ErrIncompleteReply means some chunks of a multi-event reply never arrived.
+//
+// Distinct from an omission on purpose, and the distinction matters most exactly where
+// it is least convenient: having received 2 of 3 chunks, reporting the missing items as
+// omitted would claim the hub said nothing about work it may well have done — for
+// cash_redeem, about money that moved. "Ask again" and "that is final" support different
+// actions, so they are different answers.
+var ErrIncompleteReply = errors.New("nipcash/client: reply arrived in fewer chunks than the hub sent")
+
+// collectReply gathers however many events the hub split its answer into, and joins them
+// into one outcome per requested item.
+//
+// The hub states its own total (NIP-CASH §Chunked Replies), which is what makes this
+// terminate: a client cannot instead collect until every id is answered, because an
+// omitted item is never answered and that is indistinguishable from a chunk still in
+// flight.
+func (s *BatchSession) collectReply(
+	ctx context.Context,
+	replies <-chan *nip01.Event,
+	replyKey [32]byte,
+	p packedEnvelope,
+	index int,
+) ([]ItemOutcome, error) {
+	merged := &transport.ResponseEnvelope{Version: transport.EnvelopeVersion, ReqNonce: p.Envelope.Nonce}
+	seen := map[int]struct{}{}
+	total := 0
+
+	for {
+		select {
+		case ev, ok := <-replies:
+			if !ok {
+				// The relay closed on us. Treated exactly like a timeout rather than as
+				// a distinct failure, because it is the same fact: some chunks arrived
+				// and the rest never will.
+				//
+				// This path used to discard the partial results and report no error at
+				// all, which made a dropped connection indistinguishable from a hub
+				// omitting every item — the worst possible confusion, since an omission
+				// is final and this is not.
+				if total > 0 && len(seen) > 0 {
+					return joinOutcomes(p.ItemIDs, merged, index),
+						fmt.Errorf("%w: envelope %d: got %d of %d chunks before the relay closed",
+							ErrIncompleteReply, index, len(seen), total)
+				}
+				return nil, fmt.Errorf("reply channel closed for envelope %d", index)
+			}
+			plaintext, err := nip44.Decrypt(ev.Content, replyKey[:])
+			if err != nil {
+				// Addressed to us but not written by the hub. The p-tag addresses a
+				// response; it does not authenticate one, since anyone can publish an
+				// event carrying a tag they observed. Only the derived key proves
+				// authorship — so this is discarded rather than fatal, and the real
+				// reply may still arrive.
+				continue
+			}
+			chunk, err := transport.DecodeResponse([]byte(plaintext), p.Envelope.Nonce, p.ItemIDs, s.Limits())
+			if err != nil {
+				return nil, fmt.Errorf("decode reply for envelope %d: %w", index, err)
+			}
+
+			if total == 0 {
+				total = chunk.Total
+			} else if chunk.Total != total {
+				// Chunks disagreeing about the total cannot be one reply, and picking
+				// either would mean guessing when to stop.
+				return nil, fmt.Errorf("%w: envelope %d: chunk claims %d chunks, an earlier one claimed %d",
+					transport.ErrResponseMalformed, index, chunk.Total, total)
+			}
+			if _, dup := seen[chunk.Seq]; dup {
+				return nil, fmt.Errorf("%w: envelope %d: repeated chunk %d",
+					transport.ErrResponseMalformed, index, chunk.Seq)
+			}
+			seen[chunk.Seq] = struct{}{}
+
+			if chunk.Error != nil && merged.Error == nil {
+				merged.Error = chunk.Error
+			}
+			merged.Results = append(merged.Results, chunk.Results...)
+
+			if len(seen) == total {
+				return joinOutcomes(p.ItemIDs, merged, index), nil
+			}
+
+		case <-ctx.Done():
+			if total > 0 && len(seen) > 0 {
+				// Partial: return what did arrive rather than discarding it, but say
+				// plainly that the picture is incomplete. Items in the missing chunks
+				// come back NotServed, which is honest — we do not know — while the
+				// error tells the caller that is ignorance rather than the hub's answer.
+				return joinOutcomes(p.ItemIDs, merged, index),
+					fmt.Errorf("%w: envelope %d: got %d of %d chunks", ErrIncompleteReply, index, len(seen), total)
+			}
+			return nil, ctx.Err()
+		}
 	}
 }
 
@@ -160,12 +260,19 @@ func (s *BatchSession) subscribeReplies(ctx context.Context, replyTo string) (<-
 		}
 		_, events, _ := conn.Subscribe(filter)
 
-		out := make(chan *nip01.Event, 1)
+		// Buffered and forwarding EVERY event, not just the first: a hub may answer one
+		// request with several chunks (NIP-CASH §Chunked Replies), so stopping at the
+		// first would strand the rest and the caller would read them as omissions.
+		out := make(chan *nip01.Event, 8)
 		go func() {
 			defer close(out)
 			for ev := range events {
-				if ev != nil && ev.Event != nil {
-					out <- ev.Event
+				if ev == nil || ev.Event == nil {
+					continue
+				}
+				select {
+				case out <- ev.Event:
+				case <-ctx.Done():
 					return
 				}
 			}

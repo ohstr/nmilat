@@ -23,6 +23,12 @@ import (
 // happened. None of them retries: cash_redeem has no idempotency key and a double
 // redemption is unrecoverable, so the caller decides, and ItemOutcome.SafeToResend says
 // which items they safely may.
+//
+// Each can return outcomes AND a non-nil error together, which is worth expecting rather
+// than treating as a contradiction: it means a hub's reply arrived in fewer chunks than it
+// sent (ErrIncompleteReply), so the outcomes present are genuine while the rest are
+// unknown. Discarding them on seeing the error would throw away real answers — including,
+// for RedeemMany, confirmation of redemptions that succeeded.
 
 // BatchStatus asks one bill for its state.
 type BatchStatus struct {
@@ -61,9 +67,12 @@ func (s *BatchSession) StatusMany(ctx context.Context, items []BatchStatus) ([]S
 		})
 	}
 
-	outcomes, err := s.sendBatch(ctx, builders)
-	if err != nil {
-		return nil, err
+	// sendBatch can return outcomes AND an error, when a reply arrived in fewer chunks
+	// than the hub sent. Those outcomes are real answers and must not be discarded —
+	// the error says part of the picture is missing, not that none of it is.
+	outcomes, sendErr := s.sendBatch(ctx, builders)
+	if sendErr != nil && len(outcomes) == 0 {
+		return nil, sendErr
 	}
 	out := make([]StatusOutcome, 0, len(outcomes))
 	for _, o := range outcomes {
@@ -82,7 +91,7 @@ func (s *BatchSession) StatusMany(ctx context.Context, items []BatchStatus) ([]S
 		}
 		out = append(out, so)
 	}
-	return out, nil
+	return out, sendErr
 }
 
 // BatchRedeem redeems one bill to an invoice.
@@ -122,9 +131,12 @@ func (s *BatchSession) RedeemMany(ctx context.Context, items []BatchRedeem) ([]R
 		})
 	}
 
-	outcomes, err := s.sendBatch(ctx, builders)
-	if err != nil {
-		return nil, err
+	// sendBatch can return outcomes AND an error, when a reply arrived in fewer chunks
+	// than the hub sent. Those outcomes are real answers and must not be discarded —
+	// the error says part of the picture is missing, not that none of it is.
+	outcomes, sendErr := s.sendBatch(ctx, builders)
+	if sendErr != nil && len(outcomes) == 0 {
+		return nil, sendErr
 	}
 	out := make([]RedeemOutcome, 0, len(outcomes))
 	for _, o := range outcomes {
@@ -140,7 +152,7 @@ func (s *BatchSession) RedeemMany(ctx context.Context, items []BatchRedeem) ([]R
 		}
 		out = append(out, ro)
 	}
-	return out, nil
+	return out, sendErr
 }
 
 // BatchTransfer transfers or splits one bill.
@@ -169,9 +181,12 @@ func (s *BatchSession) TransferMany(ctx context.Context, items []BatchTransfer) 
 		})
 	}
 
-	outcomes, err := s.sendBatch(ctx, builders)
-	if err != nil {
-		return nil, err
+	// sendBatch can return outcomes AND an error, when a reply arrived in fewer chunks
+	// than the hub sent. Those outcomes are real answers and must not be discarded —
+	// the error says part of the picture is missing, not that none of it is.
+	outcomes, sendErr := s.sendBatch(ctx, builders)
+	if sendErr != nil && len(outcomes) == 0 {
+		return nil, sendErr
 	}
 	out := make([]TransferOutcome, 0, len(outcomes))
 	for _, o := range outcomes {
@@ -187,7 +202,7 @@ func (s *BatchSession) TransferMany(ctx context.Context, items []BatchTransfer) 
 		}
 		out = append(out, to)
 	}
-	return out, nil
+	return out, sendErr
 }
 
 // BatchConsolidate merges several slices into one new bill.
@@ -228,9 +243,12 @@ func (s *BatchSession) ConsolidateMany(ctx context.Context, items []BatchConsoli
 		})
 	}
 
-	outcomes, err := s.sendBatch(ctx, builders)
-	if err != nil {
-		return nil, err
+	// sendBatch can return outcomes AND an error, when a reply arrived in fewer chunks
+	// than the hub sent. Those outcomes are real answers and must not be discarded —
+	// the error says part of the picture is missing, not that none of it is.
+	outcomes, sendErr := s.sendBatch(ctx, builders)
+	if sendErr != nil && len(outcomes) == 0 {
+		return nil, sendErr
 	}
 	out := make([]ConsolidateOutcome, 0, len(outcomes))
 	for _, o := range outcomes {
@@ -246,7 +264,7 @@ func (s *BatchSession) ConsolidateMany(ctx context.Context, items []BatchConsoli
 		}
 		out = append(out, co)
 	}
-	return out, nil
+	return out, sendErr
 }
 
 // itemID falls back to the index when a caller supplied no id of their own.
