@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strings"
 	"sync"
 
 	"github.com/google/uuid"
@@ -95,10 +96,6 @@ func NewNWCClient(ctx context.Context, pairing *nip47.PairingInfo, encryption st
 	if pairing == nil || len(pairing.RelayURLs) == 0 {
 		return nil, fmt.Errorf("pairing info has no relay urls")
 	}
-	relayURL, err := url.Parse(pairing.RelayURLs[0])
-	if err != nil {
-		return nil, fmt.Errorf("invalid relay url %q: %w", pairing.RelayURLs[0], err)
-	}
 
 	if encryption == "" {
 		encryption = nip47.EncryptionNIP44V2
@@ -113,9 +110,53 @@ func NewNWCClient(ctx context.Context, pairing *nip47.PairingInfo, encryption st
 	default:
 	}
 
-	conn, err := Connect(context.Background(), relayURL)
-	if err != nil {
-		return nil, fmt.Errorf("connect: %w", err)
+	// Try each hint in order until one connects, rather than only the first.
+	//
+	// This is what makes listing several relays mean failover. It used to dial
+	// RelayURLs[0] and stop, so a credential naming three relays was a single
+	// point of failure with two decoys: if the first was down, every holder was
+	// stuck while two healthy relays sat unused in the very same string. That is
+	// the opposite of what an operator listing three relays intends, and nothing
+	// in the credential hinted that only entry zero was live.
+	//
+	// It matters more here than for an ordinary Nostr client because a cash bill
+	// is a bearer instrument. It can outlive the software that minted it, and its
+	// holder cannot be handed a corrected string without the hub's cooperation —
+	// so a relay that dies takes the bill with it unless the others are tried.
+	//
+	// Order is preference, not priority: the first that answers wins, and the
+	// rest are not contacted. Empty and unparseable entries are skipped rather
+	// than fatal, so one malformed hint cannot strand a credential whose other
+	// hints are fine.
+	var (
+		conn     *Connection
+		attempts []string
+	)
+	for _, raw := range pairing.RelayURLs {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		relayURL, err := url.Parse(trimmed)
+		if err != nil {
+			attempts = append(attempts, fmt.Sprintf("%q: invalid url: %v", trimmed, err))
+			continue
+		}
+		candidate, err := Connect(context.Background(), relayURL)
+		if err != nil {
+			attempts = append(attempts, fmt.Sprintf("%q: %v", trimmed, err))
+			continue
+		}
+		conn = candidate
+		break
+	}
+	if conn == nil {
+		if len(attempts) == 0 {
+			return nil, fmt.Errorf("pairing info has no usable relay urls")
+		}
+		// Every hint is reported, not just the last: with failover the useful
+		// question is why ALL of them failed.
+		return nil, fmt.Errorf("connect: no relay could be reached (%s)", strings.Join(attempts, "; "))
 	}
 
 	c := &NWCClient{
