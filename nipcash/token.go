@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"strings"
 
 	"github.com/flokiorg/go-flokicoin/chainutil/bech32"
 )
@@ -93,6 +94,13 @@ func Encode(t Token) (string, error) {
 	secret, err := decodeKeyHex(t.Secret, "secret")
 	if err != nil {
 		return "", err
+	}
+	// A cash token is reached only through its own relay hints — there is no
+	// discovery path for a bill's wallet pubkey, which is published nowhere, and
+	// no client-side fallback. So at least one usable hint is REQUIRED, exactly as
+	// for a hub connection (NIP-CASH §The Cash Token).
+	if countUsableRelays(t.RelayURLs) == 0 {
+		return "", fmt.Errorf("nipcash: a cash token needs at least one non-empty relay url, or nobody can reach the wallet")
 	}
 	for _, url := range t.RelayURLs {
 		if len(url) > maxTLVValueLen {
@@ -225,6 +233,13 @@ func Decode(token string) (Token, error) {
 	if !haveSecret {
 		return Token{}, fmt.Errorf("nipcash: missing secret")
 	}
+	if countUsableRelays(result.RelayURLs) == 0 {
+		// Refused here rather than left to the caller's dialer. A relay-less token
+		// is structurally valid and its checksum verifies, so every layer above
+		// accepts it and the failure surfaces as an obscure connection error
+		// against a bill that looks perfect.
+		return Token{}, fmt.Errorf("nipcash: token carries no usable relay url, so the wallet is unreachable")
+	}
 	if !provenancePoisoned && mintSig != nil && attestedAmount != nil {
 		result.MintSignature = mintSig
 		result.AttestedAmountMillis = attestedAmount
@@ -259,4 +274,21 @@ func readTLV(data []byte) (typ uint8, value []byte, ok bool) {
 		return 0, nil, false
 	}
 	return typ, data[2 : 2+length], true
+}
+
+// countUsableRelays returns how many of urls are non-empty once trimmed.
+//
+// Empty entries are counted as absent rather than as relays. That distinction is
+// the whole point: a producer whose relay config was unset can easily emit one
+// relay whose URL is "", and such a credential is exactly as unreachable as one
+// carrying no relay TLV at all — while passing any check that only counts
+// entries. Trimming catches the " " variant of the same mistake.
+func countUsableRelays(urls []string) int {
+	n := 0
+	for _, u := range urls {
+		if strings.TrimSpace(u) != "" {
+			n++
+		}
+	}
+	return n
 }

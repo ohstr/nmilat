@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
+	"strings"
 
 	"github.com/flokiorg/go-flokicoin/chainutil/bech32"
 )
@@ -57,6 +58,13 @@ func EncodeCircleHubConnection(c CircleHubConnection) (string, error) {
 	secret, err := decodeCircleHubKeyHex(c.Secret, "secret")
 	if err != nil {
 		return "", err
+	}
+	// A hub connection is the ONLY way to reach that specific hub — there is no
+	// discovery path behind it — so its relay hint MUST appear at least once
+	// (NIP-CASH §The Cash Hub Connection, NIP-CW §The Circle Wallet Hub
+	// Connection). Enforced at encode so an unusable string is never produced.
+	if countUsableCircleHubRelays(c.RelayURLs) == 0 {
+		return "", fmt.Errorf("nipcw: a circle hub connection needs at least one non-empty relay url, or nobody can reach the hub")
 	}
 	for _, url := range c.RelayURLs {
 		if len(url) > maxCircleHubTLVValueLen {
@@ -152,6 +160,14 @@ func DecodeCircleHubConnection(s string) (CircleHubConnection, error) {
 	if !haveSecret {
 		return CircleHubConnection{}, fmt.Errorf("nipcw: missing secret")
 	}
+	if countUsableCircleHubRelays(result.RelayURLs) == 0 {
+		// The cardinality NIP-CW's own TLV table requires ("one or more"), finally
+		// enforced. Checked here rather than left to the dialer: a relay-less hub
+		// connection is structurally valid and its checksum verifies, so every
+		// layer above accepts it and the failure surfaces as an unexplained
+		// connection error against a string that looks perfect.
+		return CircleHubConnection{}, fmt.Errorf("nipcw: hub connection carries no usable relay url, so the hub is unreachable")
+	}
 	return result, nil
 }
 
@@ -182,4 +198,18 @@ func readCircleHubTLV(data []byte) (typ uint8, value []byte, ok bool) {
 		return 0, nil, false
 	}
 	return typ, data[2 : 2+length], true
+}
+
+// countUsableCircleHubRelays returns how many of urls are non-empty once trimmed.
+// An empty entry is absence, not a relay: a producer with an unset relay
+// config easily emits one URL of "", which is exactly as unreachable as none
+// while passing any check that merely counts entries.
+func countUsableCircleHubRelays(urls []string) int {
+	n := 0
+	for _, u := range urls {
+		if strings.TrimSpace(u) != "" {
+			n++
+		}
+	}
+	return n
 }
