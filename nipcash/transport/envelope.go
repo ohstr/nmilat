@@ -145,6 +145,13 @@ func canonicalJSON(raw json.RawMessage) ([]byte, error) {
 // told the envelope was over budget.
 func (i Item) VerificationCost() int {
 	cost := 1 // the item's own kind-23192 proof
+	if i.IsBearer() {
+		// A cash-mode item carries no proof to verify: its secret IS the
+		// authorization, so there is no signature and nothing to check. Counting a
+		// phantom verification would make a hub's budget refuse batches it could
+		// actually serve.
+		cost = 0
+	}
 
 	// cash_consolidate is the only method carrying nested proofs today: one per
 	// source, plus an attestation for a connection_key source.
@@ -172,6 +179,31 @@ func (i Item) VerificationCost() int {
 
 // SourceCount reports how many consolidate sources an item declares, for checking
 // against Limits.MaxConsolidateSources. Zero for every other method.
+// IsBearer reports whether this item authorizes with a cash secret rather than a
+// signature — a cash-mode ("bearer") bill.
+//
+// Such an item legitimately carries NO kind-23192 proof, because a cash credential
+// has no keypair to sign one with. NIP-CASH permits this for the private transport
+// specifically: the binding a proof provides adds nothing here, since anyone holding
+// the envelope already holds the secret and could spend it regardless. (The reason
+// cash-mode sources are banned from cash_consolidate does not apply — that ban is
+// about a secret sitting in a request readable by co-recipients of a SHARED calling
+// connection, and this transport has no shared calling connection: it encrypts to
+// the hub's inbox alone.)
+//
+// Inferred from params rather than flagged separately, for the same reason
+// SourceCount is: a separate flag could disagree with the params it describes, and
+// the params are what the hub acts on.
+func (i Item) IsBearer() bool {
+	var params struct {
+		CashSecret string `json:"cash_secret"`
+	}
+	if err := json.Unmarshal(i.Params, &params); err != nil {
+		return false
+	}
+	return params.CashSecret != ""
+}
+
 func (i Item) SourceCount() int {
 	var params struct {
 		Sources []json.RawMessage `json:"sources"`
@@ -287,8 +319,15 @@ func (e Envelope) check(limits Limits) error {
 		if item.Method == "" {
 			return fmt.Errorf("%w: item %q has no method", ErrEnvelopeMalformed, item.ID)
 		}
-		if len(item.Proof) == 0 {
-			return fmt.Errorf("%w: item %q has no proof", ErrEnvelopeMalformed, item.ID)
+		// A proof is required EXCEPT for a cash-mode item, which has no signing key
+		// to make one with — its secret, carried in params, is the whole
+		// authorization (NIP-CASH §Bearer Items). Note this check is a client-side
+		// coherence aid only: a hub decides what a bill actually is from its own
+		// records, never from what the item claims, so omitting a proof cannot be
+		// used to escape authorization on an identity-bound bill.
+		if len(item.Proof) == 0 && !item.IsBearer() {
+			return fmt.Errorf("%w: item %q has no proof and carries no cash secret",
+				ErrEnvelopeMalformed, item.ID)
 		}
 		if sources := item.SourceCount(); sources > limits.MaxConsolidateSources {
 			return fmt.Errorf("%w: item %q declares %d sources, limit %d",

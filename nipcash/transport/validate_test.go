@@ -200,3 +200,106 @@ func TestIsServableMethod(t *testing.T) {
 		}
 	}
 }
+
+// bearerItem builds a cash-mode item: a secret in params and NO proof, which is
+// what a bearer bill can actually produce. A cash credential has no keypair, so
+// there is no kind-23192 proof available to it at all.
+func bearerItem(t *testing.T, id string) Item {
+	t.Helper()
+	_, target := testKeypair(t)
+	return Item{
+		ID:     id,
+		Target: target,
+		Method: "cash_redeem",
+		Params: json.RawMessage(`{"invoice":"lnbc1","cash_secret":"deadbeef"}`),
+	}
+}
+
+// TestBearerItems_AreValidWithoutAProof is the bearer-bill decision.
+//
+// Two of the four credential kinds — BySecret and ByProof — have no signing key, so
+// they cannot build a kind-23192 item proof. Requiring one would shut bearer bills
+// out of the private transport entirely, which is backwards: they are arguably the
+// bills most in need of the privacy batching provides.
+//
+// It is sound because the proof's binding adds nothing for a bearer bill. Anyone
+// holding the envelope already holds the secret and could spend it regardless, so
+// there is no substitution a proof would prevent. And the reason NIP-CASH bans
+// cash-mode sources from cash_consolidate does not apply here: that ban is about a
+// secret sitting in a request readable by co-recipients of a SHARED calling
+// connection, while this transport encrypts to the hub's inbox alone.
+func TestBearerItems_AreValidWithoutAProof(t *testing.T) {
+	_, hub := testKeypair(t)
+
+	env := coherentEnvelope(t, hub, 1)
+	env.Items = append(env.Items, bearerItem(t, "bearer"))
+
+	if _, err := env.Encode(DefaultLimits()); err != nil {
+		t.Fatalf("Encode() error = %v; a proofless cash-mode item must encode", err)
+	}
+	if err := env.Validate(hub, time.Now()); err != nil {
+		t.Fatalf("Validate() error = %v; a proofless cash-mode item must validate", err)
+	}
+}
+
+// TestBearerItems_MixFreelyWithIdentityBoundOnes: one envelope may carry both kinds,
+// which is the realistic case — a wallet holds whatever it was given.
+func TestBearerItems_MixFreelyWithIdentityBoundOnes(t *testing.T) {
+	_, hub := testKeypair(t)
+
+	env := coherentEnvelope(t, hub, 3)
+	env.Items = append(env.Items, bearerItem(t, "b1"), bearerItem(t, "b2"))
+
+	if _, err := env.Encode(DefaultLimits()); err != nil {
+		t.Fatalf("Encode() error = %v", err)
+	}
+	if err := env.Validate(hub, time.Now()); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+// TestProoflessItem_WithoutASecretIsStillRejected: dropping a proof is only
+// legitimate when a secret takes its place. An item with neither authorizes nothing
+// and must not encode.
+func TestProoflessItem_WithoutASecretIsStillRejected(t *testing.T) {
+	_, hub := testKeypair(t)
+
+	env := coherentEnvelope(t, hub, 1)
+	env.Items[0].Proof = nil // no proof, and params carry no cash_secret
+
+	if _, err := env.Encode(DefaultLimits()); !errors.Is(err, ErrEnvelopeMalformed) {
+		t.Fatalf("Encode() error = %v, want ErrEnvelopeMalformed", err)
+	}
+	_ = hub
+}
+
+// TestBearerItem_MustNotCarryBothSecretAndProof: the two authorize differently and
+// an item asserting both is incoherent — a hub would have to choose, and either
+// choice hides the caller's mistake.
+func TestBearerItem_MustNotCarryBothSecretAndProof(t *testing.T) {
+	_, hub := testKeypair(t)
+
+	env := coherentEnvelope(t, hub, 1)
+	// Graft a secret onto an item that already has a real proof.
+	env.Items[0].Params = json.RawMessage(`{"cash_secret":"deadbeef"}`)
+
+	if err := env.Validate(hub, time.Now()); !errors.Is(err, ErrEnvelopeMalformed) {
+		t.Fatalf("Validate() error = %v, want ErrEnvelopeMalformed", err)
+	}
+}
+
+// TestBearerItem_CostsNoVerificationBudget: a hub's verify budget exists to bound
+// signature work. A bearer item involves none, so charging it would make a hub
+// refuse batches it could comfortably serve.
+func TestBearerItem_CostsNoVerificationBudget(t *testing.T) {
+	bearer := bearerItem(t, "b")
+	if got := bearer.VerificationCost(); got != 0 {
+		t.Errorf("bearer VerificationCost() = %d, want 0 — there is no signature to verify", got)
+	}
+
+	_, hub := testKeypair(t)
+	identityBound := coherentEnvelope(t, hub, 1).Items[0]
+	if got := identityBound.VerificationCost(); got != 1 {
+		t.Errorf("identity-bound VerificationCost() = %d, want 1", got)
+	}
+}
