@@ -37,41 +37,57 @@ import (
 // target, method and params rather than merely to an author, so a seal would add a
 // layer and an extra ECDH to prove something no hub relies on.
 //
-// The ephemeral key is generated here and never returned. Nothing needs it again:
-// the response comes back under a key derived from this event's own conversation
-// key plus the envelope's reply_to (DeriveReplyKey), which the caller already has
-// from ConversationKeyFor. Returning it would only invite someone to reuse it,
-// which would defeat the unlinkability the ephemeral key exists for.
-func WrapRequest(plaintext []byte, inboxXOnly string) (*nip01.Event, error) {
+// Returns the conversation key as well as the event, and the caller MUST keep it: it
+// is the only way to read the reply.
+//
+// This is forced by the maths rather than chosen. The response is encrypted under
+// DeriveReplyKey(conversationKey, replyTo), and the conversation key is
+// ECDH(ephemeral_priv, inbox_pub) — equivalently ECDH(inbox_priv, ephemeral_pub). The
+// hub can compute it from its own inbox key and the event's author. The CLIENT cannot
+// recompute it from anything on the wire: it would need the ephemeral private key,
+// which is generated here and deliberately never escapes, since reusing it would
+// destroy the unlinkability it exists for.
+//
+// So the conversation key is returned and the private key is not. That is the minimal
+// thing the caller needs: enough to read one reply, and useless for signing anything.
+func WrapRequest(plaintext []byte, inboxXOnly string) (*nip01.Event, [32]byte, error) {
+	var key [32]byte
+
 	if len(plaintext) == 0 {
-		return nil, fmt.Errorf("%w: refusing to wrap an empty payload", ErrEnvelopeMalformed)
+		return nil, key, fmt.Errorf("%w: refusing to wrap an empty payload", ErrEnvelopeMalformed)
 	}
 	if len(inboxXOnly) != keyHexLen || !isLowerHex(inboxXOnly) {
-		return nil, fmt.Errorf("%w: inbox pubkey must be %d lowercase hex characters",
+		return nil, key, fmt.Errorf("%w: inbox pubkey must be %d lowercase hex characters",
 			ErrAnnouncementMalformed, keyHexLen)
 	}
 	inboxBytes, err := hex.DecodeString(inboxXOnly)
 	if err != nil {
-		return nil, fmt.Errorf("%w: inbox pubkey: %v", ErrAnnouncementMalformed, err)
+		return nil, key, fmt.Errorf("%w: inbox pubkey: %v", ErrAnnouncementMalformed, err)
 	}
 	inboxPub, err := schnorr.ParsePubKey(inboxBytes)
 	if err != nil {
-		return nil, fmt.Errorf("%w: inbox pubkey is not a valid point: %v", ErrAnnouncementMalformed, err)
+		return nil, key, fmt.Errorf("%w: inbox pubkey is not a valid point: %v", ErrAnnouncementMalformed, err)
 	}
 
 	ephemeralPriv, err := btcec.NewPrivateKey()
 	if err != nil {
-		return nil, fmt.Errorf("transport: ephemeral key: %w", err)
+		return nil, key, fmt.Errorf("transport: ephemeral key: %w", err)
 	}
 	ephemeralPrivHex := hex.EncodeToString(ephemeralPriv.Serialize())
 
 	conversationKey, err := nip44.GenerateConversationKey(ephemeralPriv, inboxPub)
 	if err != nil {
-		return nil, fmt.Errorf("transport: conversation key: %w", err)
+		return nil, key, fmt.Errorf("transport: conversation key: %w", err)
 	}
+	if len(conversationKey) != len(key) {
+		return nil, key, fmt.Errorf("transport: conversation key is %d bytes, expected %d",
+			len(conversationKey), len(key))
+	}
+	copy(key[:], conversationKey)
+
 	content, err := nip44.Encrypt(string(plaintext), conversationKey)
 	if err != nil {
-		return nil, fmt.Errorf("transport: encrypt request: %w", err)
+		return nil, key, fmt.Errorf("transport: encrypt request: %w", err)
 	}
 
 	ev := nip01.NewEvent(KindPrivateRequest, content)
@@ -86,9 +102,9 @@ func WrapRequest(plaintext []byte, inboxXOnly string) (*nip01.Event, error) {
 	// Never assign PubKey by hand — Sign derives it from the private key. See
 	// nip59.Wrap's own note about the landmine that used to sit here.
 	if err := ev.Sign(ephemeralPrivHex); err != nil {
-		return nil, fmt.Errorf("transport: sign request: %w", err)
+		return nil, key, fmt.Errorf("transport: sign request: %w", err)
 	}
-	return ev, nil
+	return ev, key, nil
 }
 
 // ConversationKeyFor returns the NIP-44 conversation key between a request event's

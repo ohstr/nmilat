@@ -52,7 +52,7 @@ func TestWrapRequest_SatisfiesTheHubsOwnAcceptanceRule(t *testing.T) {
 		t.Fatalf("Encode() error = %v", err)
 	}
 
-	ev, err := WrapRequest(plaintext, inboxXOnly)
+	ev, _, err := WrapRequest(plaintext, inboxXOnly)
 	if err != nil {
 		t.Fatalf("WrapRequest() error = %v", err)
 	}
@@ -94,7 +94,7 @@ func TestWrapRequest_AuthorIsEphemeralAndUnlinkable(t *testing.T) {
 
 	seen := make(map[string]struct{}, 8)
 	for i := 0; i < 8; i++ {
-		ev, err := WrapRequest(plaintext, inboxXOnly)
+		ev, _, err := WrapRequest(plaintext, inboxXOnly)
 		if err != nil {
 			t.Fatalf("WrapRequest() error = %v", err)
 		}
@@ -122,7 +122,7 @@ func TestWrapRequest_CreatedAtIsBackdated(t *testing.T) {
 	// and require the spread that randomisation implies.
 	var oldest int64 = 1 << 62
 	for i := 0; i < 24; i++ {
-		ev, err := WrapRequest(plaintext, inboxXOnly)
+		ev, _, err := WrapRequest(plaintext, inboxXOnly)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -189,9 +189,89 @@ func TestWrapRequest_RejectsMalformedInput(t *testing.T) {
 		{"inbox not on the curve", plaintext, strings.Repeat("ff", 32)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := WrapRequest(tc.plaintext, tc.inbox); err == nil {
+			if _, _, err := WrapRequest(tc.plaintext, tc.inbox); err == nil {
 				t.Error("WrapRequest() error = nil, want an error")
 			}
 		})
+	}
+}
+
+// TestWrapRequest_ClientCanReadTheReply is the regression test for a design error
+// this function had when first written: it discarded the ephemeral key and returned
+// only the event.
+//
+// That looked tidy and made the reply unreadable. The response is encrypted under
+// DeriveReplyKey(conversationKey, replyTo), and conversationKey is
+// ECDH(ephemeral_priv, inbox_pub). The HUB can recompute it from its own inbox key
+// and the event's author, but the CLIENT cannot recompute it from anything on the
+// wire — it would need the ephemeral private key, which must never be kept.
+//
+// So the key is returned. This test proves both sides arrive at the same one by
+// deriving it from opposite halves and round-tripping an actual reply, which is the
+// only way to catch the class of bug where each end is self-consistent.
+func TestWrapRequest_ClientCanReadTheReply(t *testing.T) {
+	inboxPriv, inboxXOnly := testKeypair(t)
+
+	env := newTestEnvelope(t)
+	plaintext, err := env.Encode(DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ev, clientKey, err := WrapRequest(plaintext, inboxXOnly)
+	if err != nil {
+		t.Fatalf("WrapRequest() error = %v", err)
+	}
+	if clientKey == ([32]byte{}) {
+		t.Fatal("WrapRequest returned a zero conversation key; the reply would be unreadable")
+	}
+
+	// The hub's half: derived from its own inbox key and the event's author.
+	hubKey, err := ConversationKeyFor(ev.PubKey, inboxPriv)
+	if err != nil {
+		t.Fatalf("ConversationKeyFor() error = %v", err)
+	}
+	if hubKey != clientKey {
+		t.Fatal("client and hub derived different conversation keys from the same exchange")
+	}
+
+	// A hub encrypts its response under the reply key; the client must read it.
+	hubReplyKey, err := DeriveReplyKey(hubKey, env.ReplyTo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientReplyKey, err := DeriveReplyKey(clientKey, env.ReplyTo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hubReplyKey != clientReplyKey {
+		t.Fatal("client and hub derived different REPLY keys")
+	}
+
+	response := ResponseEnvelope{
+		Version:  EnvelopeVersion,
+		ReqNonce: env.Nonce,
+		Results:  []Result{{ID: env.Items[0].ID, ResultType: "cash_status"}},
+	}
+	encoded, err := response.EncodeResponse(DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := nip44.Encrypt(string(encoded), hubReplyKey[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	opened, err := nip44.Decrypt(sealed, clientReplyKey[:])
+	if err != nil {
+		t.Fatalf("client cannot decrypt the hub's reply: %v", err)
+	}
+	ids := []string{env.Items[0].ID}
+	decoded, err := DecodeResponse([]byte(opened), env.Nonce, ids, DefaultLimits())
+	if err != nil {
+		t.Fatalf("DecodeResponse() error = %v", err)
+	}
+	if len(decoded.Results) != 1 || decoded.Results[0].ID != ids[0] {
+		t.Errorf("decoded results = %+v, want one result for %q", decoded.Results, ids[0])
 	}
 }
