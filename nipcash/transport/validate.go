@@ -91,6 +91,24 @@ func (e Envelope) Validate(hubXOnly string, now time.Time) error {
 			return fmt.Errorf("%w: item %q calls %q", ErrMethodNotServable, item.ID, item.Method)
 		}
 
+		// A cash-mode item has no proof to check — its secret is the authorization
+		// (NIP-CASH §Bearer Items). There is genuinely nothing to validate here:
+		// no binding to compare, no signature to verify. What CAN still be wrong is
+		// caught above and below — the method must be servable, and Encode has
+		// already required that a proofless item carry a secret at all.
+		//
+		// Worth being explicit that this is not a hole. A hub decides whether a bill
+		// is cash-mode from its own records, never from the item, so an
+		// identity-bound bill cannot dodge its proof by omitting one and looking
+		// bearer: the hub simply finds no matching secret and omits the item.
+		if item.IsBearer() {
+			if len(item.Proof) != 0 {
+				return fmt.Errorf("%w: item %q carries both a cash secret and a proof; "+
+					"a cash-mode item authorizes with its secret alone", ErrEnvelopeMalformed, item.ID)
+			}
+			continue
+		}
+
 		// Recomputed from the item's own params rather than taken on trust: the
 		// whole point is to catch a hash that does not match what is being sent.
 		hash, err := CanonicalParamsHash(item.Params)
