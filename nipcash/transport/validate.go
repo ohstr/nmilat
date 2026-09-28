@@ -4,8 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"time"
-
-	"github.com/ohstr/nmilat/nipcash"
 )
 
 var (
@@ -21,23 +19,29 @@ var (
 // servableMethods is the set a hub may serve over this transport
 // (NIP-CASH §Which Methods a Hub Serves).
 //
+// Spelled as wire strings rather than importing nipcash's constants, and that is a
+// layering requirement rather than a preference. An item proof is signed with a
+// bill's own key, and a bill's key lives behind nipcash.Credential's unexported
+// methods — so nipcash is the package that must build item proofs, which means
+// nipcash has to be able to import THIS package. Importing nipcash here would make
+// that a cycle. transport is the lower layer and keeps no dependency on it.
+//
+// The names are pinned to nipcash's own constants by a test in nipcash/client,
+// which can import both without creating a cycle.
+//
 // mint_cash is deliberately absent. It is the hub owner's method on the hub's own
 // connection, and it is the one method with no retry idempotency — a hub with
 // bounded replay memory could double-mint on a caller's retry.
-//
-// create_circle_wallet lives in NIP-CW rather than here, so it is named as a string
-// rather than imported: transport must not depend on nipcw for one constant, and
-// nipcw is a different document's namespace.
 var servableMethods = map[string]struct{}{
-	nipcash.MethodCashStatus: {},
+	"cash_status": {},
 	// The deprecated alias for cash_status. Currently the only RELEASED name, so a
 	// client that has not been updated sends this one; refusing it locally would
 	// break exactly the clients the alias window exists for.
-	nipcash.MethodListRecipients:  {},
-	nipcash.MethodCashRedeem:      {},
-	nipcash.MethodCashTransfer:    {},
-	nipcash.MethodCashConsolidate: {},
-	"create_circle_wallet":        {},
+	"list_recipients":      {},
+	"cash_redeem":          {},
+	"cash_transfer":        {},
+	"cash_consolidate":     {},
+	"create_circle_wallet": {},
 }
 
 // IsServableMethod reports whether a method may travel over the private transport.

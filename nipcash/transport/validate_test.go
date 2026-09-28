@@ -6,8 +6,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/ohstr/nmilat/nipcash"
 )
 
 // coherentEnvelope builds an envelope that is actually valid: every item bound to
@@ -37,7 +35,7 @@ func coherentEnvelope(t *testing.T, hubXOnly string, bills int) Envelope {
 			t.Fatal(err)
 		}
 		proof, err := BuildItemProof(billPriv, ProofBinding{
-			Target: billTarget, HubXOnly: hubXOnly, Method: nipcash.MethodCashStatus,
+			Target: billTarget, HubXOnly: hubXOnly, Method: "cash_status",
 			ParamsHash: hash, Nonce: nonce, NotAfter: notAfter,
 		})
 		if err != nil {
@@ -45,7 +43,7 @@ func coherentEnvelope(t *testing.T, hubXOnly string, bills int) Envelope {
 		}
 		env.Items = append(env.Items, Item{
 			ID: strings.Repeat("i", i+1), Target: billTarget,
-			Method: nipcash.MethodCashStatus, Params: json.RawMessage(params), Proof: proof,
+			Method: "cash_status", Params: json.RawMessage(params), Proof: proof,
 		})
 	}
 	return env
@@ -92,7 +90,7 @@ func TestValidate_CatchesWhatTheHubAnswersWithSilence(t *testing.T) {
 			name: "proof bound to a different method",
 			mutate: func(t *testing.T, env *Envelope) {
 				// The dangerous direction: a status read turned into a transfer.
-				env.Items[0].Method = nipcash.MethodCashTransfer
+				env.Items[0].Method = "cash_transfer"
 			},
 			wantErr: ErrProofWrongMethod,
 		},
@@ -130,7 +128,7 @@ func TestValidate_CatchesWhatTheHubAnswersWithSilence(t *testing.T) {
 		{
 			name: "a method the transport does not serve",
 			mutate: func(t *testing.T, env *Envelope) {
-				env.Items[0].Method = nipcash.MethodMintCash
+				env.Items[0].Method = "mint_cash"
 			},
 			wantErr: ErrMethodNotServable,
 		},
@@ -187,8 +185,8 @@ func TestValidate_RejectsAWrongHubEvenWhenInternallyConsistent(t *testing.T) {
 
 func TestIsServableMethod(t *testing.T) {
 	for _, m := range []string{
-		nipcash.MethodCashStatus, nipcash.MethodListRecipients, nipcash.MethodCashRedeem,
-		nipcash.MethodCashTransfer, nipcash.MethodCashConsolidate, "create_circle_wallet",
+		"cash_status", "list_recipients", "cash_redeem",
+		"cash_transfer", "cash_consolidate", "create_circle_wallet",
 	} {
 		if !IsServableMethod(m) {
 			t.Errorf("IsServableMethod(%q) = false, want true", m)
@@ -196,7 +194,7 @@ func TestIsServableMethod(t *testing.T) {
 	}
 	// mint_cash is the one deliberate exclusion: hub-owner method, and the only
 	// one with no retry idempotency.
-	for _, m := range []string{nipcash.MethodMintCash, "get_balance", "pay_invoice", "", "cash_status "} {
+	for _, m := range []string{"mint_cash", "get_balance", "pay_invoice", "", "cash_status "} {
 		if IsServableMethod(m) {
 			t.Errorf("IsServableMethod(%q) = true, want false", m)
 		}
