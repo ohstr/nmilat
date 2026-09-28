@@ -257,8 +257,8 @@ type GetInfoResult struct {
 // CircleWalletInfo is get_info's circle_hub-only terms block — see
 // GetInfoResult.CircleWallet's doc comment for when it's populated.
 type CircleWalletInfo struct {
-	AvailableMloki int64 `json:"available_mloki"`
-	MaxExpSecs     int   `json:"max_exp_secs"`
+	AvailableMillis int64 `json:"available_millis"`
+	MaxExpSecs      int   `json:"max_exp_secs"`
 	// FeesPpm is the circle_hub's configured forwarding fee (parts per
 	// million of each circle_wallet child's own outgoing, non-self payment —
 	// see transactions_service.go's CalculateFeeSkimMloki on the Hub side).
