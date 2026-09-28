@@ -70,7 +70,7 @@ func TestEncodeDecode_RoundTrip(t *testing.T) {
 
 func TestEncodeDecode_AnyHRP(t *testing.T) {
 	for _, hrp := range []string{"lokicash", "satscash", "somethingelsecash"} {
-		token, err := Encode(Token{HRP: hrp, WalletPubkey: randomKeyHex(t), Secret: randomKeyHex(t)})
+		token, err := Encode(Token{HRP: hrp, WalletPubkey: randomKeyHex(t), Secret: randomKeyHex(t), RelayURLs: []string{"wss://r.example"}})
 		if err != nil {
 			t.Fatalf("Encode(%q): %v", hrp, err)
 		}
@@ -86,7 +86,7 @@ func TestEncodeDecode_AnyHRP(t *testing.T) {
 
 func TestEncodeDecode_IdentityRequired(t *testing.T) {
 	yes := true
-	token, err := Encode(Token{HRP: "lokicash", WalletPubkey: randomKeyHex(t), Secret: randomKeyHex(t), IdentityRequired: &yes})
+	token, err := Encode(Token{HRP: "lokicash", WalletPubkey: randomKeyHex(t), Secret: randomKeyHex(t), RelayURLs: []string{"wss://r.example"}, IdentityRequired: &yes})
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
@@ -107,6 +107,7 @@ func TestEncodeDecode_MintProvenancePair(t *testing.T) {
 	}
 	token, err := Encode(Token{
 		HRP: "lokicash", WalletPubkey: randomKeyHex(t), Secret: randomKeyHex(t),
+		RelayURLs:     []string{"wss://r.example"},
 		MintSignature: sig, AttestedAmountMillis: &amount,
 	})
 	if err != nil {
@@ -155,5 +156,68 @@ func TestDecode_MissingRequiredFields(t *testing.T) {
 func TestDecode_TruncatedTLV(t *testing.T) {
 	if _, err := Decode("lokicash1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"); err == nil {
 		t.Fatal("expected error for garbage bech32 data")
+	}
+}
+
+// TestDecode_RejectsRelaylessAndEmptyRelayTokens covers the credentials a
+// MISCONFIGURED PRODUCER already minted, which is the whole reason the decoder
+// checks this rather than leaving it to a dialer.
+//
+// Encode now refuses to build either shape, so both are constructed by hand —
+// exactly as a hub running older code would have emitted them. A bill's wallet
+// pubkey is published nowhere and there is no client-side relay fallback, so such
+// a token names something permanently unreachable while remaining structurally
+// perfect: valid bech32, valid checksum, all required TLVs present.
+//
+// The empty-relay row is the one that actually occurs in the wild. A producer
+// whose relay config was unset emits ONE relay whose URL is "", not zero relays —
+// and that shape defeats any check that merely counts entries, including the
+// client's own guard, which rejects zero relays by name but lets "" through
+// because url.Parse("") returns no error.
+func TestDecode_RejectsRelaylessAndEmptyRelayTokens(t *testing.T) {
+	pub, _ := hex.DecodeString(randomKeyHex(t))
+	secret, _ := hex.DecodeString(randomKeyHex(t))
+
+	build := func(t *testing.T, relays []string) string {
+		t.Helper()
+		buf := []byte{tlvWalletPubkey, byte(len(pub))}
+		buf = append(buf, pub...)
+		for _, r := range relays {
+			buf = append(buf, tlvRelay, byte(len(r)))
+			buf = append(buf, []byte(r)...)
+		}
+		buf = append(buf, tlvSecret, byte(len(secret)))
+		buf = append(buf, secret...)
+		bits5, err := bech32.ConvertBits(buf, 8, 5, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := bech32.Encode("lokicash", bits5)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+
+	for _, tc := range []struct {
+		name    string
+		relays  []string
+		wantErr bool
+	}{
+		{"no relay tlv at all", nil, true},
+		{"one empty relay", []string{""}, true},
+		{"one whitespace relay", []string{" "}, true},
+		{"empty relay alongside a real one", []string{"", "wss://r.example"}, false},
+		{"one real relay", []string{"wss://r.example"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Decode(build(t, tc.relays))
+			if tc.wantErr && err == nil {
+				t.Error("want a decode error, got nil — this token is unreachable and must not decode")
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("want nil error, got %v — at least one usable relay is present", err)
+			}
+		})
 	}
 }

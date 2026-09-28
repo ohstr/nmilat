@@ -47,6 +47,13 @@ func EncodeCashHubConnection(c CashHubConnection) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// A hub connection is the ONLY way to reach that specific hub — there is no
+	// discovery path behind it — so its relay hint MUST appear at least once
+	// (NIP-CASH §The Cash Hub Connection, NIP-CW §The Circle Wallet Hub
+	// Connection). Enforced at encode so an unusable string is never produced.
+	if countUsableRelays(c.RelayURLs) == 0 {
+		return "", fmt.Errorf("nipcash: a cash hub connection needs at least one non-empty relay url, or nobody can reach the hub")
+	}
 	for _, url := range c.RelayURLs {
 		if len(url) > maxTLVValueLen {
 			return "", fmt.Errorf("nipcash: relay url exceeds %d bytes: %q", maxTLVValueLen, url)
@@ -140,6 +147,13 @@ func DecodeCashHubConnection(s string) (CashHubConnection, error) {
 	}
 	if !haveSecret {
 		return CashHubConnection{}, fmt.Errorf("nipcash: missing secret")
+	}
+	if countUsableRelays(result.RelayURLs) == 0 {
+		// The cardinality the spec requires, finally enforced. Checked here rather
+		// than left to the dialer: a relay-less hub connection is structurally
+		// valid and its checksum verifies, so every layer above accepts it and the
+		// failure surfaces as an unexplained connection error.
+		return CashHubConnection{}, fmt.Errorf("nipcash: hub connection carries no usable relay url, so the hub is unreachable")
 	}
 	return result, nil
 }

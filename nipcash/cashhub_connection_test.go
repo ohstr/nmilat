@@ -104,18 +104,37 @@ func TestDecodeCashHubConnectionErrors(t *testing.T) {
 	walletPubkey := randomKeyHex(t)
 	secret := randomKeyHex(t)
 
-	validNoRelay, err := EncodeCashHubConnection(CashHubConnection{WalletPubkey: walletPubkey, Secret: secret})
+	// A hub connection with no relay is now REFUSED at both ends, not accepted.
+	// This assertion used to be the opposite — it required a relay-less connection
+	// to decode cleanly — which directly contradicted NIP-CASH's own TLV table
+	// ("one or more") and the prose requiring the hint at least once. A hub
+	// connection is the only way to reach that specific hub, so a relay-less one
+	// names something unreachable while looking perfectly valid.
+	if _, err := EncodeCashHubConnection(CashHubConnection{WalletPubkey: walletPubkey, Secret: secret}); err == nil {
+		t.Error("EncodeCashHubConnection() with no relay: want error, got nil")
+	}
+	// An EMPTY relay must be refused too: it is absence wearing a relay's clothes,
+	// and it is what a producer with an unset relay config actually emits.
+	if _, err := EncodeCashHubConnection(CashHubConnection{
+		WalletPubkey: walletPubkey, Secret: secret, RelayURLs: []string{""},
+	}); err == nil {
+		t.Error("EncodeCashHubConnection() with one empty relay: want error, got nil")
+	}
+
+	// A genuinely valid connection, to truncate below. It needs a relay now, which
+	// is the point of the assertions above.
+	valid, err := EncodeCashHubConnection(CashHubConnection{
+		WalletPubkey: walletPubkey, Secret: secret, RelayURLs: []string{"wss://r.example"},
+	})
 	if err != nil {
 		t.Fatalf("EncodeCashHubConnection() error = %v", err)
-	}
-	if _, err := DecodeCashHubConnection(validNoRelay); err != nil {
-		t.Errorf("DecodeCashHubConnection() with no relay, error = %v, want nil", err)
 	}
 
 	// A well-formed lokicash token has the right shape (bech32, TLV wallet
 	// pubkey + secret) but the wrong HRP — must be rejected, not silently
 	// accepted as a cashhub connection.
-	lokicashToken, err := Encode(Token{HRP: "lokicash", WalletPubkey: walletPubkey, Secret: secret})
+	lokicashToken, err := Encode(Token{HRP: "lokicash", WalletPubkey: walletPubkey, Secret: secret,
+		RelayURLs: []string{"wss://r.example"}})
 	if err != nil {
 		t.Fatalf("Encode() error = %v", err)
 	}
@@ -125,7 +144,7 @@ func TestDecodeCashHubConnectionErrors(t *testing.T) {
 		s    string
 	}{
 		{name: "not bech32", s: "not-a-valid-bech32-string"},
-		{name: "truncated", s: validNoRelay[:len(validNoRelay)-4]},
+		{name: "truncated", s: valid[:len(valid)-4]},
 		{name: "wrong hrp", s: lokicashToken},
 	}
 	for _, tt := range tests {
