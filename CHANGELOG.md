@@ -229,6 +229,20 @@
   encrypted payload.
 - `nipcw` read a circle join result from the wrong place, missing the fields
   the Hub returns under `encrypted_details`.
+- `nip46.ParseNostrconnect` required a `metadata=` query param that NIP-46
+  does not define, so it rejected every conforming `nostrconnect://` URI. The
+  client's identity now comes from the spec's own `name`/`url`/`image` params,
+  with the old blob still read as a fallback, and none of them are required.
+- `ParseNostrconnect` read only the first `relay` param, so a client listing
+  several got one — and pairing failed outright when that one was down. Every
+  relay is kept now, in URI order, and an unusable entry is dropped rather
+  than failing the whole URI. `NostrconnectSchema.Relays` carries them;
+  `Relay` remains as a deprecated alias for the first.
+- `ParseNostrconnect` discarded the `perms` list, leaving a signer no way to
+  honor the permissions a client asked for. It is now kept verbatim in
+  `NostrconnectSchema.Perms`.
+- A schemeless relay host in a `nostrconnect://` URI is read as `wss://`
+  rather than rejected.
 
 ## [0.4.0]
 

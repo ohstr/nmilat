@@ -26,7 +26,8 @@ const KindRequest = 24133
 // Standard NIP-46 method names, used as the "method" field of a Request.
 // Params for each, per spec:
 //
-//	connect:        [signer-pubkey, optional secret, optional permissions]
+//	connect:        [signer-pubkey, optional secret, optional permissions,
+//	                 optional json-stringified client metadata]
 //	sign_event:     [json-stringified unsigned event]
 //	ping:           []
 //	get_public_key: []
@@ -66,20 +67,35 @@ var (
 	ErrUnsupportedEncryption = errors.New("nip46: unsupported encryption scheme")
 )
 
-// Metadata describes the connecting client application, carried in a
-// nostrconnect:// URI's metadata query parameter.
+// Metadata describes the connecting client application — the
+// nostrconnect:// URI's name/url/image params, or the connect method's own
+// optional_client_metadata. Client-supplied and unauthenticated: a display
+// hint, never an input to an authorization decision.
 type Metadata struct {
 	Name        string `json:"name"`
 	Url         string `json:"url"`
-	Description string `json:"description"`
+	Image       string `json:"image,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 // NostrconnectSchema is a parsed nostrconnect:// connection URI.
 type NostrconnectSchema struct {
 	ClientPublickey string
-	Metadata        *Metadata
-	Relay           *url.URL
-	Secret          string
+	// Metadata is never nil — a URI carrying no app information yields a
+	// zero-valued one.
+	Metadata *Metadata
+	// Relay is Relays[0].
+	//
+	// Deprecated: a client may list several relays and means all of them.
+	// Use Relays.
+	Relay *url.URL
+	// Relays holds every relay param, in the order the URI listed them,
+	// and always has at least one element.
+	Relays []*url.URL
+	Secret string
+	// Perms is the raw comma-separated permission list the client is
+	// requesting ("nip44_encrypt,sign_event:1"), empty when unset.
+	Perms string
 }
 
 // Request is the JSON shape of a decrypted request event's content.
