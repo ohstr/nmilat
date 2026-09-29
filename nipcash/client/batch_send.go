@@ -7,10 +7,12 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip44"
 	"github.com/ohstr/nmilat/nipcash/transport"
 	relayclient "github.com/ohstr/nmilat/relay/client"
+	"github.com/ohstr/nmilat/wire"
 )
 
 // defaultNotAfterWindow is how long a batch stays valid.
@@ -235,6 +237,17 @@ func (s *BatchSession) collectReply(
 // Filtered on the p-tag carrying reply_to (NIP-CASH §Addressing the Response). That value
 // appears nowhere else — not as an author, not in the request's tags — so nothing on the
 // relay links this subscription to the request it answers.
+//
+// Uses SubscribeWithID + Read rather than Connection.Subscribe, and that is the whole
+// correctness of this function. Subscribe closes its channel at EOSE by design (see its own
+// doc comment), and EOSE means "end of STORED events" — everything live arrives after it. A
+// reply is always live: the hub has not even seen the request when the subscription opens,
+// and kind 23191 is ephemeral so no relay stores it. Subscribe therefore closed this
+// subscription before the reply could ever arrive, and every item came back as an omission —
+// indistinguishable, by design, from a hub that declined to serve them.
+//
+// It survived every in-process test because those never cross a real relay, so nothing ever
+// sent an EOSE. The first live run failed on all items, immediately and silently.
 func (s *BatchSession) subscribeReplies(ctx context.Context, replyTo string) (<-chan *nip01.Event, func(), error) {
 	relays := s.Relays()
 	if len(relays) == 0 {
@@ -258,7 +271,13 @@ func (s *BatchSession) subscribeReplies(ctx context.Context, replyTo string) (<-
 			lastErr = err
 			continue
 		}
-		_, events, _ := conn.Subscribe(filter)
+
+		subID := uuid.NewString()
+		if !conn.SubscribeWithID(subID, filter) {
+			conn.Close()
+			lastErr = errors.New("connection closed before the subscription could be sent")
+			continue
+		}
 
 		// Buffered and forwarding EVERY event, not just the first: a hub may answer one
 		// request with several chunks (NIP-CASH §Chunked Replies), so stopping at the
@@ -266,12 +285,33 @@ func (s *BatchSession) subscribeReplies(ctx context.Context, replyTo string) (<-
 		out := make(chan *nip01.Event, 8)
 		go func() {
 			defer close(out)
-			for ev := range events {
-				if ev == nil || ev.Event == nil {
-					continue
-				}
+			for {
 				select {
-				case out <- ev.Event:
+				case msg, ok := <-conn.Read():
+					if !ok {
+						return
+					}
+					switch m := msg.(type) {
+					case *wire.EventSubscriptionResponse:
+						// Other subscriptions do not exist on this connection today,
+						// but filtering by id keeps that an implementation detail
+						// rather than an assumption.
+						if m.SubscriptionID != subID || m.Event == nil {
+							continue
+						}
+						select {
+						case out <- m.Event:
+						case <-ctx.Done():
+							return
+						}
+					case *wire.ClosedSubscriptionResponse:
+						// The relay ended it; nothing more will arrive. EOSE is
+						// deliberately NOT handled here — it only marks the end of
+						// stored events, and every reply comes after it.
+						if m.SubscriptionID == subID {
+							return
+						}
+					}
 				case <-ctx.Done():
 					return
 				}

@@ -57,7 +57,17 @@ func (c *Client) NewBatchSession(ctx context.Context, hubXOnly string, relays []
 	if len(relays) == 0 {
 		return nil, fmt.Errorf("nipcash/client: no relays to look for %s's announcement on", hubXOnly)
 	}
-	s := &BatchSession{hubXOnly: hubXOnly, fallbackRelays: relays, relays: relays}
+	// Normalized because the documented source of this value — the identity
+	// recovered from a bill's mint signature — produces a 33-byte COMPRESSED
+	// pubkey, while a Nostr event's author is always the 32-byte x-only form.
+	// Without this the announcement is published under one spelling and looked up
+	// under another, and the lookup returns nothing: indistinguishable from a hub
+	// that simply does not offer the transport.
+	xonly, err := transport.NormalizeNodeIdentity(hubXOnly)
+	if err != nil {
+		return nil, err
+	}
+	s := &BatchSession{hubXOnly: xonly, fallbackRelays: relays, relays: relays}
 	if err := s.Refresh(ctx); err != nil {
 		return nil, err
 	}
