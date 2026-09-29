@@ -222,3 +222,34 @@ func TestStatusItem_ScopeTravelsInParams(t *testing.T) {
 		t.Errorf("params = %s, want no scope field at all so the hub applies its own default", got)
 	}
 }
+
+// TestStatusItem_CashModeCarriesItsSecret is the regression test for a bug that made
+// cash-mode bills unreadable over the private transport entirely.
+//
+// buildItem returns early for a cash-mode credential, on the explicit assumption
+// that the secret is already inside wireParams because "every params type puts it
+// there via buildProof". cash_status had no such field and no such path, so its item
+// came out with NEITHER a proof NOR a secret — malformed, refused by the codec, and
+// therefore never even sent. The failure surfaced only against a live hub.
+func TestStatusItem_CashModeCarriesItsSecret(t *testing.T) {
+	_, pub := itemTestKeypair(t)
+	b := ItemBinding{HubXOnly: pub, Nonce: strings.Repeat("11", 32), NotAfter: time.Now().Add(time.Minute).Unix()}
+
+	item, err := StatusItem("s1", pub, CashStatusParams{Scope: ScopeMine}, BySecret("the-secret"), b)
+	if err != nil {
+		t.Fatalf("StatusItem(cash-mode): %v", err)
+	}
+	if len(item.Proof) != 0 {
+		t.Error("a cash-mode item must carry no proof — there is no key to sign with")
+	}
+	if !item.IsBearer() {
+		t.Fatalf("a cash-mode item must be recognisable as a bearer item, or the codec refuses it as malformed: params=%s", item.Params)
+	}
+	if !strings.Contains(string(item.Params), "the-secret") {
+		t.Errorf("the cash secret never reached the params: %s", item.Params)
+	}
+	// The scope must survive alongside it.
+	if !strings.Contains(string(item.Params), `"scope":"mine"`) {
+		t.Errorf("the scope was lost when the request type changed: %s", item.Params)
+	}
+}

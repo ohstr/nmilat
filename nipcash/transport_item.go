@@ -139,8 +139,18 @@ func StatusItem(id, target string, p CashStatusParams, cred Credential, b ItemBi
 	if !IsValidCashStatusScope(p.Scope) {
 		return transport.Item{}, fmt.Errorf("nipcash: cash_status scope %q must be %q, %q, or absent", p.Scope, ScopeAll, ScopeMine)
 	}
+	// Built through the credential, exactly as every other method's Request does, so
+	// a cash-mode bill's secret reaches the params. buildItem returns early for a
+	// cash-mode credential on the assumption that the secret is ALREADY in
+	// wireParams; passing CashStatusParams straight through broke that assumption
+	// silently, and produced an item with neither a proof nor a secret — malformed,
+	// refused by the codec, and therefore never sent.
+	_, _, _, _, cashSecret, err := cred.buildProof(proofBinding{WalletPubkey: target})
+	if err != nil {
+		return transport.Item{}, err
+	}
 	// The params value is passed even when empty: CanonicalParamsHash treats absent
 	// and empty as one representation, and a hub's decoder expects a params field it
 	// can unmarshal. Being explicit avoids depending on that equivalence.
-	return buildItem(id, target, MethodCashStatus, p, cred, b)
+	return buildItem(id, target, MethodCashStatus, CashStatusRequest{Scope: p.Scope, CashSecret: cashSecret}, cred, b)
 }
