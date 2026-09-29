@@ -1,5 +1,40 @@
 package nipcash
 
+// Cash-status scopes, which select how much of the roster a Hub answers with
+// (NIP-CASH §Scoping the Roster).
+//
+// Only meaningful on the private transport, where every item carries a proof
+// signed by one specific recipient, so a Hub knows who is asking. On the standard
+// transport every recipient holds the SAME connection string, so the Hub cannot
+// identify the caller at all — which is why ScopeMine MUST be rejected there
+// rather than approximated.
+const (
+	// ScopeAll returns every recipient's row — the shared roster.
+	ScopeAll = "all"
+	// ScopeMine returns only the calling recipient's own row.
+	ScopeMine = "mine"
+)
+
+// CashStatusParams is cash_status' request.
+//
+// Scope is OPTIONAL, and absent does NOT mean one fixed thing: a Hub reads it as
+// ScopeMine on the private transport and ScopeAll on the standard one. The
+// defaults differ because the transports differ in what they can know, so a
+// client that wants a specific answer regardless of transport must say so.
+type CashStatusParams struct {
+	Scope string `json:"scope,omitempty"`
+}
+
+// IsValidCashStatusScope reports whether s is a scope a Hub can honour. An empty
+// string is valid: it means "the default for this transport".
+//
+// Exported so a client and a Hub check the same rule rather than each keeping its
+// own list — the kind of drift that shows up as a request silently answered with
+// the wrong amount of data.
+func IsValidCashStatusScope(s string) bool {
+	return s == "" || s == ScopeAll || s == ScopeMine
+}
+
 // RecipientStatus is one entry of cash_status' response roster —
 // includes every recipient this wallet was ever created or split into,
 // claimed or not (NIP-CASH §Listing Recipients).
@@ -27,9 +62,12 @@ type RecipientStatus struct {
 // CashStatusResult is cash_status' response, and carries one of two mutually
 // exclusive answers.
 //
-// Recipients is the roster — every slice this bill was created or split into.
-// It is deliberately NOT scoped to the caller's own slice, despite the method's
-// name: every holder of the connection sees every row (NIP-CASH §Cash Status).
+// Recipients is the roster. How much of it arrives depends on the request's Scope
+// and on the transport (NIP-CASH §Scoping the Roster): on the standard transport
+// it is every slice this bill was created or split into, unscoped, because every
+// holder of the connection is indistinguishable there; on the private transport an
+// unscoped request returns only the caller's own row, since a per-item proof makes
+// the caller identifiable for the first time.
 //
 // Error/RetainedUntil is the tombstone for a bill that has been spent and
 // destroyed. It exists because silence cannot be told apart from a Hub that is
