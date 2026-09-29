@@ -60,7 +60,30 @@ type Item struct {
 	// Proof is the item's own signed kind-23192 event. It is a nested object, not
 	// a JSON string: a string would need escaping (costing ~5%) and force every
 	// reader through a second parse.
-	Proof json.RawMessage `json:"proof"`
+	//
+	// omitempty is load-bearing, not tidiness. A nil json.RawMessage without it
+	// marshals to `"proof":null`, and decoding that literal yields a FOUR-BYTE
+	// value — so `len(Proof) == 0` is false on the far side and a proofless bearer
+	// item arrives looking like it carries a proof. Read HasProof rather than the
+	// length, which also survives a peer that sends an explicit null anyway.
+	Proof json.RawMessage `json:"proof,omitempty"`
+}
+
+// nullLiteral is what a nil json.RawMessage marshals to when it is not omitted.
+var nullLiteral = []byte("null")
+
+// HasProof reports whether this item actually carries a kind-23192 proof.
+//
+// Not a length check, because JSON gives three different spellings of "no proof":
+// absent, empty, and the literal `null`. The last one is the dangerous one — it
+// decodes to four bytes, so a length check reads it as a proof that is present and
+// unverifiable, and every such item is refused. That made cash-mode bills, which
+// are proofless BY DESIGN (§Bearer Items), impossible to serve over this transport
+// at all: the failure is an omission, which is information-free, so no caller could
+// ever learn why.
+func (i Item) HasProof() bool {
+	trimmed := bytes.TrimSpace(i.Proof)
+	return len(trimmed) > 0 && !bytes.Equal(trimmed, nullLiteral)
 }
 
 // Envelope is the plaintext inside one private-transport ciphertext.
@@ -325,7 +348,7 @@ func (e Envelope) check(limits Limits) error {
 		// coherence aid only: a hub decides what a bill actually is from its own
 		// records, never from what the item claims, so omitting a proof cannot be
 		// used to escape authorization on an identity-bound bill.
-		if len(item.Proof) == 0 && !item.IsBearer() {
+		if !item.HasProof() && !item.IsBearer() {
 			return fmt.Errorf("%w: item %q has no proof and carries no cash secret",
 				ErrEnvelopeMalformed, item.ID)
 		}

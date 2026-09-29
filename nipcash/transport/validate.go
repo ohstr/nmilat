@@ -102,7 +102,7 @@ func (e Envelope) Validate(hubXOnly string, now time.Time) error {
 		// identity-bound bill cannot dodge its proof by omitting one and looking
 		// bearer: the hub simply finds no matching secret and omits the item.
 		if item.IsBearer() {
-			if len(item.Proof) != 0 {
+			if item.HasProof() {
 				return fmt.Errorf("%w: item %q carries both a cash secret and a proof; "+
 					"a cash-mode item authorizes with its secret alone", ErrEnvelopeMalformed, item.ID)
 			}
