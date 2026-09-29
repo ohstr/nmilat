@@ -27,11 +27,6 @@ type CashTransferParams struct {
 	// own unchanged identity. nil transfers the slice's entire
 	// CurrentAmount.
 	SplitAmount *uint64
-	// MintSignature opts a spun-off wallet's token into mint provenance —
-	// only meaningful when this call actually spins one off (a split, or a
-	// full transfer to cash mode on a multi-recipient-history wallet);
-	// harmless no-op on an in-place reassignment.
-	MintSignature bool
 }
 
 // cashTransferNewIdentityParam is the wire shape of cash_transfer's
@@ -51,7 +46,6 @@ type CashTransferRequest struct {
 	CashSecret       string                       `json:"cash_secret,omitempty"`
 	NewIdentity      cashTransferNewIdentityParam `json:"new_identity"`
 	AmountMillis     *uint64                      `json:"amount_millis,omitempty"`
-	MintSignature    bool                         `json:"mint_signature,omitempty"`
 }
 
 // Request builds cash_transfer's wire request from p, bound to
@@ -82,7 +76,6 @@ func (p CashTransferParams) Request(walletPubkey string) (CashTransferRequest, e
 			IAPubkey:      f.iaPubkey(),
 		},
 		AmountMillis:  p.SplitAmount,
-		MintSignature: p.MintSignature,
 	}
 	if identityEvent != nil {
 		req.IdentityEvent = string(identityEvent)

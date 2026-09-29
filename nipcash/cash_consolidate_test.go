@@ -92,7 +92,6 @@ func TestCashConsolidateParams_Request_HappyPath(t *testing.T) {
 			From(walletB, 15_000, BySigning(privKeyHex)),
 		},
 		To:            Pubkey(pubKeyHex),
-		MintSignature: true,
 	}
 	req, err := p.Request()
 	if err != nil {
@@ -111,9 +110,6 @@ func TestCashConsolidateParams_Request_HappyPath(t *testing.T) {
 	}
 	if req.NewIdentity.IdentityValue != pubKeyHex {
 		t.Fatalf("NewIdentity: %+v", req.NewIdentity)
-	}
-	if !req.MintSignature {
-		t.Fatal("expected MintSignature true")
 	}
 }
 
