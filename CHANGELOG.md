@@ -153,7 +153,7 @@
   exact preimage the signature covers.
 - `nip46.MethodSwitchRelays` and `nip46.MethodLogout` name the two standard
   methods the package was missing, so a signer can answer them instead of
-  reporting them unsupported.
+  reporting them unsupported. (#42)
 
 ### Changed
 
@@ -233,16 +233,17 @@
   does not define, so it rejected every conforming `nostrconnect://` URI. The
   client's identity now comes from the spec's own `name`/`url`/`image` params,
   with the old blob still read as a fallback, and none of them are required.
+  (#42)
 - `ParseNostrconnect` read only the first `relay` param, so a client listing
   several got one — and pairing failed outright when that one was down. Every
   relay is kept now, in URI order, and an unusable entry is dropped rather
   than failing the whole URI. `NostrconnectSchema.Relays` carries them;
-  `Relay` remains as a deprecated alias for the first.
+  `Relay` remains as a deprecated alias for the first. (#42)
 - `ParseNostrconnect` discarded the `perms` list, leaving a signer no way to
   honor the permissions a client asked for. It is now kept verbatim in
-  `NostrconnectSchema.Perms`.
+  `NostrconnectSchema.Perms`. (#42)
 - A schemeless relay host in a `nostrconnect://` URI is read as `wss://`
-  rather than rejected.
+  rather than rejected. (#42)
 
 ## [0.4.0]
 
