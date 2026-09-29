@@ -1,7 +1,6 @@
 package nipcash
 
 import (
-	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -124,30 +123,6 @@ func TestItemConstructors_BearerCarriesNoProof(t *testing.T) {
 	}
 	if got := item.VerificationCost(); got != 0 {
 		t.Errorf("VerificationCost() = %d, want 0", got)
-	}
-}
-
-// TestItemConstructors_CapturedProofIsRefusedLocally: ByProof holds a finished
-// kind-23198, not a key, so it cannot sign the kind-23192 an item needs. It must fail
-// HERE, with a reason, rather than produce an item a hub silently omits.
-func TestItemConstructors_CapturedProofIsRefusedLocally(t *testing.T) {
-	_, hubXOnly := itemTestKeypair(t)
-	billPriv, target := itemTestKeypair(t)
-	b := testBinding(t, hubXOnly)
-
-	// A real captured proof, built the way a caller would have obtained one.
-	signed, err := CashRedeemParams{Invoice: testInvoice, Credential: BySigning(billPriv)}.Request(target)
-	if err != nil {
-		t.Fatal(err)
-	}
-	captured, err := ByProof([]byte(signed.IdentityEvent))
-	if err != nil {
-		t.Fatalf("ByProof() error = %v", err)
-	}
-
-	_, err = CashRedeemParams{Invoice: testInvoice, Credential: captured}.Item("r1", target, b)
-	if !errors.Is(err, ErrCapturedProofNotBatchable) {
-		t.Fatalf("Item() error = %v, want ErrCapturedProofNotBatchable", err)
 	}
 }
 

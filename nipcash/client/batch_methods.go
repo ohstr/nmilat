@@ -181,8 +181,12 @@ type TransferOutcome struct {
 // TransferMany transfers or splits several bills in one request.
 func (s *BatchSession) TransferMany(ctx context.Context, items []BatchTransfer) ([]TransferOutcome, error) {
 	builders := make([]itemBuilder, 0, len(items))
+	// Kept so each result can be parsed through the SAME params that authorized it —
+	// the delivered token is encrypted to that credential.
+	paramsByID := make(map[string]nipcash.CashTransferParams, len(items))
 	for i, it := range items {
 		it := it
+		paramsByID[itemID(it.ID, i)] = it.Params
 		builders = append(builders, itemBuilder{
 			ID: itemID(it.ID, i),
 			Build: func(id string, b nipcash.ItemBinding) (transport.Item, error) {
@@ -202,12 +206,16 @@ func (s *BatchSession) TransferMany(ctx context.Context, items []BatchTransfer) 
 	for _, o := range outcomes {
 		to := TransferOutcome{ItemOutcome: o}
 		if o.Succeeded() {
-			var result nipcash.CashTransferResult
-			if err := json.Unmarshal(o.Result, &result); err != nil {
+			// ParseResult, never a plain unmarshal: a spun-off wallet's token
+			// arrives ENCRYPTED to its new owner, and only the credential that
+			// authorized this item can open it. Unmarshalling would return
+			// ciphertext in a field named for a token — usable-looking and useless.
+			result, err := paramsByID[o.ID].ParseResult(o.Result)
+			if err != nil {
 				to.State = OutcomeError
 				to.Error = decodeError(o.ID, err)
 			} else {
-				to.Result = &result
+				to.Result = result
 			}
 		}
 		out = append(out, to)
@@ -243,8 +251,11 @@ type ConsolidateOutcome struct {
 // be split at all and returns ErrItemTooLarge: the caller must consolidate in stages.
 func (s *BatchSession) ConsolidateMany(ctx context.Context, items []BatchConsolidate) ([]ConsolidateOutcome, error) {
 	builders := make([]itemBuilder, 0, len(items))
+	// Same reason as TransferMany: the merged wallet's token is delivered encrypted.
+	paramsByID := make(map[string]nipcash.CashConsolidateParams, len(items))
 	for i, it := range items {
 		it := it
+		paramsByID[itemID(it.ID, i)] = it.Params
 		builders = append(builders, itemBuilder{
 			ID: itemID(it.ID, i),
 			Build: func(id string, b nipcash.ItemBinding) (transport.Item, error) {
@@ -264,12 +275,14 @@ func (s *BatchSession) ConsolidateMany(ctx context.Context, items []BatchConsoli
 	for _, o := range outcomes {
 		co := ConsolidateOutcome{ItemOutcome: o}
 		if o.Succeeded() {
-			var result nipcash.CashConsolidateResult
-			if err := json.Unmarshal(o.Result, &result); err != nil {
+			// ParseResult for the reason TransferMany uses it: the merged wallet's
+			// token is delivered encrypted to its new owner.
+			result, err := paramsByID[o.ID].ParseResult(o.Result)
+			if err != nil {
 				co.State = OutcomeError
 				co.Error = decodeError(o.ID, err)
 			} else {
-				co.Result = &result
+				co.Result = result
 			}
 		}
 		out = append(out, co)

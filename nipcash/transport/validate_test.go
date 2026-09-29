@@ -185,7 +185,7 @@ func TestValidate_RejectsAWrongHubEvenWhenInternallyConsistent(t *testing.T) {
 
 func TestIsServableMethod(t *testing.T) {
 	for _, m := range []string{
-		"cash_status", "list_recipients", "cash_redeem",
+		"cash_status", "cash_redeem",
 		"cash_transfer", "cash_consolidate", "create_circle_wallet",
 	} {
 		if !IsServableMethod(m) {

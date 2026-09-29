@@ -50,8 +50,12 @@ func (s BillState) String() string {
 //
 // The error is returned alongside the state so a caller can log or retry on it;
 // it must not be used to infer that the bill is gone.
-func (c *Client) State(ctx context.Context) (BillState, *nipcash.CashStatusResult, error) {
-	return classify(c.CashStatus(ctx))
+// cred is required because cash_status is: the private transport authorizes per item.
+func (c *Client) State(ctx context.Context, cred nipcash.Credential) (BillState, *nipcash.CashStatusResult, error) {
+	// ScopeMine: this asks whether the bill is alive, which the caller's own row
+	// answers. Requesting the shared roster would learn about co-recipients for no
+	// reason, and make the reply larger for nothing.
+	return classify(c.CashStatus(ctx, cred, nipcash.ScopeMine))
 }
 
 // classify is State's decision, separated from the round trip that feeds it.

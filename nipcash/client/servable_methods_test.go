@@ -24,7 +24,6 @@ import (
 func TestServableMethods_MatchNipcashConstants(t *testing.T) {
 	for _, m := range []string{
 		nipcash.MethodCashStatus,
-		nipcash.MethodListRecipients,
 		nipcash.MethodCashRedeem,
 		nipcash.MethodCashTransfer,
 		nipcash.MethodCashConsolidate,
@@ -33,6 +32,13 @@ func TestServableMethods_MatchNipcashConstants(t *testing.T) {
 			t.Errorf("transport does not recognise %q; a method constant was renamed "+
 				"and transport's own copy of the name was not updated", m)
 		}
+	}
+
+	// The list_recipients alias is gone, and must stay gone. It existed only so a
+	// released client could lag a Hub; with no released client it is dead weight, and
+	// leaving it servable would keep a second spelling of one method alive forever.
+	if transport.IsServableMethod("list_recipients") {
+		t.Error("list_recipients is still servable; the deprecated alias was removed and must not return")
 	}
 
 	// mint_cash must stay excluded: hub-owner method, and the only one with no

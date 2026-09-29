@@ -114,10 +114,6 @@ const ErrorSpent = "spent"
 // IsSpent reports whether r is a tombstone rather than a roster.
 func (r CashStatusResult) IsSpent() bool { return r.Error == ErrorSpent }
 
-// ListRecipientsResult is the former name of CashStatusResult.
-//
-// Deprecated: use CashStatusResult.
-type ListRecipientsResult = CashStatusResult
 
 // IsCash reports whether r is a cash-mode recipient row — the one
 // place identityTypeCash's own comparison lives, so a caller outside
