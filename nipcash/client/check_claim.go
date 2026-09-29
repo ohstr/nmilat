@@ -27,8 +27,12 @@ import (
 // this check — a self-dialing version would force a wasteful second
 // connection. Connect remains the only place a raw token/pairing string
 // is ever consumed.
-func (c *Client) CheckClaim(ctx context.Context, tok nipcash.Token, asPubkeyHex string) (*nipcash.CheckClaimResult, error) {
-	result, err := c.CashStatus(ctx)
+// cred is required because cash_status is: the private transport authorizes per item.
+func (c *Client) CheckClaim(ctx context.Context, cred nipcash.Credential, tok nipcash.Token, asPubkeyHex string) (*nipcash.CheckClaimResult, error) {
+	// ScopeMine: this looks up the CALLER's own row, which is exactly what the
+	// default scope returns — asking for every co-recipient would be a larger reply
+	// carrying strictly more than is needed.
+	result, err := c.CashStatus(ctx, cred, nipcash.ScopeMine)
 	if err != nil {
 		return nil, err
 	}

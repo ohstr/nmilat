@@ -29,7 +29,7 @@ func (f *fakeTransferConsolidater) CashTransfer(_ context.Context, params nipcas
 	return f.transferFunc(params)
 }
 
-func (f *fakeTransferConsolidater) CashConsolidate(_ context.Context, params nipcash.CashConsolidateParams) (*nipcash.CashConsolidateResult, error) {
+func (f *fakeTransferConsolidater) CashConsolidate(_ context.Context, _ nipcash.Credential, params nipcash.CashConsolidateParams) (*nipcash.CashConsolidateResult, error) {
 	f.consolidateCalls = append(f.consolidateCalls, params)
 	return f.consolidateFunc(params)
 }

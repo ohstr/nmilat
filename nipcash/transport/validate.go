@@ -34,10 +34,6 @@ var (
 // bounded replay memory could double-mint on a caller's retry.
 var servableMethods = map[string]struct{}{
 	"cash_status": {},
-	// The deprecated alias for cash_status. Currently the only RELEASED name, so a
-	// client that has not been updated sends this one; refusing it locally would
-	// break exactly the clients the alias window exists for.
-	"list_recipients":      {},
 	"cash_redeem":          {},
 	"cash_transfer":        {},
 	"cash_consolidate":     {},

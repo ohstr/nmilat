@@ -59,20 +59,6 @@ func decryptFromPubkey(privKeyHex, pubKeyHex, ciphertext string) (string, error)
 // request that the server would reject anyway.
 var ErrAttestationExpired = errors.New("nipcash: attestation has no expiration, or has already expired")
 
-// ErrCapturedProofNotBatchable means a credential built from an already-signed
-// kind-23198 claim proof (ByProof) cannot be used on the private transport.
-//
-// That proof is sufficient for the standard transport, where it IS the
-// authorization. The private transport needs a kind-23192 bound to the specific
-// envelope, which only the identity's own key can produce — and ByProof holds a
-// finished event, not a key.
-//
-// Surfaced as a named error because the alternative is worse than an inconvenience:
-// a hub omits an item it cannot authorize, and omission is information-free by
-// design, so a caller who sent one would learn nothing about why it vanished.
-var ErrCapturedProofNotBatchable = errors.New(
-	"nipcash: a credential built from a captured proof cannot authorize an item on the private transport; " +
-		"use BySigning or BySigningConnectionKey with the identity's own key")
 
 // proofBinding carries the call-specific values a kind-23198 proof binds to,
 // beyond the wallet pubkey every proof binds to via its own d-tag. Exactly
@@ -244,54 +230,3 @@ func (c connectionKeyCredential) decryptDelivery(newWalletPubkey, ciphertext str
 	return decryptFromPubkey(c.privKeyHex, newWalletPubkey, ciphertext)
 }
 
-// --- ByProof: a proof captured earlier, not built from a live signing key ---
-
-type proofCredential struct {
-	identityEvent []byte
-	identityValue string // parsed from identityEvent's own "pubkey" field
-}
-
-// ByProof builds a Credential from a kind-23198 proof captured earlier —
-// e.g. by a relayer/service consolidating several sources on someone else's
-// behalf, holding only proofs each source's real owner signed and handed
-// over out of band, never their private keys (NIP-CASH §Consolidating
-// Tokens: authorization is per-source, not per-connection). identityEventJSON
-// is the same JSON-encoded event BySigning would have produced; this
-// revision of cash_consolidate only accepts pubkey-identified sources, so
-// the proof's own signer pubkey is both its identity_value and the
-// verification the server needs — nothing else to derive.
-func ByProof(identityEventJSON []byte) (Credential, error) {
-	var ev struct {
-		PubKey string `json:"pubkey"`
-	}
-	if err := json.Unmarshal(identityEventJSON, &ev); err != nil {
-		return nil, fmt.Errorf("nipcash: parse captured proof: %w", err)
-	}
-	if ev.PubKey == "" {
-		return nil, fmt.Errorf("nipcash: captured proof has no pubkey")
-	}
-	return proofCredential{identityEvent: identityEventJSON, identityValue: ev.PubKey}, nil
-}
-
-// itemAuthorization: this credential cannot use the private transport.
-//
-// It was built from an already-signed kind-23198 claim proof, which is enough for
-// the standard transport — that proof IS the authorization there. The private
-// transport needs a kind-23192 bound to the envelope, a different event that only
-// the identity's own key can produce, and this credential does not hold one.
-//
-// Reported as an error rather than silently treated as bearer. A hub would omit such
-// an item, and omission is information-free by design, so the caller would learn
-// nothing whatsoever about why their request vanished. Better to refuse locally with
-// a reason.
-func (c proofCredential) itemAuthorization() (privKeyHex, cashSecret string, err error) {
-	return "", "", ErrCapturedProofNotBatchable
-}
-
-func (c proofCredential) buildProof(proofBinding) (identityType, identityValue string, identityEvent, attestationEvent []byte, cashSecret string, err error) {
-	return identityTypePubkey, c.identityValue, c.identityEvent, nil, "", nil
-}
-
-func (proofCredential) decryptDelivery(string, string) (string, error) {
-	return "", errors.New("nipcash: a ByProof credential has no private key and cannot decrypt a delivery")
-}
