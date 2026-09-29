@@ -12,11 +12,6 @@ type MintCashParams struct {
 	// which itself may be "never" (NIP-CASH §Data Model) — never a
 	// zero-duration, already-expired wallet.
 	Expiry time.Duration
-	// MintSignature opts the issued token into mint provenance (NIP-CASH
-	// §Mint Provenance) — best-effort: a signing failure server-side is
-	// never a reason to fail the mint, it just produces a token without the
-	// signature.
-	MintSignature bool
 }
 
 // RecipientParam is one entry of mint_cash's wire "recipients" array
@@ -32,7 +27,6 @@ type RecipientParam struct {
 type MintCashRequest struct {
 	Recipients    []RecipientParam `json:"recipients"`
 	Expiry        int              `json:"expiry,omitempty"`
-	MintSignature bool             `json:"mint_signature,omitempty"`
 }
 
 // Request builds mint_cash's wire request from p. Exported for
@@ -59,7 +53,6 @@ func (p MintCashParams) Request() (MintCashRequest, error) {
 	return MintCashRequest{
 		Recipients:    recipients,
 		Expiry:        int(p.Expiry / time.Second),
-		MintSignature: p.MintSignature,
 	}, nil
 }
 

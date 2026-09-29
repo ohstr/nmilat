@@ -29,7 +29,6 @@ type TransferFromSourcesParams struct {
 	// anything moves.
 	InterimIdentity   nipcash.Target
 	InterimCredential nipcash.Credential // proves control of InterimIdentity afterward
-	MintSignature     bool
 }
 
 // TransferFromSourcesResult is TransferFromSources' outcome.
@@ -105,7 +104,6 @@ func transferFromSources(ctx context.Context, c transferFromSourcesClient, p Tra
 			To:            p.To,
 			CurrentAmount: src.Amount,
 			SplitAmount:   &p.Amount,
-			MintSignature: p.MintSignature,
 		})
 		if err != nil {
 			return nil, err
@@ -116,7 +114,6 @@ func transferFromSources(ctx context.Context, c transferFromSourcesClient, p Tra
 	consolidateResult, err := c.CashConsolidate(ctx, nipcash.CashConsolidateParams{
 		Sources:       p.Sources,
 		To:            p.InterimIdentity,
-		MintSignature: p.MintSignature,
 	})
 	if err != nil {
 		return nil, err
@@ -133,7 +130,6 @@ func transferFromSources(ctx context.Context, c transferFromSourcesClient, p Tra
 		To:            p.To,
 		CurrentAmount: consolidateResult.AmountMillis,
 		SplitAmount:   &p.Amount,
-		MintSignature: p.MintSignature,
 	})
 	if err != nil {
 		return nil, &PartialProgressError{Consolidated: consolidateResult, Cause: err}

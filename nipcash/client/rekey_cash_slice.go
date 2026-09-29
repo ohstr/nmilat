@@ -40,7 +40,6 @@ type RekeyCashSliceParams struct {
 	InterimIdentity   nipcash.Target
 	InterimCredential nipcash.Credential
 	ConsolidateWith   []nipcash.Source // none may be cash-mode
-	MintSignature     bool
 }
 
 // RekeyCashSliceResult is RekeyCashSlice's outcome. NewToken == ""
@@ -88,7 +87,6 @@ func rekeyCashSlice(ctx context.Context, c transferConsolidater, p RekeyCashSlic
 			Credential:    p.CashSlice.Credential,
 			To:            bt,
 			CurrentAmount: p.CashSlice.Amount,
-			MintSignature: p.MintSignature,
 		})
 		if err != nil {
 			return nil, err
@@ -108,7 +106,6 @@ func rekeyCashSlice(ctx context.Context, c transferConsolidater, p RekeyCashSlic
 		Credential:    p.CashSlice.Credential,
 		To:            p.InterimIdentity,
 		CurrentAmount: p.CashSlice.Amount,
-		MintSignature: p.MintSignature,
 	})
 	if err != nil {
 		return nil, err
@@ -123,7 +120,6 @@ func rekeyCashSlice(ctx context.Context, c transferConsolidater, p RekeyCashSlic
 	result, err := c.CashConsolidate(ctx, nipcash.CashConsolidateParams{
 		Sources:       sources,
 		To:            bt,
-		MintSignature: p.MintSignature,
 	})
 	if err != nil {
 		return nil, &PartialProgressError{Transferred: interimResult, Cause: err}
