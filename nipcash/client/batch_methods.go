@@ -40,6 +40,16 @@ type BatchStatus struct {
 	// Target is the bill's wallet pubkey.
 	Target     string
 	Credential nipcash.Credential
+	// Scope selects how much of the roster to ask for (nipcash.ScopeAll /
+	// ScopeMine). Empty asks for this transport's default, which is ScopeMine:
+	// the caller's own row, and nothing about their co-recipients
+	// (NIP-CASH §Scoping the Roster).
+	//
+	// Worth setting deliberately when batching, because it is what decides reply
+	// size. A 100-recipient bill answers in roughly 300 bytes scoped to one row
+	// and roughly 28,500 unscoped — so a batch of unscoped reads is the common
+	// way to make a reply outgrow its envelope and need chunking.
+	Scope string
 }
 
 // StatusOutcome is one bill's status answer.
@@ -62,7 +72,7 @@ func (s *BatchSession) StatusMany(ctx context.Context, items []BatchStatus) ([]S
 		builders = append(builders, itemBuilder{
 			ID: itemID(it.ID, i),
 			Build: func(id string, b nipcash.ItemBinding) (transport.Item, error) {
-				return nipcash.StatusItem(id, it.Target, it.Credential, b)
+				return nipcash.StatusItem(id, it.Target, nipcash.CashStatusParams{Scope: it.Scope}, it.Credential, b)
 			},
 		})
 	}

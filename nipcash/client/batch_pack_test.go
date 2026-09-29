@@ -39,7 +39,7 @@ func statusBuilders(t *testing.T, n int) []itemBuilder {
 		out = append(out, itemBuilder{
 			ID: "i" + strconv.Itoa(i),
 			Build: func(id string, b nipcash.ItemBinding) (transport.Item, error) {
-				return nipcash.StatusItem(id, target, nipcash.BySigning(priv), b)
+				return nipcash.StatusItem(id, target, nipcash.CashStatusParams{}, nipcash.BySigning(priv), b)
 			},
 		})
 	}

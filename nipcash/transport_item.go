@@ -127,13 +127,20 @@ func (p CashConsolidateParams) Item(id, target string, cred Credential, b ItemBi
 
 // StatusItem builds a cash_status item for the private transport.
 //
-// A bare function rather than a method, because cash_status has no params type: on
-// the standard transport it is a call with no body, authorized by the connection it
-// arrives on. The private transport has no per-bill connection, so the credential
-// that was implicit there becomes explicit here.
-func StatusItem(id, target string, cred Credential, b ItemBinding) (transport.Item, error) {
-	// An empty object rather than nil: CanonicalParamsHash treats absent and empty
-	// as one representation, and a hub's decoder expects a params field it can
-	// unmarshal. Being explicit avoids depending on that equivalence.
-	return buildItem(id, target, MethodCashStatus, struct{}{}, cred, b)
+// A bare function rather than a method on the params, because on the standard
+// transport cash_status is authorized by the connection it arrives on. The private
+// transport has no per-bill connection, so the credential that was implicit there
+// becomes explicit here.
+//
+// Leaving p.Scope empty is the normal case and asks for this transport's own
+// default, which is ScopeMine — the caller's own row, and nothing about their
+// co-recipients. Say ScopeAll explicitly to get the shared roster.
+func StatusItem(id, target string, p CashStatusParams, cred Credential, b ItemBinding) (transport.Item, error) {
+	if !IsValidCashStatusScope(p.Scope) {
+		return transport.Item{}, fmt.Errorf("nipcash: cash_status scope %q must be %q, %q, or absent", p.Scope, ScopeAll, ScopeMine)
+	}
+	// The params value is passed even when empty: CanonicalParamsHash treats absent
+	// and empty as one representation, and a hub's decoder expects a params field it
+	// can unmarshal. Being explicit avoids depending on that equivalence.
+	return buildItem(id, target, MethodCashStatus, p, cred, b)
 }

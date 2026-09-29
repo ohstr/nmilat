@@ -2,6 +2,7 @@ package nipcash
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -54,7 +55,7 @@ func TestItemConstructors_ProduceEnvelopesThatValidate(t *testing.T) {
 		make func() (transport.Item, error)
 	}{
 		{"cash_status", func() (transport.Item, error) {
-			return StatusItem("s1", billTarget, BySigning(billPriv), b)
+			return StatusItem("s1", billTarget, CashStatusParams{}, BySigning(billPriv), b)
 		}},
 		{"cash_redeem", func() (transport.Item, error) {
 			return CashRedeemParams{
@@ -70,7 +71,7 @@ func TestItemConstructors_ProduceEnvelopesThatValidate(t *testing.T) {
 			}.Item("r2", otherTarget, b)
 		}},
 		{"cash_status, second bill, different key", func() (transport.Item, error) {
-			return StatusItem("s2", otherTarget, BySigning(otherPriv), b)
+			return StatusItem("s2", otherTarget, CashStatusParams{}, BySigning(otherPriv), b)
 		}},
 	}
 
@@ -160,5 +161,64 @@ func TestItemConstructors_RefuseAnUnservableMethod(t *testing.T) {
 
 	if _, err := buildItem("m1", target, MethodMintCash, struct{}{}, BySigning(billPriv), b); err == nil {
 		t.Fatal("buildItem() = nil error for mint_cash; it is not servable over this transport")
+	}
+}
+
+// TestIsValidCashStatusScope pins the shared rule. It is exported precisely so a
+// client and a Hub check the same list — each keeping its own is the kind of drift
+// that surfaces as a request silently answered with the wrong amount of data.
+func TestIsValidCashStatusScope(t *testing.T) {
+	for _, s := range []string{"", ScopeAll, ScopeMine} {
+		if !IsValidCashStatusScope(s) {
+			t.Errorf("IsValidCashStatusScope(%q) = false, want true", s)
+		}
+	}
+	for _, s := range []string{"ALL", "Mine", "everything", "own", " mine"} {
+		if IsValidCashStatusScope(s) {
+			t.Errorf("IsValidCashStatusScope(%q) = true, want false", s)
+		}
+	}
+}
+
+// TestStatusItem_RejectsAnUnknownScopeLocally matters because of how a hub answers
+// a malformed item: it omits it, and an omission is information-free by design. A
+// caller who sent an unknown scope would learn nothing about why their item
+// vanished, so the only place they can ever find out is here.
+func TestStatusItem_RejectsAnUnknownScopeLocally(t *testing.T) {
+	priv, pub := itemTestKeypair(t)
+	b := ItemBinding{HubXOnly: pub, Nonce: strings.Repeat("11", 32), NotAfter: time.Now().Add(time.Minute).Unix()}
+
+	if _, err := StatusItem("s1", pub, CashStatusParams{Scope: "everything"}, BySigning(priv), b); err == nil {
+		t.Fatal("StatusItem accepted an unknown scope, want a local error")
+	}
+	// The two real values, and absent, must all build.
+	for _, scope := range []string{"", ScopeAll, ScopeMine} {
+		if _, err := StatusItem("s1", pub, CashStatusParams{Scope: scope}, BySigning(priv), b); err != nil {
+			t.Errorf("StatusItem(scope=%q) error = %v, want accepted", scope, err)
+		}
+	}
+}
+
+// TestStatusItem_ScopeTravelsInParams confirms the scope actually reaches the wire
+// — and that an absent one sends no scope field at all, which is what lets a hub
+// apply its own transport-specific default rather than receiving a guess.
+func TestStatusItem_ScopeTravelsInParams(t *testing.T) {
+	priv, pub := itemTestKeypair(t)
+	b := ItemBinding{HubXOnly: pub, Nonce: strings.Repeat("11", 32), NotAfter: time.Now().Add(time.Minute).Unix()}
+
+	item, err := StatusItem("s1", pub, CashStatusParams{Scope: ScopeAll}, BySigning(priv), b)
+	if err != nil {
+		t.Fatalf("StatusItem: %v", err)
+	}
+	if got := string(item.Params); !strings.Contains(got, `"scope":"all"`) {
+		t.Errorf("params = %s, want the scope to travel", got)
+	}
+
+	bare, err := StatusItem("s1", pub, CashStatusParams{}, BySigning(priv), b)
+	if err != nil {
+		t.Fatalf("StatusItem: %v", err)
+	}
+	if got := string(bare.Params); strings.Contains(got, "scope") {
+		t.Errorf("params = %s, want no scope field at all so the hub applies its own default", got)
 	}
 }
