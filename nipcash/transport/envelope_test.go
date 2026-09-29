@@ -325,3 +325,54 @@ func FuzzDecode(f *testing.F) {
 		}
 	})
 }
+
+// TestItem_ProofSurvivesARoundTripAsAbsent is the regression test for the bug that
+// made cash-mode bills impossible to serve over the private transport.
+//
+// `Proof json.RawMessage` without omitempty marshals a nil proof to `"proof":null`,
+// and decoding that literal yields a FOUR-BYTE value. So `len(Proof) == 0` was false
+// on the receiving side, a proofless bearer item looked like it carried a proof, the
+// hub verified garbage, failed, and OMITTED the item — which is information-free by
+// design, so no client could ever learn why its cash-mode bill vanished.
+//
+// Two assertions, because either alone is insufficient: the wire form must not carry
+// a null, AND HasProof must be right even if a peer sends one anyway.
+func TestItem_ProofSurvivesARoundTripAsAbsent(t *testing.T) {
+	bearer := Item{ID: "b1", Target: "aa", Method: "cash_status", Params: []byte(`{"cash_secret":"s"}`)}
+	if bearer.HasProof() {
+		t.Fatal("a freshly built bearer item must not report a proof")
+	}
+
+	encoded, err := json.Marshal(bearer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "null") {
+		t.Errorf("a nil proof must be omitted, not serialized as null: %s", encoded)
+	}
+
+	var back Item
+	if err := json.Unmarshal(encoded, &back); err != nil {
+		t.Fatal(err)
+	}
+	if back.HasProof() {
+		t.Errorf("a bearer item grew a proof across a round trip: proof=%q", back.Proof)
+	}
+
+	// A peer that sends an explicit null must not fool us either — this is the
+	// spelling that caused the original failure, and nothing stops another
+	// implementation from emitting it.
+	var explicitNull Item
+	if err := json.Unmarshal([]byte(`{"id":"b1","proof":null}`), &explicitNull); err != nil {
+		t.Fatal(err)
+	}
+	if explicitNull.HasProof() {
+		t.Errorf(`an explicit "proof":null must read as no proof, got %q`, explicitNull.Proof)
+	}
+
+	// And a real proof must still read as present.
+	withProof := Item{ID: "p1", Proof: []byte(`{"kind":23192}`)}
+	if !withProof.HasProof() {
+		t.Error("a real proof must read as present")
+	}
+}
