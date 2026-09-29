@@ -151,6 +151,9 @@
   the client and the Hub can migrate independently.
 - `nip01.Event.Serialize` is exported, so a remote signer can produce the
   exact preimage the signature covers.
+- `nip46.MethodSwitchRelays` and `nip46.MethodLogout` name the two standard
+  methods the package was missing, so a signer can answer them instead of
+  reporting them unsupported.
 
 ### Changed
 
