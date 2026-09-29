@@ -31,6 +31,8 @@ const KindRequest = 24133
 //	ping:           []
 //	get_public_key: []
 //	get_relays:     []
+//	switch_relays:  []
+//	logout:         []
 //	nip04_encrypt:  [recipient-pubkey, plaintext]
 //	nip04_decrypt:  [sender-pubkey, ciphertext]
 //	nip44_encrypt:  [recipient-pubkey, plaintext]
@@ -41,6 +43,8 @@ const (
 	MethodPing         = "ping"
 	MethodGetPublicKey = "get_public_key"
 	MethodGetRelays    = "get_relays"
+	MethodSwitchRelays = "switch_relays"
+	MethodLogout       = "logout"
 	MethodNIP04Encrypt = "nip04_encrypt"
 	MethodNIP04Decrypt = "nip04_decrypt"
 	MethodNIP44Encrypt = "nip44_encrypt"
