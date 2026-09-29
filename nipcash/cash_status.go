@@ -25,6 +25,22 @@ type CashStatusParams struct {
 	Scope string `json:"scope,omitempty"`
 }
 
+// CashStatusRequest is cash_status' wire request.
+//
+// CashSecret exists for the private transport only. A cash-mode bill has no keypair,
+// so its items carry no proof and the secret in params is the whole authorization
+// (NIP-CASH §Bearer Items) — and an item with neither is malformed, which the codec
+// refuses locally. Without a field to put it in, no cash-mode bill could be read over
+// the private transport at all: the item was rejected before it was ever sent, and
+// the failure surfaced only against a live hub.
+//
+// Omitted on the standard transport, where the connection itself is the
+// authorization and there is nothing to attach.
+type CashStatusRequest struct {
+	Scope      string `json:"scope,omitempty"`
+	CashSecret string `json:"cash_secret,omitempty"`
+}
+
 // IsValidCashStatusScope reports whether s is a scope a Hub can honour. An empty
 // string is valid: it means "the default for this transport".
 //
