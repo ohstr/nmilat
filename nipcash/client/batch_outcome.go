@@ -119,6 +119,22 @@ func joinOutcomes(requestedIDs []string, resp *transport.ResponseEnvelope, envel
 	// Surfaced per item rather than only on the envelope, because that is where every
 	// caller already looks, and it keeps ResultError's documented envelope-level
 	// contract working for honest hubs too.
+	//
+	// Note what this makes true: State becomes OutcomeError, and SafeToResend() is
+	// exactly State == OutcomeError — so a caller WILL resend a spend on the strength
+	// of this. That is deliberate, and it rests on two facts rather than on trusting
+	// the hub:
+	//
+	//   - only the HUB can author this reply. It is authenticated by the reply key,
+	//     derived from a per-envelope ephemeral ECDH, so a relay cannot forge one and
+	//     a co-holder of the bill's connection secret cannot either.
+	//   - a resend cannot double-spend even if the hub lied about nothing having run.
+	//     Every money method carries its own idempotency guard — a redeem marks the
+	//     slice claimed_at, a transfer burns a single-use proof row — so a second
+	//     application finds nothing left to take. That is round 1's R1/R2 refutation,
+	//     and this fix depends on it: if a bill method were ever added without such a
+	//     guard, a lying envelope-level error would become a way to induce a double
+	//     application, and this would have to become conservative again.
 	var envelopeErr *transport.ResultError
 	if resp != nil {
 		envelopeErr = resp.Error
