@@ -245,6 +245,23 @@ type GetInfoResult struct {
 	BlockHash     string   `json:"block_hash,omitempty"`
 	Methods       []string `json:"methods"`
 	Notifications []string `json:"notifications,omitempty"`
+	// PrivateMethods names the methods this connection's wallet serves over the
+	// NIP-CASH private transport rather than on this kind-23194 connection.
+	//
+	// It exists because `methods` means "callable HERE" and the four bill methods are
+	// not: they are refused on 23194 with NOT_IMPLEMENTED. Listing them there promised
+	// something this transport will not do, so they were removed — which left no
+	// wire-level signal that they exist at all, since the kind-11190 announcement
+	// carries only inbox, limits and relays. A client had to hardcode the set from
+	// NIP-CASH §Which Methods a Hub Serves.
+	//
+	// A sibling field rather than an annotation inside `methods`, because `methods` is a
+	// flat []string with nowhere to mark an entry, and keeping it strictly
+	// "callable here" is what makes it spec-correct.
+	//
+	// Informational only. Authorization is still the hub's per-item scope check on the
+	// private transport; a client MUST NOT read presence here as permission.
+	PrivateMethods []string `json:"private_methods,omitempty"`
 	// CircleWallet is set only when the dialed connection IS a circle_hub's
 	// own connection (lokihub's get_info_controller.go only attaches it for
 	// app.Kind == circle_hub, never for an individual circle_wallet member) —
