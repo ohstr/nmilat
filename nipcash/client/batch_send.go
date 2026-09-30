@@ -163,6 +163,27 @@ func (s *BatchSession) collectReply(
 	answered := map[string]struct{}{}
 	total := 0
 
+	// Bound the wait by the envelope's OWN not_after, which was already computed and
+	// signed before it was sent.
+	//
+	// Without this the only exits were completion, the relay closing, a fatal decode,
+	// and the caller's context — so a hub declaring total: 2 and sending one chunk left
+	// a client waiting for the caller's full deadline on a reply that will never come,
+	// even when the envelope it is a reply TO expired minutes ago. A hub cannot be
+	// trusted to bound a client's wait, and the client already knows the answer: past
+	// not_after the hub is contractually done with this envelope, so nothing further is
+	// coming.
+	//
+	// Derived from the envelope rather than a constant, because it is the same value
+	// both sides already agreed on, and a caller who set a shorter deadline still wins —
+	// this only ever tightens.
+	if p.Envelope.NotAfter > 0 {
+		deadline := time.Unix(p.Envelope.NotAfter, 0)
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, deadline)
+		defer cancel()
+	}
+
 	for {
 		select {
 		case ev, ok := <-replies:

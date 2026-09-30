@@ -106,9 +106,33 @@ func joinOutcomes(requestedIDs []string, resp *transport.ResponseEnvelope, envel
 		}
 	}
 
+	// An ENVELOPE-level error applies to every item in it, and it was being collected
+	// and then never read — joinOutcomes walked Results only.
+	//
+	// The direction was fail-safe but it discarded the one thing that makes a spend
+	// safe to retry. A hub replying envelope-level RATE_LIMITED means "no item ran",
+	// which is exactly the fact a caller needs before resending a cash_redeem;
+	// dropping it produced err=nil with every item merely "not served", i.e. the
+	// indeterminate state a caller is told never to retry from. So a hub could strand
+	// a caller permanently having done nothing at all.
+	//
+	// Surfaced per item rather than only on the envelope, because that is where every
+	// caller already looks, and it keeps ResultError's documented envelope-level
+	// contract working for honest hubs too.
+	var envelopeErr *transport.ResultError
+	if resp != nil {
+		envelopeErr = resp.Error
+	}
+
 	out := make([]ItemOutcome, 0, len(requestedIDs))
 	for _, id := range requestedIDs {
 		outcome := ItemOutcome{ID: id, Envelope: envelope, State: OutcomeNotServed}
+		if envelopeErr != nil {
+			// A decided refusal of the whole envelope, not an omission: the hub said
+			// why, and it said it about everything inside.
+			outcome.State = OutcomeError
+			outcome.Error = envelopeErr
+		}
 		if r, ok := byID[id]; ok {
 			switch {
 			case r.Error != nil:

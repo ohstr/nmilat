@@ -91,40 +91,46 @@ func TestAuditC_SecA_CrossChunkDuplicateIDs_ArrivalOrderDecides(t *testing.T) {
 			Error: &transport.ResultError{Code: "NOT_FOUND", Message: "no such bill"}}},
 	}
 
-	run := func(first, second transport.ResponseEnvelope) ItemOutcome {
+	run := func(first, second transport.ResponseEnvelope) ([]ItemOutcome, error) {
 		ch := make(chan *nip01.Event, 2)
 		ch <- sealChunk(t, replyKey, limits, first)
 		ch <- sealChunk(t, replyKey, limits, second)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		got, err := s.collectReply(ctx, ch, replyKey, p, 0)
-		if err != nil {
-			t.Fatalf("collectReply: %v", err)
-		}
-		if len(got) != 1 {
-			t.Fatalf("got %d outcomes, want 1", len(got))
-		}
-		return got[0]
+		return got, err
 	}
 
-	richFirst := run(rich, gone)
-	goneFirst := run(gone, rich)
-	t.Logf("rich-then-gone -> state=%v error=%+v result=%s", richFirst.State, richFirst.Error, richFirst.Result)
-	t.Logf("gone-then-rich -> state=%v error=%+v result=%s", goneFirst.State, goneFirst.Error, goneFirst.Result)
+	richOutcomes, richErr := run(rich, gone)
+	goneOutcomes, goneErr := run(gone, rich)
+	t.Logf("rich-then-gone -> err=%v outcomes=%d", richErr, len(richOutcomes))
+	t.Logf("gone-then-rich -> err=%v outcomes=%d", goneErr, len(goneOutcomes))
 
-	// The security property: a duplicate item id is malformed inside one chunk, so
-	// it must be malformed across chunks of the SAME reply too. Either
-	// collectReply refuses the second answer for an already-answered id, or the
-	// client's belief about a bill is a function of relay ordering.
-	if richFirst.State == goneFirst.State && richFirst.Succeeded() == goneFirst.Succeeded() {
-		t.Log("outcome is order-independent; the duplicate is resolved by a stable rule")
+	// The security property: a duplicate item id is malformed inside one chunk, so it
+	// must be malformed across chunks of the SAME reply too.
+	//
+	// Asserted as a REFUSAL in both orders, not merely as order-independence. Sorting
+	// by seq would also have made the outcome order-independent, and would still have
+	// let the hub choose which answer won by deciding which chunk to number first — the
+	// relay loses its say, the hub keeps it. Refusing leaves neither party a choice: a
+	// hub that answers one item twice with different content has contradicted itself,
+	// and there is no reading of that reply a client should act on.
+	if richErr == nil || goneErr == nil {
+		t.Errorf("AUDITC-SECA-F3 BUG PRESENT: a contradictory duplicate was ACCEPTED in at "+
+			"least one arrival order (rich-first err=%v, gone-first err=%v). A relay that "+
+			"reorders two chunks it cannot decrypt then chooses which answer the client "+
+			"adopts, and DecodeResponse's own duplicate-id rule does not survive chunking.",
+			richErr, goneErr)
 		return
 	}
-	t.Errorf("AUDITC-SECA-F3 BUG PRESENT: the same two hub chunks produce %v when they "+
-		"arrive rich-first and %v when they arrive gone-first. A relay that reorders two "+
-		"chunks it cannot decrypt chooses which contradictory answer the client adopts, "+
-		"and DecodeResponse's own duplicate-id rule does not survive chunking.",
-		richFirst.State, goneFirst.State)
+	if !errors.Is(richErr, transport.ErrResponseMalformed) || !errors.Is(goneErr, transport.ErrResponseMalformed) {
+		t.Errorf("both orders must be refused AS MALFORMED, not by some incidental failure: "+
+			"rich-first=%v gone-first=%v",
+			richErr, goneErr)
+		return
+	}
+	t.Log("both arrival orders refused the contradictory duplicate as malformed, so neither " +
+		"the relay nor the hub can choose which answer the client believes")
 }
 
 // --- F4: an envelope-level rejection is collected and then thrown away -----
