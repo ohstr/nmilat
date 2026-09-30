@@ -37,7 +37,7 @@ type ItemBinding struct {
 // with OMISSION, which is deliberately information-free, so a caller who built one
 // could never learn what was wrong (NIP-CASH §Responses). Making the mistake
 // unrepresentable is worth more here than diagnosing it.
-func buildItem(id, target, method string, wireParams any, cred Credential, b ItemBinding) (transport.Item, error) {
+func buildItem(id, target, connSecret, method string, wireParams any, cred Credential, b ItemBinding) (transport.Item, error) {
 	if id == "" {
 		return transport.Item{}, fmt.Errorf("nipcash: item needs an id")
 	}
@@ -52,32 +52,48 @@ func buildItem(id, target, method string, wireParams any, cred Credential, b Ite
 
 	item := transport.Item{ID: id, Target: target, Method: method, Params: params}
 
-	privKeyHex, cashSecret, err := cred.itemAuthorization()
-	if err != nil {
-		return transport.Item{}, err
-	}
-	if cashSecret != "" {
-		// Cash-mode: no proof exists or is needed. The secret is already inside
-		// wireParams — every params type puts it there via buildProof — so there is
-		// nothing further to attach (NIP-CASH §Bearer Items).
-		return item, nil
-	}
-
-	// Hashed from the marshalled bytes above, so the proof commits to exactly what
+	// Hashed from the marshalled bytes above, so both proofs commit to exactly what
 	// travels. Canonicalising rather than hashing raw is what keeps the binding
 	// independent of any re-serialisation along the way.
 	hash, err := transport.CanonicalParamsHash(params)
 	if err != nil {
 		return transport.Item{}, fmt.Errorf("nipcash: hash item params: %w", err)
 	}
-	proof, err := transport.BuildItemProof(privKeyHex, transport.ProofBinding{
+	binding := transport.ProofBinding{
 		Target:     target,
 		HubXOnly:   b.HubXOnly,
 		Method:     method,
 		ParamsHash: hash,
 		Nonce:      b.Nonce,
 		NotAfter:   b.NotAfter,
-	})
+	}
+
+	// The BILL proof, first and unconditional. Every item carries one, whatever the
+	// bill's identity mode: it says the sender holds this bill's token, which is a
+	// different claim from the slice proof below and the only one a hub can safely
+	// act on when deciding whether to answer about the bill at all.
+	if connSecret == "" {
+		return transport.Item{}, fmt.Errorf("nipcash: item %q needs the bill's connection secret to prove possession", id)
+	}
+	billProof, err := transport.BuildBillProof(connSecret, binding)
+	if err != nil {
+		return transport.Item{}, fmt.Errorf("nipcash: build bill proof: %w", err)
+	}
+	item.BillProof = billProof
+
+	privKeyHex, cashSecret, err := cred.itemAuthorization()
+	if err != nil {
+		return transport.Item{}, err
+	}
+	if cashSecret != "" {
+		// Cash-mode: no SLICE proof exists or is needed. The secret is already inside
+		// wireParams — every params type puts it there via buildProof — so there is
+		// nothing further to attach (NIP-CASH §Bearer Items). The bill proof above
+		// still applies.
+		return item, nil
+	}
+
+	proof, err := transport.BuildItemProof(privKeyHex, binding)
 	if err != nil {
 		return transport.Item{}, fmt.Errorf("nipcash: build item proof: %w", err)
 	}
@@ -90,21 +106,21 @@ func buildItem(id, target, method string, wireParams any, cred Credential, b Ite
 // The item's params are the same wire request this call sends on the standard
 // transport, which is deliberate: the transport changes how a request travels, never
 // what it says. One request shape, one server-side handler, one set of guarantees.
-func (p CashRedeemParams) Item(id, target string, b ItemBinding) (transport.Item, error) {
+func (p CashRedeemParams) Item(id, target, connSecret string, b ItemBinding) (transport.Item, error) {
 	req, err := p.Request(target)
 	if err != nil {
 		return transport.Item{}, err
 	}
-	return buildItem(id, target, MethodCashRedeem, req, p.Credential, b)
+	return buildItem(id, target, connSecret, MethodCashRedeem, req, p.Credential, b)
 }
 
 // Item builds a cash_transfer item for the private transport.
-func (p CashTransferParams) Item(id, target string, b ItemBinding) (transport.Item, error) {
+func (p CashTransferParams) Item(id, target, connSecret string, b ItemBinding) (transport.Item, error) {
 	req, err := p.Request(target)
 	if err != nil {
 		return transport.Item{}, err
 	}
-	return buildItem(id, target, MethodCashTransfer, req, p.Credential, b)
+	return buildItem(id, target, connSecret, MethodCashTransfer, req, p.Credential, b)
 }
 
 // Item builds a cash_consolidate item for the private transport.
@@ -117,12 +133,12 @@ func (p CashTransferParams) Item(id, target string, b ItemBinding) (transport.It
 // cred authorizes the call itself. Note a consolidate item can therefore carry
 // several proofs: this item's own, plus one per source inside params, which is why
 // transport.Item.VerificationCost counts them.
-func (p CashConsolidateParams) Item(id, target string, cred Credential, b ItemBinding) (transport.Item, error) {
+func (p CashConsolidateParams) Item(id, target, connSecret string, cred Credential, b ItemBinding) (transport.Item, error) {
 	req, err := p.Request()
 	if err != nil {
 		return transport.Item{}, err
 	}
-	return buildItem(id, target, MethodCashConsolidate, req, cred, b)
+	return buildItem(id, target, connSecret, MethodCashConsolidate, req, cred, b)
 }
 
 // StatusItem builds a cash_status item for the private transport.
@@ -135,7 +151,7 @@ func (p CashConsolidateParams) Item(id, target string, cred Credential, b ItemBi
 // Leaving p.Scope empty is the normal case and asks for this transport's own
 // default, which is ScopeMine — the caller's own row, and nothing about their
 // co-recipients. Say ScopeAll explicitly to get the shared roster.
-func StatusItem(id, target string, p CashStatusParams, cred Credential, b ItemBinding) (transport.Item, error) {
+func StatusItem(id, target, connSecret string, p CashStatusParams, cred Credential, b ItemBinding) (transport.Item, error) {
 	if !IsValidCashStatusScope(p.Scope) {
 		return transport.Item{}, fmt.Errorf("nipcash: cash_status scope %q must be %q, %q, or absent", p.Scope, ScopeAll, ScopeMine)
 	}
@@ -152,5 +168,5 @@ func StatusItem(id, target string, p CashStatusParams, cred Credential, b ItemBi
 	// The params value is passed even when empty: CanonicalParamsHash treats absent
 	// and empty as one representation, and a hub's decoder expects a params field it
 	// can unmarshal. Being explicit avoids depending on that equivalence.
-	return buildItem(id, target, MethodCashStatus, CashStatusRequest{Scope: p.Scope, CashSecret: cashSecret}, cred, b)
+	return buildItem(id, target, connSecret, MethodCashStatus, CashStatusRequest{Scope: p.Scope, CashSecret: cashSecret, AttestationEvent: p.AttestationEvent}, cred, b)
 }
