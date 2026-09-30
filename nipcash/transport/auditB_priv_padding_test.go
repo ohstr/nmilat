@@ -131,6 +131,58 @@ func TestAuditBPriv_PaddingLeakAcrossFullRange(t *testing.T) {
 			}
 			t.Logf("pad=%dKiB %-22s item~%5dB  1..%2d items -> %d distinct wire sizes  [%s]",
 				bucketBytes/1024, tc.name, perItem, maxOK, len(order), strings.Join(buckets, " "))
+
+			// Assert, at the DEFAULT bucket and over 1..8 items only.
+			//
+			// This test measured the whole range and asserted nothing, so it could not
+			// fail — the shape a round-3 review found in it. Both bounds on the
+			// assertion are deliberate, and the second cost me a wrong threshold first
+			// time round: limits.go's "three distinct sizes" is stated for ONE TO EIGHT
+			// items, and this sweep runs to MaxItems. Applying the 1..8 figure to a 1..32
+			// sweep flags every method, because more items legitimately cross more
+			// buckets. The non-default bucket sizes are likewise in the sweep to show the
+			// trend and are expected to leak more.
+			//
+			// Within its stated range the current default does better than the figure it
+			// cites — cash_status puts items 1..5 in one bucket and 6..8 in the next, so
+			// two sizes, not three. If a change pushes that back above three, the
+			// batch-count leak has reopened and this now says so.
+			if bucketBytes == DefaultPadBucketBytes {
+				inEight := 0
+				for _, size := range order {
+					if sizes[size] <= 8 {
+						inEight++
+					}
+				}
+				// The bound is per-method, because the bucket was sized for ONE method
+				// and the difference is a finding rather than an exclusion.
+				//
+				// A cash_status item is ~1.5 KB, so an 8 KiB bucket holds five of them
+				// and 1..8 items collapse to two sizes. A cash_consolidate item with two
+				// sources is ~2.9 KB (base 1010 + 2x952, per EstimatedConsolidateItemBytes),
+				// so the same bucket holds barely two — and 1..8 items spread across FIVE
+				// sizes. Measured: 8KiB@n>=1 16KiB@n>=2 24KiB@n>=4 32KiB@n>=5 40KiB@n>=7.
+				//
+				// So padding bounds the batch count for the small-item methods and does
+				// NOT meaningfully bound it for consolidate: an observer distinguishes one
+				// consolidate from two, and two from four. That is inherent to item size
+				// against bucket size, not a regression — but it was never written down,
+				// and limits.go's "three sizes" figure quietly describes cash_status only.
+				//
+				// Asserted at the level each method actually achieves today, so a
+				// REGRESSION in either is caught while the existing asymmetry stays
+				// visible instead of being tuned away.
+				want := 3
+				if strings.HasPrefix(tc.name, "cash_consolidate") {
+					want = 5
+				}
+				if inEight > want {
+					t.Errorf("at the DEFAULT %dKiB bucket, %s produces %d distinct wire sizes "+
+						"across 1..8 items, want at most %d; this is the batch-count leak that "+
+						"raising the bucket 4KiB->8KiB was meant to bound (all sizes: %s)",
+						bucketBytes/1024, tc.name, inEight, want, strings.Join(buckets, " "))
+				}
+			}
 		}
 		t.Log("---")
 	}
@@ -138,6 +190,13 @@ func TestAuditBPriv_PaddingLeakAcrossFullRange(t *testing.T) {
 
 // How many items fit in one bucket is the leak metric: k items per bucket means an
 // observer learns the batch count to within a factor of k.
+//
+// DIAGNOSTIC, deliberately: this one reports a ratio and asserts nothing, because
+// there is no threshold for it that is not arbitrary. Named and marked so it is not
+// mistaken for a regression test — a round-3 review flagged it and its sibling for
+// exactly that, and the sibling above now asserts at the default bucket. Read this
+// one's output when changing the bucket size or adding a per-item field; it is the
+// number that moves.
 func TestAuditBPriv_ItemsPerBucket(t *testing.T) {
 	for _, bucketBytes := range []int{4 * 1024, 8 * 1024} {
 		limits := DefaultLimits()
