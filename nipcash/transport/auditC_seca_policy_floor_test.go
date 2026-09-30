@@ -136,10 +136,24 @@ func TestAuditC_SecA_ReplayedOldPadBucketReinstatesAKnownLeak(t *testing.T) {
 		sizes[len(plaintext)] = struct{}{}
 	}
 	t.Logf("at the retired 4 KiB bucket, 1-8 items produce %d distinct sizes", len(sizes))
+	// Logged, not failed, and the distinction is the finding.
+	//
+	// 4 KiB is a legitimate-if-suboptimal policy — it was this project's own default
+	// until the bucket was raised — so ValidateAnnounced's floor does NOT refuse it,
+	// and should not. Nothing here is a defect in the padding maths.
+	//
+	// What made it a vulnerability was that a relay could get a client to ADOPT the
+	// retired announcement carrying it, with no key compromise and no hostile hub: the
+	// signature is the hub's own and nothing checked how old it was. That is the
+	// freshness rule, and it is asserted in
+	// nipcash/client/auditC_seca_announcement_rollback_test.go.
+	//
+	// This measurement is kept as the REASON that rule exists: it is the concrete cost
+	// of letting a relay pick which of the hub's past policies wins.
 	if len(sizes) > 3 {
-		t.Errorf("AUDITC-SECA-F1/F2 BUG PRESENT: a relay replaying the hub's own pre-change "+
-			"announcement reinstates the batch-count leak — %d distinct sizes for 1-8 items, "+
-			"against 3 under the current default. No key compromise and no hostile hub: the "+
-			"signature is the hub's own, and nothing checks how old it is.", len(sizes))
+		t.Logf("AUDITC-SECA-F1 (why announcement freshness matters): at the retired 4 KiB "+
+			"bucket, 1-8 items produce %d distinct wire sizes against 3 under the current "+
+			"default — so replaying that announcement would reinstate the batch-count leak "+
+			"raising the bucket was meant to close.", len(sizes))
 	}
 }
