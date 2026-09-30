@@ -99,6 +99,7 @@ func (s *BatchSession) Refresh(ctx context.Context) error {
 	candidates = appendMissing(candidates, s.fallbackRelays)
 
 	var lastErr error
+	var newest *transport.Announcement
 	for _, raw := range candidates {
 		relayURL, err := url.Parse(raw)
 		if err != nil {
@@ -119,14 +120,38 @@ func (s *BatchSession) Refresh(ctx context.Context) error {
 				lastErr = fmt.Errorf("relay %q: %w", raw, err)
 				continue
 			}
-			s.mu.Lock()
-			s.announcement = announcement
-			if len(announcement.Relays) > 0 {
-				s.relays = append([]string(nil), announcement.Relays...)
+			// Keep the NEWEST candidate rather than adopting the first that parses,
+			// and never move backwards from one already held.
+			//
+			// Every announcement the hub has ever published stays individually valid
+			// forever — kind 11190 is replaceable at the relay, but an old event is
+			// still genuinely signed by the node identity. So a relay serving a stale
+			// one forges nothing; it CHOOSES which of the hub's own past policies the
+			// client obeys, and one cooperating relay in the candidate list is enough
+			// because the bill's token relay hints are re-appended on every Refresh.
+			//
+			// Measured consequence with no further precondition: replaying the hub's
+			// own pre-change announcement reinstates the 4 KiB padding bucket, which
+			// takes 1-8 items from three distinguishable wire sizes back to four —
+			// exactly the leak that change was made to close. And once inbox rotation
+			// ships, a retired inbox key is the remedy for a leaked one, so being able
+			// to pin a client to the old inbox would defeat rotation entirely.
+			if newest == nil || announcement.CreatedAt > newest.CreatedAt {
+				newest = announcement
 			}
-			s.mu.Unlock()
-			return nil
 		}
+	}
+
+	if newest != nil {
+		s.mu.Lock()
+		if s.announcement == nil || newest.CreatedAt >= s.announcement.CreatedAt {
+			s.announcement = newest
+			if len(newest.Relays) > 0 {
+				s.relays = append([]string(nil), newest.Relays...)
+			}
+		}
+		s.mu.Unlock()
+		return nil
 	}
 
 	if lastErr != nil {

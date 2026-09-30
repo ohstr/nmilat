@@ -260,7 +260,7 @@ func TestBatch_EndToEnd_ManyBillsInOneEvent(t *testing.T) {
 	items := make([]BatchStatus, 0, 12)
 	for i := 0; i < 12; i++ {
 		priv, target := sessionKeypair(t)
-		items = append(items, BatchStatus{Target: target, Credential: nipcash.BySigning(priv)})
+		items = append(items, BatchStatus{Bill: mustBill(t, target), Credential: nipcash.BySigning(priv)})
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -309,7 +309,7 @@ func TestBatch_EndToEnd_OmissionSurvivesTheRoundTrip(t *testing.T) {
 
 	mk := func(id string) BatchStatus {
 		priv, target := sessionKeypair(t)
-		return BatchStatus{ID: id, Target: target, Credential: nipcash.BySigning(priv)}
+		return BatchStatus{ID: id, Bill: mustBill(t, target), Credential: nipcash.BySigning(priv)}
 	}
 	omitted = "silent"
 	items := []BatchStatus{mk("ok"), mk("silent"), mk("refused")}
@@ -363,7 +363,7 @@ func TestBatch_EndToEnd_SplitsAcrossEnvelopesWhenNeeded(t *testing.T) {
 	items := make([]BatchStatus, 0, 10)
 	for i := 0; i < 10; i++ {
 		priv, target := sessionKeypair(t)
-		items = append(items, BatchStatus{Target: target, Credential: nipcash.BySigning(priv)})
+		items = append(items, BatchStatus{Bill: mustBill(t, target), Credential: nipcash.BySigning(priv)})
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -430,7 +430,7 @@ func TestBatch_EndToEnd_ChunkedReplyReassembles(t *testing.T) {
 	items := make([]BatchStatus, 0, 9)
 	for i := 0; i < 9; i++ {
 		priv, target := sessionKeypair(t)
-		items = append(items, BatchStatus{Target: target, Credential: nipcash.BySigning(priv)})
+		items = append(items, BatchStatus{Bill: mustBill(t, target), Credential: nipcash.BySigning(priv)})
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -477,7 +477,7 @@ func TestBatch_EndToEnd_LostChunkIsIncompleteNotOmitted(t *testing.T) {
 	items := make([]BatchStatus, 0, 6)
 	for i := 0; i < 6; i++ {
 		priv, target := sessionKeypair(t)
-		items = append(items, BatchStatus{ID: "b" + strconv.Itoa(i), Target: target,
+		items = append(items, BatchStatus{ID: "b" + strconv.Itoa(i), Bill: mustBill(t, target),
 			Credential: nipcash.BySigning(priv)})
 	}
 
@@ -518,4 +518,16 @@ func TestBatch_EndToEnd_LostChunkIsIncompleteNotOmitted(t *testing.T) {
 	if served+unknown != 6 {
 		t.Errorf("served=%d unknown=%d, want 6 total", served, unknown)
 	}
+}
+
+// mustBill pairs a test bill's target with its deterministic connection secret.
+// Bill's halves cannot be set independently, which is the point of the type — so a
+// test builds one the same way production does.
+func mustBill(t *testing.T, target string) Bill {
+	t.Helper()
+	b, err := BillFromParts(target, connSecretFor(target))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }

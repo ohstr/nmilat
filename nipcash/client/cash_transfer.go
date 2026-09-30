@@ -13,12 +13,16 @@ import (
 // Travels over the private transport. The spun-off wallet's token arrives encrypted to
 // its new owner and is decrypted with params' own credential on the way back.
 func (c *Client) CashTransfer(ctx context.Context, params nipcash.CashTransferParams) (*nipcash.CashTransferResult, error) {
+	bill, err := c.bill()
+	if err != nil {
+		return nil, err
+	}
 	session, err := c.billSession(ctx)
 	if err != nil {
 		return nil, err
 	}
 	outcomes, sendErr := session.TransferMany(ctx, []BatchTransfer{{
-		ID: "1", Target: c.WalletPubkey(), Params: params,
+		ID: "1", Bill: bill, Params: params,
 	}})
 	if len(outcomes) == 0 {
 		return nil, oneItemOutcome(OutcomeNotServed, nil, sendErr, nipcash.MethodCashTransfer)

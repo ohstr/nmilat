@@ -42,6 +42,15 @@ type Announcement struct {
 	Inbox  string          `json:"inbox"`
 	Limits AnnouncedLimits `json:"limits"`
 	Relays []string        `json:"relays,omitempty"`
+	// CreatedAt is the announcing EVENT's created_at, not part of the content.
+	//
+	// Carried here because kind 11190 is replaceable but every announcement the hub
+	// ever published stays individually valid forever — each one is genuinely signed
+	// by the node identity. So a relay serving an old one is not forging anything; it
+	// is CHOOSING which of the hub's own past policies a client obeys. Without a
+	// timestamp a client has nothing to order them by and adopts whichever arrives
+	// first.
+	CreatedAt int64 `json:"-"`
 }
 
 // AnnouncedLimits is Limits on the wire. Spelled out separately so the JSON names
@@ -206,9 +215,10 @@ func ParseAnnouncement(ev *nip01.Event, expectedNodeXOnly string) (*Announcement
 	// A hostile or misconfigured hub must not be able to talk a client into
 	// building something unencryptable, so the announced policy is validated
 	// rather than adopted.
-	if err := a.Limits.Limits().Validate(); err != nil {
+	if err := a.Limits.Limits().ValidateAnnounced(); err != nil {
 		return nil, fmt.Errorf("%w: announced limits are unusable: %v", ErrAnnouncementMalformed, err)
 	}
+	a.CreatedAt = int64(ev.CreatedAt)
 	return &a, nil
 }
 

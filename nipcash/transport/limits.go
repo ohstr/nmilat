@@ -84,6 +84,11 @@ const (
 	// smaller item.
 	DefaultPadBucketBytes = 8 * 1024
 
+	// MinPadBucketBytes is the smallest padding granularity an ANNOUNCED policy may
+	// set. Padding only hides anything if a bucket is wider than the thing being
+	// hidden; below one maximal item, batch size is readable off the ciphertext length.
+	MinPadBucketBytes = 2 * 1024
+
 	// DefaultMaxVerifyBudget bounds the total signature verifications one
 	// envelope may demand, counted structurally BEFORE any crypto runs. Without
 	// it, 32 items each carrying 100 nested source proofs would be 3200
@@ -190,6 +195,33 @@ var (
 // Validate rejects a policy that cannot be honoured. A hub calls this on the
 // values it read from configuration, so a misconfiguration fails at startup
 // rather than at the first envelope.
+// ValidateAnnounced is Validate plus the constraints that only matter for a policy
+// arriving from SOMEWHERE ELSE.
+//
+// Kept separate deliberately. Validate answers "is this policy coherent", which a
+// locally-constructed one must also satisfy and which tests legitimately probe with
+// small numbers. This answers "is this policy safe to ADOPT from a hub", where the
+// author is not necessarily honest and a value can be chosen to harm the client
+// rather than merely be wrong.
+func (l Limits) ValidateAnnounced() error {
+	if err := l.Validate(); err != nil {
+		return err
+	}
+	// A padding bucket below one maximal item defeats padding entirely, and that is
+	// the one thing an announced policy must not be able to do.
+	//
+	// Announcing pad_bucket_bytes: 1 produced eight distinct wire sizes for one to
+	// eight items, exactly linear at the per-item cost — so a relay reads the batch
+	// count straight off the ciphertext length. That is the leak
+	// DefaultPadBucketBytes was raised 4 KiB -> 8 KiB to close, handed back by one
+	// announced integer.
+	if l.PadBucketBytes < MinPadBucketBytes {
+		return fmt.Errorf("%w: announced pad_bucket_bytes %d is below the %d floor, which would defeat padding",
+			ErrLimitsNotPositive, l.PadBucketBytes, MinPadBucketBytes)
+	}
+	return nil
+}
+
 func (l Limits) Validate() error {
 	if l.MaxEnvelopeBytes <= 0 || l.MaxItems <= 0 || l.PadBucketBytes <= 0 || l.MaxVerifyBudget <= 0 {
 		return fmt.Errorf("%w: %+v", ErrLimitsNotPositive, l)
