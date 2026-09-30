@@ -2,6 +2,7 @@ package nipcash
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
@@ -24,7 +25,28 @@ const (
 	tlvIdentityRequired uint8 = 3
 	tlvMintSignature    uint8 = 5
 	tlvAttestedAmount   uint8 = 6
+	tlvHubGroup         uint8 = 7
 )
+
+// HubGroupLen is the byte length of the hub-group fingerprint (TLV type 7): a
+// truncated hash of the issuing Cash Hub's own pubkey.
+//
+// Four bytes, and the reason it can be this short is what it is FOR. It answers
+// exactly one question — do two bills share an issuing Hub, and may therefore be
+// consolidated together — and it is never an authorization input. A wrong value
+// makes a client group wrongly and the Hub refuses with its own same-Hub error, so
+// the worst outcome is a failed consolidate, never misplaced value.
+//
+// Collisions only matter among the Hubs of ONE Lightning node, since bills must
+// already share a minter before grouping is considered at all. That is a handful of
+// Hubs against a 4-byte space, so the margin is enormous — and the cost of being
+// wrong is a retry with explicit sources.
+//
+// It is a HASH rather than the Hub's pubkey itself, and truncated rather than full,
+// because every bill a Hub mints would otherwise carry a stable, linkable
+// identifier for that Hub in the clear. A 4-byte digest of a pubkey nobody can
+// enumerate groups bills for their holder without publishing which Hub issued them.
+const HubGroupLen = 4
 
 // keyLen is the byte length of both a wallet pubkey and a pairing secret —
 // raw 32-byte values, same as every other Nostr key.
@@ -77,6 +99,45 @@ type Token struct {
 	// NEVER a spending credential.
 	MintSignature        []byte
 	AttestedAmountMillis *uint64
+
+	// HubGroup is the issuing Cash Hub's fingerprint (TLV type 7, HubGroupLen
+	// bytes), nil when the minting Hub did not include one.
+	//
+	// Its ONLY use is grouping: two bills may be consolidated together just when
+	// they share an issuing Hub, and nothing else in a token says which Hub that
+	// was. Mint provenance identifies the minting NODE, and one node routinely runs
+	// several Hubs — so grouping by minter merges bills the Hub will then refuse,
+	// which is what this exists to fix.
+	//
+	// NOT an authorization input, and MUST NOT be treated as one. It is
+	// unauthenticated and truncated; a wrong value causes a client to group wrongly
+	// and the Hub to refuse, which costs a retry and never moves value. Compare with
+	// HasProvenance, which IS verifiable and does identify the minter.
+	HubGroup []byte
+}
+
+// SameHubGroup reports whether two tokens carry the same hub fingerprint, i.e.
+// whether they may be consolidated together.
+//
+// False when either is missing one: an absent fingerprint is "unknown Hub", never a
+// wildcard. Grouping two bills on the strength of neither naming a Hub is how the
+// minter-based grouping this replaces went wrong.
+func SameHubGroup(a, b Token) bool {
+	if len(a.HubGroup) != HubGroupLen || len(b.HubGroup) != HubGroupLen {
+		return false
+	}
+	return bytes.Equal(a.HubGroup, b.HubGroup)
+}
+
+// HubGroupFor derives the fingerprint a Hub stamps on every bill it mints:
+// the first HubGroupLen bytes of sha256 of its own pubkey.
+//
+// Hashed rather than used raw so a bill does not carry a stable, linkable
+// identifier for its issuing Hub in the clear; truncated because it only has to
+// distinguish the Hubs of one node (see HubGroupLen).
+func HubGroupFor(hubPubkeyHex string) []byte {
+	sum := sha256.Sum256([]byte(hubPubkeyHex))
+	return sum[:HubGroupLen]
 }
 
 // HasProvenance reports whether t carries a complete mint-provenance pair.
@@ -113,6 +174,9 @@ func Encode(t Token) (string, error) {
 	if t.MintSignature != nil && len(t.MintSignature) != mintSigLen {
 		return "", fmt.Errorf("nipcash: mint signature must be %d bytes, got %d", mintSigLen, len(t.MintSignature))
 	}
+	if t.HubGroup != nil && len(t.HubGroup) != HubGroupLen {
+		return "", fmt.Errorf("nipcash: hub group must be %d bytes, got %d", HubGroupLen, len(t.HubGroup))
+	}
 
 	buf := &bytes.Buffer{}
 	writeTLV(buf, tlvWalletPubkey, pubkey)
@@ -132,6 +196,9 @@ func Encode(t Token) (string, error) {
 		binary.BigEndian.PutUint64(amountBytes[:], *t.AttestedAmountMillis)
 		writeTLV(buf, tlvMintSignature, t.MintSignature)
 		writeTLV(buf, tlvAttestedAmount, amountBytes[:])
+	}
+	if t.HubGroup != nil {
+		writeTLV(buf, tlvHubGroup, t.HubGroup)
 	}
 
 	bits5, err := bech32.ConvertBits(buf.Bytes(), 8, 5, true)
@@ -167,6 +234,11 @@ func Decode(token string) (Token, error) {
 	var mintSig []byte
 	var attestedAmount *uint64
 	provenancePoisoned := false
+	// Same tentative-then-attach treatment for the hub-group fingerprint, and for a
+	// softer reason: it is a grouping hint, so anything anomalous about it MUST
+	// leave the token simply ungrouped rather than fail the decode.
+	var hubGroup []byte
+	hubGroupPoisoned := false
 	curr := 0
 	for curr < len(data) {
 		typ, value, ok := readTLV(data[curr:])
@@ -213,6 +285,16 @@ func Decode(token string) (Token, error) {
 				break
 			}
 			mintSig = append([]byte(nil), value...)
+		case tlvHubGroup:
+			// A malformed or repeated fingerprint is DROPPED, not a decode failure.
+			// It is a grouping hint: a bill carrying a bad one is still perfectly
+			// spendable, one bill at a time, and refusing the whole token would make
+			// a cosmetic field able to strand real value.
+			if hubGroup != nil || len(value) != HubGroupLen {
+				hubGroupPoisoned = true
+				break
+			}
+			hubGroup = append([]byte(nil), value...)
 		case tlvAttestedAmount:
 			if attestedAmount != nil || len(value) != attestedAmountLen {
 				provenancePoisoned = true
@@ -243,6 +325,9 @@ func Decode(token string) (Token, error) {
 	if !provenancePoisoned && mintSig != nil && attestedAmount != nil {
 		result.MintSignature = mintSig
 		result.AttestedAmountMillis = attestedAmount
+	}
+	if !hubGroupPoisoned {
+		result.HubGroup = hubGroup
 	}
 	return result, nil
 }

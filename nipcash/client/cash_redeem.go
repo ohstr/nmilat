@@ -18,12 +18,16 @@ import (
 // is the honest report — and for a method that moves money it is the difference
 // between asking and double-paying.
 func (c *Client) CashRedeem(ctx context.Context, params nipcash.CashRedeemParams) (*nipcash.CashRedeemResult, error) {
+	bill, err := c.bill()
+	if err != nil {
+		return nil, err
+	}
 	session, err := c.billSession(ctx)
 	if err != nil {
 		return nil, err
 	}
 	outcomes, sendErr := session.RedeemMany(ctx, []BatchRedeem{{
-		ID: "1", Target: c.WalletPubkey(), Params: params,
+		ID: "1", Bill: bill, Params: params,
 	}})
 	if len(outcomes) == 0 {
 		return nil, oneItemOutcome(OutcomeNotServed, nil, sendErr, nipcash.MethodCashRedeem)

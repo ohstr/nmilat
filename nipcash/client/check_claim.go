@@ -2,8 +2,10 @@ package client
 
 import (
 	"context"
+	"errors"
 
 	"github.com/ohstr/nmilat/nipcash"
+	relayclient "github.com/ohstr/nmilat/relay/client"
 )
 
 // CheckClaim confirms a matching, unclaimed recipient actually exists on
@@ -34,6 +36,23 @@ func (c *Client) CheckClaim(ctx context.Context, cred nipcash.Credential, tok ni
 	// carrying strictly more than is needed.
 	result, err := c.CashStatus(ctx, cred, nipcash.ScopeMine)
 	if err != nil {
+		// A hub that holds the bill but has no slice for this caller answers
+		// NOT_FOUND. That is the same fact as an empty roster, so it becomes the same
+		// sentinel — callers already branch on ErrClaimNotFound to say "this token
+		// does not name you", and they should not each have to learn a wire code.
+		//
+		// Safe to collapse HERE specifically because CheckClaim only ever performs a
+		// cash_status, where NOT_FOUND has exactly this one meaning. On the spend
+		// methods it does not: there it can also be a wrong cash secret, which is why
+		// that path reads the code itself rather than a sentinel.
+		//
+		// The hub only became able to answer at all once items carried a bill proof;
+		// before that this was an information-free omission, indistinguishable from
+		// an unreachable hub.
+		var walletErr *relayclient.WalletError
+		if errors.As(err, &walletErr) && walletErr.Code == "NOT_FOUND" {
+			return nil, nipcash.ErrClaimNotFound
+		}
 		return nil, err
 	}
 

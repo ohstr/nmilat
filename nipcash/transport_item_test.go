@@ -1,6 +1,8 @@
 package nipcash
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 	"testing"
 	"time"
@@ -54,23 +56,23 @@ func TestItemConstructors_ProduceEnvelopesThatValidate(t *testing.T) {
 		make func() (transport.Item, error)
 	}{
 		{"cash_status", func() (transport.Item, error) {
-			return StatusItem("s1", billTarget, CashStatusParams{}, BySigning(billPriv), b)
+			return StatusItem("s1", billTarget, connSecretFor(billTarget), CashStatusParams{}, BySigning(billPriv), b)
 		}},
 		{"cash_redeem", func() (transport.Item, error) {
 			return CashRedeemParams{
 				Invoice:    testInvoice,
 				Credential: BySigning(billPriv),
 				Amount:     &amount,
-			}.Item("r1", billTarget, b)
+			}.Item("r1", billTarget, connSecretFor(billTarget), b)
 		}},
 		{"cash_redeem, bearer", func() (transport.Item, error) {
 			return CashRedeemParams{
 				Invoice:    testInvoice,
 				Credential: BySecret("a-cash-secret"),
-			}.Item("r2", otherTarget, b)
+			}.Item("r2", otherTarget, connSecretFor(otherTarget), b)
 		}},
 		{"cash_status, second bill, different key", func() (transport.Item, error) {
-			return StatusItem("s2", otherTarget, CashStatusParams{}, BySigning(otherPriv), b)
+			return StatusItem("s2", otherTarget, connSecretFor(otherTarget), CashStatusParams{}, BySigning(otherPriv), b)
 		}},
 	}
 
@@ -110,7 +112,7 @@ func TestItemConstructors_BearerCarriesNoProof(t *testing.T) {
 	item, err := CashRedeemParams{
 		Invoice:    testInvoice,
 		Credential: BySecret("a-cash-secret"),
-	}.Item("r1", target, b)
+	}.Item("r1", target, connSecretFor(target), b)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,8 +123,13 @@ func TestItemConstructors_BearerCarriesNoProof(t *testing.T) {
 	if !item.IsBearer() {
 		t.Error("transport does not recognise the item as bearer — the secret did not reach params")
 	}
-	if got := item.VerificationCost(); got != 0 {
-		t.Errorf("VerificationCost() = %d, want 0", got)
+	// One, not zero: no slice proof, but a bill proof like every other item. The
+	// bearer saving is the slice proof, not the whole cost.
+	if got := item.VerificationCost(); got != 1 {
+		t.Errorf("VerificationCost() = %d, want 1 (bill proof only)", got)
+	}
+	if !item.HasBillProof() {
+		t.Error("a bearer item must still carry a bill proof — holding the bill is a separate claim from holding the slice")
 	}
 }
 
@@ -134,7 +141,7 @@ func TestItemConstructors_RefuseAnUnservableMethod(t *testing.T) {
 	billPriv, target := itemTestKeypair(t)
 	b := testBinding(t, hubXOnly)
 
-	if _, err := buildItem("m1", target, MethodMintCash, struct{}{}, BySigning(billPriv), b); err == nil {
+	if _, err := buildItem("m1", target, connSecretFor(target), MethodMintCash, struct{}{}, BySigning(billPriv), b); err == nil {
 		t.Fatal("buildItem() = nil error for mint_cash; it is not servable over this transport")
 	}
 }
@@ -163,12 +170,12 @@ func TestStatusItem_RejectsAnUnknownScopeLocally(t *testing.T) {
 	priv, pub := itemTestKeypair(t)
 	b := ItemBinding{HubXOnly: pub, Nonce: strings.Repeat("11", 32), NotAfter: time.Now().Add(time.Minute).Unix()}
 
-	if _, err := StatusItem("s1", pub, CashStatusParams{Scope: "everything"}, BySigning(priv), b); err == nil {
+	if _, err := StatusItem("s1", pub, connSecretFor(pub), CashStatusParams{Scope: "everything"}, BySigning(priv), b); err == nil {
 		t.Fatal("StatusItem accepted an unknown scope, want a local error")
 	}
 	// The two real values, and absent, must all build.
 	for _, scope := range []string{"", ScopeAll, ScopeMine} {
-		if _, err := StatusItem("s1", pub, CashStatusParams{Scope: scope}, BySigning(priv), b); err != nil {
+		if _, err := StatusItem("s1", pub, connSecretFor(pub), CashStatusParams{Scope: scope}, BySigning(priv), b); err != nil {
 			t.Errorf("StatusItem(scope=%q) error = %v, want accepted", scope, err)
 		}
 	}
@@ -181,7 +188,7 @@ func TestStatusItem_ScopeTravelsInParams(t *testing.T) {
 	priv, pub := itemTestKeypair(t)
 	b := ItemBinding{HubXOnly: pub, Nonce: strings.Repeat("11", 32), NotAfter: time.Now().Add(time.Minute).Unix()}
 
-	item, err := StatusItem("s1", pub, CashStatusParams{Scope: ScopeAll}, BySigning(priv), b)
+	item, err := StatusItem("s1", pub, connSecretFor(pub), CashStatusParams{Scope: ScopeAll}, BySigning(priv), b)
 	if err != nil {
 		t.Fatalf("StatusItem: %v", err)
 	}
@@ -189,7 +196,7 @@ func TestStatusItem_ScopeTravelsInParams(t *testing.T) {
 		t.Errorf("params = %s, want the scope to travel", got)
 	}
 
-	bare, err := StatusItem("s1", pub, CashStatusParams{}, BySigning(priv), b)
+	bare, err := StatusItem("s1", pub, connSecretFor(pub), CashStatusParams{}, BySigning(priv), b)
 	if err != nil {
 		t.Fatalf("StatusItem: %v", err)
 	}
@@ -210,7 +217,7 @@ func TestStatusItem_CashModeCarriesItsSecret(t *testing.T) {
 	_, pub := itemTestKeypair(t)
 	b := ItemBinding{HubXOnly: pub, Nonce: strings.Repeat("11", 32), NotAfter: time.Now().Add(time.Minute).Unix()}
 
-	item, err := StatusItem("s1", pub, CashStatusParams{Scope: ScopeMine}, BySecret("the-secret"), b)
+	item, err := StatusItem("s1", pub, connSecretFor(pub), CashStatusParams{Scope: ScopeMine}, BySecret("the-secret"), b)
 	if err != nil {
 		t.Fatalf("StatusItem(cash-mode): %v", err)
 	}
@@ -227,4 +234,15 @@ func TestStatusItem_CashModeCarriesItsSecret(t *testing.T) {
 	if !strings.Contains(string(item.Params), `"scope":"mine"`) {
 		t.Errorf("the scope was lost when the request type changed: %s", item.Params)
 	}
+}
+
+// connSecretFor gives each bill in a test its own deterministic connection secret.
+//
+// Deterministic so a test can build a second item for the same bill and get a
+// matching proof, and DISTINCT per bill so nothing passes by accidentally reusing
+// one bill's secret for another — which is precisely the substitution a bill proof
+// exists to catch.
+func connSecretFor(target string) string {
+	sum := sha256.Sum256([]byte("conn-secret:" + target))
+	return hex.EncodeToString(sum[:])
 }

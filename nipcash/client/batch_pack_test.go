@@ -1,6 +1,7 @@
 package client
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -39,7 +40,7 @@ func statusBuilders(t *testing.T, n int) []itemBuilder {
 		out = append(out, itemBuilder{
 			ID: "i" + strconv.Itoa(i),
 			Build: func(id string, b nipcash.ItemBinding) (transport.Item, error) {
-				return nipcash.StatusItem(id, target, nipcash.CashStatusParams{}, nipcash.BySigning(priv), b)
+				return nipcash.StatusItem(id, target, connSecretFor(target), nipcash.CashStatusParams{}, nipcash.BySigning(priv), b)
 			},
 		})
 	}
@@ -186,4 +187,11 @@ func TestPackItems_ABuilderErrorSurfaces(t *testing.T) {
 	if _, err := packItems(builders, hub, transport.DefaultLimits(), time.Minute); err == nil {
 		t.Fatal("packItems() = nil error; a builder failure must surface to the caller")
 	}
+}
+
+// connSecretFor mirrors the helper in nipcash's own tests: a deterministic,
+// per-bill connection secret, so bill proofs are valid and no two bills share one.
+func connSecretFor(target string) string {
+	sum := sha256.Sum256([]byte("conn-secret:" + target))
+	return hex.EncodeToString(sum[:])
 }

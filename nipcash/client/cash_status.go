@@ -24,12 +24,16 @@ import (
 // caller's own row and nothing about their co-recipients. Pass nipcash.ScopeAll for the
 // shared roster.
 func (c *Client) CashStatus(ctx context.Context, cred nipcash.Credential, scope string) (*nipcash.CashStatusResult, error) {
+	bill, err := c.bill()
+	if err != nil {
+		return nil, err
+	}
 	session, err := c.billSession(ctx)
 	if err != nil {
 		return nil, err
 	}
 	outcomes, sendErr := session.StatusMany(ctx, []BatchStatus{{
-		ID: "1", Target: c.WalletPubkey(), Credential: cred, Scope: scope,
+		ID: "1", Bill: bill, Credential: cred, Scope: scope,
 	}})
 	if len(outcomes) == 0 {
 		return nil, oneItemOutcome(OutcomeNotServed, nil, sendErr, nipcash.MethodCashStatus)

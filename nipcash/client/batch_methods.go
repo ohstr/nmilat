@@ -37,8 +37,10 @@ type BatchStatus struct {
 	// id) is what lets a caller map outcomes back to their own records without
 	// depending on ordering.
 	ID string
-	// Target is the bill's wallet pubkey.
-	Target     string
+	// Bill is which bill this item acts on, plus the secret proving the sender holds
+	// it. Build it with BillFor(token) — the two halves come from one token and are
+	// deliberately not separately settable (see Bill).
+	Bill       Bill
 	Credential nipcash.Credential
 	// Scope selects how much of the roster to ask for (nipcash.ScopeAll /
 	// ScopeMine). Empty asks for this transport's default, which is ScopeMine:
@@ -72,7 +74,10 @@ func (s *BatchSession) StatusMany(ctx context.Context, items []BatchStatus) ([]S
 		builders = append(builders, itemBuilder{
 			ID: itemID(it.ID, i),
 			Build: func(id string, b nipcash.ItemBinding) (transport.Item, error) {
-				return nipcash.StatusItem(id, it.Target, nipcash.CashStatusParams{Scope: it.Scope}, it.Credential, b)
+				if !it.Bill.ok() {
+					return transport.Item{}, fmt.Errorf("nipcash/client: item %q has no bill; build one with BillFor(token)", id)
+				}
+				return nipcash.StatusItem(id, it.Bill.target, it.Bill.connSecret, nipcash.CashStatusParams{Scope: it.Scope}, it.Credential, b)
 			},
 		})
 	}
@@ -106,8 +111,11 @@ func (s *BatchSession) StatusMany(ctx context.Context, items []BatchStatus) ([]S
 
 // BatchRedeem redeems one bill to an invoice.
 type BatchRedeem struct {
-	ID     string
-	Target string
+	ID string
+	// Bill is which bill this item acts on, plus the secret proving the sender holds
+	// it. Build it with BillFor(token) — the two halves come from one token and are
+	// deliberately not separately settable (see Bill).
+	Bill   Bill
 	Params nipcash.CashRedeemParams
 }
 
@@ -136,7 +144,10 @@ func (s *BatchSession) RedeemMany(ctx context.Context, items []BatchRedeem) ([]R
 		builders = append(builders, itemBuilder{
 			ID: itemID(it.ID, i),
 			Build: func(id string, b nipcash.ItemBinding) (transport.Item, error) {
-				return it.Params.Item(id, it.Target, b)
+				if !it.Bill.ok() {
+					return transport.Item{}, fmt.Errorf("nipcash/client: item %q has no bill; build one with BillFor(token)", id)
+				}
+				return it.Params.Item(id, it.Bill.target, it.Bill.connSecret, b)
 			},
 		})
 	}
@@ -167,8 +178,11 @@ func (s *BatchSession) RedeemMany(ctx context.Context, items []BatchRedeem) ([]R
 
 // BatchTransfer transfers or splits one bill.
 type BatchTransfer struct {
-	ID     string
-	Target string
+	ID string
+	// Bill is which bill this item acts on, plus the secret proving the sender holds
+	// it. Build it with BillFor(token) — the two halves come from one token and are
+	// deliberately not separately settable (see Bill).
+	Bill   Bill
 	Params nipcash.CashTransferParams
 }
 
@@ -190,7 +204,10 @@ func (s *BatchSession) TransferMany(ctx context.Context, items []BatchTransfer) 
 		builders = append(builders, itemBuilder{
 			ID: itemID(it.ID, i),
 			Build: func(id string, b nipcash.ItemBinding) (transport.Item, error) {
-				return it.Params.Item(id, it.Target, b)
+				if !it.Bill.ok() {
+					return transport.Item{}, fmt.Errorf("nipcash/client: item %q has no bill; build one with BillFor(token)", id)
+				}
+				return it.Params.Item(id, it.Bill.target, it.Bill.connSecret, b)
 			},
 		})
 	}
@@ -229,7 +246,10 @@ type BatchConsolidate struct {
 	// Target is the wallet this call is made AGAINST — the entry point. It need not be
 	// one of Params.Sources: NIP-CASH lets a caller consolidate slices it does not
 	// otherwise hold, as long as it can prove control of each.
-	Target string
+	// Bill is which bill this item acts on, plus the secret proving the sender holds
+	// it. Build it with BillFor(token) — the two halves come from one token and are
+	// deliberately not separately settable (see Bill).
+	Bill Bill
 	// Credential authorizes the call itself, separately from each source's own
 	// credential inside Params.
 	Credential nipcash.Credential
@@ -259,7 +279,10 @@ func (s *BatchSession) ConsolidateMany(ctx context.Context, items []BatchConsoli
 		builders = append(builders, itemBuilder{
 			ID: itemID(it.ID, i),
 			Build: func(id string, b nipcash.ItemBinding) (transport.Item, error) {
-				return it.Params.Item(id, it.Target, it.Credential, b)
+				if !it.Bill.ok() {
+					return transport.Item{}, fmt.Errorf("nipcash/client: item %q has no bill; build one with BillFor(token)", id)
+				}
+				return it.Params.Item(id, it.Bill.target, it.Bill.connSecret, it.Credential, b)
 			},
 		})
 	}

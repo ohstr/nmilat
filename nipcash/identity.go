@@ -164,11 +164,11 @@ func Send(recipient Recipient, amountMillis uint64) Allocation {
 
 // Source pairs a source wallet with its own current committed amount and
 // the Credential proving control over it, for CashConsolidate. Build one
-// with From — a live Credential (BySigning; pubkey and connection_key both
-// work, cash-mode sources are rejected, see ErrCashSource), or one built
-// from a proof captured earlier via ByProof. Authorization is per-source,
-// not per-connection, so a relayer holding only captured proofs can still
-// consolidate on someone else's behalf (NIP-CASH §Consolidating Tokens).
+// with From and a live Credential (BySigning; pubkey and connection_key both
+// work, cash-mode sources are rejected, see ErrCashSource). Authorization is
+// per-source, not per-connection, so a caller can consolidate slices it does
+// not otherwise hold, given a credential for each (NIP-CASH §Consolidating
+// Tokens).
 type Source struct {
 	WalletPubkey string
 	// Amount is this source's own current committed amount, in millis —
@@ -208,19 +208,23 @@ type Credential interface {
 	// above, bound to an envelope rather than to a call, so the transport needs the
 	// signing key rather than a finished proof.
 	//
-	// Exactly one of the three outcomes holds, and they are genuinely three rather
-	// than a key-or-not pair:
+	// Exactly one of the two outcomes holds:
 	//
 	//   privKeyHex set   — sign a kind-23192 for this item
-	//   cashSecret set   — cash-mode: no proof exists or is needed; the secret IS
-	//                      the authorization (NIP-CASH §Bearer Items)
-	//   err              — this credential cannot use the private transport at all
+	//   cashSecret set   — cash-mode: no SLICE proof exists or is needed; the secret
+	//                      IS that authorization (NIP-CASH §Bearer Items)
 	//
-	// The third case is real and belongs as an error rather than silence: a
-	// credential built from a captured proof (ByProof) is identity-bound yet holds
-	// no key, so it can neither sign a 23192 nor claim to be bearer. Treating it as
-	// bearer would send an item a hub must omit, and omission is
-	// information-free — the caller would be told nothing at all.
+	// The error return remains for a credential that can do neither. There used to
+	// be a third case it existed for — a credential built from a captured kind-23198
+	// proof, identity-bound yet holding no key, so it could neither sign a 23192 nor
+	// claim to be bearer. That credential kind is gone, but the return stays: a
+	// future one in the same shape must fail loudly here rather than be treated as
+	// bearer, which would send an item the hub must omit, and an omission is
+	// information-free, so the caller would be told nothing at all.
+	//
+	// Note this concerns the SLICE proof only. The bill proof is signed with the
+	// bill's connection secret, which no credential supplies — it comes from the
+	// token (see transport.BuildBillProof).
 	//
 	// Unexported, like buildProof, so a signing key never leaves this package. The
 	// transport layer receives a finished proof, never the key that made it.

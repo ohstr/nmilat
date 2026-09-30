@@ -160,6 +160,7 @@ func (s *BatchSession) collectReply(
 ) ([]ItemOutcome, error) {
 	merged := &transport.ResponseEnvelope{Version: transport.EnvelopeVersion, ReqNonce: p.Envelope.Nonce}
 	seen := map[int]struct{}{}
+	answered := map[string]struct{}{}
 	total := 0
 
 	for {
@@ -211,6 +212,29 @@ func (s *BatchSession) collectReply(
 
 			if chunk.Error != nil && merged.Error == nil {
 				merged.Error = chunk.Error
+			}
+			// Refuse a second answer for an id already answered, rather than letting the
+			// later one overwrite the earlier.
+			//
+			// A duplicate id WITHIN one chunk is already rejected, but across chunks the
+			// results were appended blind and the outcome map is last-wins — so two
+			// contradictory statements about the same bill were resolved by ARRIVAL
+			// ORDER. Only the hub can produce them (it holds the reply key), but a relay
+			// holding no key at all decides which one the client believes, simply by
+			// reordering two events: NOT_FOUND becomes a live million-millis bill, or the
+			// reverse.
+			//
+			// Sorting by seq would make the outcome deterministic and still let the hub
+			// choose it by construction. Refusing is the answer that leaves no room for
+			// either party to pick: a hub that answers one item twice with different
+			// content has contradicted itself, and there is no reading of that reply a
+			// client should act on.
+			for _, r := range chunk.Results {
+				if _, already := answered[r.ID]; already {
+					return nil, fmt.Errorf("%w: envelope %d: item %q answered in more than one chunk",
+						transport.ErrResponseMalformed, index, r.ID)
+				}
+				answered[r.ID] = struct{}{}
 			}
 			merged.Results = append(merged.Results, chunk.Results...)
 

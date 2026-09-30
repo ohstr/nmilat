@@ -17,12 +17,16 @@ import (
 // The merged wallet's token arrives encrypted to its new owner and is decrypted on the
 // way back.
 func (c *Client) CashConsolidate(ctx context.Context, cred nipcash.Credential, params nipcash.CashConsolidateParams) (*nipcash.CashConsolidateResult, error) {
+	bill, err := c.bill()
+	if err != nil {
+		return nil, err
+	}
 	session, err := c.billSession(ctx)
 	if err != nil {
 		return nil, err
 	}
 	outcomes, sendErr := session.ConsolidateMany(ctx, []BatchConsolidate{{
-		ID: "1", Target: c.WalletPubkey(), Credential: cred, Params: params,
+		ID: "1", Bill: bill, Credential: cred, Params: params,
 	}})
 	if len(outcomes) == 0 {
 		return nil, oneItemOutcome(OutcomeNotServed, nil, sendErr, nipcash.MethodCashConsolidate)
