@@ -23,6 +23,18 @@ const (
 // client that wants a specific answer regardless of transport must say so.
 type CashStatusParams struct {
 	Scope string `json:"scope,omitempty"`
+	// AttestationEvent lets a connection_key recipient read their own row.
+	//
+	// A connection_key slice's identity_value is hex(sha256(platform + ":" + externalID)),
+	// never a pubkey, so the item's signer can never equal it and a Hub's transport gate
+	// has nothing to compare. cash_redeem already requires an IA attestation binding the
+	// claimant's keypair to that identity; this is the same evidence, for a read instead of
+	// a spend, and a Hub resolves WHICH claim from the attestation itself rather than from
+	// anything the caller names.
+	//
+	// Omit it for pubkey and cash-mode slices, which need nothing: a pubkey slice's
+	// identity IS the signer, and a cash-mode slice's secret is its whole authorization.
+	AttestationEvent string `json:"attestation_event,omitempty"`
 }
 
 // CashStatusRequest is cash_status' wire request.
@@ -39,6 +51,9 @@ type CashStatusParams struct {
 type CashStatusRequest struct {
 	Scope      string `json:"scope,omitempty"`
 	CashSecret string `json:"cash_secret,omitempty"`
+	// AttestationEvent is the connection_key counterpart to CashSecret: the evidence
+	// that authorizes a read the signer alone cannot. See CashStatusParams.
+	AttestationEvent string `json:"attestation_event,omitempty"`
 }
 
 // IsValidCashStatusScope reports whether s is a scope a Hub can honour. An empty
