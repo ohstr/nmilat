@@ -34,16 +34,25 @@ func coherentEnvelope(t *testing.T, hubXOnly string, bills int) Envelope {
 		if err != nil {
 			t.Fatal(err)
 		}
-		proof, err := BuildItemProof(billPriv, ProofBinding{
+		binding := ProofBinding{
 			Target: billTarget, HubXOnly: hubXOnly, Method: "cash_status",
 			ParamsHash: hash, Nonce: nonce, NotAfter: notAfter,
-		})
+		}
+		proof, err := BuildItemProof(billPriv, binding)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Each bill gets its own connection secret, distinct from its slice key, so
+		// the two proofs stay separable and no bill can borrow another's.
+		connPriv, _ := testKeypair(t)
+		billProof, err := BuildBillProof(connPriv, binding)
 		if err != nil {
 			t.Fatal(err)
 		}
 		env.Items = append(env.Items, Item{
 			ID: strings.Repeat("i", i+1), Target: billTarget,
-			Method: "cash_status", Params: json.RawMessage(params), Proof: proof,
+			Method: "cash_status", Params: json.RawMessage(params),
+			Proof: proof, BillProof: billProof,
 		})
 	}
 	return env
@@ -207,11 +216,29 @@ func TestIsServableMethod(t *testing.T) {
 func bearerItem(t *testing.T, id string) Item {
 	t.Helper()
 	_, target := testKeypair(t)
+	_, hubXOnly := testKeypair(t)
+	billPriv, _ := testKeypair(t)
+	params := json.RawMessage(`{"invoice":"lnbc1","cash_secret":"deadbeef"}`)
+	hash, err := CanonicalParamsHash(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A bearer item carries NO slice proof — its secret is that authorization — but
+	// it still carries a bill proof, because holding the bill is a separate claim
+	// that no identity mode exempts.
+	billProof, err := BuildBillProof(billPriv, ProofBinding{
+		Target: target, HubXOnly: hubXOnly, Method: "cash_redeem",
+		ParamsHash: hash, Nonce: "00", NotAfter: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	return Item{
-		ID:     id,
-		Target: target,
-		Method: "cash_redeem",
-		Params: json.RawMessage(`{"invoice":"lnbc1","cash_secret":"deadbeef"}`),
+		ID:        id,
+		Target:    target,
+		Method:    "cash_redeem",
+		Params:    params,
+		BillProof: billProof,
 	}
 }
 
@@ -288,18 +315,28 @@ func TestBearerItem_MustNotCarryBothSecretAndProof(t *testing.T) {
 	}
 }
 
-// TestBearerItem_CostsNoVerificationBudget: a hub's verify budget exists to bound
-// signature work. A bearer item involves none, so charging it would make a hub
-// refuse batches it could comfortably serve.
-func TestBearerItem_CostsNoVerificationBudget(t *testing.T) {
+// TestBearerItem_CostsOneVerificationLessThanAnIdentityBoundOne replaces an earlier
+// test that asserted a bearer item costs ZERO.
+//
+// That was right when the only signature on an item was its slice proof, which a
+// bearer item genuinely has none of. It is now wrong: every item carries a
+// kind-23193 bill proof whatever its identity mode, so a bearer item costs exactly
+// one signature — the saving is the slice proof it still does not carry, not the
+// whole cost.
+//
+// Inverted rather than renumbered, because the claim itself changed. Leaving "costs
+// nothing" in place with a 1 in it would have described the budget as free for a
+// batch of bearer items that each cost real secp256k1 time — undercounting in the
+// one direction a DoS budget must never be wrong.
+func TestBearerItem_CostsOneVerificationLessThanAnIdentityBoundOne(t *testing.T) {
 	bearer := bearerItem(t, "b")
-	if got := bearer.VerificationCost(); got != 0 {
-		t.Errorf("bearer VerificationCost() = %d, want 0 — there is no signature to verify", got)
+	if got := bearer.VerificationCost(); got != 1 {
+		t.Errorf("bearer VerificationCost() = %d, want 1 — no slice proof, but still a bill proof", got)
 	}
 
 	_, hub := testKeypair(t)
 	identityBound := coherentEnvelope(t, hub, 1).Items[0]
-	if got := identityBound.VerificationCost(); got != 1 {
-		t.Errorf("identity-bound VerificationCost() = %d, want 1", got)
+	if got := identityBound.VerificationCost(); got != 2 {
+		t.Errorf("identity-bound VerificationCost() = %d, want 2 (slice proof + bill proof)", got)
 	}
 }

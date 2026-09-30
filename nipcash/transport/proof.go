@@ -69,20 +69,42 @@ func (b ProofBinding) tags() [][]string {
 	}
 }
 
-// BuildItemProof signs a kind-23192 proof for one item. privKeyHex is the bill's
-// connection key — holding it is what the proof demonstrates.
+// BuildItemProof signs a kind-23192 SLICE proof for one item. privKeyHex is the
+// key that identifies the recipient — their own signing identity for a
+// pubkey-bound slice — so the proof establishes "I am identity K".
+//
+// It deliberately does NOT establish that the signer holds the bill: the key is
+// the signer's own choice, so anyone can produce a structurally valid proof for
+// any target they can name. BuildBillProof is what demonstrates possession.
 func BuildItemProof(privKeyHex string, binding ProofBinding) (json.RawMessage, error) {
+	return buildProof(KindItemProof, "slice", privKeyHex, binding)
+}
+
+// BuildBillProof signs a kind-23193 BILL proof for one item. connSecretHex is the
+// bill's own connection secret, straight out of its token — holding it is exactly
+// what the proof demonstrates, and nothing else can produce it.
+//
+// Bound to the same six fields as the slice proof, so it is per-item and cannot be
+// lifted onto a different item, method, params, envelope or hub. An aggregator
+// assembling an envelope holds other people's bill proofs; binding them this
+// tightly is what stops one being reused to probe a bill its holder never asked
+// about.
+func BuildBillProof(connSecretHex string, binding ProofBinding) (json.RawMessage, error) {
+	return buildProof(KindBillProof, "bill", connSecretHex, binding)
+}
+
+func buildProof(kind int, what, privKeyHex string, binding ProofBinding) (json.RawMessage, error) {
 	if binding.Target == "" || binding.HubXOnly == "" || binding.Method == "" ||
 		binding.ParamsHash == "" || binding.Nonce == "" {
 		return nil, fmt.Errorf("%w: every binding field is required", ErrProofMalformed)
 	}
-	ev, err := nip01.NewSignedEvent(KindItemProof, "", privKeyHex, binding.tags()...)
+	ev, err := nip01.NewSignedEvent(kind, "", privKeyHex, binding.tags()...)
 	if err != nil {
-		return nil, fmt.Errorf("transport: sign item proof: %w", err)
+		return nil, fmt.Errorf("transport: sign %s proof: %w", what, err)
 	}
 	raw, err := json.Marshal(ev)
 	if err != nil {
-		return nil, fmt.Errorf("transport: marshal item proof: %w", err)
+		return nil, fmt.Errorf("transport: marshal %s proof: %w", what, err)
 	}
 	return raw, nil
 }
@@ -98,12 +120,29 @@ func BuildItemProof(privKeyHex string, binding ProofBinding) (json.RawMessage, e
 //
 // Shared by hub and client so the two cannot disagree on what a valid proof is.
 func VerifyItemProof(proof json.RawMessage, want ProofBinding, now time.Time) (signerPubkey string, err error) {
+	return verifyProof(KindItemProof, proof, want, now)
+}
+
+// VerifyBillProof checks one item's kind-23193 bill proof and returns the pubkey
+// that signed it — which the hub compares against the bill's own connection
+// pubkey.
+//
+// Identical checks to the slice proof, including the expected KIND. That last
+// point is load-bearing rather than incidental: the two proofs bind to the same
+// six fields, so without a kind check a slice proof would verify as a bill proof
+// and possession would be provable by anyone holding a key. The kind is the only
+// thing separating them.
+func VerifyBillProof(proof json.RawMessage, want ProofBinding, now time.Time) (signerPubkey string, err error) {
+	return verifyProof(KindBillProof, proof, want, now)
+}
+
+func verifyProof(wantKind int, proof json.RawMessage, want ProofBinding, now time.Time) (signerPubkey string, err error) {
 	var ev nip01.Event
 	if err := json.Unmarshal(proof, &ev); err != nil {
 		return "", fmt.Errorf("%w: %v", ErrProofMalformed, err)
 	}
-	if ev.Kind != KindItemProof {
-		return "", fmt.Errorf("%w: kind %d, want %d", ErrProofMalformed, ev.Kind, KindItemProof)
+	if ev.Kind != wantKind {
+		return "", fmt.Errorf("%w: kind %d, want %d", ErrProofMalformed, ev.Kind, wantKind)
 	}
 	if len(ev.PubKey) != keyHexLen || !isLowerHex(ev.PubKey) {
 		return "", fmt.Errorf("%w: signer pubkey must be %d lowercase hex characters",

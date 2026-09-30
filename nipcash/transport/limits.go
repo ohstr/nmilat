@@ -51,17 +51,38 @@ const (
 	// kilobytes. A count cap cannot express that, so it exists only to reject an
 	// absurd item count before anything is parsed or hashed.
 	//
-	// 32 is deliberately below what the byte budget allows (32 redeems is ~37 KB
-	// of 56 KB): it also bounds worst-case CPU per envelope independently of size,
-	// and a client needing more sends a second envelope for one extra ~166us
-	// unwrap.
+	// 32 still fits the byte budget, but only just: measured, 32 cash_redeem items
+	// are ~52 KB of the 56 KB ceiling, where they were ~37 KB before every item
+	// gained a second signature (the kind-23193 bill proof roughly doubled item
+	// size). The count cap is therefore no longer comfortably below the byte cap —
+	// they now bind at almost the same point.
+	//
+	// Left at 32 rather than lowered, because the byte cap is the one that has to
+	// hold and it does: a batch that would not fit is split into a second envelope
+	// by the client (see packOne), costing one extra ~166us unwrap rather than
+	// failing. Anyone raising MaxConsolidateSources or shrinking MaxEnvelopeBytes
+	// should re-measure, since the slack that used to absorb such a change is gone.
 	DefaultMaxItems = 32
 
 	// DefaultPadBucketBytes is the padding granularity. Ciphertext length leaks
 	// how much is inside, so an envelope is padded up to a multiple of this and
 	// a single cash_status becomes indistinguishable from a small batch. NIP-44's
 	// own padding is power-of-two-ish and far too coarse to hide batch size.
-	DefaultPadBucketBytes = 4 * 1024
+	//
+	// 8 KiB, raised from 4 KiB when every item gained its kind-23193 bill proof.
+	// That is not a tuning preference: the bucket only hides batch size while it
+	// is large relative to an item, and items roughly doubled (a cash_status item
+	// measured 865 bytes with one proof, 1519 with two). At the old 4 KiB, 1 to 8
+	// items fell into FOUR distinguishable padded sizes instead of three, so the
+	// padding had begun disclosing the batch count — the exact leak it exists to
+	// close. TestEnvelope_EncodePadsToBuckets is what caught it.
+	//
+	// The ratio is what was preserved: ~4.8 buckets-worth of padding per item
+	// either way. The cost is bandwidth for small batches — one cash_status pads
+	// to 8 KiB, ~11 KiB base64 on the wire — which is the price of hiding how many
+	// bills a request carries, and was already accepted at 4 KiB for a
+	// smaller item.
+	DefaultPadBucketBytes = 8 * 1024
 
 	// DefaultMaxVerifyBudget bounds the total signature verifications one
 	// envelope may demand, counted structurally BEFORE any crypto runs. Without
