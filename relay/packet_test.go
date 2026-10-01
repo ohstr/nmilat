@@ -3,6 +3,7 @@ package relay
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -327,8 +328,122 @@ func (m *MockSearchService) DeleteIndex(ctx context.Context) error {
 	return nil
 }
 
+// TestProcessEvent_SearchIndexing covers the NIP-50 indexing hook on the EVENT write
+// path (packet.go, after executeStoreTask).
+//
+// It skipped unconditionally for its whole life — "signing complexity without key
+// access" — which read as coverage and was not. The reason was also simply untrue:
+// CreateEvent in this package signs with a hardcoded key, and five sibling test files
+// call ev.Sign directly. An unguarded t.Skip is worse than no test, because the
+// absence is invisible in a green run.
+//
+// The row that earns its keep is index_error_still_accepts_the_event. Indexing is
+// explicitly best-effort — packet.go logs a warning and carries on — so a search
+// backend that is down, slow, or misconfigured must never turn into rejected writes.
+// Nothing else asserted that, and it is the failure that would hurt in production.
 func TestProcessEvent_SearchIndexing(t *testing.T) {
-	t.Skip("Skipping write path test due to signing complexity without key access")
+	// profileContent is valid kind-0 metadata, so search.FromEvent builds a real
+	// document rather than its penalised fallback.
+	const profileContent = `{"name":"alice","display_name":"Alice","about":"testing"}`
+
+	cases := []struct {
+		name        string
+		kind        int
+		content     string
+		noService   bool
+		indexErr    error
+		wantIndexed bool
+		why         string
+	}{
+		{
+			name: "kind_zero_profile_is_indexed", kind: 0, content: profileContent,
+			wantIndexed: true, why: "the hook's whole purpose",
+		},
+		{
+			name: "non_profile_kind_is_not_indexed", kind: 1, content: "a note",
+			wantIndexed: false, why: "the hook is gated on kind 0; indexing notes would poison profile search",
+		},
+		{
+			name: "kind_zero_with_invalid_json_is_still_indexed", kind: 0, content: "not json at all",
+			wantIndexed: true,
+			why: "search.FromEvent deliberately returns a penalised document (score -500) rather " +
+				"than nil, so the pubkey stays minimally discoverable — asserted because it is a " +
+				"choice, not an accident, and silently changing it would change search results",
+		},
+		{
+			name: "no_search_service_configured", kind: 0, content: profileContent,
+			noService: true, wantIndexed: false,
+			why: "the nil check must hold; a relay built without search must not panic on a profile",
+		},
+		{
+			name: "index_error_still_accepts_the_event", kind: 0, content: profileContent,
+			indexErr: errors.New("search backend unavailable"), wantIndexed: true,
+			why: "indexing is best-effort: packet.go logs and continues, so a search outage must " +
+				"not become rejected writes",
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			indexed := make(chan *search.ProfileDocument, 1)
+			var svc search.Service
+			if !c.noService {
+				svc = &MockSearchService{
+					IndexProfileWithMetricsFunc: func(ctx context.Context, profile *search.ProfileDocument, getMetrics func(string) (int64, error)) error {
+						indexed <- profile
+						return c.indexErr
+					},
+				}
+			}
+
+			sc := NewSessionContext(newStoreWithEvents(t, []*nip01.Event{}), &ClientInfo{}, &nip11.Metadata{}, svc, nil, nil)
+			sess := &Session{SessionContext: sc}
+
+			ev := CreateEvent(t, c.kind)
+			ev.Content = c.content
+			// Re-sign: CreateEvent signed the default content, and the id commits to it.
+			if err := ev.Sign("0acd12cbf0fb87cd13b17bc9b57dffd11b3870b407984cec5a4ce2a69b90268c"); err != nil {
+				t.Fatalf("sign: %v", err)
+			}
+
+			if err := sess.processEvent(context.Background(), &wire.EventPacket{Event: ev}); err != nil {
+				t.Fatalf("processEvent: %v", err)
+			}
+
+			// The event must be accepted in EVERY row, including the one where indexing
+			// failed. This is the assertion the skip was hiding.
+			select {
+			case reply := <-sess.incoming:
+				ok, isOk := reply.(*wire.OkSubscriptionResponse)
+				if !isOk {
+					t.Fatalf("reply type = %T, want *wire.OkSubscriptionResponse", reply)
+				}
+				if !ok.Accepted {
+					t.Fatalf("event rejected (%q) — %s", ok.Message, c.why)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("no OK reply")
+			}
+
+			if c.wantIndexed {
+				select {
+				case doc := <-indexed:
+					if doc.ID != ev.PubKey {
+						t.Errorf("indexed document ID = %q, want the event's pubkey %q", doc.ID, ev.PubKey)
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatalf("the profile was not queued for indexing — %s", c.why)
+				}
+				return
+			}
+
+			select {
+			case doc := <-indexed:
+				t.Errorf("indexed %q when it must not have been — %s", doc.ID, c.why)
+			case <-time.After(200 * time.Millisecond):
+			}
+		})
+	}
 }
 
 func TestProcessRequest_SearchFilter(t *testing.T) {
