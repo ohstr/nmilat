@@ -84,6 +84,23 @@ const (
 	// smaller item.
 	DefaultPadBucketBytes = 8 * 1024
 
+	// MaxItemIDBytes bounds an item id, which an envelope echoes back inside its reply.
+	//
+	// An id needs only to be unique within one envelope, and in practice is a short label
+	// or a uuid. There was no cap at all, and the consequence was not cosmetic: a request
+	// and its reply share one byte budget, but the reply carries every id AGAIN plus the
+	// result bodies, so an id that fits going in need not fit coming back. Measured: a
+	// request encoding to exactly 57344 of 57344 bytes, carrying one 48 KiB id, produced a
+	// reply of 83968 bytes — undeliverable, for an item the Hub had already served.
+	//
+	// 256 is far above any legitimate use and still leaves the asymmetry impossible to
+	// reach by ids alone: 32 items x 256 bytes is 8 KiB of a 56 KiB envelope.
+	//
+	// Secondary reason, worth stating because it bit on discovery: the "does not fit"
+	// error quotes the id, so an uncapped id is also an attacker-controlled 48 KiB string
+	// written straight into the Hub's logs.
+	MaxItemIDBytes = 256
+
 	// MinPadBucketBytes is the smallest padding granularity an ANNOUNCED policy may
 	// set. Padding only hides anything if a bucket is wider than the thing being
 	// hidden; below one maximal item, batch size is readable off the ciphertext length.

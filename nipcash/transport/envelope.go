@@ -71,7 +71,7 @@ var (
 	// Adding the id to the proof binding would fix it at the root and break every
 	// signature already in circulation, for something with no live impact. Refusing
 	// the duplicate costs nothing and removes the amplifier.
-	ErrDuplicateItem     = errors.New("transport: envelope repeats an identical item")
+	ErrDuplicateItem = errors.New("transport: envelope repeats an identical item")
 )
 
 // Item is one bill operation inside an envelope.
@@ -388,6 +388,15 @@ func (e Envelope) check(limits Limits) error {
 	for i, item := range e.Items {
 		if item.ID == "" {
 			return fmt.Errorf("%w: item %d has no id", ErrEnvelopeMalformed, i)
+		}
+		// Bounded because the REPLY echoes every id back alongside the result bodies,
+		// so an id that fits in the request need not fit in the answer — see
+		// MaxItemIDBytes. Deliberately not quoting the id in this error: an uncapped id
+		// is exactly the thing being refused, and echoing it would write the
+		// attacker's 48 KiB string into the log line that reports it.
+		if len(item.ID) > MaxItemIDBytes {
+			return fmt.Errorf("%w: item %d has a %d-byte id, over the %d limit",
+				ErrEnvelopeMalformed, i, len(item.ID), MaxItemIDBytes)
 		}
 		if _, dup := seen[item.ID]; dup {
 			return fmt.Errorf("%w: %q", ErrDuplicateItemID, item.ID)
