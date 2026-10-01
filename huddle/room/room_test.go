@@ -513,3 +513,200 @@ func TestRosterSnapshotIsACopy(t *testing.T) {
 		t.Error("mutating a returned roster changed the room's state")
 	}
 }
+
+// benchFrameBytes is a realistic payload: a 20 ms Opus frame at ~64 kbps, plus
+// the 8-byte client header the relay forwards verbatim.
+const benchFrameBytes = 160 + wire.HeaderLen
+
+// countingSink accepts every frame and does nothing else, so a measurement
+// isolates the room's own fan-out cost from whatever a real sink's delivery
+// costs. The counter is a plain int: BroadcastFrame holds the room lock, so
+// every call into a sink is serialized.
+type countingSink struct{ frames int }
+
+func (s *countingSink) SendFrame(Frame) bool     { s.frames++; return true }
+func (s *countingSink) SendControl(Control) bool { return true }
+
+// BenchmarkRoomBroadcastFrame measures one broadcast's cost as occupancy grows.
+//
+// The room's own doc comment calls fan-out quadratic -- N peers produce N*(N-1)
+// frame copies per 20 ms tick. That aggregate is quadratic because all N peers
+// broadcast; a single broadcast is O(N), and the relayed frame is built once and
+// shared, so allocations should stay flat as peers grow.
+//
+// Measured on an AMD EPYC-Genoa, allocations are flat at 1 alloc / 176 B from 2
+// peers to 25 -- that is wire.RelayFrame's single buffer, shared by every
+// recipient. Cost is ~230 ns fixed plus ~20 ns per recipient: ~250 ns at 2 peers,
+// ~750 ns at 25, rising to ~975 ns at 25 under the concurrent contention
+// BenchmarkRoomBroadcastFrameConcurrent applies. With all 25 sending 50 frames a
+// second that is 1250 broadcasts/s, so ~1.2 ms of CPU per second of call. The
+// quadratic shape is real, but at this cap it is ~3 orders of magnitude from
+// mattering, so the 25-peer limit is not CPU-bound and this path should not be
+// optimized on the strength of the shape alone.
+//
+// None of this measures call latency. It is in-memory fan-out cost, which is a
+// rounding error next to the WebSocket write path and the queue's own buffering.
+// Mouth-to-ear latency needs a paced soak test through a real relay reporting
+// percentiles, not a benchmark reporting means.
+func BenchmarkRoomBroadcastFrame(b *testing.B) {
+	for _, peers := range []int{2, 5, 10, 25} {
+		b.Run(fmt.Sprintf("peers=%d", peers), func(b *testing.B) {
+			r := New()
+			sinks := make([]*countingSink, peers)
+			var author PeerID
+			for i := 0; i < peers; i++ {
+				sinks[i] = &countingSink{}
+				peer, _, err := r.AddPeer(fmt.Sprintf("pubkey-%064x", i), v3, sinks[i])
+				if err != nil {
+					b.Fatalf("AddPeer(%d): %v", i, err)
+				}
+				if i == 0 {
+					author = peer.ID
+				}
+			}
+
+			frame := make([]byte, benchFrameBytes)
+			recipients := peers - 1
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if dropped := r.BroadcastFrame(author, frame); dropped != 0 {
+					b.Fatalf("a sink that always accepts reported %d drops", dropped)
+				}
+			}
+			b.StopTimer()
+
+			// Guard: a broadcast that reached nobody would otherwise look fast.
+			delivered := 0
+			for _, s := range sinks {
+				delivered += s.frames
+			}
+			if want := b.N * recipients; delivered != want {
+				b.Fatalf("fan-out delivered %d frames, want %d", delivered, want)
+			}
+
+			b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/float64(recipients), "ns/recipient")
+		})
+	}
+}
+
+// BenchmarkRoomBroadcastFrameToChannelSinks is the same fan-out through the real
+// ChannelSink, with a drainer per peer -- the shape wsaudio actually runs.
+//
+// Read the reported %dropped as a property of *this benchmark*, not of
+// production. A benchmark broadcasts as fast as it can, which is millions of
+// frames per second; a real peer sends 50. The queue is 8 frames deep, so of
+// course it overflows here, and the high drop rate is the drop-don't-block policy
+// working under a load five orders of magnitude past its design point. What is
+// worth reading is that ns/recipient stays bounded while it happens: a full queue
+// never stalls the broadcaster. Steady-state drop behaviour needs a paced soak
+// test, which a benchmark cannot be.
+func BenchmarkRoomBroadcastFrameToChannelSinks(b *testing.B) {
+	for _, peers := range []int{2, 5, 10, 25} {
+		b.Run(fmt.Sprintf("peers=%d", peers), func(b *testing.B) {
+			r := New()
+			var author PeerID
+			var drainers sync.WaitGroup
+			stop := make(chan struct{})
+
+			for i := 0; i < peers; i++ {
+				sink := NewChannelSink()
+				peer, _, err := r.AddPeer(fmt.Sprintf("pubkey-%064x", i), v3, sink)
+				if err != nil {
+					b.Fatalf("AddPeer(%d): %v", i, err)
+				}
+				if i == 0 {
+					author = peer.ID
+					continue // the author is sent nothing, so it needs no drainer
+				}
+				drainers.Add(1)
+				go func(audio <-chan []byte) {
+					defer drainers.Done()
+					for {
+						select {
+						case <-stop:
+							return
+						case <-audio:
+						}
+					}
+				}(sink.Audio())
+			}
+
+			frame := make([]byte, benchFrameBytes)
+			recipients := peers - 1
+			dropped := 0
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				dropped += r.BroadcastFrame(author, frame)
+			}
+			b.StopTimer()
+
+			close(stop)
+			drainers.Wait()
+
+			b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/float64(recipients), "ns/recipient")
+			b.ReportMetric(float64(dropped)/float64(b.N)/float64(recipients)*100, "%dropped")
+		})
+	}
+}
+
+// BenchmarkRoomBroadcastFrameConcurrent is the shape production has: every peer
+// has its own reader goroutine calling BroadcastFrame, so all of them contend on
+// the room's single mutex, which is held for the whole fan-out loop.
+//
+// BenchmarkRoomBroadcastFrame above cannot show that -- one goroutine never
+// contends with itself -- and contention is the scalability question at MaxPeers,
+// not per-frame cost. Compare the two: if concurrent ns/broadcast is close to
+// sequential, the lock is not the bottleneck; if it climbs with peer count, the
+// single room-wide mutex is what caps occupancy.
+//
+// Measured: concurrent costs ~1.3x sequential and that ratio stays flat from 2
+// peers to 25 (309/253, 410/281, 595/465, 975/760 ns). A lock that capped
+// occupancy would show the ratio climbing, so it does not.
+//
+// countingSink stays safe here without atomics precisely because BroadcastFrame
+// holds the lock across every sink call, so deliveries are serialized even when
+// broadcasts are not.
+func BenchmarkRoomBroadcastFrameConcurrent(b *testing.B) {
+	for _, peers := range []int{2, 5, 10, 25} {
+		b.Run(fmt.Sprintf("peers=%d", peers), func(b *testing.B) {
+			r := New()
+			authors := make([]PeerID, peers)
+			for i := 0; i < peers; i++ {
+				peer, _, err := r.AddPeer(fmt.Sprintf("pubkey-%064x", i), v3, &countingSink{})
+				if err != nil {
+					b.Fatalf("AddPeer(%d): %v", i, err)
+				}
+				authors[i] = peer.ID
+			}
+
+			frame := make([]byte, benchFrameBytes)
+			per := b.N / peers
+			if per == 0 {
+				per = 1
+			}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			var wg sync.WaitGroup
+			for i := 0; i < peers; i++ {
+				wg.Add(1)
+				go func(author PeerID) {
+					defer wg.Done()
+					for j := 0; j < per; j++ {
+						r.BroadcastFrame(author, frame)
+					}
+				}(authors[i])
+			}
+			wg.Wait()
+			b.StopTimer()
+
+			broadcasts := per * peers
+			b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(broadcasts), "ns/broadcast")
+			b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(broadcasts)/float64(peers-1), "ns/recipient")
+		})
+	}
+}
