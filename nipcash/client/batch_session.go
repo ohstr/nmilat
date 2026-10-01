@@ -86,38 +86,28 @@ func (s *BatchSession) Refresh(ctx context.Context) error {
 	// Addressed by author, which is why no "d" tag is needed: a replaceable kind
 	// plus one author returns exactly one event.
 	//
-	// THIS FRAME NAMES THE HUB TO THE RELAY, IN THE CLEAR, BEFORE ANY PRIVATE
-	// TRAFFIC. s.hubXOnly is the hub's Lightning node identity in Nostr form (the
-	// hub derives it by dropping the compressed prefix byte from its own
-	// GetPubkey, and signs the announcement with it so a client can anchor trust
-	// to it). An LN node pubkey is public routing data, so it resolves to a named
-	// operator through any graph explorer — which means a relay, or anyone
-	// watching the unencrypted WebSocket text, learns "this host is a customer of
-	// hub X" from one frame, for free, on the same connection that later carries
-	// the envelopes. Audit finding P-4 (High); the relay transcript is in
-	// auditD_privacy_relayview_test.go, which asserts this filter carries exactly
-	// that key and that it precedes the private exchange.
+	// This frame names the HUB to the relay, in the clear: s.hubXOnly is the hub's
+	// Lightning node identity, which is public routing data and resolves to a named
+	// operator. It names nothing about the CALLER — the fetch carries no identifier,
+	// so a relay cannot tell a customer from anyone merely curious, and the
+	// envelopes that follow are authored by a throwaway ephemeral key each.
 	//
-	// Kept, for now, and documented rather than quietly worked around, because
-	// every alternative costs something real:
+	// Audit finding P-4 called this a High leak and proposed fetching the
+	// announcement from an unrelated relay, or by a blinded "d" tag, to close it.
+	// REFUTED, and the reasoning is worth keeping so it is not re-proposed: a
+	// request is p-tagged with the hub's inbox key (transport.WrapRequest — the
+	// hub's own subscription needs it), and the hub publishes that inbox in its
+	// public announcement. Any relay can therefore map inbox -> hub once, offline,
+	// and read the hub off the p tag of every envelope it carries. Moving THIS
+	// fetch elsewhere changes when the association is visible, not whether it is,
+	// so it buys nothing against the relay carrying the traffic.
 	//
-	//   (a) Fetch the announcement over a different relay than the traffic, or
-	//       over Tor, and cache it durably so the fetch is once-per-install
-	//       rather than once-per-session. Cheapest, and it narrows the window
-	//       rather than closing it — the SDK has no storage of its own, so the
-	//       durable cache has to belong to the embedding application.
-	//   (b) Fetch by a blinded "d"-tag identifier instead of by author. Actually
-	//       closes it, needs a NIP-CASH change, and gives up the "one author
-	//       returns exactly one event" property this very comment relies on.
-	//   (c) Accept it. Defensible — NIP-CASH §Privacy Considerations already says
-	//       the transport cannot hide that a given client talked to a given Hub —
-	//       but then nothing may claim otherwise, which is why transport's own
-	//       package comment had to be scoped.
+	// Nor is a network layer a fix for it, though it is worth having for its own
+	// sake: Tor hides WHICH CLIENT is asking, not WHICH HUB is being asked about.
 	//
-	// Note what (a) does NOT fix, since it is the intuitive answer: a network
-	// layer hides the client's ADDRESS, not this filter's CONTENTS. Over Tor the
-	// relay still learns that somebody is a customer of hub X, and can still group
-	// one circuit's exchanges together — it just no longer knows which host.
+	// The disclosure is a deliberate consequence of bootstrapping from one public,
+	// shared inbox. See NIP-CASH §Privacy Considerations for what removing it would
+	// actually cost.
 	filter := nip01.NewSubscriptionFilterGroup(&nip01.SubscriptionFilter{
 		Kinds:   []int{transport.KindHubAnnouncement},
 		Authors: []string{s.hubXOnly},
