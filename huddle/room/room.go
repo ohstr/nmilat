@@ -255,6 +255,42 @@ func (r *Room) RemovePeer(id PeerID) (*Peer, bool) {
 	return peer, true
 }
 
+// EvictPubkey removes every peer authenticated as pubkey, delivering message to
+// each first (when non-empty) and then asking its writer to close. It reports
+// how many peers it removed.
+//
+// Removal is the guarantee, not the close: a peer out of r.peers neither
+// receives a broadcast nor has its own frames relayed, since BroadcastFrame
+// drops a sender it cannot find. So a dropped Close leaves a socket to time out
+// but never leaves a revoked peer in the call.
+//
+// The room's other peers are untouched -- revoking one membership ends that
+// membership, not the call.
+func (r *Room) EvictPubkey(pubkey, message string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	evicted := 0
+	for id, peer := range r.peers {
+		if peer.Pubkey != pubkey {
+			continue
+		}
+		if message != "" {
+			peer.sink.SendControl(Control{JSON: message})
+		}
+		peer.sink.SendControl(Control{Close: true})
+		delete(r.peers, id)
+		if holder, ok := r.byIndex[peer.Index]; ok && holder == id {
+			delete(r.byIndex, peer.Index)
+		}
+		evicted++
+	}
+	if evicted > 0 {
+		r.revision++
+	}
+	return evicted
+}
+
 // Roster returns a snapshot of the room's occupants.
 func (r *Room) Roster() Roster {
 	r.mu.Lock()

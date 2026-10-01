@@ -88,6 +88,31 @@ func (m *Manager) Leave(id string, peer PeerID) bool {
 	return removed
 }
 
+// EvictPubkey removes pubkey from every live room, delivering message to each
+// peer it removes, and reports how many it removed in total. A room left empty
+// is dropped, as it is on Leave.
+//
+// This is what a relay calls when a membership is revoked while its holder is
+// mid-call: admission was checked once at join, so without it a removed member
+// keeps hearing the room until it reconnects.
+func (m *Manager) EvictPubkey(pubkey, message string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	total := 0
+	for id, r := range m.rooms {
+		n := r.EvictPubkey(pubkey, message)
+		if n == 0 {
+			continue
+		}
+		total += n
+		if r.Len() == 0 {
+			delete(m.rooms, id)
+		}
+	}
+	return total
+}
+
 // Get returns the room with this id if it is live.
 func (m *Manager) Get(id string) (*Room, bool) {
 	m.mu.Lock()
