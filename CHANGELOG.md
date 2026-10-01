@@ -154,6 +154,13 @@
 - `nip46.MethodSwitchRelays` and `nip46.MethodLogout` name the two standard
   methods the package was missing, so a signer can answer them instead of
   reporting them unsupported. (#42)
+- `nip98.Verify` takes an `Options` and returns the pubkey that
+  authenticated, so a caller can scope what the request may do. It adds the
+  three things `VerifyAuthHeader` could not express: a set of allowed
+  pubkeys rather than one, `payload`-tag verification binding the body to
+  the signature, and an opt-in trailing-slash relaxation of the `u` tag so
+  a client that signs a bare relay URL reaches a handler mounted at `/`.
+  Empty `AllowedPubkeys` allows nobody. `VerifyAuthHeader` is unchanged.
 
 ### Changed
 
