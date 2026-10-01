@@ -169,7 +169,12 @@
   `relay/`, so binding the methods to a membership store stays with
   whatever composes the relay's handler. `Router.Visible` scopes which
   methods a caller sees, and a method hidden from a caller is also refused
-  to it.
+  to it. `nip86.NewHandler` serves it over HTTP, including the CORS
+  preflight a browser requires before it will send the request at all --
+  neither the content type nor `Authorization` is CORS-safelisted, so
+  without an answered `OPTIONS` an app cannot call the API. An empty origin
+  allowlist answers any origin, which is safe when authorization is a signed
+  header rather than a cookie.
 - `huddle/room.Room.EvictPubkey` and `Manager.EvictPubkey` remove a pubkey
   from a live call, for a relay revoking a membership whose holder is
   mid-call: admission is checked once at join, so without it a removed
