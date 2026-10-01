@@ -12,6 +12,23 @@ type MintCashParams struct {
 	// which itself may be "never" (NIP-CASH §Data Model) — never a
 	// zero-duration, already-expired wallet.
 	Expiry time.Duration
+	// IdempotencyKey is OPTIONAL, and any caller that retries should set it.
+	//
+	// mint_cash is the one money method with no replay guard of its own:
+	// cash_transfer and cash_consolidate sources carry a signed identity_event the
+	// Hub refuses on replay, while these params are plain identity/amount fields
+	// with no nonce. So a caller whose retry logic reads a timeout as "it failed"
+	// resends the same logical request and the Hub mints and funds a SECOND wallet.
+	//
+	// A timeout does not mean the mint did not happen — the Hub's commit is durable
+	// and complete before any response is built. With this set, a resend is REFUSED
+	// and told which wallet it already created, instead of creating another.
+	//
+	// It is not a way to re-read a lost response: a cash-mode mint's secret exists
+	// only in the reply the caller missed, and the Hub keeps a commitment rather
+	// than the secret, so it genuinely cannot be reissued. What this prevents is
+	// minting twice.
+	IdempotencyKey string
 }
 
 // RecipientParam is one entry of mint_cash's wire "recipients" array
@@ -25,8 +42,12 @@ type RecipientParam struct {
 
 // MintCashRequest is mint_cash's wire request shape.
 type MintCashRequest struct {
-	Recipients    []RecipientParam `json:"recipients"`
-	Expiry        int              `json:"expiry,omitempty"`
+	Recipients []RecipientParam `json:"recipients"`
+	Expiry     int              `json:"expiry,omitempty"`
+	// IdempotencyKey is omitted when unset, so a Hub that does not implement it sees
+	// exactly the request it saw before and nothing changes for callers that do not
+	// retry — see MintCashParams.IdempotencyKey.
+	IdempotencyKey string `json:"idempotency_key,omitempty"`
 }
 
 // Request builds mint_cash's wire request from p. Exported for
@@ -51,8 +72,9 @@ func (p MintCashParams) Request() (MintCashRequest, error) {
 		return MintCashRequest{}, ErrMixedCashAllocation
 	}
 	return MintCashRequest{
-		Recipients:    recipients,
-		Expiry:        int(p.Expiry / time.Second),
+		Recipients:     recipients,
+		Expiry:         int(p.Expiry / time.Second),
+		IdempotencyKey: p.IdempotencyKey,
 	}, nil
 }
 
