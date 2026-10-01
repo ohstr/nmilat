@@ -7,27 +7,52 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/ohstr/nmilat/nip01"
 )
 
-// Repro for issue #33: ValidateZapReceipt, which nip57/relayreg registers as a
-// hard reject for kind 9735, enforces two NIP-57 SHOULD/optional rules as MUST
-// and so drops receipts that are otherwise valid and correctly signed.
+// Issue #33 — RESOLVED IN MAIN, and this file is now its regression test rather
+// than its repro.
 //
-//   - Cause 1: the embedded zap request's `lnurl` tag is run through
-//     utils.ValidateLNURL, which requires bech32 `lnurl1…`. NIP-57 marks the
-//     tag "recommended, but optional" and Appendix F states only that it
-//     SHOULD equal the recipient's lnurl. Real clients put a lightning
-//     address there.
-//   - Cause 2: an invoice with no description hash at all is reported as a
-//     *mismatch* (`want=`), conflating "absent" with "wrong".
+// The original report, and this file as it arrived on the worktree-integration
+// branch, argued that ValidateZapReceipt "which nip57/relayreg registers as a hard
+// reject for kind 9735" enforced two SHOULD/optional NIP-57 rules as MUST and so
+// dropped otherwise-valid receipts — 72 of 88 rejections by its count. The two
+// causes it named:
 //
-// Both tests assert the behavior the issue argues for, so both fail against
-// today's validator.
-
+//   - the embedded zap request's `lnurl` tag is run through utils.ValidateLNURL,
+//     which requires bech32 `lnurl1…`, while NIP-57 Appendix A calls the tag
+//     "recommended, but optional" and Appendix F states only that it SHOULD equal
+//     the recipient's lnurl. Real clients put a LUD-16 lightning address there.
+//   - an invoice with no description hash at all was reported as a *mismatch*,
+//     conflating "absent" with "wrong".
+//
+// **That premise no longer holds.** relayreg.go registers
+// ValidateZapReceiptForRelay, not ValidateZapReceipt — checked, not assumed — and
+// that validator tolerates exactly these two deviations by design, as its own doc
+// comment spells out. So the fix landed, but in a different shape than the repro
+// anticipated: rather than loosening the strict validator, main grew a second,
+// relay-tolerant entry point and pointed relay ingest at it. policyStrict stays
+// strict on purpose, for "callers building or settling their own zaps", where you
+// control the tag you emit.
+//
+// Which means the repro as written asserted the wrong thing about the wrong
+// function, and failed for that reason rather than because a bug was present —
+// deterministically, 3/3, including on its own branch. Rewritten here to assert
+// the design that actually shipped, in both directions, because the asymmetry IS
+// the fix and nothing else pinned it:
+//
+//   - the relay path MUST tolerate a LUD-16 lnurl and an absent description hash;
+//   - the strict path MUST still reject the former, or "strict" means nothing.
+//
 // newReceiptWithLnurl builds a signed receipt whose embedded, signed zap
 // request carries the given lnurl tag, and stubs DecodeBolt11 so the invoice
 // agrees with it. descriptionHash selects what the stub reports.
-func newReceiptWithLnurl(t *testing.T, lnurl string, descriptionHash func(matching string) string) func() error {
+//
+// Returns a func taking the validator to apply, because which validator is used
+// is the whole point of issue #33: the same receipt is meant to be accepted by
+// the relay path and rejected by the strict one.
+func newReceiptWithLnurl(t *testing.T, lnurl string, descriptionHash func(matching string) string) func(validate func(*nip01.Event) error) error {
 	t.Helper()
 
 	const recipient = "0000000000000000000000000000000000000000000000000000000000000001"
@@ -65,57 +90,59 @@ func newReceiptWithLnurl(t *testing.T, lnurl string, descriptionHash func(matchi
 		t.Fatalf("sign receipt: %v", err)
 	}
 
-	return func() error { return ValidateZapReceipt(receipt) }
+	return func(validate func(*nip01.Event) error) error { return validate(receipt) }
 }
 
 func TestIssue33LightningAddressLnurlIsAccepted(t *testing.T) {
 	matching := func(m string) string { return m }
 
-	// Control: a bech32 lnurl is accepted today.
+	// Control: a bech32 lnurl is accepted on both paths.
 	t.Run("bech32 lnurl", func(t *testing.T) {
 		validate := newReceiptWithLnurl(t, "lnurl1dp68gurn8ghj7ar9wd6zucm0d5hkzurf9akxuatjdsyukzu5", matching)
-		if err := validate(); err != nil {
-			t.Fatalf("bech32 lnurl should validate, got: %v", err)
+		if err := validate(ValidateZapReceipt); err != nil {
+			t.Fatalf("bech32 lnurl should validate strictly, got: %v", err)
+		}
+		if err := validate(ValidateZapReceiptForRelay); err != nil {
+			t.Fatalf("bech32 lnurl should validate for relay ingest, got: %v", err)
 		}
 	})
 
-	// The report: 72 of 88 rejections were this. The tag is optional and its
-	// rule is SHOULD-level, so an otherwise valid receipt must not be
-	// rejected over it.
-	t.Run("lightning address lnurl", func(t *testing.T) {
-		// QUARANTINED 2026-10-01, and this is the open bug, not a flake: this
-		// subtest fails deterministically (3/3) and failed on its own branch
-		// before it was merged, so it is a live repro rather than a regression.
-		// It is skipped only so `main` is not red while the fix is decided —
-		// deliberately at the SUBTEST level, so the two controls either side keep
-		// running and the day the fix lands this single Skip is the only thing to
-		// remove.
-		//
-		// The bug: ValidateZapReceipt rejects the whole receipt over the FORMAT of
-		// an optional, SHOULD-level tag. The "no lnurl tag" subtest below proves
-		// omitting it validates fine, so rejecting a present-but-non-bech32 value
-		// is strictly harsher than rejecting its absence — which cannot be right.
-		//
-		// NOT fixed here on purpose. The fix is a semantics change to nip57's
-		// validation (accept the lud16 lightning-address form, or stop treating
-		// this tag's format as fatal), nipAZ reuses these same error values, and
-		// neither package has been through the audit that covered the cash and
-		// private-transport surfaces. That is a reviewed change, not a release
-		// unblock. See data/docs/release/release-runbook-2026-10-01.md §1e.
-		t.Skip("open bug (issue 33): a lightning-address lnurl tag is rejected although the tag is optional and SHOULD-level; see this subtest's comment")
-
+	// The issue's own case. A relay stores receipts settled by someone else, and a
+	// receipt is the record that a payment happened, so dropping one at ingest over
+	// the FORMAT of an optional tag silently loses that record. This is the
+	// assertion that would have failed before relay ingest moved off the strict
+	// validator.
+	t.Run("lightning address lnurl is tolerated for relay ingest", func(t *testing.T) {
 		validate := newReceiptWithLnurl(t, "alice@example.com", matching)
-		if err := validate(); err != nil {
-			t.Fatalf("lightning-address lnurl should not reject a valid receipt, got: %v", err)
+		if err := validate(ValidateZapReceiptForRelay); err != nil {
+			t.Fatalf("a LUD-16 lightning address is what real clients put in the lnurl tag, and "+
+				"NIP-57 makes the tag optional and its matching a SHOULD, so relay ingest must "+
+				"not drop the receipt over it; got: %v", err)
 		}
 	})
 
-	// A receipt carrying no lnurl tag at all is already fine -- included to
-	// show the rejection is specific to the tag's *format*, not its absence.
+	// And the other half of the design, which nothing else pins: strict stays
+	// strict. policyStrict is for callers building or settling their own zaps,
+	// where the tag is yours to emit correctly — if this ever starts passing, the
+	// two policies have collapsed into one and the distinction relayreg relies on
+	// is gone.
+	t.Run("lightning address lnurl is still rejected strictly", func(t *testing.T) {
+		validate := newReceiptWithLnurl(t, "alice@example.com", matching)
+		if err := validate(ValidateZapReceipt); !errors.Is(err, ErrInvalidLNURL) {
+			t.Fatalf("the strict validator must still require the bech32 form, got: %v", err)
+		}
+	})
+
+	// A receipt carrying no lnurl tag at all is fine on either path -- included to
+	// show the strict rejection above is specific to the tag's *format*, not its
+	// presence.
 	t.Run("no lnurl tag", func(t *testing.T) {
 		validate := newReceiptWithLnurl(t, "", matching)
-		if err := validate(); err != nil {
-			t.Fatalf("absent lnurl tag should validate, got: %v", err)
+		if err := validate(ValidateZapReceipt); err != nil {
+			t.Fatalf("absent lnurl tag should validate strictly, got: %v", err)
+		}
+		if err := validate(ValidateZapReceiptForRelay); err != nil {
+			t.Fatalf("absent lnurl tag should validate for relay ingest, got: %v", err)
 		}
 	})
 }
@@ -128,7 +155,10 @@ func TestIssue33AbsentDescriptionHashIsNotAMismatch(t *testing.T) {
 		validate := newReceiptWithLnurl(t, bech32Lnurl, func(string) string {
 			return "00000000000000000000000000000000000000000000000000000000deadbeef"
 		})
-		err := validate()
+		// Strict deliberately: requireDescriptionHash is only set under
+		// policyStrict, so running this through the relay validator would make
+		// it vacuous — it tolerates the hash entirely.
+		err := validate(ValidateZapReceipt)
 		if !errors.Is(err, ErrDescriptionHashMismatch) {
 			t.Fatalf("wrong hash should be a mismatch, got: %v", err)
 		}
@@ -140,7 +170,7 @@ func TestIssue33AbsentDescriptionHashIsNotAMismatch(t *testing.T) {
 	// so absent must not surface as ErrDescriptionHashMismatch with `want=`.
 	t.Run("absent hash", func(t *testing.T) {
 		validate := newReceiptWithLnurl(t, bech32Lnurl, func(string) string { return "" })
-		err := validate()
+		err := validate(ValidateZapReceipt)
 		if errors.Is(err, ErrDescriptionHashMismatch) {
 			t.Fatalf("absent hash reported as a mismatch: %v", err)
 		}
