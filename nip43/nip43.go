@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/ohstr/nmilat/nip01"
+	"github.com/ohstr/nmilat/nip70"
 	"github.com/ohstr/nmilat/utils"
 )
 
@@ -63,17 +64,12 @@ var (
 	ErrInvalidSignature    = errors.New("nip43: invalid signature")
 )
 
-// hasProtectedTag reports whether tags include a NIP-70 "-" tag: a
-// single-element ["-"] tag marking the event as protected (publishable
-// only by its own author). This package implements only this narrow
-// presence check, not a general NIP-70 enforcement mechanism.
+// hasProtectedTag reports whether tags carry NIP-70's ["-"] marker, which
+// every kind in this NIP is required to set. It defers to nip70 so the two
+// cannot disagree about what counts as protected; enforcing the marker is the
+// relay's job, not this package's.
 func hasProtectedTag(tags [][]string) bool {
-	for _, tag := range tags {
-		if len(tag) >= 1 && tag[0] == "-" {
-			return true
-		}
-	}
-	return false
+	return nip70.IsProtected(tags)
 }
 
 // ValidateFreshness reports whether createdAt falls within window of now,

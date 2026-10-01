@@ -197,6 +197,14 @@
   starting this version. The rebuild runs at startup, before the relay
   accepts connections, and costs roughly a second per 20,000 stored events
   (2.3s for 50,000 on a development machine); progress is logged. (#37)
+- **The relay now enforces NIP-70.** An event carrying `["-"]` is accepted
+  only when its author has authenticated on that connection: unauthenticated
+  gets `auth-required:`, authenticated as someone else gets `restricted:`.
+  Previously a valid signature was enough, so anyone who had seen such an
+  event could replay it -- for a NIP-43 join, burning the invite's remaining
+  uses. Every NIP-43 kind carries the marker, so a client that publishes a
+  join or leave must now AUTH first. `nip70.IsProtected` is the predicate,
+  and NIP-11 advertises 70.
 
 ### Fixed
 
