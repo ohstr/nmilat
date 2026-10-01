@@ -161,6 +161,15 @@
   the signature, and an opt-in trailing-slash relaxation of the `u` tag so
   a client that signs a bare relay URL reaches a handler mounted at `/`.
   Empty `AllowedPubkeys` allows nobody. `VerifyAuthHeader` is unchanged.
+- `nip86` carries NIP-86, the Relay Management API: the request/response
+  shapes, the method names, and a `Router` that dispatches them. A request
+  is selected by its `application/nostr+json+rpc` content type rather than
+  a path, so the API shares the relay URL with the WebSocket upgrade and
+  the NIP-11 document. The package is protocol only and does not import
+  `relay/`, so binding the methods to a membership store stays with
+  whatever composes the relay's handler. `Router.Visible` scopes which
+  methods a caller sees, and a method hidden from a caller is also refused
+  to it.
 
 ### Changed
 
