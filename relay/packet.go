@@ -10,6 +10,7 @@ import (
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip42"
 	"github.com/ohstr/nmilat/nip43"
+	"github.com/ohstr/nmilat/nip70"
 	"github.com/ohstr/nmilat/nip77"
 	"github.com/ohstr/nmilat/nipAA"
 	"github.com/ohstr/nmilat/search"
@@ -425,10 +426,35 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 		return nil
 	}
 
+	// NIP-70: a protected event may only be published by its own author, and
+	// a valid signature is not enough to establish that -- anyone who has
+	// seen the event can replay it. So the author must have authenticated on
+	// *this* connection. The NIP-43 join below carries ["-"], which is why
+	// this gate sits above it: without it a captured join could be replayed
+	// by a third party to burn an invite's remaining uses.
+	if nip70.IsProtected(ep.Event.Tags) {
+		if _, authed := s.IdentityMembership(ep.Event.PubKey); !authed {
+			// auth-required when nothing has authenticated as this pubkey, so
+			// a client knows to run AUTH and retry; restricted once something
+			// else has, since retrying cannot help.
+			message := "auth-required: this event is protected and its author must authenticate first"
+			if s.AuthedPubkey() != "" {
+				message = "restricted: a protected event may only be published by its author"
+			}
+			s.reply(&wire.OkSubscriptionResponse{
+				EventID:  ep.Event.ID,
+				Accepted: false,
+				Message:  message,
+			})
+			return nil
+		}
+	}
+
 	// NIP-43: Join/Leave requests are fully owned by MembershipService from
 	// here -- structural/freshness validation already passed above
-	// (runEventValidators), and the event's signature is already verified,
-	// so ep.Event.PubKey can be trusted for the membership mutation this
+	// (runEventValidators), the signature is verified, and NIP-70 above
+	// established that the author authenticated on this connection, so
+	// ep.Event.PubKey can be trusted for the membership mutation this
 	// performs. These kinds never reach the generic store-and-OK path
 	// below: they're commands, not content to persist/broadcast (and, per
 	// NIP-16, ephemeral kinds like these wouldn't be persisted through it
