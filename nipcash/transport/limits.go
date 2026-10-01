@@ -2,17 +2,19 @@
 // carrying many bill operations inside one NIP-44 ciphertext, so a relay sees
 // neither which bills are in use nor a stable identifier for the caller.
 //
-// Read that sentence as scoped to the ENVELOPE, which is all this package
-// defines. It is not a claim about everything a client puts on the wire, and it
-// was being read as one. In particular it does NOT mean a relay cannot tell
-// WHICH HUB a client is talking to: before any envelope is sent, the client
-// fetches the hub's announcement by author, and that author is the hub's
-// Lightning node pubkey — public routing data that resolves to a named operator.
-// So a relay learns "this host is a customer of hub X" from one earlier,
-// unencrypted frame, while learning nothing more about the bills or the caller
-// from the envelope itself. See client.BatchSession.Refresh, which is where that
-// frame is built and where the trade-off is written down; audit finding P-4; and
-// NIP-CASH §Privacy Considerations, which states the limit normatively.
+// Both halves of that are literally true, and the second is the load-bearing one:
+// a request's author is a FRESH EPHEMERAL KEY per envelope (see WrapRequest), and
+// the reply correlator is single-use, so nothing on the wire is a stable handle on
+// the caller. The caller's own nostr identity never appears at all.
+//
+// What it does NOT claim, and MUST NOT be read as claiming, is that a relay cannot
+// tell WHICH HUB is being used. It can, unavoidably: every request is p-tagged
+// with the hub's inbox key, because that is how the hub's own subscription finds
+// it, and the hub publishes that same inbox in its public announcement. So any
+// relay can map inbox -> hub once and read the hub off the p tag of everything it
+// carries. That is a disclosure about the COUNTERPARTY, not about the caller, and
+// it is structural — see NIP-CASH §Privacy Considerations, which states it
+// normatively and explains why the obvious mitigations do not remove it.
 //
 // This package is protocol only — types, codecs, size policy and per-item proof
 // construction/verification. It makes no network calls and holds no keys. The
