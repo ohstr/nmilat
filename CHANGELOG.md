@@ -170,6 +170,12 @@
   whatever composes the relay's handler. `Router.Visible` scopes which
   methods a caller sees, and a method hidden from a caller is also refused
   to it.
+- `huddle/room.Room.EvictPubkey` and `Manager.EvictPubkey` remove a pubkey
+  from a live call, for a relay revoking a membership whose holder is
+  mid-call: admission is checked once at join, so without it a removed
+  member keeps hearing the room until it reconnects. Removal is the
+  guarantee rather than the socket close -- a peer out of the registry is
+  neither heard nor hearing -- and the room's other peers are untouched.
 
 ### Changed
 
