@@ -2,6 +2,18 @@
 // carrying many bill operations inside one NIP-44 ciphertext, so a relay sees
 // neither which bills are in use nor a stable identifier for the caller.
 //
+// Read that sentence as scoped to the ENVELOPE, which is all this package
+// defines. It is not a claim about everything a client puts on the wire, and it
+// was being read as one. In particular it does NOT mean a relay cannot tell
+// WHICH HUB a client is talking to: before any envelope is sent, the client
+// fetches the hub's announcement by author, and that author is the hub's
+// Lightning node pubkey — public routing data that resolves to a named operator.
+// So a relay learns "this host is a customer of hub X" from one earlier,
+// unencrypted frame, while learning nothing more about the bills or the caller
+// from the envelope itself. See client.BatchSession.Refresh, which is where that
+// frame is built and where the trade-off is written down; audit finding P-4; and
+// NIP-CASH §Privacy Considerations, which states the limit normatively.
+//
 // This package is protocol only — types, codecs, size policy and per-item proof
 // construction/verification. It makes no network calls and holds no keys. The
 // hub and the client both depend on it precisely so the two cannot drift on what

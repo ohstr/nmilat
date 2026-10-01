@@ -85,6 +85,39 @@ func (c *Client) NewBatchSession(ctx context.Context, hubXOnly string, relays []
 func (s *BatchSession) Refresh(ctx context.Context) error {
 	// Addressed by author, which is why no "d" tag is needed: a replaceable kind
 	// plus one author returns exactly one event.
+	//
+	// THIS FRAME NAMES THE HUB TO THE RELAY, IN THE CLEAR, BEFORE ANY PRIVATE
+	// TRAFFIC. s.hubXOnly is the hub's Lightning node identity in Nostr form (the
+	// hub derives it by dropping the compressed prefix byte from its own
+	// GetPubkey, and signs the announcement with it so a client can anchor trust
+	// to it). An LN node pubkey is public routing data, so it resolves to a named
+	// operator through any graph explorer — which means a relay, or anyone
+	// watching the unencrypted WebSocket text, learns "this host is a customer of
+	// hub X" from one frame, for free, on the same connection that later carries
+	// the envelopes. Audit finding P-4 (High); the relay transcript is in
+	// auditD_privacy_relayview_test.go, which asserts this filter carries exactly
+	// that key and that it precedes the private exchange.
+	//
+	// Kept, for now, and documented rather than quietly worked around, because
+	// every alternative costs something real:
+	//
+	//   (a) Fetch the announcement over a different relay than the traffic, or
+	//       over Tor, and cache it durably so the fetch is once-per-install
+	//       rather than once-per-session. Cheapest, and it narrows the window
+	//       rather than closing it — the SDK has no storage of its own, so the
+	//       durable cache has to belong to the embedding application.
+	//   (b) Fetch by a blinded "d"-tag identifier instead of by author. Actually
+	//       closes it, needs a NIP-CASH change, and gives up the "one author
+	//       returns exactly one event" property this very comment relies on.
+	//   (c) Accept it. Defensible — NIP-CASH §Privacy Considerations already says
+	//       the transport cannot hide that a given client talked to a given Hub —
+	//       but then nothing may claim otherwise, which is why transport's own
+	//       package comment had to be scoped.
+	//
+	// Note what (a) does NOT fix, since it is the intuitive answer: a network
+	// layer hides the client's ADDRESS, not this filter's CONTENTS. Over Tor the
+	// relay still learns that somebody is a customer of hub X, and can still group
+	// one circuit's exchanges together — it just no longer knows which host.
 	filter := nip01.NewSubscriptionFilterGroup(&nip01.SubscriptionFilter{
 		Kinds:   []int{transport.KindHubAnnouncement},
 		Authors: []string{s.hubXOnly},
