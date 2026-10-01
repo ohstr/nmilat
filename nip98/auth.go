@@ -37,13 +37,15 @@ type Options struct {
 	// nothing configured fails closed rather than open.
 	AllowedPubkeys []string
 
-	// Body is the request body already read by the caller. When non-nil the
-	// event's payload tag must be its SHA-256. A caller that passes the body
-	// gets payload verification whether or not RequirePayload is set.
+	// Body is the request body already read by the caller. When non-nil, a
+	// payload tag the event carries must be its SHA-256 -- but an event with no
+	// such tag still passes unless RequirePayload is set. That is what lets an
+	// existing endpoint gain body binding without turning away clients that
+	// predate it.
 	Body []byte
 
-	// RequirePayload rejects an event with no payload tag even when Body is
-	// empty, so an empty-bodied request still has to commit to that emptiness.
+	// RequirePayload insists on a payload tag, and so rejects a client that
+	// sends none. An empty body then has to commit to being empty.
 	RequirePayload bool
 
 	// NormalizeRootPath compares the u tag ignoring a trailing slash, so a
@@ -138,10 +140,15 @@ func Verify(r *http.Request, opts Options) (string, error) {
 
 	// 6. Bind the body to the signature, so a captured header cannot be
 	// replayed with different contents inside the freshness window.
-	if opts.Body != nil || opts.RequirePayload {
-		if payloadTag == "" {
-			return "", ErrMissingPayloadTag
-		}
+	//
+	// A present tag is always checked, but only RequirePayload insists there be
+	// one. That split lets an endpoint gain body binding from clients that send
+	// the tag without turning away older ones that do not, while NIP-86 -- where
+	// the spec makes it mandatory -- sets RequirePayload.
+	if opts.RequirePayload && payloadTag == "" {
+		return "", ErrMissingPayloadTag
+	}
+	if payloadTag != "" && (opts.Body != nil || opts.RequirePayload) {
 		sum := sha256.Sum256(opts.Body)
 		if !strings.EqualFold(payloadTag, hex.EncodeToString(sum[:])) {
 			return "", ErrPayloadMismatch

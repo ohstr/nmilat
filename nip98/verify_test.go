@@ -107,7 +107,7 @@ func TestVerify_SwappedBodyRejected(t *testing.T) {
 	}
 }
 
-func TestVerify_MissingPayloadTagRejected(t *testing.T) {
+func TestVerify_MissingPayloadTagRejectedWhenRequired(t *testing.T) {
 	pubkey := signedRequiredPubkey(t)
 	body := []byte(`{}`)
 	req := newAuthRequest(t, "POST", "http://example.com/")
@@ -116,9 +116,24 @@ func TestVerify_MissingPayloadTagRejected(t *testing.T) {
 		{"method", "POST"},
 	}))
 
-	_, err := Verify(req, Options{AllowedPubkeys: []string{pubkey}, Body: body})
-	if !errors.Is(err, ErrMissingPayloadTag) {
+	opts := Options{AllowedPubkeys: []string{pubkey}, Body: body, RequirePayload: true}
+	if _, err := Verify(req, opts); !errors.Is(err, ErrMissingPayloadTag) {
 		t.Fatalf("err = %v, want ErrMissingPayloadTag", err)
+	}
+}
+
+// An endpoint can gain body binding without turning away a client that predates
+// the tag: present is checked, absent is tolerated unless required.
+func TestVerify_MissingPayloadTagToleratedWhenNotRequired(t *testing.T) {
+	pubkey := signedRequiredPubkey(t)
+	req := newAuthRequest(t, "POST", "http://example.com/")
+	req.Header.Set("Authorization", buildAuthHeader(t, 27235, "", 0, [][]string{
+		{"u", "http://example.com/"},
+		{"method", "POST"},
+	}))
+
+	if _, err := Verify(req, Options{AllowedPubkeys: []string{pubkey}, Body: []byte(`{}`)}); err != nil {
+		t.Fatalf("Verify: %v", err)
 	}
 }
 
