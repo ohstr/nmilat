@@ -154,6 +154,33 @@
 - `nip46.MethodSwitchRelays` and `nip46.MethodLogout` name the two standard
   methods the package was missing, so a signer can answer them instead of
   reporting them unsupported. (#42)
+- `nip98.Verify` takes an `Options` and returns the pubkey that
+  authenticated, so a caller can scope what the request may do. It adds the
+  three things `VerifyAuthHeader` could not express: a set of allowed
+  pubkeys rather than one, `payload`-tag verification binding the body to
+  the signature, and an opt-in trailing-slash relaxation of the `u` tag so
+  a client that signs a bare relay URL reaches a handler mounted at `/`.
+  Empty `AllowedPubkeys` allows nobody. `VerifyAuthHeader` is unchanged.
+- `nip86` carries NIP-86, the Relay Management API: the request/response
+  shapes, the method names, and a `Router` that dispatches them. A request
+  is selected by its `application/nostr+json+rpc` content type rather than
+  a path, so the API shares the relay URL with the WebSocket upgrade and
+  the NIP-11 document. The package is protocol only and does not import
+  `relay/`, so binding the methods to a membership store stays with
+  whatever composes the relay's handler. `Router.Visible` scopes which
+  methods a caller sees, and a method hidden from a caller is also refused
+  to it. `nip86.NewHandler` serves it over HTTP, including the CORS
+  preflight a browser requires before it will send the request at all --
+  neither the content type nor `Authorization` is CORS-safelisted, so
+  without an answered `OPTIONS` an app cannot call the API. An empty origin
+  allowlist answers any origin, which is safe when authorization is a signed
+  header rather than a cookie.
+- `huddle/room.Room.EvictPubkey` and `Manager.EvictPubkey` remove a pubkey
+  from a live call, for a relay revoking a membership whose holder is
+  mid-call: admission is checked once at join, so without it a removed
+  member keeps hearing the room until it reconnects. Removal is the
+  guarantee rather than the socket close -- a peer out of the registry is
+  neither heard nor hearing -- and the room's other peers are untouched.
 
 ### Changed
 
@@ -175,6 +202,14 @@
   starting this version. The rebuild runs at startup, before the relay
   accepts connections, and costs roughly a second per 20,000 stored events
   (2.3s for 50,000 on a development machine); progress is logged. (#37)
+- **The relay now enforces NIP-70.** An event carrying `["-"]` is accepted
+  only when its author has authenticated on that connection: unauthenticated
+  gets `auth-required:`, authenticated as someone else gets `restricted:`.
+  Previously a valid signature was enough, so anyone who had seen such an
+  event could replay it -- for a NIP-43 join, burning the invite's remaining
+  uses. Every NIP-43 kind carries the marker, so a client that publishes a
+  join or leave must now AUTH first. `nip70.IsProtected` is the predicate,
+  and NIP-11 advertises 70.
 
 ### Fixed
 

@@ -18,6 +18,7 @@ var coreNIPs = []int{
 	16, // NIP-16
 	33, // NIP-33
 	40, // NIP-40
+	70, // NIP-70
 	77, // NIP-77
 }
 
