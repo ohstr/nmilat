@@ -167,7 +167,7 @@ serialization fix that had made every tagless event's id wrong.
   pubkeys rather than one, `payload`-tag verification binding the body to
   the signature, and an opt-in trailing-slash relaxation of the `u` tag so
   a client that signs a bare relay URL reaches a handler mounted at `/`.
-  Empty `AllowedPubkeys` allows nobody. `VerifyAuthHeader` is unchanged.
+  Empty `AllowedPubkeys` allows nobody. `VerifyAuthHeader` is unchanged. (#43)
 - `nip86` carries NIP-86, the Relay Management API: the request/response
   shapes, the method names, and a `Router` that dispatches them. A request
   is selected by its `application/nostr+json+rpc` content type rather than
@@ -181,51 +181,52 @@ serialization fix that had made every tagless event's id wrong.
   neither the content type nor `Authorization` is CORS-safelisted, so
   without an answered `OPTIONS` an app cannot call the API. An empty origin
   allowlist answers any origin, which is safe when authorization is a signed
-  header rather than a cookie.
+  header rather than a cookie. (#43)
 - `huddle/room.Room.EvictPubkey` and `Manager.EvictPubkey` remove a pubkey
   from a live call, for a relay revoking a membership whose holder is
   mid-call: admission is checked once at join, so without it a removed
   member keeps hearing the room until it reconnects. Removal is the
   guarantee rather than the socket close -- a peer out of the registry is
-  neither heard nor hearing -- and the room's other peers are untouched.
+  neither heard nor hearing -- and the room's other peers are untouched. (#43)
 - `nipcash/client.BatchSession` fetches, verifies and caches a hub's
   kind-11190 announcement. The SDK had no way to obtain one --
   `ParseAnnouncement` only verifies an announcement a caller already holds --
   so four of the client obligations NIP-CASH places on a batching caller had
   no implementation path. The hub's key is required rather than discovered,
   and the announced inbox and relays are preferred over the token's hints.
+  (#43)
 - `nipcash/client` gains the batch API the private transport was built for:
   `RedeemMany`, `StatusMany`, `TransferMany` and `ConsolidateMany` act on many
   bills in one relay event instead of one event per bill. On the standard
   transport every request is p-tagged with a bill's own pubkey, so a holder
   consolidating fifty bills publishes fifty events that resolve to one, tying
   them together for anyone watching without decrypting anything. Batched, the
-  count stops being public and the timing correlation disappears.
+  count stops being public and the timing correlation disappears. (#43)
 - A batch item has three outcomes, not two. A hub omits an item whose target
   it does not hold, whose proof did not verify, or whose method it does not
   serve, and those are indistinguishable by design -- telling them apart would
   make a batch an oracle for which bills a hub holds. `ItemOutcome` keeps "the
   hub said nothing" separate from "the hub refused", so a bill a hub simply
   does not hold is not reported as a failure of that bill, and
-  `SafeToResend` says which spends a caller may retry.
+  `SafeToResend` says which spends a caller may retry. (#43)
 - A hub may answer one request with several kind-23191 events sharing a
   `reply_to`, each carrying `seq` and `total`. A reply can be far larger than
   the request that produced it -- a `cash_status` item's params are 2 bytes
   while its answer for a 100-recipient bill is over 28 KiB -- so a hub could
   serve a batch and then be unable to report it, which for `cash_redeem` is
   money moved with the caller told nothing. A single-event reply is 1 of 1,
-  filled in automatically.
+  filled in automatically. (#43)
 - `cash_status` takes NIP-CASH's optional `scope`: `all` for the shared
   roster, `mine` for the caller's own row, defaulting to `mine` on the private
   transport and `all` on the standard one. Neither the field nor the default
   existed, so a private-transport caller who said nothing got every
   co-recipient's identity, amount and claim state -- the precise disclosure
-  the private transport exists to prevent.
+  the private transport exists to prevent. (#43)
 - `cash_status` carries an `AttestationEvent`, so a `connection_key` recipient
   can read their own row. That identity is a hash of platform and external id
   rather than a pubkey, so an item's signer can never equal it and a hub's
   gate had nothing to compare: the only options were to disclose the whole
-  roster or to refuse that identity mode its only read.
+  roster or to refuse that identity mode its only read. (#43)
 - `mint_cash` takes an optional `idempotency_key`. It is the only
   value-creating method with no replay protection of its own -- a transfer or
   consolidate source carries a signed proof whose nonce the hub burns, while
@@ -233,20 +234,24 @@ serialization fix that had made every tagless event's id wrong.
   reads a timeout as failure makes the hub mint and fund a second wallet. It
   does not make a lost reply re-readable, since a cash-mode mint's secret
   exists only in that reply; it prevents minting twice. Omitted when unset.
+  (#43)
 - `nip47.GetInfoResult.PrivateMethods` names the bill methods a hub serves
   only over the private transport. `methods` means callable here and those
   four are refused on kind 23194, so dropping them from `methods` was right
   but left no wire signal they exist at all, leaving a client to hardcode the
   set. Informational only -- authorization stays the hub's per-item check.
+  (#43)
 - `nipcash/transport` admits bearer items: a cash-mode credential authorizes
   with its secret rather than an item proof. Two of the four credential kinds
   hold no keypair, so requiring a kind-23192 proof per item shut them out of
   batching entirely -- and a bearer bill, whose life is otherwise a public
   timeline under one pubkey, is the one most in need of what batching hides.
+  (#43)
 - `transport.Envelope.Validate` rejects a proof bound to a different target,
   method, params or envelope than the item carrying it, and the item
   constructors derive every binding from a single source, so an incoherent
   item cannot be built in the first place rather than merely being caught.
+  (#43)
 
 ### Changed
 
@@ -275,7 +280,7 @@ serialization fix that had made every tagless event's id wrong.
   event could replay it -- for a NIP-43 join, burning the invite's remaining
   uses. Every NIP-43 kind carries the marker, so a client that publishes a
   join or leave must now AUTH first. `nip70.IsProtected` is the predicate,
-  and NIP-11 advertises 70.
+  and NIP-11 advertises 70. (#43)
 - **Bill methods now go through the `Client`, and the private transport is the
   only transport that serves them.** `Connect`, then call: `CashStatus`,
   `CashRedeem`, `CashTransfer` and `CashConsolidate` each run as a one-item
@@ -286,7 +291,7 @@ serialization fix that had made every tagless event's id wrong.
   with a bare pairing URI can still mint but cannot act on a bill, since such
   a URI carries no mint signature and so names no hub to verify an
   announcement against -- a real limit of a pairing URI, now stated outright
-  instead of failing obscurely.
+  instead of failing obscurely. (#43)
 - **Mint provenance is mandatory**, so `MintSignature` is gone from
   `MintCashParams`, `CashTransferParams`, `CashConsolidateParams` and the
   client params that threaded it through. A token's mint signature is the only
@@ -295,25 +300,26 @@ serialization fix that had made every tagless event's id wrong.
   the only transport that serves bill methods, making it unspendable. There
   was nothing to opt into. The `Token`'s own `MintSignature` and
   `AttestedAmountMillis` fields stay, and `VerifyProvenance` still reads them.
+  (#43)
 - `transport.WrapRequest` returns the conversation key. A reply is encrypted
   under a key derived from the request's ephemeral ECDH, which a hub can
   recompute from its own inbox key but a client cannot recover from anything
   on the wire -- the ephemeral private key must not be kept, because reusing
   it destroys the unlinkability it exists for. Without it every reply would
-  have been undecryptable by the only party entitled to read it.
+  have been undecryptable by the only party entitled to read it. (#43)
 - An envelope may not repeat an identical request. A proof binds target, hub,
   method, params, nonce and expiry but not the item id, so one signed pair
   authorized any number of otherwise-identical items: 32 copies of a
   handed-over item all verify. No money followed, because every bill method
   carries its own idempotency guard, but those guards were the only line of
   defence and a fifth method added without one would inherit a
-  duplicate-execution hole with no warning anywhere.
+  duplicate-execution hole with no warning anywhere. (#43)
 - An item id is capped at 256 bytes. `transport.Result` echoes the id back
   verbatim, so a request and its reply share one byte budget while the reply
   carries every id again plus the result bodies -- an id that fits going in
   need not fit coming back. A request filling a 56 KiB envelope with one
   48 KiB id owed a reply of 82 KiB, undeliverable for an item the hub had
-  already served. The refusal deliberately does not quote the id.
+  already served. The refusal deliberately does not quote the id. (#43)
 - `RekeyCashSlice` takes the replacement target from its caller. It minted one
   itself, so the new secret lived only in a local variable while only a
   commitment crossed the wire: on any ambiguous error -- a timeout, or a hub
@@ -322,7 +328,7 @@ serialization fix that had made every tagless event's id wrong.
   with a secret that existed nowhere and that the hub never had either. One
   dropped reply was enough. The caller can now write the secret down before
   the call and reconcile after, the only order that survives an ambiguous
-  answer.
+  answer. (#43)
 - **Every credential must name at least one usable relay**, enforced in the
   token codec and both hub-connection codecs, on encode and on decode. There
   is no discovery path behind a cash bill's wallet pubkey -- it is published
@@ -333,12 +339,13 @@ serialization fix that had made every tagless event's id wrong.
   rather than none, defeating every check that merely counts entries.
   Previously-decodable credentials now fail to decode; they could never have
   worked, so this moves a hang at dial time to a named error at decode time.
+  (#43)
 - `nip47`'s `circle_wallet` block renames `available_mloki` to
   `available_millis`, the last field on this wire still using the mloki
   vocabulary. No compatibility alias: a client reading the old name now gets a
   zero value and must be updated. The field is read once at discovery time to
   decide whether to join a circle, so an alias would be carried indefinitely
-  to serve a single read. The unit is unchanged.
+  to serve a single read. The unit is unchanged. (#43)
 
 ### Fixed
 
@@ -414,21 +421,22 @@ serialization fix that had made every tagless event's id wrong.
   other implementation has `[]` and relays refused the event over an id
   mismatch. Signing and verifying inside this library agreed with each other,
   so nothing surfaced until the first event was published to a real relay.
+  (#43)
 - A batch reply subscription closed at EOSE, so every item in every batch read
   as omitted. EOSE ends stored events and a reply is always live: the hub has
   not seen the request when the subscription opens, and kind 23191 is
-  ephemeral, so no relay stores it.
+  ephemeral, so no relay stores it. (#43)
 - `cash_status` could not carry a cash secret, so cash-mode bills never
   batched. The item was built with neither a proof nor a secret, which the
   codec's own rule refuses -- surfacing as "a single item exceeds the hub's
   envelope limit", the wrong error for an item that is malformed rather than
-  oversized.
+  oversized. (#43)
 - A nil proof marshalled to `"proof":null` instead of being omitted, and
   decoding that literal yields four bytes, so every proofless item arrived
   looking like it carried a proof. A cash-mode bill is proofless by design, so
   the hub took the proof branch, failed to verify `null`, and omitted the item
   -- and omission is information-free by design, so this surfaced only as "no
-  cash-mode bill works over the private transport".
+  cash-mode bill works over the private transport". (#43)
 - Four defects a hostile hub or relay could exploit. A lying chunk `total`
   made the SDK discard a real success, so a completed carve -- source bill
   drained, funds in a new wallet whose token existed only in that reply --
@@ -444,20 +452,20 @@ serialization fix that had made every tagless event's id wrong.
   built policy is coherent. And two chunks could answer the same item id with
   arrival order deciding which contradictory answer won, letting a relay that
   holds no key choose whether the client believes `NOT_FOUND` or a live bill;
-  a cross-chunk duplicate is now refused in either order.
+  a cross-chunk duplicate is now refused in either order. (#43)
 - An envelope-level refusal was collected and never read. A hub answering
   envelope-level `RATE_LIMITED` means no item ran, which is exactly what a
   caller needs before resending a `cash_redeem`, and dropping it left every
   item merely not-served -- whose contract is the opposite, indistinguishable
   from an item that executed and whose response was lost. A hub could strand a
   caller in permanent indeterminacy having done nothing at all. It is now
-  surfaced per item as a decided error, where callers already look.
+  surfaced per item as a decided error, where callers already look. (#43)
 - Collecting a reply had no deadline of its own, so a hub declaring `total: 2`
   and sending one chunk left a client waiting out its entire deadline for a
   reply that will never come, even when the envelope expired minutes earlier.
   The wait is now bounded by the envelope's own `not_after`, the value both
   sides already agreed on and signed; a caller with a shorter deadline still
-  wins.
+  wins. (#43)
 - `relay/client.NewNWCClient` dialled only the first relay hint and silently
   ignored the rest, so a credential naming three relays was a single point of
   failure with two decoys -- an operator who configured three had done the
@@ -466,7 +474,7 @@ serialization fix that had made every tagless event's id wrong.
   and when nothing can be reached the error names every attempt. This matters
   more here than for an ordinary client because a cash bill is a bearer
   instrument whose holder cannot be handed a corrected string, so a dead relay
-  takes the bill with it unless the others are tried.
+  takes the bill with it unless the others are tried. (#43)
 
 ## [0.4.0]
 
