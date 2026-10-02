@@ -91,7 +91,7 @@ func TestCashConsolidateParams_Request_HappyPath(t *testing.T) {
 			From(walletA, 10_000, BySigning(privKeyHex)),
 			From(walletB, 15_000, BySigning(privKeyHex)),
 		},
-		To:            Pubkey(pubKeyHex),
+		To: Pubkey(pubKeyHex),
 	}
 	req, err := p.Request()
 	if err != nil {

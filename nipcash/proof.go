@@ -59,7 +59,6 @@ func decryptFromPubkey(privKeyHex, pubKeyHex, ciphertext string) (string, error)
 // request that the server would reject anyway.
 var ErrAttestationExpired = errors.New("nipcash: attestation has no expiration, or has already expired")
 
-
 // proofBinding carries the call-specific values a kind-23198 proof binds to,
 // beyond the wallet pubkey every proof binds to via its own d-tag. Exactly
 // one of Bolt11Hash (cash_redeem) or NewIdentityHash+AmountMillis
@@ -229,4 +228,3 @@ func (c connectionKeyCredential) itemAuthorization() (privKeyHex, cashSecret str
 func (c connectionKeyCredential) decryptDelivery(newWalletPubkey, ciphertext string) (string, error) {
 	return decryptFromPubkey(c.privKeyHex, newWalletPubkey, ciphertext)
 }
-

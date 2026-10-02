@@ -35,7 +35,6 @@ import (
 //	    transaction closed -- delivery to a stalled socket did not hold it open,
 //	    contradicting the report". Main's
 //	    TestScanDoesNotHoldReadTransactionAcrossDelivery is its inverted form.
-//
 func TestReplyBlocksInsteadOfDroppingWhenOutgoingBufferIsFull(t *testing.T) {
 	r := &replyer{
 		incoming: make(chan wire.SubscriptionResponse, 2),

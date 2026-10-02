@@ -31,8 +31,8 @@ type consolidateSourceParam struct {
 
 // CashConsolidateRequest is cash_consolidate's wire request shape.
 type CashConsolidateRequest struct {
-	Sources       []consolidateSourceParam     `json:"sources"`
-	NewIdentity   cashTransferNewIdentityParam `json:"new_identity"`
+	Sources     []consolidateSourceParam     `json:"sources"`
+	NewIdentity cashTransferNewIdentityParam `json:"new_identity"`
 }
 
 // Request builds cash_consolidate's wire request from p. Exported for

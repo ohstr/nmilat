@@ -62,10 +62,10 @@ func TestAuditC_SecA_StaleAnnouncementWinsOnRelayOrder(t *testing.T) {
 	t.Logf("old created_at=%d, current created_at=%d", old.CreatedAt, cur.CreatedAt)
 
 	if s.Inbox() == retiredInbox {
-		t.Errorf("AUDITC-SECA-F1 BUG PRESENT: the relay served a 90-day-old announcement "+
-			"before the current one and the client adopted the RETIRED inbox key. "+
-			"ParseAnnouncement takes no created_at into account and Refresh returns on the "+
-			"first event that parses, so ordering is the relay's choice. Whoever holds the "+
+		t.Errorf("AUDITC-SECA-F1 BUG PRESENT: the relay served a 90-day-old announcement " +
+			"before the current one and the client adopted the RETIRED inbox key. " +
+			"ParseAnnouncement takes no created_at into account and Refresh returns on the " +
+			"first event that parses, so ordering is the relay's choice. Whoever holds the " +
 			"retired inbox private key decrypts every envelope this session sends.")
 	}
 	if s.Inbox() != currentInbox {

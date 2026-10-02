@@ -75,7 +75,7 @@ func (p CashTransferParams) Request(walletPubkey string) (CashTransferRequest, e
 			IdentityValue: f.identityValue(),
 			IAPubkey:      f.iaPubkey(),
 		},
-		AmountMillis:  p.SplitAmount,
+		AmountMillis: p.SplitAmount,
 	}
 	if identityEvent != nil {
 		req.IdentityEvent = string(identityEvent)
