@@ -213,7 +213,26 @@ func EscapeJSONString(s string) string {
 	return buf.String()
 }
 
+// MarshalTags serializes an event's tags for NIP-01's id/signature payload.
+//
+// A nil tag list MUST serialize as `[]`, not `null`. encoding/json renders a nil
+// slice as null, and NIP-01's serialization is positional — `[0,pubkey,created_at,
+// kind,tags,content]` — so a null there produces a different digest from the one
+// every relay computes, and the event is rejected with an id mismatch.
+//
+// This went unnoticed for a long time because virtually every event carries at
+// least one tag: NWC requests are p-tagged, replaceable events carry `d`, and so
+// on. The first tagless event this library built was the private transport's
+// kind-11190 announcement, which is addressed by author alone and deliberately
+// needs no tag at all — and it was refused by a live relay with
+// "event ID mismatch", having verified perfectly against this library's own
+// checks. Two self-consistent halves disagreeing.
 func MarshalTags(tags [][]string) ([]byte, error) {
+	if tags == nil {
+		// Not an optimisation: this is the whole fix. Returning the literal keeps
+		// it independent of how encoding/json treats a nil versus empty slice.
+		return []byte("[]"), nil
+	}
 	buffer := &bytes.Buffer{}
 	encoder := json.NewEncoder(buffer)
 	encoder.SetEscapeHTML(false)

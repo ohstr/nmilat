@@ -42,14 +42,26 @@ func newTestItem(t *testing.T, id, method, params, nonce string) Item {
 	if err != nil {
 		t.Fatal(err)
 	}
-	proof, err := BuildItemProof(connPriv, ProofBinding{
+	binding := ProofBinding{
 		Target: target, HubXOnly: hubXOnly, Method: method,
 		ParamsHash: hash, Nonce: nonce, NotAfter: time.Now().Add(60 * time.Second).Unix(),
-	})
+	}
+	proof, err := BuildItemProof(connPriv, binding)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Item{ID: id, Target: target, Method: method, Params: json.RawMessage(params), Proof: proof}
+	// A distinct key from the slice proof's, so a fixture can never pass by having
+	// signed both with the same one — the two proofs answer different questions and
+	// are meant to be separable.
+	billPriv, _ := testKeypair(t)
+	billProof, err := BuildBillProof(billPriv, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return Item{
+		ID: id, Target: target, Method: method, Params: json.RawMessage(params),
+		Proof: proof, BillProof: billProof,
+	}
 }
 
 func TestEnvelope_RoundTrip(t *testing.T) {
@@ -187,8 +199,9 @@ func TestEnvelope_VerificationBudgetIsCountedStructurally(t *testing.T) {
 	env := newTestEnvelope(t)
 	env.Items = []Item{{
 		ID: "1", Target: strings.Repeat("a", 64), Method: "cash_consolidate",
-		Params: json.RawMessage(params),
-		Proof:  json.RawMessage(`{"not":"a real proof"}`),
+		Params:    json.RawMessage(params),
+		Proof:     json.RawMessage(`{"not":"a real proof"}`),
+		BillProof: json.RawMessage(`{"not":"a real proof"}`),
 	}}
 
 	_, err := env.Encode(limits)
@@ -197,21 +210,28 @@ func TestEnvelope_VerificationBudgetIsCountedStructurally(t *testing.T) {
 	}
 }
 
+// Every cost below counts TWO signatures for an identity-bound item, not one: the
+// kind-23192 slice proof and the kind-23193 bill proof. The bill proof is
+// unconditional, so it is the baseline every case starts from.
+//
+// This is the hub's DoS budget, so undercounting is the dangerous direction — it
+// would admit a batch that costs more secp256k1 time than the hub authorised.
 func TestItem_VerificationCost(t *testing.T) {
 	tests := map[string]struct {
 		params string
 		want   int
 	}{
-		"no params":               {`{}`, 1},
-		"simple method":           {`{"invoice":"lnbc1"}`, 1},
-		"two sources with proofs": {`{"sources":[{"identity_event":"{}"},{"identity_event":"{}"}]}`, 3},
-		"source with attestation": {`{"sources":[{"identity_event":"{}","attestation_event":"{}"}]}`, 3},
-		"sources without proofs":  {`{"sources":[{"wallet_pubkey":"aa"},{"wallet_pubkey":"bb"}]}`, 1},
-		"unparseable params":      {`{oops`, 1},
+		"no params":               {`{}`, 2},
+		"simple method":           {`{"invoice":"lnbc1"}`, 2},
+		"two sources with proofs": {`{"sources":[{"identity_event":"{}"},{"identity_event":"{}"}]}`, 4},
+		"source with attestation": {`{"sources":[{"identity_event":"{}","attestation_event":"{}"}]}`, 4},
+		"sources without proofs":  {`{"sources":[{"wallet_pubkey":"aa"},{"wallet_pubkey":"bb"}]}`, 2},
+		"unparseable params":      {`{oops`, 2},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			item := Item{Params: json.RawMessage(tc.params)}
+			// Proof set, so this is an identity-bound item: slice proof + bill proof.
+			item := Item{Params: json.RawMessage(tc.params), Proof: json.RawMessage(`{}`)}
 			if got := item.VerificationCost(); got != tc.want {
 				t.Errorf("VerificationCost() = %d, want %d", got, tc.want)
 			}
@@ -232,8 +252,9 @@ func TestEnvelope_RejectsTooManyConsolidateSources(t *testing.T) {
 	env := newTestEnvelope(t)
 	env.Items = []Item{{
 		ID: "1", Target: strings.Repeat("a", 64), Method: "cash_consolidate",
-		Params: json.RawMessage(`{"sources":[` + strings.Join(sources, ",") + `]}`),
-		Proof:  json.RawMessage(`{}`),
+		Params:    json.RawMessage(`{"sources":[` + strings.Join(sources, ",") + `]}`),
+		Proof:     json.RawMessage(`{}`),
+		BillProof: json.RawMessage(`{}`),
 	}}
 
 	if _, err := env.Encode(limits); !errors.Is(err, ErrTooManyItems) {
@@ -324,4 +345,55 @@ func FuzzDecode(f *testing.F) {
 			}
 		}
 	})
+}
+
+// TestItem_ProofSurvivesARoundTripAsAbsent is the regression test for the bug that
+// made cash-mode bills impossible to serve over the private transport.
+//
+// `Proof json.RawMessage` without omitempty marshals a nil proof to `"proof":null`,
+// and decoding that literal yields a FOUR-BYTE value. So `len(Proof) == 0` was false
+// on the receiving side, a proofless bearer item looked like it carried a proof, the
+// hub verified garbage, failed, and OMITTED the item — which is information-free by
+// design, so no client could ever learn why its cash-mode bill vanished.
+//
+// Two assertions, because either alone is insufficient: the wire form must not carry
+// a null, AND HasProof must be right even if a peer sends one anyway.
+func TestItem_ProofSurvivesARoundTripAsAbsent(t *testing.T) {
+	bearer := Item{ID: "b1", Target: "aa", Method: "cash_status", Params: []byte(`{"cash_secret":"s"}`)}
+	if bearer.HasProof() {
+		t.Fatal("a freshly built bearer item must not report a proof")
+	}
+
+	encoded, err := json.Marshal(bearer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "null") {
+		t.Errorf("a nil proof must be omitted, not serialized as null: %s", encoded)
+	}
+
+	var back Item
+	if err := json.Unmarshal(encoded, &back); err != nil {
+		t.Fatal(err)
+	}
+	if back.HasProof() {
+		t.Errorf("a bearer item grew a proof across a round trip: proof=%q", back.Proof)
+	}
+
+	// A peer that sends an explicit null must not fool us either — this is the
+	// spelling that caused the original failure, and nothing stops another
+	// implementation from emitting it.
+	var explicitNull Item
+	if err := json.Unmarshal([]byte(`{"id":"b1","proof":null}`), &explicitNull); err != nil {
+		t.Fatal(err)
+	}
+	if explicitNull.HasProof() {
+		t.Errorf(`an explicit "proof":null must read as no proof, got %q`, explicitNull.Proof)
+	}
+
+	// And a real proof must still read as present.
+	withProof := Item{ID: "p1", Proof: []byte(`{"kind":23192}`)}
+	if !withProof.HasProof() {
+		t.Error("a real proof must read as present")
+	}
 }

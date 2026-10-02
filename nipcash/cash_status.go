@@ -1,5 +1,71 @@
 package nipcash
 
+// Cash-status scopes, which select how much of the roster a Hub answers with
+// (NIP-CASH §Scoping the Roster).
+//
+// Only meaningful on the private transport, where every item carries a proof
+// signed by one specific recipient, so a Hub knows who is asking. On the standard
+// transport every recipient holds the SAME connection string, so the Hub cannot
+// identify the caller at all — which is why ScopeMine MUST be rejected there
+// rather than approximated.
+const (
+	// ScopeAll returns every recipient's row — the shared roster.
+	ScopeAll = "all"
+	// ScopeMine returns only the calling recipient's own row.
+	ScopeMine = "mine"
+)
+
+// CashStatusParams is cash_status' request.
+//
+// Scope is OPTIONAL, and absent does NOT mean one fixed thing: a Hub reads it as
+// ScopeMine on the private transport and ScopeAll on the standard one. The
+// defaults differ because the transports differ in what they can know, so a
+// client that wants a specific answer regardless of transport must say so.
+type CashStatusParams struct {
+	Scope string `json:"scope,omitempty"`
+	// AttestationEvent lets a connection_key recipient read their own row.
+	//
+	// A connection_key slice's identity_value is hex(sha256(platform + ":" + externalID)),
+	// never a pubkey, so the item's signer can never equal it and a Hub's transport gate
+	// has nothing to compare. cash_redeem already requires an IA attestation binding the
+	// claimant's keypair to that identity; this is the same evidence, for a read instead of
+	// a spend, and a Hub resolves WHICH claim from the attestation itself rather than from
+	// anything the caller names.
+	//
+	// Omit it for pubkey and cash-mode slices, which need nothing: a pubkey slice's
+	// identity IS the signer, and a cash-mode slice's secret is its whole authorization.
+	AttestationEvent string `json:"attestation_event,omitempty"`
+}
+
+// CashStatusRequest is cash_status' wire request.
+//
+// CashSecret exists for the private transport only. A cash-mode bill has no keypair,
+// so its items carry no proof and the secret in params is the whole authorization
+// (NIP-CASH §Bearer Items) — and an item with neither is malformed, which the codec
+// refuses locally. Without a field to put it in, no cash-mode bill could be read over
+// the private transport at all: the item was rejected before it was ever sent, and
+// the failure surfaced only against a live hub.
+//
+// Omitted on the standard transport, where the connection itself is the
+// authorization and there is nothing to attach.
+type CashStatusRequest struct {
+	Scope      string `json:"scope,omitempty"`
+	CashSecret string `json:"cash_secret,omitempty"`
+	// AttestationEvent is the connection_key counterpart to CashSecret: the evidence
+	// that authorizes a read the signer alone cannot. See CashStatusParams.
+	AttestationEvent string `json:"attestation_event,omitempty"`
+}
+
+// IsValidCashStatusScope reports whether s is a scope a Hub can honour. An empty
+// string is valid: it means "the default for this transport".
+//
+// Exported so a client and a Hub check the same rule rather than each keeping its
+// own list — the kind of drift that shows up as a request silently answered with
+// the wrong amount of data.
+func IsValidCashStatusScope(s string) bool {
+	return s == "" || s == ScopeAll || s == ScopeMine
+}
+
 // RecipientStatus is one entry of cash_status' response roster —
 // includes every recipient this wallet was ever created or split into,
 // claimed or not (NIP-CASH §Listing Recipients).
@@ -27,9 +93,12 @@ type RecipientStatus struct {
 // CashStatusResult is cash_status' response, and carries one of two mutually
 // exclusive answers.
 //
-// Recipients is the roster — every slice this bill was created or split into.
-// It is deliberately NOT scoped to the caller's own slice, despite the method's
-// name: every holder of the connection sees every row (NIP-CASH §Cash Status).
+// Recipients is the roster. How much of it arrives depends on the request's Scope
+// and on the transport (NIP-CASH §Scoping the Roster): on the standard transport
+// it is every slice this bill was created or split into, unscoped, because every
+// holder of the connection is indistinguishable there; on the private transport an
+// unscoped request returns only the caller's own row, since a per-item proof makes
+// the caller identifiable for the first time.
 //
 // Error/RetainedUntil is the tombstone for a bill that has been spent and
 // destroyed. It exists because silence cannot be told apart from a Hub that is
@@ -59,11 +128,6 @@ const ErrorSpent = "spent"
 
 // IsSpent reports whether r is a tombstone rather than a roster.
 func (r CashStatusResult) IsSpent() bool { return r.Error == ErrorSpent }
-
-// ListRecipientsResult is the former name of CashStatusResult.
-//
-// Deprecated: use CashStatusResult.
-type ListRecipientsResult = CashStatusResult
 
 // IsCash reports whether r is a cash-mode recipient row — the one
 // place identityTypeCash's own comparison lives, so a caller outside
