@@ -2,14 +2,12 @@
 
 ## [0.5.0]
 
-_Cut as `v0.5.0-rc.2` on 2026-10-01._ This section stays open: 0.5.0 itself has
+_Cut as `v0.5.0-rc.2` on 2026-10-02._ This section stays open: 0.5.0 itself has
 not been released, so everything under it is still pre-release and accumulating.
-rc.2 adds no API or wire change over rc.1 -- what it carries is test and
-documentation work from the NIP-CASH private transport audit: privacy finding
-P-4 refuted and the code comment that had implied otherwise corrected, two
-unique relay reply-path tests and the relay delivery-stall root-cause analysis
-salvaged before their branch was dropped, and nip57 issue 33's repro converted
-into a two-directional regression test.
+rc.2 is where the NIP-CASH private transport became usable from a client: the
+batch API that spends many bills in one relay event, the breaking changes three
+rounds of audit forced on the transport's own shapes, and the NIP-01
+serialization fix that had made every tagless event's id wrong.
 
 ### Added
 
@@ -146,20 +144,20 @@ into a two-directional regression test.
   node-signed hub announcement so a client can find and authenticate a Hub's
   inbox. Envelope size limits are configurable, and the consolidate source
   cap is derived from them rather than fixed, so it cannot be set above what
-  an envelope can actually carry.
+  an envelope can actually carry. (#39)
 - Padding hides how many items an envelope holds: a one-item request and a
   six-item one are the same size on the wire, and an unserved item is
   omitted from the response rather than answered with an error — an error
   would confirm the existence of a wallet the caller could not prove it
-  holds.
+  holds. (#39)
 - `nipcash.BillState` gives the three-outcome bill read (live, spent,
   indeterminate) one reusable representation, and `CashStatus`/
   `CashStatusResult` replace the `list_recipients` naming throughout. The
   old names remain as deprecated aliases for one release, and
   `Client.ListRecipients` deliberately still sends the old wire method so
-  the client and the Hub can migrate independently.
+  the client and the Hub can migrate independently. (#39)
 - `nip01.Event.Serialize` is exported, so a remote signer can produce the
-  exact preimage the signature covers.
+  exact preimage the signature covers. (#39)
 - `nip46.MethodSwitchRelays` and `nip46.MethodLogout` name the two standard
   methods the package was missing, so a signer can answer them instead of
   reporting them unsupported. (#42)
@@ -190,6 +188,65 @@ into a two-directional regression test.
   member keeps hearing the room until it reconnects. Removal is the
   guarantee rather than the socket close -- a peer out of the registry is
   neither heard nor hearing -- and the room's other peers are untouched.
+- `nipcash/client.BatchSession` fetches, verifies and caches a hub's
+  kind-11190 announcement. The SDK had no way to obtain one --
+  `ParseAnnouncement` only verifies an announcement a caller already holds --
+  so four of the client obligations NIP-CASH places on a batching caller had
+  no implementation path. The hub's key is required rather than discovered,
+  and the announced inbox and relays are preferred over the token's hints.
+- `nipcash/client` gains the batch API the private transport was built for:
+  `RedeemMany`, `StatusMany`, `TransferMany` and `ConsolidateMany` act on many
+  bills in one relay event instead of one event per bill. On the standard
+  transport every request is p-tagged with a bill's own pubkey, so a holder
+  consolidating fifty bills publishes fifty events that resolve to one, tying
+  them together for anyone watching without decrypting anything. Batched, the
+  count stops being public and the timing correlation disappears.
+- A batch item has three outcomes, not two. A hub omits an item whose target
+  it does not hold, whose proof did not verify, or whose method it does not
+  serve, and those are indistinguishable by design -- telling them apart would
+  make a batch an oracle for which bills a hub holds. `ItemOutcome` keeps "the
+  hub said nothing" separate from "the hub refused", so a bill a hub simply
+  does not hold is not reported as a failure of that bill, and
+  `SafeToResend` says which spends a caller may retry.
+- A hub may answer one request with several kind-23191 events sharing a
+  `reply_to`, each carrying `seq` and `total`. A reply can be far larger than
+  the request that produced it -- a `cash_status` item's params are 2 bytes
+  while its answer for a 100-recipient bill is over 28 KiB -- so a hub could
+  serve a batch and then be unable to report it, which for `cash_redeem` is
+  money moved with the caller told nothing. A single-event reply is 1 of 1,
+  filled in automatically.
+- `cash_status` takes NIP-CASH's optional `scope`: `all` for the shared
+  roster, `mine` for the caller's own row, defaulting to `mine` on the private
+  transport and `all` on the standard one. Neither the field nor the default
+  existed, so a private-transport caller who said nothing got every
+  co-recipient's identity, amount and claim state -- the precise disclosure
+  the private transport exists to prevent.
+- `cash_status` carries an `AttestationEvent`, so a `connection_key` recipient
+  can read their own row. That identity is a hash of platform and external id
+  rather than a pubkey, so an item's signer can never equal it and a hub's
+  gate had nothing to compare: the only options were to disclose the whole
+  roster or to refuse that identity mode its only read.
+- `mint_cash` takes an optional `idempotency_key`. It is the only
+  value-creating method with no replay protection of its own -- a transfer or
+  consolidate source carries a signed proof whose nonce the hub burns, while
+  `mint_cash`'s params hold nothing unique -- so a caller whose retry logic
+  reads a timeout as failure makes the hub mint and fund a second wallet. It
+  does not make a lost reply re-readable, since a cash-mode mint's secret
+  exists only in that reply; it prevents minting twice. Omitted when unset.
+- `nip47.GetInfoResult.PrivateMethods` names the bill methods a hub serves
+  only over the private transport. `methods` means callable here and those
+  four are refused on kind 23194, so dropping them from `methods` was right
+  but left no wire signal they exist at all, leaving a client to hardcode the
+  set. Informational only -- authorization stays the hub's per-item check.
+- `nipcash/transport` admits bearer items: a cash-mode credential authorizes
+  with its secret rather than an item proof. Two of the four credential kinds
+  hold no keypair, so requiring a kind-23192 proof per item shut them out of
+  batching entirely -- and a bearer bill, whose life is otherwise a public
+  timeline under one pubkey, is the one most in need of what batching hides.
+- `transport.Envelope.Validate` rejects a proof bound to a different target,
+  method, params or envelope than the item carrying it, and the item
+  constructors derive every binding from a single source, so an incoherent
+  item cannot be built in the first place rather than merely being caught.
 
 ### Changed
 
@@ -219,6 +276,69 @@ into a two-directional regression test.
   uses. Every NIP-43 kind carries the marker, so a client that publishes a
   join or leave must now AUTH first. `nip70.IsProtected` is the predicate,
   and NIP-11 advertises 70.
+- **Bill methods now go through the `Client`, and the private transport is the
+  only transport that serves them.** `Connect`, then call: `CashStatus`,
+  `CashRedeem`, `CashTransfer` and `CashConsolidate` each run as a one-item
+  batch, with the session opened on first use and the hub identity recovered
+  from the bill's own mint signature. `cash_status` and `cash_consolidate`
+  gained a credential argument, unavoidably: the standard transport authorized
+  by connection, the private transport authorizes per item. A `Client` dialled
+  with a bare pairing URI can still mint but cannot act on a bill, since such
+  a URI carries no mint signature and so names no hub to verify an
+  announcement against -- a real limit of a pairing URI, now stated outright
+  instead of failing obscurely.
+- **Mint provenance is mandatory**, so `MintSignature` is gone from
+  `MintCashParams`, `CashTransferParams`, `CashConsolidateParams` and the
+  client params that threaded it through. A token's mint signature is the only
+  thing identifying its minting hub, and so the only thing a client can verify
+  a transport announcement against -- a token without one could never reach
+  the only transport that serves bill methods, making it unspendable. There
+  was nothing to opt into. The `Token`'s own `MintSignature` and
+  `AttestedAmountMillis` fields stay, and `VerifyProvenance` still reads them.
+- `transport.WrapRequest` returns the conversation key. A reply is encrypted
+  under a key derived from the request's ephemeral ECDH, which a hub can
+  recompute from its own inbox key but a client cannot recover from anything
+  on the wire -- the ephemeral private key must not be kept, because reusing
+  it destroys the unlinkability it exists for. Without it every reply would
+  have been undecryptable by the only party entitled to read it.
+- An envelope may not repeat an identical request. A proof binds target, hub,
+  method, params, nonce and expiry but not the item id, so one signed pair
+  authorized any number of otherwise-identical items: 32 copies of a
+  handed-over item all verify. No money followed, because every bill method
+  carries its own idempotency guard, but those guards were the only line of
+  defence and a fifth method added without one would inherit a
+  duplicate-execution hole with no warning anywhere.
+- An item id is capped at 256 bytes. `transport.Result` echoes the id back
+  verbatim, so a request and its reply share one byte budget while the reply
+  carries every id again plus the result bodies -- an id that fits going in
+  need not fit coming back. A request filling a 56 KiB envelope with one
+  48 KiB id owed a reply of 82 KiB, undeliverable for an item the hub had
+  already served. The refusal deliberately does not quote the id.
+- `RekeyCashSlice` takes the replacement target from its caller. It minted one
+  itself, so the new secret lived only in a local variable while only a
+  commitment crossed the wire: on any ambiguous error -- a timeout, or a hub
+  lying about its chunk total -- the secret died with the stack frame while
+  the hub may well have applied the re-key, leaving the slice redeemable only
+  with a secret that existed nowhere and that the hub never had either. One
+  dropped reply was enough. The caller can now write the secret down before
+  the call and reconcile after, the only order that survives an ambiguous
+  answer.
+- **Every credential must name at least one usable relay**, enforced in the
+  token codec and both hub-connection codecs, on encode and on decode. There
+  is no discovery path behind a cash bill's wallet pubkey -- it is published
+  nowhere, existing only as a subscription filter on the minting hub -- so a
+  relay-less credential is permanently unusable while remaining structurally
+  perfect. Usable means non-empty after trimming, which is the substantive
+  part: a producer whose relay config was unset emits one empty-string relay
+  rather than none, defeating every check that merely counts entries.
+  Previously-decodable credentials now fail to decode; they could never have
+  worked, so this moves a hang at dial time to a named error at decode time.
+- `nip47`'s `circle_wallet` block renames `available_mloki` to
+  `available_millis`, the last field on this wire still using the mloki
+  vocabulary. No compatibility alias: a client reading the old name now gets a
+  zero value and must be updated. The field is read once at discovery time to
+  decide whether to join a circle, so an alias would be carried indefinitely
+  to serve a single read. The unit is unchanged.
 
 ### Fixed
 
@@ -257,22 +377,22 @@ into a two-directional regression test.
 - A relay verified an event's signature before checking the proof-of-work
   floor, so an under-difficulty event still cost a signature verification.
   The floor is now enforced first, which is the cheaper check and the one
-  that makes the PoW requirement worth declaring.
+  that makes the PoW requirement worth declaring. (#39)
 - NIP-59 gift wrapping assigned the sender's private key to the seal's
   `PubKey` field and relied on the following `Sign` call to overwrite it.
   Nothing leaked, because `Sign` does overwrite it — but the code was one
   reordering, or one seal built without signing, away from publishing a
   private key in a field designed to be public. `Sign` now owns that field
-  outright.
+  outright. (#39)
 - Neither the seal nor the gift wrap randomized `created_at`, so both
   carried the true time — the correlation signal wrapping exists to remove.
   Both now use `RandomizedCreatedAt` over NIP-59's two-day window. Two
   consequences follow for callers: a `since` filter will silently drop a
   fraction of legitimate wrapped events, and `created_at` is no longer
   evidence of freshness, so replay protection has to live inside the
-  encrypted payload.
+  encrypted payload. (#39)
 - `nipcw` read a circle join result from the wrong place, missing the fields
-  the Hub returns under `encrypted_details`.
+  the Hub returns under `encrypted_details`. (#39)
 - `nip46.ParseNostrconnect` required a `metadata=` query param that NIP-46
   does not define, so it rejected every conforming `nostrconnect://` URI. The
   client's identity now comes from the spec's own `name`/`url`/`image` params,
@@ -288,6 +408,65 @@ into a two-directional regression test.
   `NostrconnectSchema.Perms`. (#42)
 - A schemeless relay host in a `nostrconnect://` URI is read as `wss://`
   rather than rejected. (#42)
+- A tagless event's id was wrong. `MarshalTags` handed a nil tag slice
+  straight to `encoding/json`, which renders it as `null`, and NIP-01's
+  serialization is positional -- so the preimage carried `null` where every
+  other implementation has `[]` and relays refused the event over an id
+  mismatch. Signing and verifying inside this library agreed with each other,
+  so nothing surfaced until the first event was published to a real relay.
+- A batch reply subscription closed at EOSE, so every item in every batch read
+  as omitted. EOSE ends stored events and a reply is always live: the hub has
+  not seen the request when the subscription opens, and kind 23191 is
+  ephemeral, so no relay stores it.
+- `cash_status` could not carry a cash secret, so cash-mode bills never
+  batched. The item was built with neither a proof nor a secret, which the
+  codec's own rule refuses -- surfacing as "a single item exceeds the hub's
+  envelope limit", the wrong error for an item that is malformed rather than
+  oversized.
+- A nil proof marshalled to `"proof":null` instead of being omitted, and
+  decoding that literal yields four bytes, so every proofless item arrived
+  looking like it carried a proof. A cash-mode bill is proofless by design, so
+  the hub took the proof branch, failed to verify `null`, and omitted the item
+  -- and omission is information-free by design, so this surfaced only as "no
+  cash-mode bill works over the private transport".
+- Four defects a hostile hub or relay could exploit. A lying chunk `total`
+  made the SDK discard a real success, so a completed carve -- source bill
+  drained, funds in a new wallet whose token existed only in that reply --
+  was returned to the caller as a failure, and the same lie erases the
+  `cash_status` that is the prescribed recovery call. A decided outcome now
+  beats a send error. Nothing compared a hub announcement's `created_at`
+  against the one already held, so a relay could replay the hub's own retired
+  policy and walk a session backwards onto a padding bucket that leaks the
+  batch count; adoption now keeps the newest candidate and never moves
+  backwards. An announced `pad_bucket_bytes` had no floor, so announcing 1
+  gave eight distinct wire sizes for one to eight items; `ValidateAnnounced`
+  gates what is safe to adopt from a hub, separately from whether a locally
+  built policy is coherent. And two chunks could answer the same item id with
+  arrival order deciding which contradictory answer won, letting a relay that
+  holds no key choose whether the client believes `NOT_FOUND` or a live bill;
+  a cross-chunk duplicate is now refused in either order.
+- An envelope-level refusal was collected and never read. A hub answering
+  envelope-level `RATE_LIMITED` means no item ran, which is exactly what a
+  caller needs before resending a `cash_redeem`, and dropping it left every
+  item merely not-served -- whose contract is the opposite, indistinguishable
+  from an item that executed and whose response was lost. A hub could strand a
+  caller in permanent indeterminacy having done nothing at all. It is now
+  surfaced per item as a decided error, where callers already look.
+- Collecting a reply had no deadline of its own, so a hub declaring `total: 2`
+  and sending one chunk left a client waiting out its entire deadline for a
+  reply that will never come, even when the envelope expired minutes earlier.
+  The wait is now bounded by the envelope's own `not_after`, the value both
+  sides already agreed on and signed; a caller with a shorter deadline still
+  wins.
+- `relay/client.NewNWCClient` dialled only the first relay hint and silently
+  ignored the rest, so a credential naming three relays was a single point of
+  failure with two decoys -- an operator who configured three had done the
+  thing that looks like redundancy and got none. Each hint is now tried in
+  order until one connects, unparseable entries are skipped rather than fatal,
+  and when nothing can be reached the error names every attempt. This matters
+  more here than for an ordinary client because a cash bill is a bearer
+  instrument whose holder cannot be handed a corrected string, so a dead relay
+  takes the bill with it unless the others are tried.
 
 ## [0.4.0]
 
