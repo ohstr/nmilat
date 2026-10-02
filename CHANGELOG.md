@@ -2,6 +2,15 @@
 
 ## [0.5.0]
 
+_Cut as `v0.5.0-rc.2` on 2026-10-01._ This section stays open: 0.5.0 itself has
+not been released, so everything under it is still pre-release and accumulating.
+rc.2 adds no API or wire change over rc.1 -- what it carries is test and
+documentation work from the NIP-CASH private transport audit: privacy finding
+P-4 refuted and the code comment that had implied otherwise corrected, two
+unique relay reply-path tests and the relay delivery-stall root-cause analysis
+salvaged before their branch was dropped, and nip57 issue 33's repro converted
+into a two-directional regression test.
+
 ### Added
 
 - `huddle/room.Sink` is the seam that makes a room transport-agnostic: a
