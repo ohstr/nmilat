@@ -16,6 +16,13 @@ import (
 // CashConsolidate then rejected it.
 var ErrInterimIdentityNotPubkey = errors.New("nipcash/client: RekeyCashSlice requires InterimIdentity to be a pubkey target")
 
+// ErrNewTargetNotCash refuses a re-key with no caller-supplied cash target.
+//
+// Deliberately an error rather than minting one: the target carries the only copy
+// of the replacement secret, and a secret minted inside this call is lost on any
+// ambiguous failure — see RekeyCashSliceParams.NewTarget.
+var ErrNewTargetNotCash = errors.New("nipcash/client: RekeyCashSlice requires NewTarget to be a cash target the CALLER minted, so the new secret is recorded before the call")
+
 // RekeyCashSliceParams moves a cash-mode slice out of shared custody:
 // CashSlice's own secret is presented once, consumed, and replaced with
 // a fresh secret only the caller knows — optionally consolidating the
@@ -40,7 +47,32 @@ type RekeyCashSliceParams struct {
 	InterimIdentity   nipcash.Target
 	InterimCredential nipcash.Credential
 	ConsolidateWith   []nipcash.Source // none may be cash-mode
-	MintSignature     bool
+	// NewTarget is the cash-mode target this slice is re-keyed ONTO, and the
+	// caller supplies it.
+	//
+	// It used to be minted inside this function by nipcash.NewCashTarget(), which
+	// made the replacement secret unrecoverable on any ambiguous failure. Only a
+	// COMMITMENT crosses the wire, so the secret existed solely in a local
+	// variable: if the CashTransfer returned a timeout, a NotServedError, or an
+	// incomplete reply, this returned (nil, err) and the secret died with the
+	// stack frame — while the Hub may well have applied the re-key. The slice was
+	// then redeemable only with a secret that existed nowhere, and the Hub could
+	// not restore it either, because it never had it.
+	//
+	// That is not conditional on a hostile Hub; one dropped reply is enough.
+	//
+	// Taking it as a parameter lets a caller write the secret down BEFORE the call
+	// and reconcile afterwards, which is the only order that survives an
+	// ambiguous answer. cashctl already does exactly this by bypassing
+	// RekeyCashSlice entirely and generating the target itself — it wrote down the
+	// reason in a comment and the SDK was never changed, so every other consumer
+	// of this published API still had the defect.
+	//
+	// The CONCRETE type, not the Target interface, deliberately: only *CashTarget
+	// exposes Secret(), so the compiler now enforces that the caller holds the thing
+	// the secret lives in. A nil is refused rather than silently minted, so the
+	// requirement cannot be missed by omission.
+	NewTarget *nipcash.CashTarget
 }
 
 // RekeyCashSliceResult is RekeyCashSlice's outcome. NewToken == ""
@@ -81,14 +113,19 @@ func (c *Client) RekeyCashSlice(ctx context.Context, p RekeyCashSliceParams) (*R
 // (single vs. consolidated path, partial-failure error) without a
 // network.
 func rekeyCashSlice(ctx context.Context, c transferConsolidater, p RekeyCashSliceParams) (*RekeyCashSliceResult, error) {
-	bt := nipcash.NewCashTarget()
+	// Refused, not defaulted. Minting one here is what destroyed the secret on an
+	// ambiguous failure, so a caller that forgot to supply one must be told rather
+	// than quietly given the old behaviour back.
+	if p.NewTarget == nil {
+		return nil, ErrNewTargetNotCash
+	}
+	bt := p.NewTarget
 
 	if len(p.ConsolidateWith) == 0 {
 		result, err := c.CashTransfer(ctx, nipcash.CashTransferParams{
 			Credential:    p.CashSlice.Credential,
 			To:            bt,
 			CurrentAmount: p.CashSlice.Amount,
-			MintSignature: p.MintSignature,
 		})
 		if err != nil {
 			return nil, err
@@ -108,7 +145,6 @@ func rekeyCashSlice(ctx context.Context, c transferConsolidater, p RekeyCashSlic
 		Credential:    p.CashSlice.Credential,
 		To:            p.InterimIdentity,
 		CurrentAmount: p.CashSlice.Amount,
-		MintSignature: p.MintSignature,
 	})
 	if err != nil {
 		return nil, err
@@ -120,10 +156,11 @@ func rekeyCashSlice(ctx context.Context, c transferConsolidater, p RekeyCashSlic
 		Credential:   p.InterimCredential,
 	}
 	sources := append([]nipcash.Source{thisSource}, p.ConsolidateWith...)
-	result, err := c.CashConsolidate(ctx, nipcash.CashConsolidateParams{
-		Sources:       sources,
-		To:            bt,
-		MintSignature: p.MintSignature,
+	// Authorized by this slice's own interim credential — the same one proving
+	// control of the first source below.
+	result, err := c.CashConsolidate(ctx, p.InterimCredential, nipcash.CashConsolidateParams{
+		Sources: sources,
+		To:      bt,
 	})
 	if err != nil {
 		return nil, &PartialProgressError{Transferred: interimResult, Cause: err}

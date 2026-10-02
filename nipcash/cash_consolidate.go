@@ -16,9 +16,6 @@ type CashConsolidateParams struct {
 	// connection_key, or a *CashTarget) is accepted; ErrConsolidateTargetInvalid
 	// only if left nil.
 	To Target
-	// MintSignature opts the merged wallet's token into mint provenance —
-	// independent of whether any source wallet had one.
-	MintSignature bool
 }
 
 // consolidateSourceParam is the wire shape of one entry in cash_consolidate's
@@ -34,9 +31,8 @@ type consolidateSourceParam struct {
 
 // CashConsolidateRequest is cash_consolidate's wire request shape.
 type CashConsolidateRequest struct {
-	Sources       []consolidateSourceParam     `json:"sources"`
-	NewIdentity   cashTransferNewIdentityParam `json:"new_identity"`
-	MintSignature bool                         `json:"mint_signature,omitempty"`
+	Sources     []consolidateSourceParam     `json:"sources"`
+	NewIdentity cashTransferNewIdentityParam `json:"new_identity"`
 }
 
 // Request builds cash_consolidate's wire request from p. Exported for
@@ -86,7 +82,6 @@ func (p CashConsolidateParams) Request() (CashConsolidateRequest, error) {
 			IdentityValue: targetFieldsVal.identityValue(),
 			IAPubkey:      targetFieldsVal.iaPubkey(),
 		},
-		MintSignature: p.MintSignature,
 	}, nil
 }
 

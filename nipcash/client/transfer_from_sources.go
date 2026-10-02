@@ -29,7 +29,6 @@ type TransferFromSourcesParams struct {
 	// anything moves.
 	InterimIdentity   nipcash.Target
 	InterimCredential nipcash.Credential // proves control of InterimIdentity afterward
-	MintSignature     bool
 }
 
 // TransferFromSourcesResult is TransferFromSources' outcome.
@@ -105,7 +104,6 @@ func transferFromSources(ctx context.Context, c transferFromSourcesClient, p Tra
 			To:            p.To,
 			CurrentAmount: src.Amount,
 			SplitAmount:   &p.Amount,
-			MintSignature: p.MintSignature,
 		})
 		if err != nil {
 			return nil, err
@@ -113,10 +111,12 @@ func transferFromSources(ctx context.Context, c transferFromSourcesClient, p Tra
 		return &TransferFromSourcesResult{Transfer: result}, nil
 	}
 
-	consolidateResult, err := c.CashConsolidate(ctx, nipcash.CashConsolidateParams{
-		Sources:       p.Sources,
-		To:            p.InterimIdentity,
-		MintSignature: p.MintSignature,
+	// The call is authorized by the first source's own credential: the caller proves
+	// control of every source individually inside Params, and any one of them is
+	// equally a proof that this caller may make the call.
+	consolidateResult, err := c.CashConsolidate(ctx, p.Sources[0].Credential, nipcash.CashConsolidateParams{
+		Sources: p.Sources,
+		To:      p.InterimIdentity,
 	})
 	if err != nil {
 		return nil, err
@@ -133,7 +133,6 @@ func transferFromSources(ctx context.Context, c transferFromSourcesClient, p Tra
 		To:            p.To,
 		CurrentAmount: consolidateResult.AmountMillis,
 		SplitAmount:   &p.Amount,
-		MintSignature: p.MintSignature,
 	})
 	if err != nil {
 		return nil, &PartialProgressError{Consolidated: consolidateResult, Cause: err}

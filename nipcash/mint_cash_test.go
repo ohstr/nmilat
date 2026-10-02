@@ -11,8 +11,7 @@ func TestMintCashParams_Request_HappyPath(t *testing.T) {
 			Send(Pubkey("aa"), 10_000_000),
 			Send(ConnectionKey("discord", "some.user", "iapub"), 5_000_000),
 		},
-		Expiry:        24 * time.Hour,
-		MintSignature: true,
+		Expiry: 24 * time.Hour,
 	}
 	req, err := p.Request()
 	if err != nil {
@@ -29,9 +28,6 @@ func TestMintCashParams_Request_HappyPath(t *testing.T) {
 	}
 	if req.Expiry != 86400 {
 		t.Fatalf("Expiry: got %d, want 86400", req.Expiry)
-	}
-	if !req.MintSignature {
-		t.Fatal("expected MintSignature to carry through")
 	}
 }
 

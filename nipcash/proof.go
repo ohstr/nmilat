@@ -118,6 +118,12 @@ func (c secretCredential) buildProof(proofBinding) (identityType, identityValue 
 	return "", "", nil, nil, c.secret, nil
 }
 
+// itemAuthorization: cash-mode, so there is no key and no proof — the secret
+// itself authorizes the item (NIP-CASH §Bearer Items).
+func (c secretCredential) itemAuthorization() (privKeyHex, cashSecret string, err error) {
+	return "", c.secret, nil
+}
+
 // decryptDelivery is a pass-through: a cash-mode caller's proof is
 // their raw secret, which carries no pubkey to derive a delivery key from,
 // so NIP-CASH requires this case be delivered in the clear instead — see
@@ -153,6 +159,12 @@ func (c signingCredential) buildProof(binding proofBinding) (identityType, ident
 
 func (c signingCredential) decryptDelivery(newWalletPubkey, ciphertext string) (string, error) {
 	return decryptFromPubkey(c.privKeyHex, newWalletPubkey, ciphertext)
+}
+
+// itemAuthorization: a plain signing identity, so the transport signs a
+// kind-23192 with this key.
+func (c signingCredential) itemAuthorization() (privKeyHex, cashSecret string, err error) {
+	return c.privKeyHex, "", nil
 }
 
 // --- BySigningConnectionKey: connection_key credential ---
@@ -200,43 +212,19 @@ func (c connectionKeyCredential) buildProof(binding proofBinding) (identityType,
 	return identityTypeConnectionKey, connectionKey.String(), identityEvent, attestationEvent, "", nil
 }
 
+// itemAuthorization: a connection_key identity signs with its own real Nostr key,
+// exactly as it does for a claim proof. The IA attestation is NOT returned here — it
+// travels in the item's params alongside identity_type/identity_value, the same way
+// it does on the standard transport, because it authenticates the identity rather
+// than the envelope.
+//
+// The expiry check buildProof performs is deliberately not repeated. A stale
+// attestation must fail where it is actually used, against the request that carries
+// it, rather than here where the error could only say "some credential is stale".
+func (c connectionKeyCredential) itemAuthorization() (privKeyHex, cashSecret string, err error) {
+	return c.privKeyHex, "", nil
+}
+
 func (c connectionKeyCredential) decryptDelivery(newWalletPubkey, ciphertext string) (string, error) {
 	return decryptFromPubkey(c.privKeyHex, newWalletPubkey, ciphertext)
-}
-
-// --- ByProof: a proof captured earlier, not built from a live signing key ---
-
-type proofCredential struct {
-	identityEvent []byte
-	identityValue string // parsed from identityEvent's own "pubkey" field
-}
-
-// ByProof builds a Credential from a kind-23198 proof captured earlier —
-// e.g. by a relayer/service consolidating several sources on someone else's
-// behalf, holding only proofs each source's real owner signed and handed
-// over out of band, never their private keys (NIP-CASH §Consolidating
-// Tokens: authorization is per-source, not per-connection). identityEventJSON
-// is the same JSON-encoded event BySigning would have produced; this
-// revision of cash_consolidate only accepts pubkey-identified sources, so
-// the proof's own signer pubkey is both its identity_value and the
-// verification the server needs — nothing else to derive.
-func ByProof(identityEventJSON []byte) (Credential, error) {
-	var ev struct {
-		PubKey string `json:"pubkey"`
-	}
-	if err := json.Unmarshal(identityEventJSON, &ev); err != nil {
-		return nil, fmt.Errorf("nipcash: parse captured proof: %w", err)
-	}
-	if ev.PubKey == "" {
-		return nil, fmt.Errorf("nipcash: captured proof has no pubkey")
-	}
-	return proofCredential{identityEvent: identityEventJSON, identityValue: ev.PubKey}, nil
-}
-
-func (c proofCredential) buildProof(proofBinding) (identityType, identityValue string, identityEvent, attestationEvent []byte, cashSecret string, err error) {
-	return identityTypePubkey, c.identityValue, c.identityEvent, nil, "", nil
-}
-
-func (proofCredential) decryptDelivery(string, string) (string, error) {
-	return "", errors.New("nipcash: a ByProof credential has no private key and cannot decrypt a delivery")
 }

@@ -19,6 +19,24 @@ const (
 	KindPrivateRequest  = 23190
 	KindPrivateResponse = 23191
 	KindItemProof       = 23192
+	// KindBillProof proves possession of the BILL — that the sender holds its
+	// lokicash token — as opposed to KindItemProof, which proves control of a
+	// SLICE of it.
+	//
+	// Two different questions, and the hub needs both. A slice proof is signed by
+	// whatever key the signer chooses, so it establishes "I am identity K" and
+	// nothing more: anyone can mint a key and sign a structurally perfect slice
+	// proof for a wallet pubkey they merely guessed. A bill proof is signed by the
+	// token's own connection secret, which only someone who was GIVEN the token
+	// can produce.
+	//
+	// The standard transport had this for free — a request was encrypted to the
+	// bill's wallet pubkey, so sending one at all proved possession — and moving
+	// to an envelope addressed to the hub's inbox silently dropped it. Everything
+	// that needs to distinguish "you hold this bill but not this slice" from "no
+	// such bill" depends on it, because without it any such answer confirms a
+	// guessed wallet pubkey exists.
+	KindBillProof = 23193
 )
 
 // EnvelopeVersion is the only version this package emits. Present so a future
@@ -41,6 +59,19 @@ var (
 	ErrEnvelopeTooFresh  = errors.New("transport: envelope not_after is too far ahead")
 	ErrEnvelopeMalformed = errors.New("transport: envelope is malformed")
 	ErrDuplicateItemID   = errors.New("transport: envelope reuses an item id")
+	// ErrDuplicateItem rejects two items asking the same thing of the same bill.
+	//
+	// Distinct ids are not enough. A proof binds target, hub, method, params, nonce
+	// and expiry — but NOT the item id — so one signed pair authorizes an arbitrary
+	// number of otherwise-identical items, and only each method's own idempotency
+	// guard stops the duplicates from executing. That makes the guards the single
+	// line of defence, and any bill method added without one inherits a
+	// duplicate-execution hole with no warning.
+	//
+	// Adding the id to the proof binding would fix it at the root and break every
+	// signature already in circulation, for something with no live impact. Refusing
+	// the duplicate costs nothing and removes the amplifier.
+	ErrDuplicateItem = errors.New("transport: envelope repeats an identical item")
 )
 
 // Item is one bill operation inside an envelope.
@@ -60,7 +91,53 @@ type Item struct {
 	// Proof is the item's own signed kind-23192 event. It is a nested object, not
 	// a JSON string: a string would need escaping (costing ~5%) and force every
 	// reader through a second parse.
-	Proof json.RawMessage `json:"proof"`
+	//
+	// omitempty is load-bearing, not tidiness. A nil json.RawMessage without it
+	// marshals to `"proof":null`, and decoding that literal yields a FOUR-BYTE
+	// value — so `len(Proof) == 0` is false on the far side and a proofless bearer
+	// item arrives looking like it carries a proof. Read HasProof rather than the
+	// length, which also survives a peer that sends an explicit null anyway.
+	Proof json.RawMessage `json:"proof,omitempty"`
+	// BillProof is the item's signed kind-23193 bill proof: possession of the
+	// bill's token, signed with its connection secret.
+	//
+	// REQUIRED on every item, whatever the bill's identity mode. A cash-mode item
+	// carries no slice Proof (§Bearer Items) but still carries this, because the
+	// two answer different questions — the cash secret says which slice, this says
+	// which bill the sender actually holds.
+	//
+	// Same omitempty reasoning as Proof, and the same rule: read HasBillProof, not
+	// the length.
+	BillProof json.RawMessage `json:"bill_proof,omitempty"`
+}
+
+// nullLiteral is what a nil json.RawMessage marshals to when it is not omitted.
+var nullLiteral = []byte("null")
+
+// HasProof reports whether this item actually carries a kind-23192 proof.
+//
+// Not a length check, because JSON gives three different spellings of "no proof":
+// absent, empty, and the literal `null`. The last one is the dangerous one — it
+// decodes to four bytes, so a length check reads it as a proof that is present and
+// unverifiable, and every such item is refused. That made cash-mode bills, which
+// are proofless BY DESIGN (§Bearer Items), impossible to serve over this transport
+// at all: the failure is an omission, which is information-free, so no caller could
+// ever learn why.
+func (i Item) HasProof() bool {
+	return hasRawValue(i.Proof)
+}
+
+// HasBillProof reports whether this item actually carries a kind-23193 bill proof.
+// Same null-literal hazard as HasProof; see there.
+func (i Item) HasBillProof() bool {
+	return hasRawValue(i.BillProof)
+}
+
+// hasRawValue is HasProof and HasBillProof's shared test, so the two cannot drift
+// on the one detail that has already caused a live outage.
+func hasRawValue(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) > 0 && !bytes.Equal(trimmed, nullLiteral)
 }
 
 // Envelope is the plaintext inside one private-transport ciphertext.
@@ -144,7 +221,18 @@ func canonicalJSON(raw json.RawMessage) ([]byte, error) {
 // not be able to make the hub spend a second of secp256k1 time and only then be
 // told the envelope was over budget.
 func (i Item) VerificationCost() int {
-	cost := 1 // the item's own kind-23192 proof
+	// Every item carries a kind-23193 bill proof, whatever its identity mode, so
+	// that signature is unconditional. Undercounting it would let a batch of
+	// cash-mode items — each previously counted as free — spend far more
+	// secp256k1 time than the hub's budget believed it had authorised.
+	cost := 1 // the kind-23193 bill proof
+	if !i.IsBearer() {
+		// Plus the kind-23192 slice proof. A cash-mode item carries none: its
+		// secret IS the slice authorization, so there is no second signature.
+		// Counting a phantom verification would make a hub's budget refuse batches
+		// it could actually serve.
+		cost++
+	}
 
 	// cash_consolidate is the only method carrying nested proofs today: one per
 	// source, plus an attestation for a connection_key source.
@@ -172,6 +260,31 @@ func (i Item) VerificationCost() int {
 
 // SourceCount reports how many consolidate sources an item declares, for checking
 // against Limits.MaxConsolidateSources. Zero for every other method.
+// IsBearer reports whether this item authorizes with a cash secret rather than a
+// signature — a cash-mode ("bearer") bill.
+//
+// Such an item legitimately carries NO kind-23192 proof, because a cash credential
+// has no keypair to sign one with. NIP-CASH permits this for the private transport
+// specifically: the binding a proof provides adds nothing here, since anyone holding
+// the envelope already holds the secret and could spend it regardless. (The reason
+// cash-mode sources are banned from cash_consolidate does not apply — that ban is
+// about a secret sitting in a request readable by co-recipients of a SHARED calling
+// connection, and this transport has no shared calling connection: it encrypts to
+// the hub's inbox alone.)
+//
+// Inferred from params rather than flagged separately, for the same reason
+// SourceCount is: a separate flag could disagree with the params it describes, and
+// the params are what the hub acts on.
+func (i Item) IsBearer() bool {
+	var params struct {
+		CashSecret string `json:"cash_secret"`
+	}
+	if err := json.Unmarshal(i.Params, &params); err != nil {
+		return false
+	}
+	return params.CashSecret != ""
+}
+
 func (i Item) SourceCount() int {
 	var params struct {
 		Sources []json.RawMessage `json:"sources"`
@@ -270,15 +383,45 @@ func (e Envelope) check(limits Limits) error {
 	}
 
 	seen := make(map[string]struct{}, len(e.Items))
+	seenItems := make(map[string]string, len(e.Items))
 	budget := 0
 	for i, item := range e.Items {
 		if item.ID == "" {
 			return fmt.Errorf("%w: item %d has no id", ErrEnvelopeMalformed, i)
 		}
+		// Bounded because the REPLY echoes every id back alongside the result bodies,
+		// so an id that fits in the request need not fit in the answer — see
+		// MaxItemIDBytes. Deliberately not quoting the id in this error: an uncapped id
+		// is exactly the thing being refused, and echoing it would write the
+		// attacker's 48 KiB string into the log line that reports it.
+		if len(item.ID) > MaxItemIDBytes {
+			return fmt.Errorf("%w: item %d has a %d-byte id, over the %d limit",
+				ErrEnvelopeMalformed, i, len(item.ID), MaxItemIDBytes)
+		}
 		if _, dup := seen[item.ID]; dup {
 			return fmt.Errorf("%w: %q", ErrDuplicateItemID, item.ID)
 		}
 		seen[item.ID] = struct{}{}
+
+		// Same bill, same method, same params is the same request. Two of them in one
+		// envelope can only ever mean a replay of a signed item, since the second
+		// cannot succeed at anything the first did not already do.
+		//
+		// Keyed on the params HASH rather than the raw bytes so that a
+		// re-serialisation with different whitespace or key order is still caught —
+		// it is the same hash the proof itself binds, so this matches exactly the set
+		// of items one signature covers. Different params (two transfers of different
+		// amounts on one bill) hash differently and stay legal, which is the whole
+		// point of batching.
+		paramsHash, hashErr := CanonicalParamsHash(item.Params)
+		if hashErr != nil {
+			return fmt.Errorf("%w: item %q params: %v", ErrEnvelopeMalformed, item.ID, hashErr)
+		}
+		fingerprint := item.Target + "\x00" + item.Method + "\x00" + paramsHash
+		if prior, dup := seenItems[fingerprint]; dup {
+			return fmt.Errorf("%w: items %q and %q", ErrDuplicateItem, prior, item.ID)
+		}
+		seenItems[fingerprint] = item.ID
 
 		if len(item.Target) != keyHexLen || !isLowerHex(item.Target) {
 			return fmt.Errorf("%w: item %q target must be %d lowercase hex characters",
@@ -287,8 +430,25 @@ func (e Envelope) check(limits Limits) error {
 		if item.Method == "" {
 			return fmt.Errorf("%w: item %q has no method", ErrEnvelopeMalformed, item.ID)
 		}
-		if len(item.Proof) == 0 {
-			return fmt.Errorf("%w: item %q has no proof", ErrEnvelopeMalformed, item.ID)
+		// A proof is required EXCEPT for a cash-mode item, which has no signing key
+		// to make one with — its secret, carried in params, is the whole
+		// authorization (NIP-CASH §Bearer Items). Note this check is a client-side
+		// coherence aid only: a hub decides what a bill actually is from its own
+		// records, never from what the item claims, so omitting a proof cannot be
+		// used to escape authorization on an identity-bound bill.
+		if !item.HasProof() && !item.IsBearer() {
+			return fmt.Errorf("%w: item %q has no proof and carries no cash secret",
+				ErrEnvelopeMalformed, item.ID)
+		}
+		// A BILL proof is required unconditionally — cash-mode included. The slice
+		// proof above says which slice; this says the sender holds the bill at all,
+		// and no identity mode exempts an item from it.
+		//
+		// Same caveat as above: client-side coherence only. The hub verifies this
+		// itself and omits anything that fails, because a client-side check cannot
+		// be an authorization boundary.
+		if !item.HasBillProof() {
+			return fmt.Errorf("%w: item %q has no bill proof", ErrEnvelopeMalformed, item.ID)
 		}
 		if sources := item.SourceCount(); sources > limits.MaxConsolidateSources {
 			return fmt.Errorf("%w: item %q declares %d sources, limit %d",

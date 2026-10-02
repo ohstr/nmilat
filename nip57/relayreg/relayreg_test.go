@@ -57,8 +57,32 @@ func newRelayConn(t *testing.T) *websocket.Conn {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = conn.Close() })
+	// Cleanups run LIFO, so this fires first: close the socket, then wait for
+	// the relay's session goroutine to actually finish. gorilla hijacks the
+	// connection, so httptest.Server.Close() never waits for it -- and a session
+	// that ends after the test has completed logs into a finished *testing.T,
+	// which panics the whole package. That is an observed intermittent failure
+	// under the full suite, not a theoretical one: this package passed in
+	// isolation while failing under parallel load.
+	t.Cleanup(func() {
+		_ = conn.Close()
+		waitForSessionsToDrain(t, handler)
+	})
 	return conn
+}
+
+// waitForSessionsToDrain polls until the relay reports no live sessions,
+// mirroring the waitForSessionCount helper relay's own tests use.
+func waitForSessionsToDrain(t *testing.T, handler *relay.SessionHandler) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for handler.SessionCount() != 0 {
+		if time.Now().After(deadline) {
+			t.Errorf("relay still reports %d live session(s) after the socket closed", handler.SessionCount())
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // publish sends an EVENT and returns the relay's OK verdict and message.

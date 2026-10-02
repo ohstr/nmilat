@@ -8,31 +8,39 @@ import (
 
 // CashStatus asks a Cash Wallet what state it is in.
 //
-// It answers one of two ways: the full roster of recipients the bill was
-// created for — a read-only, shared view, not scoped to the caller alone — or,
-// for a bill the Hub has already destroyed and is still inside its retention
-// window, a tombstone (CashStatusResult.IsSpent).
+// It answers one of two ways: the roster of recipients — scoped per §Scoping the
+// Roster — or, for a bill the Hub has already destroyed and is still inside its
+// retention window, a tombstone (CashStatusResult.IsSpent).
 //
 // A timeout is NOT a third answer meaning "spent". Silence is indeterminate by
-// construction — an unreachable Hub looks identical — so a caller MUST retry
-// rather than report the bill gone.
+// construction — an unreachable Hub looks identical — so a caller MUST retry rather
+// than report the bill gone.
 //
-// Takes no params; MAY be called by any holder of the connection.
-func (c *Client) CashStatus(ctx context.Context) (*nipcash.CashStatusResult, error) {
-	return call[nipcash.CashStatusResult](ctx, c, nipcash.MethodCashStatus, struct{}{})
-}
-
-// ListRecipients is the former name of CashStatus.
+// cred is required, unlike the connection-authorized call this replaced: the private
+// transport authorizes per item, and it is also what identifies the caller well enough
+// to scope the answer at all.
 //
-// Deprecated: use CashStatus. It still calls the old wire method, so it keeps
-// working against a Hub that has not been updated yet.
-func (c *Client) ListRecipients(ctx context.Context) (*nipcash.CashStatusResult, error) {
-	// Still sends the old wire method on purpose: MethodCashStatus is a
-	// different string ("cash_status" vs "list_recipients"), so switching it
-	// here would stop this client talking to a Hub that has not migrated. The
-	// deprecation is kept for one release precisely so the two sides can move
-	// independently, and which side moves first is a wire-compatibility
-	// decision rather than a lint fix.
-	//nolint:staticcheck // SA1019: deliberate during the compatibility window.
-	return call[nipcash.CashStatusResult](ctx, c, nipcash.MethodListRecipients, struct{}{})
+// scope may be left empty, which asks for the transport's default — ScopeMine, the
+// caller's own row and nothing about their co-recipients. Pass nipcash.ScopeAll for the
+// shared roster.
+func (c *Client) CashStatus(ctx context.Context, cred nipcash.Credential, scope string) (*nipcash.CashStatusResult, error) {
+	bill, err := c.bill()
+	if err != nil {
+		return nil, err
+	}
+	session, err := c.billSession(ctx)
+	if err != nil {
+		return nil, err
+	}
+	outcomes, sendErr := session.StatusMany(ctx, []BatchStatus{{
+		ID: "1", Bill: bill, Credential: cred, Scope: scope,
+	}})
+	if len(outcomes) == 0 {
+		return nil, oneItemOutcome(OutcomeNotServed, nil, sendErr, nipcash.MethodCashStatus)
+	}
+	o := outcomes[0]
+	if err := oneItemOutcome(o.State, o.Error, sendErr, nipcash.MethodCashStatus); err != nil {
+		return nil, err
+	}
+	return o.Result, nil
 }

@@ -105,12 +105,26 @@ func TestDecodeCircleHubConnectionErrors(t *testing.T) {
 	walletPubkey := randomKeyHex(t)
 	secret := randomKeyHex(t)
 
-	validNoRelay, err := EncodeCircleHubConnection(CircleHubConnection{WalletPubkey: walletPubkey, Secret: secret})
+	// Refused at both ends now. This used to assert the opposite — that a
+	// relay-less circle hub connection decodes cleanly — contradicting NIP-CW's
+	// own TLV table, which says "one or more". A relay-less connection names a hub
+	// nothing can reach, while looking entirely valid.
+	if _, err := EncodeCircleHubConnection(CircleHubConnection{WalletPubkey: walletPubkey, Secret: secret}); err == nil {
+		t.Error("EncodeCircleHubConnection() with no relay: want error, got nil")
+	}
+	if _, err := EncodeCircleHubConnection(CircleHubConnection{
+		WalletPubkey: walletPubkey, Secret: secret, RelayURLs: []string{""},
+	}); err == nil {
+		t.Error("EncodeCircleHubConnection() with one empty relay: want error, got nil")
+	}
+
+	// A genuinely valid connection, to truncate below. It needs a relay now, which
+	// is the point of the assertions above.
+	valid, err := EncodeCircleHubConnection(CircleHubConnection{
+		WalletPubkey: walletPubkey, Secret: secret, RelayURLs: []string{"wss://r.example"},
+	})
 	if err != nil {
 		t.Fatalf("EncodeCircleHubConnection() error = %v", err)
-	}
-	if _, err := DecodeCircleHubConnection(validNoRelay); err != nil {
-		t.Errorf("DecodeCircleHubConnection() with no relay, error = %v, want nil", err)
 	}
 
 	tests := []struct {
@@ -118,7 +132,7 @@ func TestDecodeCircleHubConnectionErrors(t *testing.T) {
 		s    string
 	}{
 		{name: "not bech32", s: "not-a-valid-bech32-string"},
-		{name: "truncated", s: validNoRelay[:len(validNoRelay)-4]},
+		{name: "truncated", s: valid[:len(valid)-4]},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -135,6 +149,7 @@ func TestDecodeCircleHubConnectionWrongHRP(t *testing.T) {
 	// silently accepted as a circle hub connection.
 	s, err := nipcash.EncodeCashHubConnection(nipcash.CashHubConnection{
 		WalletPubkey: randomKeyHex(t), Secret: randomKeyHex(t),
+		RelayURLs: []string{"wss://r.example"},
 	})
 	if err != nil {
 		t.Fatalf("setup error = %v", err)

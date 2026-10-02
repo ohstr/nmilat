@@ -91,8 +91,7 @@ func TestCashConsolidateParams_Request_HappyPath(t *testing.T) {
 			From(walletA, 10_000, BySigning(privKeyHex)),
 			From(walletB, 15_000, BySigning(privKeyHex)),
 		},
-		To:            Pubkey(pubKeyHex),
-		MintSignature: true,
+		To: Pubkey(pubKeyHex),
 	}
 	req, err := p.Request()
 	if err != nil {
@@ -111,42 +110,6 @@ func TestCashConsolidateParams_Request_HappyPath(t *testing.T) {
 	}
 	if req.NewIdentity.IdentityValue != pubKeyHex {
 		t.Fatalf("NewIdentity: %+v", req.NewIdentity)
-	}
-	if !req.MintSignature {
-		t.Fatal("expected MintSignature true")
-	}
-}
-
-func TestByProof_ParsesIdentityValueFromEvent(t *testing.T) {
-	privKeyHex, pubKeyHex := generateTestKeypair(t)
-	// Build a real signed proof the way BySigning would, to hand to
-	// ByProof as a "captured earlier" credential.
-	signing := BySigning(privKeyHex)
-	_, _, identityEvent, _, _, err := signing.buildProof(proofBinding{
-		WalletPubkey: randomKeyHex(t), NewIdentityHash: "hash", AmountMillis: uint64Ptr(1000),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	cred, err := ByProof(identityEvent)
-	if err != nil {
-		t.Fatalf("ByProof: %v", err)
-	}
-	identityType, identityValue, gotEvent, _, _, err := cred.buildProof(proofBinding{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if identityType != identityTypePubkey || identityValue != pubKeyHex {
-		t.Fatalf("got type=%s value=%s, want pubkey=%s", identityType, identityValue, pubKeyHex)
-	}
-	if string(gotEvent) != string(identityEvent) {
-		t.Fatal("ByProof must return the captured proof verbatim, not re-sign")
-	}
-}
-
-func TestByProof_MalformedJSON(t *testing.T) {
-	if _, err := ByProof([]byte("not json")); err == nil {
-		t.Fatal("expected an error for malformed captured proof JSON")
 	}
 }
 

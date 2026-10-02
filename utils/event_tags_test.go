@@ -161,11 +161,34 @@ func TestMarshalTags(t *testing.T) {
 		t.Errorf("unexpected marshaled tags: %s", data)
 	}
 
+	// Nil tags MUST serialize as `[]`, not `null`.
+	//
+	// This assertion used to expect "null", which was not a requirement but a
+	// transcription of whatever encoding/json happened to do with a nil slice.
+	// NIP-01's serialization is positional — [0,pubkey,created_at,kind,tags,
+	// content] — so a null in the tags position yields a different digest from the
+	// one every relay computes, and the event is rejected as an id mismatch.
+	//
+	// It stayed hidden because virtually every event carries a tag. The first
+	// tagless event this library built was the private transport's kind-11190
+	// announcement, addressed by author alone, and a live relay refused it with
+	// "event ID mismatch" after it had verified perfectly against this library's
+	// own checks.
 	empty, err := MarshalTags(nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if string(empty) != "null" {
-		t.Errorf("expected \"null\" for nil tags, got %s", empty)
+	if string(empty) != "[]" {
+		t.Errorf("MarshalTags(nil) = %s, want [] — null makes every tagless event's id wrong", empty)
+	}
+
+	// An explicitly empty slice must agree with nil: both mean "no tags", so they
+	// must produce the same digest.
+	explicit, err := MarshalTags([][]string{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(explicit) != string(empty) {
+		t.Errorf("MarshalTags([][]string{}) = %s but MarshalTags(nil) = %s; both mean no tags", explicit, empty)
 	}
 }

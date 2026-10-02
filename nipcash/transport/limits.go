@@ -2,6 +2,20 @@
 // carrying many bill operations inside one NIP-44 ciphertext, so a relay sees
 // neither which bills are in use nor a stable identifier for the caller.
 //
+// Both halves of that are literally true, and the second is the load-bearing one:
+// a request's author is a FRESH EPHEMERAL KEY per envelope (see WrapRequest), and
+// the reply correlator is single-use, so nothing on the wire is a stable handle on
+// the caller. The caller's own nostr identity never appears at all.
+//
+// What it does NOT claim, and MUST NOT be read as claiming, is that a relay cannot
+// tell WHICH HUB is being used. It can, unavoidably: every request is p-tagged
+// with the hub's inbox key, because that is how the hub's own subscription finds
+// it, and the hub publishes that same inbox in its public announcement. So any
+// relay can map inbox -> hub once and read the hub off the p tag of everything it
+// carries. That is a disclosure about the COUNTERPARTY, not about the caller, and
+// it is structural — see NIP-CASH §Privacy Considerations, which states it
+// normatively and explains why the obvious mitigations do not remove it.
+//
 // This package is protocol only — types, codecs, size policy and per-item proof
 // construction/verification. It makes no network calls and holds no keys. The
 // hub and the client both depend on it precisely so the two cannot drift on what
@@ -51,17 +65,60 @@ const (
 	// kilobytes. A count cap cannot express that, so it exists only to reject an
 	// absurd item count before anything is parsed or hashed.
 	//
-	// 32 is deliberately below what the byte budget allows (32 redeems is ~37 KB
-	// of 56 KB): it also bounds worst-case CPU per envelope independently of size,
-	// and a client needing more sends a second envelope for one extra ~166us
-	// unwrap.
+	// 32 still fits the byte budget, but only just: measured, 32 cash_redeem items
+	// are ~52 KB of the 56 KB ceiling, where they were ~37 KB before every item
+	// gained a second signature (the kind-23193 bill proof roughly doubled item
+	// size). The count cap is therefore no longer comfortably below the byte cap —
+	// they now bind at almost the same point.
+	//
+	// Left at 32 rather than lowered, because the byte cap is the one that has to
+	// hold and it does: a batch that would not fit is split into a second envelope
+	// by the client (see packOne), costing one extra ~166us unwrap rather than
+	// failing. Anyone raising MaxConsolidateSources or shrinking MaxEnvelopeBytes
+	// should re-measure, since the slack that used to absorb such a change is gone.
 	DefaultMaxItems = 32
 
 	// DefaultPadBucketBytes is the padding granularity. Ciphertext length leaks
 	// how much is inside, so an envelope is padded up to a multiple of this and
 	// a single cash_status becomes indistinguishable from a small batch. NIP-44's
 	// own padding is power-of-two-ish and far too coarse to hide batch size.
-	DefaultPadBucketBytes = 4 * 1024
+	//
+	// 8 KiB, raised from 4 KiB when every item gained its kind-23193 bill proof.
+	// That is not a tuning preference: the bucket only hides batch size while it
+	// is large relative to an item, and items roughly doubled (a cash_status item
+	// measured 865 bytes with one proof, 1519 with two). At the old 4 KiB, 1 to 8
+	// items fell into FOUR distinguishable padded sizes instead of three, so the
+	// padding had begun disclosing the batch count — the exact leak it exists to
+	// close. TestEnvelope_EncodePadsToBuckets is what caught it.
+	//
+	// The ratio is what was preserved: ~4.8 buckets-worth of padding per item
+	// either way. The cost is bandwidth for small batches — one cash_status pads
+	// to 8 KiB, ~11 KiB base64 on the wire — which is the price of hiding how many
+	// bills a request carries, and was already accepted at 4 KiB for a
+	// smaller item.
+	DefaultPadBucketBytes = 8 * 1024
+
+	// MaxItemIDBytes bounds an item id, which an envelope echoes back inside its reply.
+	//
+	// An id needs only to be unique within one envelope, and in practice is a short label
+	// or a uuid. There was no cap at all, and the consequence was not cosmetic: a request
+	// and its reply share one byte budget, but the reply carries every id AGAIN plus the
+	// result bodies, so an id that fits going in need not fit coming back. Measured: a
+	// request encoding to exactly 57344 of 57344 bytes, carrying one 48 KiB id, produced a
+	// reply of 83968 bytes — undeliverable, for an item the Hub had already served.
+	//
+	// 256 is far above any legitimate use and still leaves the asymmetry impossible to
+	// reach by ids alone: 32 items x 256 bytes is 8 KiB of a 56 KiB envelope.
+	//
+	// Secondary reason, worth stating because it bit on discovery: the "does not fit"
+	// error quotes the id, so an uncapped id is also an attacker-controlled 48 KiB string
+	// written straight into the Hub's logs.
+	MaxItemIDBytes = 256
+
+	// MinPadBucketBytes is the smallest padding granularity an ANNOUNCED policy may
+	// set. Padding only hides anything if a bucket is wider than the thing being
+	// hidden; below one maximal item, batch size is readable off the ciphertext length.
+	MinPadBucketBytes = 2 * 1024
 
 	// DefaultMaxVerifyBudget bounds the total signature verifications one
 	// envelope may demand, counted structurally BEFORE any crypto runs. Without
@@ -169,6 +226,33 @@ var (
 // Validate rejects a policy that cannot be honoured. A hub calls this on the
 // values it read from configuration, so a misconfiguration fails at startup
 // rather than at the first envelope.
+// ValidateAnnounced is Validate plus the constraints that only matter for a policy
+// arriving from SOMEWHERE ELSE.
+//
+// Kept separate deliberately. Validate answers "is this policy coherent", which a
+// locally-constructed one must also satisfy and which tests legitimately probe with
+// small numbers. This answers "is this policy safe to ADOPT from a hub", where the
+// author is not necessarily honest and a value can be chosen to harm the client
+// rather than merely be wrong.
+func (l Limits) ValidateAnnounced() error {
+	if err := l.Validate(); err != nil {
+		return err
+	}
+	// A padding bucket below one maximal item defeats padding entirely, and that is
+	// the one thing an announced policy must not be able to do.
+	//
+	// Announcing pad_bucket_bytes: 1 produced eight distinct wire sizes for one to
+	// eight items, exactly linear at the per-item cost — so a relay reads the batch
+	// count straight off the ciphertext length. That is the leak
+	// DefaultPadBucketBytes was raised 4 KiB -> 8 KiB to close, handed back by one
+	// announced integer.
+	if l.PadBucketBytes < MinPadBucketBytes {
+		return fmt.Errorf("%w: announced pad_bucket_bytes %d is below the %d floor, which would defeat padding",
+			ErrLimitsNotPositive, l.PadBucketBytes, MinPadBucketBytes)
+	}
+	return nil
+}
+
 func (l Limits) Validate() error {
 	if l.MaxEnvelopeBytes <= 0 || l.MaxItems <= 0 || l.PadBucketBytes <= 0 || l.MaxVerifyBudget <= 0 {
 		return fmt.Errorf("%w: %+v", ErrLimitsNotPositive, l)

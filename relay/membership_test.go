@@ -81,6 +81,13 @@ func newSelfAuthTestSession(t *testing.T, selfPubkey string) *Session {
 	return &Session{SessionContext: sc}
 }
 
+// authSessionAs marks pubkey as authenticated on sess, which NIP-70 requires
+// before the relay accepts a protected event -- as every NIP-43 kind is.
+// Membership stays None so only the gate under test decides the outcome.
+func authSessionAs(sess *Session, pubkey string) {
+	sess.addIdentity(AuthedIdentity{Pubkey: pubkey, Membership: MembershipNone})
+}
+
 func sendEventAndAwaitOKForSession(t *testing.T, sess *Session, ev *nip01.Event) *wire.OkSubscriptionResponse {
 	t.Helper()
 	if err := sess.processEvent(context.Background(), &wire.EventPacket{Event: ev}); err != nil {
@@ -103,6 +110,9 @@ func TestProcessEvent_RejectsImpersonationOfRelayAuthoredKind(t *testing.T) {
 	if err := ev.Sign(otherPrivKey); err != nil {
 		t.Fatalf("sign: %v", err)
 	}
+	// Let the impersonator past NIP-70 so the self-authored gate is what
+	// rejects it, which is the gate this test is about.
+	authSessionAs(sess, ev.PubKey)
 
 	resp := sendEventAndAwaitOKForSession(t, sess, ev)
 	if resp.Accepted {
@@ -112,6 +122,7 @@ func TestProcessEvent_RejectsImpersonationOfRelayAuthoredKind(t *testing.T) {
 
 func TestProcessEvent_AcceptsRelayAuthoredEventFromSelf(t *testing.T) {
 	sess := newSelfAuthTestSession(t, authTestPubKey)
+	authSessionAs(sess, authTestPubKey)
 
 	ev := nip43.NewMembershipList(nip43.MembershipListParams{SelfPubkey: authTestPubKey})
 	if err := ev.Sign(authTestPrivKey); err != nil {
@@ -153,7 +164,13 @@ func newMembershipEnabledTestSession(t *testing.T) *Session {
 		Self: authTestPubKey,
 	}, nil, nil, cfg)
 	sc.membership = NewMembershipService(store)
-	return &Session{SessionContext: sc}
+	sess := &Session{SessionContext: sc}
+	// Every NIP-43 kind carries NIP-70's ["-"], so its author must have
+	// authenticated on this connection before the relay will accept it. These
+	// tests model a client that has run AUTH; membership itself stays None,
+	// which is what the gates under test are there to decide.
+	sess.addIdentity(AuthedIdentity{Pubkey: authTestPubKey, Membership: MembershipNone})
+	return sess
 }
 
 func joinRequestEvent(t *testing.T, claim string) *nip01.Event {
@@ -307,6 +324,7 @@ func TestHandleEvent_NilMembership_RejectsJoinAndLeave(t *testing.T) {
 	// No membership service wired in at all -- distinct from
 	// newMembershipEnabledTestSession, which always sets one.
 	sess := newSelfAuthTestSession(t, authTestPubKey)
+	authSessionAs(sess, authTestPubKey)
 
 	for _, ev := range []*nip01.Event{joinRequestEvent(t, "any-claim"), leaveRequestEvent(t)} {
 		resp := sendEventAndAwaitOKForSession(t, sess, ev)

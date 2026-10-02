@@ -7,7 +7,7 @@ import (
 
 // TestGetInfoResult_CircleWalletRoundTrips guards against exactly the bug
 // found auditing cashctl: lokihub's get_info_controller.go sends a
-// circle_hub-only `circle_wallet: {available_mloki, max_exp_secs, fees_ppm,
+// circle_hub-only `circle_wallet: {available_millis, max_exp_secs, fees_ppm,
 // circle_policy}` object over the wire, but this type had no field to catch
 // it — encoding/json silently drops unknown fields on Unmarshal, so every
 // caller (cashctl's `wallet get-info`, `decode --check`) saw an empty
@@ -17,7 +17,7 @@ func TestGetInfoResult_CircleWalletRoundTrips(t *testing.T) {
 		"alias": "hub",
 		"methods": ["get_info", "create_circle_wallet"],
 		"circle_wallet": {
-			"available_mloki": 42000,
+			"available_millis": 42000,
 			"max_exp_secs": 86400,
 			"fees_ppm": 5000,
 			"circle_policy": "allowlist"
@@ -30,7 +30,7 @@ func TestGetInfoResult_CircleWalletRoundTrips(t *testing.T) {
 	if got.CircleWallet == nil {
 		t.Fatalf("CircleWallet = nil, want populated — the circle_wallet wire field was dropped")
 	}
-	want := CircleWalletInfo{AvailableMloki: 42000, MaxExpSecs: 86400, FeesPpm: 5000, CirclePolicy: "allowlist"}
+	want := CircleWalletInfo{AvailableMillis: 42000, MaxExpSecs: 86400, FeesPpm: 5000, CirclePolicy: "allowlist"}
 	if *got.CircleWallet != want {
 		t.Errorf("CircleWallet = %+v, want %+v", *got.CircleWallet, want)
 	}

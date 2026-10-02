@@ -17,5 +17,5 @@ import (
 // doesn't need.
 type transferConsolidater interface {
 	CashTransfer(ctx context.Context, params nipcash.CashTransferParams) (*nipcash.CashTransferResult, error)
-	CashConsolidate(ctx context.Context, params nipcash.CashConsolidateParams) (*nipcash.CashConsolidateResult, error)
+	CashConsolidate(ctx context.Context, cred nipcash.Credential, params nipcash.CashConsolidateParams) (*nipcash.CashConsolidateResult, error)
 }
