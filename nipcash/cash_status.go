@@ -129,7 +129,6 @@ const ErrorSpent = "spent"
 // IsSpent reports whether r is a tombstone rather than a roster.
 func (r CashStatusResult) IsSpent() bool { return r.Error == ErrorSpent }
 
-
 // IsCash reports whether r is a cash-mode recipient row — the one
 // place identityTypeCash's own comparison lives, so a caller outside
 // this package (nipcash/client's CheckClaim, say) never needs the

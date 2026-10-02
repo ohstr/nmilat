@@ -33,7 +33,7 @@ var (
 // connection, and it is the one method with no retry idempotency — a hub with
 // bounded replay memory could double-mint on a caller's retry.
 var servableMethods = map[string]struct{}{
-	"cash_status": {},
+	"cash_status":          {},
 	"cash_redeem":          {},
 	"cash_transfer":        {},
 	"cash_consolidate":     {},

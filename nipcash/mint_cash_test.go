@@ -11,7 +11,7 @@ func TestMintCashParams_Request_HappyPath(t *testing.T) {
 			Send(Pubkey("aa"), 10_000_000),
 			Send(ConnectionKey("discord", "some.user", "iapub"), 5_000_000),
 		},
-		Expiry:        24 * time.Hour,
+		Expiry: 24 * time.Hour,
 	}
 	req, err := p.Request()
 	if err != nil {
