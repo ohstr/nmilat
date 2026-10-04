@@ -113,7 +113,15 @@ func verify(r *http.Request, opts Options, pubkeyAllowed func(pubkey string) boo
 	}
 
 	// 3. Verify Nostr Signature
-	if err := event.Verify(); err != nil {
+	//
+	// Skip NIP-13 PoW checking: Verify's generic PoW path triggers on any tag
+	// literally named "nonce" (nip13.POWTagName), regardless of event kind or
+	// tag shape. A NIP-98 HTTP-auth event has nothing to do with proof-of-work,
+	// but a client-side anti-replay nonce tag (e.g. buzz-acp's 2-element
+	// ["nonce", <uuid>], unrelated to NIP-13's 3-element ["nonce", <hex>,
+	// <difficulty>]) collides on tag name alone and fails PoW validation,
+	// rejecting an otherwise-valid auth event.
+	if err := event.Verify(nip01.WithoutPowCheck()); err != nil {
 		return "", ErrInvalidNIP98Event
 	}
 
