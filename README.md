@@ -106,8 +106,12 @@ itself — nmilat ships no router or mux of its own:
   matching stored events as a flat JSON array. This is the baseline case
   of buzz's own NIP-CW (not this module's unrelated `nipcw` package,
   which is NIP-CASH's Circle Wallet and merely shares the short name).
-  NIP-98 here binds identity/freshness, not authorization: any
-  validly-signed request is served, like an unauthenticated REQ would be.
+  NIP-98 binds identity/freshness, not authorization by itself, but this
+  endpoint is not exempt from whatever access control an equivalent REQ
+  would get: pass the relay's `*nip11.Limitation` and `*relay.MembershipService`
+  (the same instance `SessionHandler.Membership()` returns, not a second
+  one) and a `MembershipRequired` relay refuses a non-member here exactly
+  as it would refuse their REQ.
 - **[`huddle/wsaudio`](huddle/wsaudio)**'s handler — Huddle audio, on its
   own WebSocket upgrader because a binary audio frame would be a parse
   error on the Nostr socket's JSON decoder.

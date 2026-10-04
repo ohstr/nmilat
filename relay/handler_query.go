@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/ohstr/nmilat/nip01"
+	"github.com/ohstr/nmilat/nip11"
 	"github.com/ohstr/nmilat/nip98"
 )
 
@@ -32,15 +33,27 @@ const MaxQueryBodyBytes = 1 << 20
 // since/until, limit, single-letter tag filters).
 //
 // NIP-98 proves the caller's identity and binds the request the way it
-// would for any HTTP endpoint; it is not an authorization gate here. Any
-// validly-signed request is served, matching what an unauthenticated REQ
-// for the same filter would return over a socket.
-func NewQueryHandler(store *EventStore) http.Handler {
-	return &queryHandler{store: store}
+// would for any HTTP endpoint; it is not an authorization gate on its
+// own. But NIP-CW's own Access Scoping section is explicit that a query
+// surface MUST apply "the relay's ordinary access-scoped result for that
+// surface... exactly as any other filter against an inaccessible channel
+// produces" -- a plain filter through this endpoint is not exempt from
+// whatever access control an equivalent REQ would get. On this relay that
+// is the NIP-43 MembershipRequired gate (processRequest's connection-level
+// check, mirrored here per authenticated pubkey since there is no
+// connection to hold state on): limitation and membership, if given,
+// reject a non-member exactly as a REQ would, rather than silently
+// serving everyone who can produce a valid signature. AuthRequired has no
+// separate equivalent here -- a NIP-98 signature is already mandatory for
+// every request to this endpoint, required or not.
+func NewQueryHandler(store *EventStore, limitation *nip11.Limitation, membership *MembershipService) http.Handler {
+	return &queryHandler{store: store, limitation: limitation, membership: membership}
 }
 
 type queryHandler struct {
-	store *EventStore
+	store      *EventStore
+	limitation *nip11.Limitation
+	membership *MembershipService
 }
 
 func (h *queryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -60,9 +73,25 @@ func (h *queryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := nip98.VerifyAnyPubkey(r, nip98.Options{Body: body, NormalizeRootPath: true}); err != nil {
+	pubkey, err := nip98.VerifyAnyPubkey(r, nip98.Options{Body: body, NormalizeRootPath: true})
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
+	}
+
+	// Same gate as processRequest's REQ/COUNT check: NIP-43's "if at least
+	// one authenticated pubkey ... holds active or virtual membership" has
+	// no connection to hold multiple identities on here, so the NIP-98
+	// signer is the one pubkey being asked about. No membership service
+	// configured fails closed, same as nip86's empty-AllowedPubkeys
+	// posture: an operator who turned MembershipRequired on without
+	// wiring membership through to this handler gets a closed endpoint,
+	// not an accidentally open one.
+	if h.limitation != nil && h.limitation.MembershipRequired {
+		if h.membership == nil || !h.membership.IsMember(pubkey) {
+			http.Error(w, "restricted: valid NIP-43 membership required", http.StatusForbidden)
+			return
+		}
 	}
 
 	var filters []*nip01.SubscriptionFilter

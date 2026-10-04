@@ -60,7 +60,12 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/", relayHandler)
 	mux.Handle("/admin", adminHandler)
-	mux.Handle("/query", relay.NewQueryHandler(store))
+	// The query bridge shares relayHandler's own MembershipService (not a
+	// second, independently-caching one) so a NIP-43 join/leave is visible
+	// to both surfaces immediately, and so it enforces the same
+	// MembershipRequired gate relayHandler already would for an
+	// equivalent REQ.
+	mux.Handle("/query", relay.NewQueryHandler(store, &metadata.Limitation, relayHandler.Membership()))
 
 	log.Fatal(http.ListenAndServe(":8080", mux))
 }

@@ -9,15 +9,31 @@ import (
 	"testing"
 
 	"github.com/ohstr/nmilat/nip01"
+	"github.com/ohstr/nmilat/nip11"
 )
 
-const queryTestPrivKey = "0acd12cbf0fb87cd13b17bc9b57dffd11b3870b407984cec5a4ce2a69b90268c"
+const (
+	queryTestPrivKey  = "0acd12cbf0fb87cd13b17bc9b57dffd11b3870b407984cec5a4ce2a69b90268c"
+	queryOtherPrivKey = "0000000000000000000000000000000000000000000000000000000000000001"
+)
 
 func newQueryTestServer(t *testing.T, store *EventStore) string {
 	t.Helper()
-	srv := httptest.NewServer(NewQueryHandler(store))
+	srv := httptest.NewServer(NewQueryHandler(store, nil, nil))
 	t.Cleanup(srv.Close)
 	return srv.URL
+}
+
+// newQueryTestServerWithMembership serves a relay with MembershipRequired
+// set, backed by membership (which the caller populates via Join before
+// or after this call -- the service is live, not a snapshot).
+func newQueryTestServerWithMembership(t *testing.T, store *EventStore) (url string, membership *MembershipService) {
+	t.Helper()
+	membership = NewMembershipService(store)
+	limitation := &nip11.Limitation{MembershipRequired: true}
+	srv := httptest.NewServer(NewQueryHandler(store, limitation, membership))
+	t.Cleanup(srv.Close)
+	return srv.URL, membership
 }
 
 func postQuery(t *testing.T, url string, body []byte, sign bool) *http.Response {
@@ -136,8 +152,7 @@ func TestQueryHandlerAcceptsAnyValidlySignedPubkey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherPrivKey := "0000000000000000000000000000000000000000000000000000000000000001"
-	req.Header.Set("Authorization", nip98AuthHeader(t, otherPrivKey, url, http.MethodPost, body))
+	req.Header.Set("Authorization", nip98AuthHeader(t, queryOtherPrivKey, url, http.MethodPost, body))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -170,5 +185,69 @@ func TestQueryHandlerRejectsMalformedBody(t *testing.T) {
 	resp := postQuery(t, url, body, true)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+// TestQueryHandlerRejectsNonMemberWhenMembershipRequired guards the gate
+// NIP-CW's own Access Scoping section requires: this endpoint must not
+// bypass whatever access control an equivalent REQ would get. On this
+// relay that is the NIP-43 MembershipRequired connection-level check
+// (processRequest); a validly-signed but non-member caller must be
+// refused here exactly as a REQ would refuse it, not served anyway just
+// because the signature checks out.
+func TestQueryHandlerRejectsNonMemberWhenMembershipRequired(t *testing.T) {
+	ev := CreateEvent(t, 1)
+	store := newStoreWithEvents(t, []*nip01.Event{ev})
+	url, _ := newQueryTestServerWithMembership(t, store)
+	body := []byte(`[{"kinds":[1]}]`)
+
+	// queryTestPrivKey is validly signed (NIP-98 passes) but was never
+	// granted membership.
+	resp := postQuery(t, url, body, true)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", resp.StatusCode)
+	}
+}
+
+func TestQueryHandlerAllowsMemberWhenMembershipRequired(t *testing.T) {
+	ev := CreateEvent(t, 1)
+	store := newStoreWithEvents(t, []*nip01.Event{ev})
+	url, membership := newQueryTestServerWithMembership(t, store)
+	body := []byte(`[{"kinds":[1]}]`)
+
+	memberPubkey := pubkeyOfPrivKey(t, queryTestPrivKey)
+	if err := membership.Join(memberPubkey, nil); err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+
+	resp := postQuery(t, url, body, true)
+	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 200, body=%s", resp.StatusCode, data)
+	}
+
+	var got []nip01.Event
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d events, want 1", len(got))
+	}
+}
+
+// TestQueryHandlerFailsClosedWithoutMembershipService guards the
+// fail-closed posture when MembershipRequired is set but no
+// MembershipService was wired through: an operator's misconfiguration
+// must not accidentally open the endpoint to everyone.
+func TestQueryHandlerFailsClosedWithoutMembershipService(t *testing.T) {
+	store := newStore(t)
+	limitation := &nip11.Limitation{MembershipRequired: true}
+	srv := httptest.NewServer(NewQueryHandler(store, limitation, nil))
+	t.Cleanup(srv.Close)
+	body := []byte(`[{"kinds":[1]}]`)
+
+	resp := postQuery(t, srv.URL, body, true)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", resp.StatusCode)
 	}
 }

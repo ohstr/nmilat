@@ -19,7 +19,13 @@ serialization fix that had made every tagless event's id wrong.
   (`PotentialEvent.Bytes`), so it pays no extra store read beyond the
   scan itself. `nip98.VerifyAnyPubkey` is the new primitive underneath:
   same checks as `Verify`, but for an endpoint where NIP-98 binds identity
-  and freshness rather than gating on an allowlist. (#50)
+  and freshness rather than gating on an allowlist. Per NIP-CW's own
+  Access Scoping section, this is not exempt from whatever access control
+  an equivalent REQ gets: given the relay's `*nip11.Limitation` and its
+  `*MembershipService`, a `MembershipRequired` relay refuses a non-member
+  caller here exactly as it would refuse their REQ, rather than serving
+  everyone who can produce a valid signature; no membership service given
+  fails closed rather than open. (#50)
 - `huddle/room.Sink` is the seam that makes a room transport-agnostic: a
   peer is admitted with a sink, and a WebSocket peer differs from one
   bridged onto another transport only in which sink it has. `ChannelSink` is
