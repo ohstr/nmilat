@@ -2,6 +2,7 @@ package relay
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -106,6 +107,68 @@ func TestQueryHandlerDedupesAcrossFilters(t *testing.T) {
 	}
 	if len(got) != 1 {
 		t.Fatalf("got %d events, want 1 (deduped across both matching filters)", len(got))
+	}
+}
+
+// TestQueryHandlerBeforeIDResumesPastSameTimestampTie is the HTTP-level
+// counterpart to relay/store_limit_consumers_test.go's FindEvents test,
+// through the actual public /query contract: a client paging with Limit,
+// cursoring Until/BeforeID off the previous page's last entry exactly as
+// buzz-acp's own query_raw_all does, must see every event exactly once and
+// must terminate. Until alone cannot disambiguate a same-second tie -- it
+// re-matches the boundary event(s) forever.
+func TestQueryHandlerBeforeIDResumesPastSameTimestampTie(t *testing.T) {
+	tied := uint64(1700000000)
+	const total = 7
+	const pageLimit = 3
+	var all []*nip01.Event
+	for i := 0; i < total; i++ {
+		// A distinguishing tag per event, or all seven would hash to the
+		// same id: CreateEventWithTimestamp's content is fixed.
+		all = append(all, CreateEventWithTimestamp(t, 1, tied, []string{"d", fmt.Sprintf("%d", i)}))
+	}
+	store := newStoreWithEvents(t, all)
+	url := newQueryTestServer(t, store)
+
+	seen := map[string]int{}
+	filter := map[string]interface{}{"kinds": []int{1}, "limit": pageLimit}
+	const maxPages = total/pageLimit + 2
+
+	for page := 1; ; page++ {
+		if page > maxPages {
+			t.Fatalf("exceeded %d pages without terminating -- before_id is not advancing the cursor", maxPages)
+		}
+		body, err := json.Marshal([]map[string]interface{}{filter})
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp := postQuery(t, url, body, true)
+		if resp.StatusCode != http.StatusOK {
+			data, _ := io.ReadAll(resp.Body)
+			t.Fatalf("page %d: status = %d, body=%s", page, resp.StatusCode, data)
+		}
+		var got []nip01.Event
+		if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+			t.Fatalf("page %d: decoding response: %v", page, err)
+		}
+		for _, ev := range got {
+			seen[ev.ID]++
+		}
+		if len(got) < pageLimit {
+			break
+		}
+		last := got[len(got)-1]
+		filter["until"] = last.CreatedAt
+		filter["before_id"] = last.ID
+	}
+
+	if len(seen) != total {
+		t.Errorf("got %d unique events, want %d", len(seen), total)
+	}
+	for id, count := range seen {
+		if count != 1 {
+			t.Errorf("event %s returned %d times, want exactly once", id, count)
+		}
 	}
 }
 

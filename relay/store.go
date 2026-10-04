@@ -1025,13 +1025,47 @@ func (s *EventStore) findEvents(ctx context.Context, tx *bolt.Tx, filter *nip01.
 			wg.Done()
 		}
 	}()
-	if err := scan.fetch(ctx, tx, potEventsCh, &wg, true); err != nil {
+	// false, not true: storeScan.scan's fetchUntilEmpty parameter only stops
+	// early once filter.Limit matches are emitted when this is false: `true`
+	// scans the store to exhaustion regardless of Limit. FindEvents' only
+	// caller (handler_query.go's POST /query) passes a client-supplied
+	// Limit expecting it to cap the result size the way every other reader
+	// of this scan (subscription.go's REQ replay, handler_nip05.go) already
+	// does with their own `false` -- passing `true` here silently ignored
+	// it, so /query always returned every matching event regardless of the
+	// requested limit.
+	if err := scan.fetch(ctx, tx, potEventsCh, &wg, false); err != nil {
 		return nil, err
 	}
 	wg.Wait()
 	close(potEventsCh)
 
 	return potEvents, nil
+}
+
+// resolveEvsidByID looks up idHex's evsid via the indexID bucket (keyed
+// eventID+createdAt+evsid), for NIP-CW's BeforeID cursor: see
+// scanContext.beforeIDEvsid's doc comment for why evsid, not the hex id
+// itself, is what match actually compares against. found is false, with no
+// error, when idHex simply isn't (or is no longer) in the store -- that is
+// not a query failure, just a cursor pointing at a boundary event that
+// doesn't resolve to anything right now.
+func (s *EventStore) resolveEvsidByID(idHex string) (evsid uint64, found bool, err error) {
+	prefix, decodeErr := hex.DecodeString(idHex)
+	if decodeErr != nil || len(prefix) != 32 {
+		return 0, false, nil
+	}
+	err = s.db.View(func(tx *bolt.Tx) error {
+		c := tx.Bucket(indexID).Cursor()
+		k, _ := c.Seek(prefix)
+		if k == nil || !bytes.HasPrefix(k, prefix) || len(k) != 32+8+8 {
+			return nil
+		}
+		evsid = btoi(k[40:])
+		found = true
+		return nil
+	})
+	return evsid, found, err
 }
 
 func (s *EventStore) CountEvents(ctx context.Context, filters *nip01.SubscriptionFilterGroup) (int64, error) {
@@ -1202,8 +1236,17 @@ func newEventQueue() *eventQueue {
 
 func (eq *eventQueue) Len() int { return len(eq.events) }
 
+// Less breaks a CreatedAt tie by Evsid, descending: container/heap gives no
+// stable order among equal-priority elements otherwise, so a page of
+// same-second events could come back in a different pick every call with
+// no cursor able to describe "resume after here" at all -- evsid, like
+// everywhere else this store orders events, is the thing every event
+// actually has a distinct value for.
 func (eq *eventQueue) Less(i, j int) bool {
-	return eq.events[i].CreatedAt > eq.events[j].CreatedAt
+	if eq.events[i].CreatedAt != eq.events[j].CreatedAt {
+		return eq.events[i].CreatedAt > eq.events[j].CreatedAt
+	}
+	return eq.events[i].Evsid > eq.events[j].Evsid
 }
 
 func (eq *eventQueue) Swap(i, j int) {
@@ -1281,6 +1324,18 @@ func (sc *storeCursor) match(ss *scanContext, k, v []byte) (queued bool, done bo
 
 	created := btoi(v)
 	if (ss.filter.Since > 0 && created < ss.filter.Since) || (ss.filter.Until > 0 && created > ss.filter.Until) {
+		return false, false, nil
+	}
+
+	// NIP-CW composite cursor: a page boundary that falls mid-tie (several
+	// events sharing created_at == Until) can't be resumed by Until alone --
+	// "created_at <= Until" matches the boundary event(s) again on every
+	// subsequent page, which never advances and never terminates. BeforeID
+	// names that boundary event; evsid >= its own evsid is exactly "this
+	// event, or another one at the same timestamp already delivered on an
+	// earlier page" -- a scan-order comparison, not an identity check, so
+	// it holds with no re-walk of already-delivered keys.
+	if ss.hasBeforeID && created == ss.filter.Until && evsid >= ss.beforeIDEvsid {
 		return false, false, nil
 	}
 
@@ -1414,6 +1469,23 @@ type scanContext struct {
 	// skips them. Zero on a first scan, when nothing has been delivered
 	// yet.
 	boundaryEvsid uint64
+	// beforeIDEvsid/hasBeforeID: filter.BeforeID resolved to its own evsid
+	// once at scan setup (see resolveEvsidByID), since most indexes' keys
+	// don't carry the 32-byte event id at all -- evsid is the one thing
+	// every index's key format has in common, so it's what match compares
+	// against instead of the hex id. A plain evsid >= beforeIDEvsid check
+	// (see storeCursor.match) excludes exactly the tied-timestamp boundary
+	// events already delivered, with no "have we seen it yet" state to
+	// track -- which matters because a multi-cursor scan (e.g. several
+	// kind+author combinations) runs each cursor over its own disjoint key
+	// range, so a stateful "skip until this cursor's walk reaches evsid X"
+	// would starve any cursor whose range never contains that evsid at all.
+	// hasBeforeID is false both when BeforeID is unset and when it named an
+	// event resolveEvsidByID couldn't find (e.g. deleted between pages):
+	// either way, Until-only matching is the correct fallback, not
+	// excluding the entire scan.
+	beforeIDEvsid uint64
+	hasBeforeID   bool
 }
 
 type storeScan struct {
@@ -1435,6 +1507,15 @@ func newStoreScan(store *EventStore, filter *nip01.SubscriptionFilter, sentEvent
 			sentEvents:  sentEvents,
 			queued:      make(map[uint64]bool),
 		},
+	}
+
+	if filter.BeforeID != "" {
+		evsid, found, err := store.resolveEvsidByID(filter.BeforeID)
+		if err != nil {
+			return nil, err
+		}
+		ss.beforeIDEvsid = evsid
+		ss.hasBeforeID = found
 	}
 
 	var err error
