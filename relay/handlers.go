@@ -149,10 +149,7 @@ func (h *StandardRequestHandler) Handle(ctx context.Context, s *Session, rp *wir
 		for {
 			select {
 			case event := <-toSend:
-				eventBytes, err := s.store.FindEventBytes(event.Evsid)
-				if err == nil {
-					s.reply(&wire.EventSubscriptionResponse{SubscriptionID: sub.id, EventBytes: eventBytes})
-				}
+				s.reply(&wire.EventSubscriptionResponse{SubscriptionID: sub.id, EventBytes: event.Bytes})
 				wg.Done()
 
 			case <-eose:

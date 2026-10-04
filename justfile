@@ -22,3 +22,7 @@ tidy:
 
 # Run build, vet, and test together (local pre-push / pre-tag check)
 check: build vet test
+
+# Benchmark the relay engine's hot paths (allocs/op, ns/op)
+bench:
+    go test -bench=. -benchmem ./relay/...

@@ -255,11 +255,37 @@ Results with the fix, same command as above:
 --- PASS: TestBoltNewReadTransactionBlocksBehindAGrowingWrite (1.42s)
 ```
 
-Not done, and worth considering separately: the delivery loop still
-re-reads each event with `FindEventBytes` (`handlers.go:154`) right after
-the scan loaded it. Carrying the bytes through on the `PotentialEvent`
-would drop one short read transaction per event from the hot path, at the
-cost of holding event bodies in the batch and the subscription channel.
+**Update, 2026-10-03: done.** The delivery loop used to re-read each event
+with `FindEventBytes` (`handlers.go:154`, as it was) right after the scan
+had already loaded it. `PotentialEvent` now carries that event's raw JSON
+as `Bytes`, set by `collectBatch` from the same read it already does for
+filter matching, copied out of bbolt's mmap the same way `FindEventBytes`
+always has. `handlers.go`'s delivery loop and `handler_nip05.go`'s consumer
+both use `event.Bytes`/`pe.Bytes` directly now, at the cost of holding
+event bodies in the batch and the subscription channel -- the tradeoff
+flagged below when this was still open.
+
+This also changes what happens to an event deleted in the gap between scan
+and delivery: it is now delivered once anyway, using the bytes captured at
+scan time, rather than silently dropped (the old `FindEventBytes` at
+delivery time would have returned `ErrEventNotFound` for it). This is a
+deliberate snapshot-consistency choice -- "deliver what matched at scan
+time" -- not an oversight; see `TestDeliveryUsesScanTimeBytesEvenIfEventIsLaterDeleted`
+(`relay/store_potentialevent_bytes_test.go`).
+
+Measured with `BenchmarkDeliverREQ` vs. `BenchmarkDeliverREQLegacyPerEventStoreRead`
+(`relay/store_bench_test.go`, `go test -bench=BenchmarkDeliverREQ -benchmem
+./relay/...`), scanning and delivering 200 matching events:
+
+| | old (one `FindEventBytes` read tx per event) | new (`PotentialEvent.Bytes`) | delta |
+|---|---|---|---|
+| ns/op | 2,678,799 | 1,774,558 | -33.8% |
+| B/op | 448,347 | 275,670 | -38.5% |
+| allocs/op | 5,270 | 3,470 | -34.2% |
+
+`TestStandardRequestHandlerDoesNotOpenASecondReadTransactionPerDeliveredEvent`
+(`relay/store_scan_transaction_test.go`) guards this over a real REQ/websocket
+round trip via bbolt's own `Stats().TxN`.
 
 ## Live incident (downstream: `bzzsocial/bzz-feed`, 2026-09-22)
 

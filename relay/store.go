@@ -870,6 +870,26 @@ func (s *EventStore) findEventUsingTx(tx *bolt.Tx, evsid uint64) (*nip01.Event, 
 	return event, nil
 }
 
+// findEventAndBytesUsingTx is findEventUsingTx plus the raw JSON, for callers
+// that go on to hand those bytes to a consumer outside this transaction (see
+// collectBatch). The bytes are copied out of bbolt's mmap before returning,
+// same as FindEventBytes -- they must not be a direct reference into it.
+func (s *EventStore) findEventAndBytesUsingTx(tx *bolt.Tx, evsid uint64) (*nip01.Event, []byte, error) {
+
+	raw := tx.Bucket(indexEvents).Get(itob(evsid))
+	if raw == nil {
+		return nil, nil, fmt.Errorf("%w, evsid=%d", ErrEventNotFound, evsid)
+	}
+	bytes := append([]byte(nil), raw...)
+
+	var event *nip01.Event
+	if err := json.Unmarshal(bytes, &event); err != nil {
+		return nil, nil, err
+	}
+
+	return event, bytes, nil
+}
+
 func (s *EventStore) findEventEvsidByEventID(ctx context.Context, tx *bolt.Tx, eventsID []string) ([]*PotentialEvent, error) {
 
 	cursors, err := createCursorsByID(eventsID)
@@ -1160,6 +1180,14 @@ type PotentialEvent struct {
 	Evsid     uint64
 	CreatedAt uint64
 	EventID   string
+	// Bytes is the event's raw JSON as collectBatch found it at scan time.
+	// A consumer that delivers this event later (handlers.go, handler_nip05.go)
+	// uses Bytes directly instead of re-reading the store, which would open a
+	// second transaction per delivered event. This means delivery reflects a
+	// snapshot taken at scan time: an event deleted between scan and delivery
+	// is still delivered once, using the bytes captured here, rather than
+	// silently dropped.
+	Bytes []byte
 }
 
 type eventQueue struct {
@@ -1261,7 +1289,7 @@ func (sc *storeCursor) match(ss *scanContext, k, v []byte) (queued bool, done bo
 		idHex = hex.EncodeToString(idBytes)
 	}
 
-	ss.queueEvents.AddEvent(&PotentialEvent{evsid, created, idHex})
+	ss.queueEvents.AddEvent(&PotentialEvent{Evsid: evsid, CreatedAt: created, EventID: idHex})
 	ss.queued[evsid] = true
 
 	return true, false, nil
@@ -1713,7 +1741,7 @@ func (ss *storeScan) collectBatch(tx *bolt.Tx, batch []*PotentialEvent, fetchUnt
 		}
 
 		potEvent := ss.queueEvents.PopEvent()
-		event, err := ss.store.findEventUsingTx(tx, potEvent.Evsid)
+		event, bytes, err := ss.store.findEventAndBytesUsingTx(tx, potEvent.Evsid)
 		if err != nil {
 			return batch, added, err
 		}
@@ -1728,6 +1756,7 @@ func (ss *storeScan) collectBatch(tx *bolt.Tx, batch []*PotentialEvent, fetchUnt
 		}
 
 		potEvent.EventID = event.ID
+		potEvent.Bytes = bytes
 		ss.sentEvents[potEvent.Evsid] = true
 		batch = append(batch, potEvent)
 		added++

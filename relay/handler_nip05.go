@@ -90,8 +90,8 @@ func (h *nip05Handler) findIdentities(ctx context.Context, name string) (*nip05.
 				if !ok {
 					return
 				}
-				dnsEvent, err := h.store.FindEvent(pe.Evsid)
-				if err != nil {
+				var dnsEvent *nip01.Event
+				if err := json.Unmarshal(pe.Bytes, &dnsEvent); err != nil {
 					continue
 				}
 				dnsEvents = append(dnsEvents, dnsEvent)

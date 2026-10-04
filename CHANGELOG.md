@@ -346,6 +346,18 @@ serialization fix that had made every tagless event's id wrong.
   zero value and must be updated. The field is read once at discovery time to
   decide whether to join a circle, so an alias would be carried indefinitely
   to serve a single read. The unit is unchanged. (#43)
+- `relay.PotentialEvent` now carries `Bytes`, the event's raw JSON as
+  `collectBatch` found it at scan time. The REQ delivery loop
+  (`handlers.go`) and the NIP-05 handler's consumer used to re-read each
+  delivered event from the store -- `FindEventBytes`/`FindEvent`, each its
+  own bolt read transaction -- right after the scan had already loaded the
+  same bytes; they now use `Bytes` directly. Scanning and delivering 200
+  matching events drops from 2.68ms to 1.77ms and 5270 to 3470 allocs/op
+  (`BenchmarkDeliverREQ` vs. `BenchmarkDeliverREQLegacyPerEventStoreRead`,
+  `relay/store_bench_test.go`). This also means an event deleted between
+  scan and delivery is now delivered once anyway, using the bytes captured
+  at scan time, rather than silently dropped -- a deliberate
+  snapshot-consistency choice, not a live re-check. (#49)
 
 ### Fixed
 
