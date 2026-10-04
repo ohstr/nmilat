@@ -252,6 +252,13 @@ serialization fix that had made every tagless event's id wrong.
   constructors derive every binding from a single source, so an incoherent
   item cannot be built in the first place rather than merely being caught.
   (#43)
+- `examples/` holds runnable embedding patterns -- `basic-relay`,
+  `full-relay`, and `relay-with-management-api`, the last mirroring how
+  `ncli` composes the relay engine and the NIP-86 management API under one
+  mux in production. README gets a matching "Embedding nmilat" section
+  naming the three independent `http.Handler`s an embedder composes
+  (relay, NIP-86, Huddle audio) and the performance guarantees that
+  composition relies on. (#49)
 
 ### Changed
 
