@@ -2,12 +2,17 @@
 
 ## [0.5.0]
 
-_Cut as `v0.5.0-rc.2` on 2026-10-02._ This section stays open: 0.5.0 itself has
+_Cut as `v0.5.0-rc.3` on 2026-10-04._ This section stays open: 0.5.0 itself has
 not been released, so everything under it is still pre-release and accumulating.
 rc.2 is where the NIP-CASH private transport became usable from a client: the
 batch API that spends many bills in one relay event, the breaking changes three
 rounds of audit forced on the transport's own shapes, and the NIP-01
-serialization fix that had made every tagless event's id wrong.
+serialization fix that had made every tagless event's id wrong. rc.3 formalizes
+the embeddable relay SDK -- `examples/`, a README "Embedding nmilat" section --
+alongside the `PotentialEvent.Bytes` hot-path fix that removes a second
+read transaction from REQ delivery, and adds the NIP-98-authenticated
+`POST /query` HTTP bridge for buzz-relay compatibility (access-scoped by
+NIP-43 membership exactly as REQ is).
 
 ### Added
 
