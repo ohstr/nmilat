@@ -16,6 +16,7 @@ import (
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip11"
 	"github.com/ohstr/nmilat/testlogger"
+	"github.com/ohstr/nmilat/wire"
 )
 
 // These tests cover the failure mode written up in
@@ -528,5 +529,58 @@ func TestBoltNewReadTransactionBlocksBehindAGrowingWrite(t *testing.T) {
 	case <-newRead:
 	case <-time.After(30 * time.Second):
 		t.Fatal("new read transaction never started after the held read transaction was released")
+	}
+}
+
+// TestStandardRequestHandlerDoesNotOpenASecondReadTransactionPerDeliveredEvent
+// guards the fix for the "not done" item this report originally left open:
+// handlers.go's delivery loop used to call store.FindEventBytes for every
+// event it took off the subscription channel, each one its own fresh
+// db.View -- on top of the one (or few) short transactions the scan itself
+// already opened to collect and filter the same events via collectBatch.
+// PotentialEvent now carries Bytes from collectBatch straight through to
+// delivery, so that second, per-event transaction no longer happens.
+//
+// This drives a real REQ over a real websocket connection (the actual code
+// path in handlers.go, not a synthetic one), and asserts that bbolt's own
+// TxN counter -- "total number of started read transactions"
+// (db.Stats().TxN) -- grows by far less than the event count. Before the
+// fix, delivering eventCount events opened at least eventCount extra
+// transactions on top of the scan's own; eventCount is chosen large enough
+// that no plausible number of scan passes could account for that growth.
+func TestStandardRequestHandlerDoesNotOpenASecondReadTransactionPerDeliveredEvent(t *testing.T) {
+	const eventCount = 50
+
+	events := CreateEvents(t, eventCount, 1)
+	store := newStoreWithEvents(t, events)
+	conn := createWS(t, store)
+
+	txnBefore := store.db.Stats().TxN
+
+	req := wire.NewRequestPacket("txn-count-sub", CreateFilter([]int{1}, eventCount))
+	if err := conn.WriteJSON(req); err != nil {
+		t.Fatalf("failed to send REQ: %v", err)
+	}
+
+	delivered := 0
+	deadline := time.Now().Add(10 * time.Second)
+	for delivered < eventCount {
+		_ = conn.SetReadDeadline(deadline)
+		var payload wire.ClientPayload
+		if err := conn.ReadJSON(&payload); err != nil {
+			t.Fatalf("reading response %d/%d: %v", delivered, eventCount, err)
+		}
+		if _, ok := payload.SubscriptionResponse.(*wire.EventSubscriptionResponse); ok {
+			delivered++
+		}
+	}
+
+	txnAfter := store.db.Stats().TxN
+	growth := txnAfter - txnBefore
+
+	if growth >= eventCount {
+		t.Fatalf("delivering %d events opened %d new read transactions -- "+
+			"the delivery loop is re-reading the store per event instead of using "+
+			"PotentialEvent.Bytes captured at scan time", eventCount, growth)
 	}
 }

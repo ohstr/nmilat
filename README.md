@@ -87,6 +87,54 @@ dependency-free on their own; blank-import their `relayreg` subpackage to
 declare relay support, e.g. `import _ "github.com/ohstr/nmilat/nip57/relayreg"`.
 See "Run a relay" below.
 
+Runnable embedding patterns, at increasing levels of control, live in
+[`examples/`](examples/) — not an importable package, just reference code to
+copy from.
+
+## Embedding nmilat
+
+An embedder gets several independent `http.Handler`s and composes them
+itself — nmilat ships no router or mux of its own:
+
+- **`relay.Relay`** (or `relay.SessionHandler` directly) — the Nostr relay:
+  NIP-11 info document and WebSocket upgrade on one path.
+- **[`nip86.Handler`](nip86)** — the NIP-86 relay management API,
+  NIP-98-authenticated, on whatever path the embedder mounts it.
+- **`relay.NewQueryHandler`** — `POST /query`: a NIP-98-authenticated HTTP
+  bridge, a one-shot alternative to a WebSocket REQ/EOSE round trip. The
+  body is a JSON array of plain NIP-01 filters; the response is the
+  matching stored events as a flat JSON array. This is the baseline case
+  of buzz's own NIP-CW (not this module's unrelated `nipcw` package,
+  which is NIP-CASH's Circle Wallet and merely shares the short name).
+  NIP-98 binds identity/freshness, not authorization by itself, but this
+  endpoint is not exempt from whatever access control an equivalent REQ
+  would get: pass the relay's `*nip11.Limitation` and `*relay.MembershipService`
+  (the same instance `SessionHandler.Membership()` returns, not a second
+  one) and a `MembershipRequired` relay refuses a non-member here exactly
+  as it would refuse their REQ.
+- **[`huddle/wsaudio`](huddle/wsaudio)**'s handler — Huddle audio, on its
+  own WebSocket upgrader because a binary audio frame would be a parse
+  error on the Nostr socket's JSON decoder.
+
+They can share one `*relay.EventStore` (`EventStore.Db()` is deliberately
+exposed for an embedder's own buckets on the same file) and are mounted
+under whatever `http.ServeMux` the embedder already has — see
+[`examples/relay-with-management-api`](examples/relay-with-management-api)
+for the relay + management-API + query-bridge composition, which mirrors
+what [`ncli`](https://github.com/ohstr/ncli) does internally. Optional
+NIPs opt in by `relayreg` blank-import (above), not by the relay package
+importing them.
+
+**Performance characteristics an embedder can rely on:** every logger is
+`zerolog.Nop()` unless passed in via `WithLogger`/`WithEventStoreLogger` —
+nothing is written anywhere by default; there is no reflection-based
+validation or schema check on the event ingest/delivery hot path; writes
+are batched into single bbolt transactions (`EventStore`'s task queue); and
+the REQ delivery loop carries each matched event's bytes from the scan
+straight through to the wire reply, rather than re-reading the store per
+event (see `docs/relay-scan-transaction-blocks-under-load.md` for the
+before/after numbers).
+
 ## Quick start
 
 ### Run a relay
@@ -121,17 +169,19 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer rl.Close()
+	defer func() { _ = rl.Close() }()
 
 	log.Fatal(http.ListenAndServe(":8080", rl))
 }
 ```
 
+(Runnable as [`examples/basic-relay`](examples/basic-relay).)
+
 `relay.New` includes NIP-11 relay-info negotiation and starts profile
 verification, with search disabled. For storage tuning, a search service, or
 session options (CORS allowlist, NIP-26 delegation, ...), build the store
 and handler directly with `relay.NewEventStore`/`relay.NewSessionHandler`
-instead.
+instead — see [`examples/full-relay`](examples/full-relay).
 
 Connect with `relayclient.Connect` against `ws://localhost:8080` (next example).
 

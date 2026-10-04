@@ -2,15 +2,35 @@
 
 ## [0.5.0]
 
-_Cut as `v0.5.0-rc.2` on 2026-10-02._ This section stays open: 0.5.0 itself has
+_Cut as `v0.5.0-rc.3` on 2026-10-04._ This section stays open: 0.5.0 itself has
 not been released, so everything under it is still pre-release and accumulating.
 rc.2 is where the NIP-CASH private transport became usable from a client: the
 batch API that spends many bills in one relay event, the breaking changes three
 rounds of audit forced on the transport's own shapes, and the NIP-01
-serialization fix that had made every tagless event's id wrong.
+serialization fix that had made every tagless event's id wrong. rc.3 formalizes
+the embeddable relay SDK -- `examples/`, a README "Embedding nmilat" section --
+alongside the `PotentialEvent.Bytes` hot-path fix that removes a second
+read transaction from REQ delivery, and adds the NIP-98-authenticated
+`POST /query` HTTP bridge for buzz-relay compatibility (access-scoped by
+NIP-43 membership exactly as REQ is).
 
 ### Added
 
+- `relay.NewQueryHandler` serves `POST /query`: a NIP-98-authenticated HTTP
+  bridge that takes a JSON array of plain NIP-01 filters and returns the
+  matching stored events as a flat JSON array, a one-shot alternative to a
+  WebSocket REQ/EOSE round trip for buzz-relay-compatible clients. It
+  reuses the bytes `collectBatch` already captured at scan time
+  (`PotentialEvent.Bytes`), so it pays no extra store read beyond the
+  scan itself. `nip98.VerifyAnyPubkey` is the new primitive underneath:
+  same checks as `Verify`, but for an endpoint where NIP-98 binds identity
+  and freshness rather than gating on an allowlist. Per NIP-CW's own
+  Access Scoping section, this is not exempt from whatever access control
+  an equivalent REQ gets: given the relay's `*nip11.Limitation` and its
+  `*MembershipService`, a `MembershipRequired` relay refuses a non-member
+  caller here exactly as it would refuse their REQ, rather than serving
+  everyone who can produce a valid signature; no membership service given
+  fails closed rather than open. (#50)
 - `huddle/room.Sink` is the seam that makes a room transport-agnostic: a
   peer is admitted with a sink, and a WebSocket peer differs from one
   bridged onto another transport only in which sink it has. `ChannelSink` is
@@ -252,6 +272,13 @@ serialization fix that had made every tagless event's id wrong.
   constructors derive every binding from a single source, so an incoherent
   item cannot be built in the first place rather than merely being caught.
   (#43)
+- `examples/` holds runnable embedding patterns -- `basic-relay`,
+  `full-relay`, and `relay-with-management-api`, the last mirroring how
+  `ncli` composes the relay engine and the NIP-86 management API under one
+  mux in production. README gets a matching "Embedding nmilat" section
+  naming the three independent `http.Handler`s an embedder composes
+  (relay, NIP-86, Huddle audio) and the performance guarantees that
+  composition relies on. (#50)
 
 ### Changed
 
@@ -346,6 +373,18 @@ serialization fix that had made every tagless event's id wrong.
   zero value and must be updated. The field is read once at discovery time to
   decide whether to join a circle, so an alias would be carried indefinitely
   to serve a single read. The unit is unchanged. (#43)
+- `relay.PotentialEvent` now carries `Bytes`, the event's raw JSON as
+  `collectBatch` found it at scan time. The REQ delivery loop
+  (`handlers.go`) and the NIP-05 handler's consumer used to re-read each
+  delivered event from the store -- `FindEventBytes`/`FindEvent`, each its
+  own bolt read transaction -- right after the scan had already loaded the
+  same bytes; they now use `Bytes` directly. Scanning and delivering 200
+  matching events drops from 2.68ms to 1.77ms and 5270 to 3470 allocs/op
+  (`BenchmarkDeliverREQ` vs. `BenchmarkDeliverREQLegacyPerEventStoreRead`,
+  `relay/store_bench_test.go`). This also means an event deleted between
+  scan and delivery is now delivered once anyway, using the bytes captured
+  at scan time, rather than silently dropped -- a deliberate
+  snapshot-consistency choice, not a live re-check. (#50)
 
 ### Fixed
 
