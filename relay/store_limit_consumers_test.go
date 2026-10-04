@@ -11,6 +11,141 @@ import (
 
 // CountEvents (NIP-45) and QueryNip77Items (NIP-77) run the same bounded
 // scan a REQ does, so they inherit whatever that path does with a limit.
+//
+// FindEvents (POST /query's only caller, handler_query.go) used to be a
+// fourth, unlisted consumer of that same scan with no test of its own --
+// it called scan.fetch's fetchUntilEmpty parameter with `true` instead of
+// every other caller's `false`, silently scanning to exhaustion regardless
+// of the filter's own Limit. /query's own response-shape tests
+// (handler_query_test.go) never exercised a filter with more matching
+// events than the requested limit, so nothing caught it.
+
+func TestFindEventsRespectsLimit(t *testing.T) {
+	store := newStore(t)
+	base := uint64(time.Now().Unix())
+
+	var all []*nip01.Event
+	for i := 0; i < 40; i++ {
+		all = append(all, signEventAt(t, probeKeyA, 1, base-uint64(i), fmt.Sprintf("find %d", i)))
+	}
+	insertInOrder(t, store, all, newestFirst)
+
+	cases := []struct {
+		limit int
+		want  int
+	}{
+		{1, 1},
+		{5, 5},
+		{40, 40},
+		{100, 40},
+	}
+
+	for _, tc := range cases {
+		t.Run(fmt.Sprintf("limit_%d", tc.limit), func(t *testing.T) {
+			got, err := store.FindEvents(context.Background(), &nip01.SubscriptionFilter{
+				Kinds: []int{1},
+				Limit: tc.limit,
+			})
+			if err != nil {
+				t.Fatalf("FindEvents: %v", err)
+			}
+			if len(got) != tc.want {
+				t.Errorf("got %d events, want %d", len(got), tc.want)
+			}
+		})
+	}
+}
+
+// They must be the newest N, not an arbitrary N -- the same "oldest N
+// unnoticed" risk store_limit_test.go's fixtures target for the other
+// consumers.
+func TestFindEventsLimitReturnsNewestNotArbitrary(t *testing.T) {
+	store := newStore(t)
+	base := uint64(time.Now().Unix())
+
+	var all []*nip01.Event
+	for i := 0; i < 20; i++ {
+		all = append(all, signEventAt(t, probeKeyA, 1, base-uint64(i), fmt.Sprintf("newest %d", i)))
+	}
+	insertInOrder(t, store, all, newestFirst)
+
+	got, err := store.FindEvents(context.Background(), &nip01.SubscriptionFilter{
+		Kinds: []int{1},
+		Limit: 5,
+	})
+	if err != nil {
+		t.Fatalf("FindEvents: %v", err)
+	}
+	if len(got) != 5 {
+		t.Fatalf("got %d events, want 5", len(got))
+	}
+	want := map[uint64]bool{}
+	for _, ev := range all[:5] {
+		want[ev.CreatedAt] = true
+	}
+	for _, pe := range got {
+		if !want[pe.CreatedAt] {
+			t.Errorf("got created_at=%d, want one of the 5 newest timestamps", pe.CreatedAt)
+		}
+	}
+}
+
+// TestFindEventsBeforeIDResumesPastSameTimestampTieWithoutDuplicationOrLoss
+// is NIP-CW's composite cursor, exercised the way buzz-acp's own
+// query_raw_all actually uses it: page by Limit, and on a full page, cursor
+// the next request with Until=last page entry's CreatedAt,
+// BeforeID=that entry's id. Until alone ("created_at <= Until") cannot
+// disambiguate a same-second tie -- it re-matches the boundary event(s) on
+// every subsequent page, which never advances and never terminates (bounded
+// only by query_raw_all's own 10,000-event safety cap in production). This
+// asserts both that it terminates and that every event is returned exactly
+// once across the full walk.
+func TestFindEventsBeforeIDResumesPastSameTimestampTieWithoutDuplicationOrLoss(t *testing.T) {
+	store := newStore(t)
+	tied := uint64(time.Now().Unix())
+
+	const total = 11
+	const pageLimit = 3
+	var all []*nip01.Event
+	for i := 0; i < total; i++ {
+		all = append(all, signEventAt(t, probeKeyA, 1, tied, fmt.Sprintf("tied %d", i)))
+	}
+	insertInOrder(t, store, all, shuffled)
+
+	filter := &nip01.SubscriptionFilter{Kinds: []int{1}, Limit: pageLimit}
+	seen := map[string]int{}
+	const maxPages = total/pageLimit + 2 // generous; a real bug here loops far longer than this
+	pages := 0
+
+	for {
+		pages++
+		if pages > maxPages {
+			t.Fatalf("exceeded %d pages without terminating -- before_id is not advancing the cursor", maxPages)
+		}
+		page, err := store.FindEvents(context.Background(), filter)
+		if err != nil {
+			t.Fatalf("FindEvents (page %d): %v", pages, err)
+		}
+		for _, pe := range page {
+			seen[pe.EventID]++
+		}
+		if len(page) < pageLimit {
+			break
+		}
+		last := page[len(page)-1]
+		filter.Until = last.CreatedAt
+		filter.BeforeID = last.EventID
+	}
+
+	if len(seen) != total {
+		t.Errorf("got %d unique events across %d pages, want %d", len(seen), pages, total)
+	}
+	for id, count := range seen {
+		if count != 1 {
+			t.Errorf("event %s returned %d times, want exactly once", id, count)
+		}
+	}
+}
 
 func TestCountEventsRespectsLimit(t *testing.T) {
 	store := newStore(t)

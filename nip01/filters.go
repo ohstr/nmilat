@@ -17,6 +17,13 @@ type SubscriptionFilter struct {
 	Limit   int                 `json:"limit,omitempty"`
 	Search  string              `json:"search,omitempty"`
 	Cache   json.RawMessage     `json:"cache,omitempty"`
+	// BeforeID is NIP-CW's composite-cursor tie-breaker: paired with Until
+	// (set to the event's own created_at), it resumes a page strictly after
+	// this specific event rather than merely "created_at <= Until", which
+	// alone cannot disambiguate same-second ties and would keep re-matching
+	// the boundary event(s) forever. See storeCursor.match in relay/store.go
+	// for the scan-side handling.
+	BeforeID string `json:"before_id,omitempty"`
 }
 
 // UnmarshalJSON decodes a filter's known fields directly into their typed
