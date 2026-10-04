@@ -19,7 +19,7 @@ serialization fix that had made every tagless event's id wrong.
   (`PotentialEvent.Bytes`), so it pays no extra store read beyond the
   scan itself. `nip98.VerifyAnyPubkey` is the new primitive underneath:
   same checks as `Verify`, but for an endpoint where NIP-98 binds identity
-  and freshness rather than gating on an allowlist. (#48)
+  and freshness rather than gating on an allowlist. (#50)
 - `huddle/room.Sink` is the seam that makes a room transport-agnostic: a
   peer is admitted with a sink, and a WebSocket peer differs from one
   bridged onto another transport only in which sink it has. `ChannelSink` is
@@ -267,7 +267,7 @@ serialization fix that had made every tagless event's id wrong.
   mux in production. README gets a matching "Embedding nmilat" section
   naming the three independent `http.Handler`s an embedder composes
   (relay, NIP-86, Huddle audio) and the performance guarantees that
-  composition relies on. (#49)
+  composition relies on. (#50)
 
 ### Changed
 
@@ -373,7 +373,7 @@ serialization fix that had made every tagless event's id wrong.
   `relay/store_bench_test.go`). This also means an event deleted between
   scan and delivery is now delivered once anyway, using the bytes captured
   at scan time, rather than silently dropped -- a deliberate
-  snapshot-consistency choice, not a live re-check. (#49)
+  snapshot-consistency choice, not a live re-check. (#50)
 
 ### Fixed
 
