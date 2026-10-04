@@ -272,6 +272,17 @@ NIP-43 membership exactly as REQ is).
   constructors derive every binding from a single source, so an incoherent
   item cannot be built in the first place rather than merely being caught.
   (#43)
+- `relay.NewEventsHandler` serves POST /events: the write-side counterpart to
+  `NewQueryHandler`'s POST /query, a NIP-98-authenticated HTTP bridge for
+  submitting one already-signed event with no WebSocket connection open. A
+  caller with only a /query-shaped relationship to the relay -- the buzz
+  CLI, a reaction, a NIP-AM turn-metrics event -- previously had nowhere to
+  publish at all. The NIP-98 signer must equal the submitted event's own
+  pubkey (stricter than the WS EVENT path, which has no such blanket
+  requirement, but every real caller already signs both with the same key),
+  and NIP-43 join/leave requests are rejected outright, since
+  `MembershipService.HandleEvent` needs a live `*Session` for its
+  reply/broadcast side effects that an HTTP POST doesn't have. (#51)
 - `examples/` holds runnable embedding patterns -- `basic-relay`,
   `full-relay`, and `relay-with-management-api`, the last mirroring how
   `ncli` composes the relay engine and the NIP-86 management API under one
@@ -514,6 +525,32 @@ NIP-43 membership exactly as REQ is).
   more here than for an ordinary client because a cash bill is a bearer
   instrument whose holder cannot be handed a corrected string, so a dead relay
   takes the bill with it unless the others are tried. (#43)
+- `nip98.Verify`'s generic proof-of-work check triggered on any tag literally
+  named `nonce` (`nip13.POWTagName`), regardless of event kind or tag shape.
+  A client-side anti-replay nonce -- buzz-acp's 2-element
+  `["nonce", <uuid>]`, unrelated to NIP-13's 3-element
+  `["nonce", <hex>, <difficulty>]` -- collided on tag name alone and failed
+  PoW validation, rejecting an otherwise fully valid, correctly-signed
+  NIP-98 HTTP-auth event with a generic "invalid NIP-98 event payload"
+  error. PoW checking is now skipped for NIP-98's own auth wrapper via the
+  existing `WithoutPowCheck` option: proof-of-work belongs to events
+  actually being stored, never to the ephemeral header around a request.
+  (#51)
+- POST /query ignored its own `Limit` field entirely. `FindEvents` (the
+  handler's only caller) scanned every matching event to exhaustion
+  regardless of what the client requested -- the one reader of this scan
+  not to pass `scan.fetch`'s `fetchUntilEmpty` as `false`, unlike REQ's own
+  replay and `handler_nip05.go`. Fixed alongside a second, independent bug
+  it had been masking: `eventQueue`'s heap had no tie-break beyond
+  `CreatedAt`, so same-second events had no stable order at all -- which is
+  what made NIP-CW's composite cursor (`Until`+`BeforeID`) unable to
+  terminate pagination across a same-second burst. In production,
+  buzz-acp's `query_raw_all` would loop until its own 10,000-event safety
+  cap tripped, burning thousands of wasted round trips before failing.
+  `BeforeID` is now a recognized filter field, resolved once per scan to
+  its own `evsid` (most indexes' keys don't carry the 32-byte event id at
+  all, but `evsid` is common to every one of them), and the heap
+  tie-breaks by `Evsid` descending. (#52)
 
 ## [0.4.0]
 
