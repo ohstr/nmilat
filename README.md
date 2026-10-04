@@ -93,13 +93,21 @@ copy from.
 
 ## Embedding nmilat
 
-An embedder gets three independent `http.Handler`s and composes them
+An embedder gets several independent `http.Handler`s and composes them
 itself — nmilat ships no router or mux of its own:
 
 - **`relay.Relay`** (or `relay.SessionHandler` directly) — the Nostr relay:
   NIP-11 info document and WebSocket upgrade on one path.
 - **[`nip86.Handler`](nip86)** — the NIP-86 relay management API,
   NIP-98-authenticated, on whatever path the embedder mounts it.
+- **`relay.NewQueryHandler`** — `POST /query`: a NIP-98-authenticated HTTP
+  bridge, a one-shot alternative to a WebSocket REQ/EOSE round trip. The
+  body is a JSON array of plain NIP-01 filters; the response is the
+  matching stored events as a flat JSON array. This is the baseline case
+  of buzz's own NIP-CW (not this module's unrelated `nipcw` package,
+  which is NIP-CASH's Circle Wallet and merely shares the short name).
+  NIP-98 here binds identity/freshness, not authorization: any
+  validly-signed request is served, like an unauthenticated REQ would be.
 - **[`huddle/wsaudio`](huddle/wsaudio)**'s handler — Huddle audio, on its
   own WebSocket upgrader because a binary audio frame would be a parse
   error on the Nostr socket's JSON decoder.
@@ -108,10 +116,10 @@ They can share one `*relay.EventStore` (`EventStore.Db()` is deliberately
 exposed for an embedder's own buckets on the same file) and are mounted
 under whatever `http.ServeMux` the embedder already has — see
 [`examples/relay-with-management-api`](examples/relay-with-management-api)
-for the relay + management-API composition, which mirrors what
-[`ncli`](https://github.com/ohstr/ncli) does internally. Optional NIPs opt
-in by `relayreg` blank-import (above), not by the relay package importing
-them.
+for the relay + management-API + query-bridge composition, which mirrors
+what [`ncli`](https://github.com/ohstr/ncli) does internally. Optional
+NIPs opt in by `relayreg` blank-import (above), not by the relay package
+importing them.
 
 **Performance characteristics an embedder can rely on:** every logger is
 `zerolog.Nop()` unless passed in via `WithLogger`/`WithEventStoreLogger` —

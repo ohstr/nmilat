@@ -72,7 +72,21 @@ func Verify(r *http.Request, opts Options) (string, error) {
 	if len(opts.AllowedPubkeys) == 0 {
 		return "", ErrNoAllowedPubkeys
 	}
+	return verify(r, opts, func(pubkey string) bool { return allowed(opts.AllowedPubkeys, pubkey) })
+}
 
+// VerifyAnyPubkey validates r's Authorization header the same way Verify
+// does, but accepts any validly-signed pubkey instead of gating on
+// opts.AllowedPubkeys (which is ignored). Use this where NIP-98 is binding
+// the request to a known, fresh identity rather than authorizing it --
+// e.g. a query endpoint serving the same events an unauthenticated REQ
+// would, where the signature proves who's asking without restricting who
+// may ask.
+func VerifyAnyPubkey(r *http.Request, opts Options) (string, error) {
+	return verify(r, opts, func(string) bool { return true })
+}
+
+func verify(r *http.Request, opts Options, pubkeyAllowed func(pubkey string) bool) (string, error) {
 	authHeader := r.Header.Get("Authorization")
 	if len(authHeader) < 7 || authHeader[:6] != "Nostr " {
 		return "", ErrMissingAuthHeader
@@ -94,7 +108,7 @@ func Verify(r *http.Request, opts Options) (string, error) {
 	}
 
 	// 2. Must be from an authorized pubkey
-	if !allowed(opts.AllowedPubkeys, event.PubKey) {
+	if !pubkeyAllowed(event.PubKey) {
 		return "", ErrWrongPubkey
 	}
 

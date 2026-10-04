@@ -11,6 +11,15 @@ serialization fix that had made every tagless event's id wrong.
 
 ### Added
 
+- `relay.NewQueryHandler` serves `POST /query`: a NIP-98-authenticated HTTP
+  bridge that takes a JSON array of plain NIP-01 filters and returns the
+  matching stored events as a flat JSON array, a one-shot alternative to a
+  WebSocket REQ/EOSE round trip for buzz-relay-compatible clients. It
+  reuses the bytes `collectBatch` already captured at scan time
+  (`PotentialEvent.Bytes`), so it pays no extra store read beyond the
+  scan itself. `nip98.VerifyAnyPubkey` is the new primitive underneath:
+  same checks as `Verify`, but for an endpoint where NIP-98 binds identity
+  and freshness rather than gating on an allowlist. (#48)
 - `huddle/room.Sink` is the seam that makes a room transport-agnostic: a
   peer is admitted with a sink, and a WebSocket peer differs from one
   bridged onto another transport only in which sink it has. `ChannelSink` is
