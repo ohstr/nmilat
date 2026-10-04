@@ -65,6 +65,25 @@ func TestVerifyAuthHeader_Success(t *testing.T) {
 	}
 }
 
+// A client-side anti-replay nonce (2-element ["nonce", <uuid>], e.g.
+// buzz-acp's sign_nip98) must not be confused with NIP-13's proof-of-work
+// nonce (3-element ["nonce", <hex>, <difficulty>]) merely because both use
+// the tag name "nonce".
+func TestVerifyAuthHeader_ToleratesAntiReplayNonceTag(t *testing.T) {
+	pubkey := signedRequiredPubkey(t)
+	req := newAuthRequest(t, "GET", "http://example.com/path")
+
+	req.Header.Set("Authorization", buildAuthHeader(t, 27235, "", 0, [][]string{
+		{"u", "http://example.com/path"},
+		{"method", "GET"},
+		{"nonce", "fcd34f29-f959-4aa7-b88a-d5c0d9f2c6bc"},
+	}))
+
+	if err := VerifyAuthHeader(req, pubkey); err != nil {
+		t.Fatalf("expected success, got error: %v", err)
+	}
+}
+
 func TestVerifyAuthHeader_MissingHeader(t *testing.T) {
 	req := newAuthRequest(t, "GET", "http://example.com/path")
 	err := VerifyAuthHeader(req, "anypubkey")
