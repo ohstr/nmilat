@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/ohstr/nmilat/nip01"
+	"github.com/ohstr/nmilat/nip42"
 	"github.com/ohstr/nmilat/wire"
 )
 
@@ -64,7 +65,30 @@ type ConnectionConfig struct {
 	PingInterval     time.Duration
 	PongTimeout      time.Duration
 	WriteTimeout     time.Duration
+
+	// PrivateKey, if set, makes the connection answer a NIP-42 AUTH
+	// challenge on its own: sign and send a kind:22242 event the moment
+	// the relay's challenge arrives, with no action required from the
+	// caller. Leave empty for the previous, anonymous-only behavior --
+	// a challenge then arrives on Read()/Events() like any other
+	// message, unanswered, exactly as before this field existed.
+	PrivateKey string
 }
+
+// AuthState reports the outcome of this connection's NIP-42 handshake, as
+// last observed by AuthState(). It only ever advances forward
+// (None -> Succeeded/Failed); a relay that challenges again mid-connection
+// (not something this relay does today) would restart it from None.
+type AuthState int
+
+const (
+	// AuthStateNone means PrivateKey was never set, the relay hasn't sent
+	// a challenge yet, or a challenge arrived but signing/sending the
+	// response hasn't resolved yet.
+	AuthStateNone AuthState = iota
+	AuthStateSucceeded
+	AuthStateFailed
+)
 
 func DefaultConnectionConfig() *ConnectionConfig {
 	return &ConnectionConfig{
@@ -102,6 +126,11 @@ type Connection struct {
 
 	subsMu sync.Mutex
 	subs   map[string]*subDispatch
+
+	authMu      sync.Mutex
+	authState   AuthState
+	authEventID string
+	authMessage string
 }
 
 // Connect dials relayURL with default timeouts and intervals. This is the
@@ -230,6 +259,12 @@ func (c *Connection) handle(parent context.Context) {
 				return
 			}
 		} else {
+			switch m := p.SubscriptionResponse.(type) {
+			case *wire.AuthChallengeResponse:
+				go c.handleAuthChallenge(m.Challenge)
+			case *wire.OkSubscriptionResponse:
+				c.handleAuthResult(m)
+			}
 			c.dispatch(p.SubscriptionResponse)
 			select {
 			case c.incoming <- p.SubscriptionResponse:
@@ -385,6 +420,70 @@ func (c *Connection) Events(subID string) <-chan *wire.EventSubscriptionResponse
 // Relay reports the URL this connection was dialed against.
 func (c *Connection) Relay() *url.URL {
 	return c.relay
+}
+
+// handleAuthChallenge signs and sends a NIP-42 response to challenge, if
+// this connection was configured with a PrivateKey and hasn't already
+// answered one. Run in its own goroutine from handle()'s read loop so a
+// slow or momentarily-busy outgoing writer never stalls reading further
+// relay messages.
+func (c *Connection) handleAuthChallenge(challenge string) {
+	c.authMu.Lock()
+	if c.config.PrivateKey == "" || c.authEventID != "" {
+		c.authMu.Unlock()
+		return
+	}
+
+	ev := nip42.NewAuthEvent(challenge, c.relay.String())
+	if err := ev.Sign(c.config.PrivateKey); err != nil {
+		c.authState = AuthStateFailed
+		c.authMessage = fmt.Sprintf("signing auth event: %v", err)
+		c.authMu.Unlock()
+		return
+	}
+	c.authEventID = ev.ID
+	c.authMu.Unlock()
+
+	select {
+	case c.outgoing <- &wire.AuthPacket{Event: ev}:
+	case <-c.closeCh:
+	}
+}
+
+// handleAuthResult records the relay's OK for the one event this
+// connection itself sent to answer an AUTH challenge (if any) -- it never
+// touches the result of a caller's own Send/Publish, which that caller
+// observes on Read()/Publish's own return value instead, same as before
+// this existed.
+func (c *Connection) handleAuthResult(ok *wire.OkSubscriptionResponse) {
+	c.authMu.Lock()
+	defer c.authMu.Unlock()
+	if c.authEventID == "" || ok.EventID != c.authEventID {
+		return
+	}
+	if ok.Accepted {
+		c.authState = AuthStateSucceeded
+	} else {
+		c.authState = AuthStateFailed
+	}
+	c.authMessage = ok.Message
+}
+
+// AuthState reports this connection's current NIP-42 handshake state: see
+// AuthState's own doc for what each value means. AuthMessage returns the
+// relay's OK message once the state is Succeeded or Failed (the relay's
+// own "auth-success" text, or its rejection reason); it is empty while
+// the state is None.
+func (c *Connection) AuthState() AuthState {
+	c.authMu.Lock()
+	defer c.authMu.Unlock()
+	return c.authState
+}
+
+func (c *Connection) AuthMessage() string {
+	c.authMu.Lock()
+	defer c.authMu.Unlock()
+	return c.authMessage
 }
 
 func (c *Connection) Send(ev *nip01.Event) bool {

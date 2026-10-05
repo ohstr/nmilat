@@ -22,6 +22,18 @@ where `nip29/` had previously been structural validation only.
 
 ### Added
 
+- `relay/client.Connection` answers a NIP-42 AUTH challenge on its own when
+  given a `ConnectionConfig.PrivateKey`: it signs and sends the kind:22242
+  event the instant the challenge arrives, with no action required from
+  the caller, and the connection's `AuthState()`/`AuthMessage()` report
+  whether the relay accepted or rejected it. Until now every generic
+  `Connection` was anonymous-only -- huddle and bunker each hand-roll their
+  own ad hoc AUTH handshake against their own bespoke protocols, but
+  nothing backed the plain Nostr relay wire protocol this package
+  otherwise speaks, which left a client with no way to read from a
+  membership-required relay through it. No `PrivateKey` given is the same
+  anonymous-only behavior as before this existed: a challenge still just
+  arrives on `Read()`/`Events()` unanswered. (ncli#99)
 - `relay.NewQueryHandler` serves `POST /query`: a NIP-98-authenticated HTTP
   bridge that takes a JSON array of plain NIP-01 filters and returns the
   matching stored events as a flat JSON array, a one-shot alternative to a
