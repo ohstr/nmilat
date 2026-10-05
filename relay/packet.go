@@ -124,9 +124,20 @@ func (s *Session) processRequest(ctx context.Context, rp *wire.RequestPacket) er
 
 func (s *Session) processClose(ctx context.Context, cp *wire.ClosePacket) error {
 
-	if exists := s.subscriptions.Close(cp.SubscriptionID); !exists {
-		return wire.NewPacketError(fmt.Sprintf("subscription not found ID=%v", cp.SubscriptionID), nil)
-	}
+	// A CLOSE naming a subscription that's already gone -- most commonly
+	// because the relay itself already ended it (a restricted CLOSED, an
+	// EOSE the client is closing out of habit after, or any other reply
+	// that calls s.subscriptions.Close on this package's own behalf) --
+	// is not a protocol violation worth tearing the whole connection
+	// down over. This used to return a wire.PacketError here, which
+	// (unlike processRequest's own per-handler error replies, or Recv's
+	// soft handling of a PacketError from a malformed wire message)
+	// nothing catches on this path: it propagated all the way up through
+	// ProcessPacket/Recv as fatal, killing a connection that was
+	// otherwise perfectly healthy over one stray/late/redundant CLOSE.
+	// Subscriptions.Close is already a safe no-op on an unknown id (a
+	// map-lookup miss), so there is nothing left to guard here.
+	s.subscriptions.Close(cp.SubscriptionID)
 
 	s.reply(&wire.ClosedSubscriptionResponse{
 		SubscriptionID: cp.SubscriptionID,

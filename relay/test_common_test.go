@@ -15,6 +15,7 @@ import (
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip11"
 	"github.com/ohstr/nmilat/testlogger"
+	"github.com/ohstr/nmilat/wire"
 )
 
 const publicKey = "3c1db3dd55e2ff09ba5317dd8eec2339797e9e2ddf74591172735c47f3a2ad6e"
@@ -162,6 +163,18 @@ func createWS(t testing.TB, store *EventStore) *websocket.Conn {
 	conn, _, err := websocket.DefaultDialer.Dial(u, nil)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// Session.Start sends a NIP-42 AUTH challenge on every connection
+	// unconditionally. createWS's callers are anonymous and exercise
+	// unrelated behavior (REQ delivery, transaction counts, ...), not
+	// auth, so drain it here once rather than making every caller account
+	// for an extra leading message it doesn't care about.
+	var challenge wire.ClientPayload
+	if err := conn.ReadJSON(&challenge); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := challenge.SubscriptionResponse.(*wire.AuthChallengeResponse); !ok {
+		t.Fatalf("expected the connection's first message to be a NIP-42 AUTH challenge, got %T", challenge.SubscriptionResponse)
 	}
 	// Runs before srv.Close() (t.Cleanup is LIFO): gorilla/websocket hijacks
 	// the TCP connection on upgrade, so srv.Close()'s own WaitGroup treats

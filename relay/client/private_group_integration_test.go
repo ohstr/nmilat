@@ -17,15 +17,22 @@ import (
 )
 
 // newPrivateGroupTestRelay starts a REAL, store-backed relay (relay.New,
-// the same constructor a host actually running one calls) with NIP-42
-// auth required -- not a hand-rolled WebSocket mock. This is deliberate:
-// the bug this file guards against (ReadEventsFromRelayWithAuth returning
-// "connection closed" for every authenticated read of a private group,
-// even by its own creator) was only ever observed against a real relay
-// process, never reproduced against the package's own mocks, so the
-// mocks alone don't prove the fix actually holds against the real
+// the same constructor a host actually running one calls) -- not a
+// hand-rolled WebSocket mock. This is deliberate: the bug this file
+// guards against (ReadEventsFromRelayWithAuth returning "connection
+// closed" for every authenticated read of a private group, even by its
+// own creator) was only ever observed against a real relay process,
+// never reproduced against the package's own mocks, so the mocks alone
+// don't prove the fix actually holds against the real
 // processRequest/processAuth/GroupsService code paths on the other end.
-func newPrivateGroupTestRelay(t *testing.T) *url.URL {
+//
+// authRequired controls nip11.limitation.auth_required -- true matches
+// the relay-wide-authenticated setup the redial fix was originally
+// reproduced against; false exercises the lazy, REQ-time-only challenge
+// deniedPrivateGroupFilter's own branch issues instead, which is what
+// lets write access (kind:9007 group creation) stay anonymous while
+// reads of a private group still end up authenticatable.
+func newPrivateGroupTestRelay(t *testing.T, authRequired bool) *url.URL {
 	t.Helper()
 	f, err := os.CreateTemp("", "private-group-integration-*.db")
 	if err != nil {
@@ -66,7 +73,7 @@ func newPrivateGroupTestRelay(t *testing.T) *url.URL {
 		Self: relaySelfEvent.PubKey,
 		Limitation: nip11.Limitation{
 			MaxMessageLength: 1024 * 1024,
-			AuthRequired:     true,
+			AuthRequired:     authRequired,
 		},
 	}
 	store, err := relay.NewEventStore(f.Name(), &metadata.Limitation)
@@ -162,7 +169,7 @@ func createPrivateGroup(t *testing.T, relayURL *url.URL, creatorPrivKey, groupID
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		events, err := ReadEventsFromRelayWithAuth(ctx, relayURL, groupMetadataFilter(groupID), creatorPrivKey)
+		events, _, err := ReadEventsFromRelayWithAuth(ctx, relayURL, groupMetadataFilter(groupID), creatorPrivKey)
 		cancel()
 		if err == nil && len(events) > 0 {
 			return
@@ -191,16 +198,19 @@ func groupMetadataFilter(groupID string) *nip01.SubscriptionFilterGroup {
 // group requires membership to read even its own metadata, and the
 // creator is the identity that just proved it by creating the group.
 func TestPrivateGroup_CreatorReadsOwnGroup_EndToEnd(t *testing.T) {
-	relayURL := newPrivateGroupTestRelay(t)
+	relayURL := newPrivateGroupTestRelay(t, true)
 	const groupID = "end-to-end-private-group"
 	createPrivateGroup(t, relayURL, testPrivKey, groupID)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	events, err := ReadEventsFromRelayWithAuth(ctx, relayURL, groupMetadataFilter(groupID), testPrivKey)
+	events, restricted, err := ReadEventsFromRelayWithAuth(ctx, relayURL, groupMetadataFilter(groupID), testPrivKey)
 	if err != nil {
 		t.Fatalf("creator's read of their own private group: %v", err)
+	}
+	if restricted {
+		t.Error("restricted = true, want false -- the creator's retry succeeded")
 	}
 	if len(events) != 1 {
 		t.Fatalf("creator's read returned %d events, want exactly 1 (the kind:39000 mirror)", len(events))
@@ -215,18 +225,24 @@ func TestPrivateGroup_CreatorReadsOwnGroup_EndToEnd(t *testing.T) {
 // ReadEventsFromRelayWithAuth(..., "") never attempts NIP-42 at all (no
 // behavior change from before --auth-identity existed), and the relay's
 // deniedPrivateGroupFilter closes the REQ as restricted since an
-// unauthenticated connection is a member of nothing.
+// unauthenticated connection is a member of nothing. restricted is false
+// here specifically because signingKeyHex == "" delegates straight to
+// ReadEventsFromRelay, which has no restricted-vs-empty signal to report
+// at all -- not because the relay didn't restrict it (it did).
 func TestPrivateGroup_AnonymousReadIsDenied(t *testing.T) {
-	relayURL := newPrivateGroupTestRelay(t)
+	relayURL := newPrivateGroupTestRelay(t, true)
 	const groupID = "anon-denied-private-group"
 	createPrivateGroup(t, relayURL, testPrivKey, groupID)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	events, err := ReadEventsFromRelayWithAuth(ctx, relayURL, groupMetadataFilter(groupID), "")
+	events, restricted, err := ReadEventsFromRelayWithAuth(ctx, relayURL, groupMetadataFilter(groupID), "")
 	if err != nil {
 		t.Fatalf("anonymous read error = %v, want nil (an empty result, not an error)", err)
+	}
+	if restricted {
+		t.Error("restricted = true, want false -- an anonymous read has no identity to retry with, so it can't observe this signal")
 	}
 	if len(events) != 0 {
 		t.Fatalf("anonymous read returned %d events, want 0 -- a non-member must not see a private group's metadata", len(events))
@@ -241,7 +257,7 @@ func TestPrivateGroup_AnonymousReadIsDenied(t *testing.T) {
 // accidentally degrading into "any authenticated pubkey may read any
 // group."
 func TestPrivateGroup_NonMemberReadIsDenied(t *testing.T) {
-	relayURL := newPrivateGroupTestRelay(t)
+	relayURL := newPrivateGroupTestRelay(t, true)
 	const groupID = "non-member-denied-private-group"
 	createPrivateGroup(t, relayURL, testPrivKey, groupID)
 
@@ -250,11 +266,73 @@ func TestPrivateGroup_NonMemberReadIsDenied(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	events, err := ReadEventsFromRelayWithAuth(ctx, relayURL, groupMetadataFilter(groupID), outsiderPrivKey)
+	events, restricted, err := ReadEventsFromRelayWithAuth(ctx, relayURL, groupMetadataFilter(groupID), outsiderPrivKey)
 	if err != nil {
 		t.Fatalf("outsider's read error = %v, want nil (an empty result, not an error)", err)
 	}
+	if !restricted {
+		t.Error("restricted = false, want true -- the outsider authenticated fine, but is still not a member, so the retry is denied too")
+	}
 	if len(events) != 0 {
 		t.Fatalf("outsider's read returned %d events, want 0 -- authenticating as a real, different pubkey must not substitute for membership", len(events))
+	}
+}
+
+// TestPrivateGroup_LazyChallengeWithoutRelayWideAuthRequired is the real-
+// relay reproduction of nmilat#64 part 1: a relay with
+// nip11.limitation.auth_required left false -- so kind:9007 group
+// creation stays anonymous, the write path AuthRequired: true would
+// otherwise have blocked -- must still let the creator's authenticated
+// retry succeed. Before the fix, AuthRequired false meant Start() never
+// sent a challenge on connect at all, and nothing else sent one either,
+// so this read would hang out the full authRetryWindow waiting on a
+// handshake that could never start; deniedPrivateGroupFilter's branch
+// now issues one itself, independent of that flag.
+func TestPrivateGroup_LazyChallengeWithoutRelayWideAuthRequired(t *testing.T) {
+	relayURL := newPrivateGroupTestRelay(t, false)
+	const groupID = "lazy-challenge-no-auth-required"
+
+	// Anonymous write: no identity configured at all -- exactly the write
+	// access AuthRequired: true would otherwise have blocked.
+	create := nip29.NewCreateGroup("", groupID)
+	if err := create.Sign(testPrivKey); err != nil {
+		t.Fatal(err)
+	}
+	writeCtx, writeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	conn, err := NewConnection(writeCtx, relayURL, nil)
+	if err != nil {
+		writeCancel()
+		t.Fatalf("NewConnection: %v", err)
+	}
+	resp, err := conn.Publish(writeCtx, create)
+	conn.Close()
+	writeCancel()
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if !resp.Accepted {
+		t.Fatalf("create-group event was not accepted: %s", resp.Message)
+	}
+
+	// The read that needs the lazy challenge: AuthRequired never sent one
+	// on connect, so without deniedPrivateGroupFilter's own branch issuing
+	// one, there would be nothing for the creator's identity to answer at
+	// all. Polls past the same mirror-durability race createPrivateGroup
+	// guards against (see its own doc comment).
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		readCtx, readCancel := context.WithTimeout(context.Background(), time.Second)
+		events, restricted, err := ReadEventsFromRelayWithAuth(readCtx, relayURL, groupMetadataFilter(groupID), testPrivKey)
+		readCancel()
+		if err == nil && len(events) > 0 {
+			if restricted {
+				t.Error("restricted = true, want false -- the creator's lazy-challenge retry succeeded")
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("group %q's kind:39000 mirror never became queryable via the lazy-challenge path (last: events=%d restricted=%v err=%v)", groupID, len(events), restricted, err)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

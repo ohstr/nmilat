@@ -413,11 +413,23 @@ func (s *Session) Start(parent context.Context) error {
 		s.handleOutgoingMessages(ctx)
 	}()
 
-	// Send AUTH challenge
-	if s.limitation.AuthRequired {
-		s.challenge = nip42.NewChallenge()
-		s.reply(&wire.AuthChallengeResponse{Challenge: s.challenge})
-	}
+	// Send the NIP-42 AUTH challenge on every connection, unconditionally
+	// -- not just when AuthRequired is on. AuthRequired is the only thing
+	// that ever triggered a challenge before this, but it's relay-wide:
+	// turning it on to make a restricted REQ authenticatable (NIP-43
+	// MembershipRequired at processRequest, or NIP-29's
+	// deniedPrivateGroupFilter) also gates every EVENT (processEvent),
+	// blocking whatever writes are meant to stay open (e.g. kind:9007
+	// group creation). With it off, neither of those REQ-time gates could
+	// ever be satisfied -- nothing else ever sent a challenge for an
+	// unauthenticated connection to answer. block/buzz's own relay sends
+	// this unconditionally on every connection for exactly this reason
+	// (crates/buzz-relay/src/connection.rs): individual resources decide
+	// afterward whether to require the result; the challenge itself is
+	// never withheld. An anonymous-only relay is unaffected -- nothing
+	// requires a response to a challenge nobody needs.
+	s.challenge = nip42.NewChallenge()
+	s.reply(&wire.AuthChallengeResponse{Challenge: s.challenge})
 
 	return s.receiveMessages(ctx)
 }

@@ -88,6 +88,50 @@ func TestPacketPayloads(t *testing.T) {
 
 }
 
+// TestProcessClose_UnknownSubscriptionDoesNotError guards against a CLOSE
+// naming a subscription that's already gone (the relay itself already
+// ended it, or it's simply a stray/redundant/late CLOSE -- all protocol-
+// legal, unremarkable situations) killing the whole session. It used to
+// return a *wire.PacketError here, and unlike processRequest's own
+// per-handler error replies, or Recv's soft handling of a PacketError
+// from a malformed wire message, nothing on this path caught it: it
+// propagated all the way up through ProcessPacket/Recv as fatal.
+// Reproduced this exact way (a bare CLOSE naming an id that was never
+// opened) because that's sufficient on its own to prove the bug and the
+// fix -- no REQ/CLOSED race needed to construct it.
+func TestProcessClose_UnknownSubscriptionDoesNotError(t *testing.T) {
+	store := newStore(t)
+	session := NewSessionContext(store, &ClientInfo{}, &nip11.Metadata{}, nil, nil, nil)
+	sess := &Session{SessionContext: session}
+	ctx := context.WithValue(context.Background(), sessionContextKey{}, sess)
+
+	closePacket := &wire.ClosePacket{SubscriptionID: "never-opened"}
+	errCh := make(chan error, 1)
+	go func() { errCh <- sess.ProcessPacket(ctx, closePacket) }()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("ProcessPacket(CLOSE for an unknown subscription) error = %v, want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ProcessPacket never returned")
+	}
+
+	select {
+	case res := <-session.incoming:
+		closed, ok := res.(*wire.ClosedSubscriptionResponse)
+		if !ok {
+			t.Fatalf("reply type = %T, want *wire.ClosedSubscriptionResponse", res)
+		}
+		if closed.SubscriptionID != "never-opened" {
+			t.Errorf("SubscriptionID = %q, want %q", closed.SubscriptionID, "never-opened")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected a CLOSED reply even for an unknown subscription (idempotent, like closing twice)")
+	}
+}
+
 func TestPacketRequest(b *testing.T) {
 
 	store := OpenBenchStore(b)

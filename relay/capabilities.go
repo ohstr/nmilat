@@ -112,9 +112,13 @@ func (sh *SessionHandler) SupportedNIPs() nip11.NIPSet {
 	}
 	nips = append(nips, RegisteredNIPs()...)
 
-	if sh.relayMetadata != nil && sh.relayMetadata.Limitation.AuthRequired {
-		nips = append(nips, nip11.NIP(42)) // NIP-42: Authentication
-	}
+	// NIP-42 is unconditional: Session.Start sends the AUTH challenge on
+	// every connection now, not just when AuthRequired is on (see its own
+	// comment), so every relay genuinely supports it regardless of this
+	// flag -- a relay with MembershipRequired/a private NIP-29 group but
+	// AuthRequired: false would otherwise keep lying in its own NIP-11
+	// document about a capability it actually has.
+	nips = append(nips, nip11.NIP(42)) // NIP-42: Authentication
 	if sh.relayMetadata != nil && sh.relayMetadata.Self != "" {
 		nips = append(nips, nip11.NIP(43)) // NIP-43: Relay Access Metadata and Requests
 	}

@@ -22,6 +22,46 @@ where `nip29/` had previously been structural validation only.
 
 ### Added
 
+- `Session.Start` sends the NIP-42 AUTH challenge on every connection
+  now, unconditionally -- not only when `nip11.limitation.auth_required`
+  is on. That flag was the only thing that ever triggered a challenge,
+  but it's relay-wide: turning it on to make a restricted REQ
+  authenticatable (NIP-43 `MembershipRequired`, or NIP-29's private-group
+  gate) also gated every `EVENT` (`processEvent`), blocking whichever
+  writes were meant to stay open (e.g. kind:9007 group creation --
+  verified live: `ncli groups create`/`edit` both failed with
+  `"restricted: valid NIP-42 authentication required"` with it on). With
+  it off, neither restricted-REQ branch could ever be satisfied, by
+  anyone, including a legitimate member -- nothing else ever sent a
+  challenge for an unauthenticated connection to answer. Matches
+  block/buzz's own relay, which sends this unconditionally on every
+  connection for the same reason: individual resources decide afterward
+  whether to require the result, the challenge itself is never withheld.
+  `AuthRequired`'s own enforcement meaning (the blanket "require auth for
+  everything" gate) is unchanged -- only its coupling to challenge-sending
+  goes away. NIP-11's own `supported_nips` advertises 42 unconditionally
+  to match (`relay/capabilities.go`): a relay now genuinely supports it
+  regardless of this flag.
+- `processClose` no longer kills the whole session over a CLOSE naming a
+  subscription that's already gone. Found while testing the above: a
+  client's routine, redundant CLOSE (e.g. right after the relay's own
+  restricted CLOSED already ended that subscription) returned a
+  `*wire.PacketError`, and unlike `processRequest`'s own per-handler
+  error replies, or `Recv`'s soft handling of a `PacketError` from a
+  malformed wire message, nothing on this path caught it -- it
+  propagated as fatal, tearing down a connection that was otherwise
+  perfectly healthy. This is very likely the real root cause behind the
+  "connection closed" failure `relay/client.ReadEventsFromRelayWithAuth`'s
+  redial fix (above) was built to route around -- that fix stays in as
+  defense in depth, but shouldn't be needed to hit this path anymore.
+- `relay/client.ReadEventsFromRelayWithAuth` now returns `(events,
+  restricted, err)` instead of discarding the `restricted` bool
+  `subscribeOnce` already computed internally -- its own final line used
+  to throw it away (`events, _, err = subscribeOnce(...); return events,
+  err`), so even this package's own exported API couldn't tell a caller
+  "empty because restricted" apart from "empty because nothing's there."
+  `signingKeyHex == ""` (delegating to `ReadEventsFromRelay`) always
+  reports `false`, having no such signal to give.
 - `relay/client.ReadEventsFromRelayWithAuth` redials and re-authenticates
   once if its connection dies while waiting out the NIP-42 handshake
   (`#61`'s retry-after-restricted-CLOSED window), rather than retrying

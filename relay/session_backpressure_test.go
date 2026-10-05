@@ -148,14 +148,21 @@ func TestSessionSlowReaderStallsEveryOtherSubscriptionOnThatConnection(t *testin
 			t.Fatal(err)
 		}
 	}
+	deadline := time.Now().Add(5 * time.Second)
 	for range probe {
-		var payload wire.ClientPayload
-		if err := publisher.ReadJSON(&payload); err != nil {
-			t.Fatal(err)
+		// Session.Start now sends a NIP-42 AUTH challenge on every
+		// connection unconditionally, so it (or anything else) may
+		// precede the OK here -- skip past whatever isn't it.
+		var okResp *wire.OkSubscriptionResponse
+		found := readUntil(t, publisher, deadline, func(res wire.SubscriptionResponse) bool {
+			okResp, _ = res.(*wire.OkSubscriptionResponse)
+			return okResp != nil
+		})
+		if !found {
+			t.Fatal("timed out waiting for a probe event's OK")
 		}
-		ok, isOK := payload.SubscriptionResponse.(*wire.OkSubscriptionResponse)
-		if !isOK || !ok.Accepted {
-			t.Fatalf("probe event not accepted: %#v", payload.SubscriptionResponse)
+		if !okResp.Accepted {
+			t.Fatalf("probe event not accepted: %#v", okResp)
 		}
 	}
 

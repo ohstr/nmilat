@@ -136,9 +136,17 @@ const restrictedClosePrefix = "restricted:"
 // redials and re-authenticates once before retrying, the same way the
 // restricted-CLOSED case above gets one retry rather than being treated
 // as terminal.
-func ReadEventsFromRelayWithAuth(parent context.Context, relayURL *url.URL, filters *nip01.SubscriptionFilterGroup, signingKeyHex string) ([]*nip01.Event, error) {
+//
+// restricted reports whether the final attempt -- whichever one actually
+// produced events/err -- ended via a "restricted: ..." CLOSED rather than
+// a normal EOSE, so a caller can tell "nothing matched" apart from "the
+// relay refused this query" instead of both reading as an empty result.
+// signingKeyHex == "" delegates straight to ReadEventsFromRelay, which
+// has no such signal to report, so restricted is always false there.
+func ReadEventsFromRelayWithAuth(parent context.Context, relayURL *url.URL, filters *nip01.SubscriptionFilterGroup, signingKeyHex string) (events []*nip01.Event, restricted bool, err error) {
 	if signingKeyHex == "" {
-		return ReadEventsFromRelay(parent, relayURL, filters)
+		events, err = ReadEventsFromRelay(parent, relayURL, filters)
+		return events, false, err
 	}
 
 	ctx, cancel := context.WithCancel(parent)
@@ -146,13 +154,13 @@ func ReadEventsFromRelayWithAuth(parent context.Context, relayURL *url.URL, filt
 
 	conn, err := NewConnection(ctx, relayURL, &ConnectionConfig{SigningKeyHex: signingKeyHex})
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer conn.Close()
 
-	events, restricted, err := subscribeOnce(ctx, conn, filters)
+	events, restricted, err = subscribeOnce(ctx, conn, filters)
 	if err != nil || !restricted {
-		return events, err
+		return events, restricted, err
 	}
 
 	select {
@@ -161,21 +169,21 @@ func ReadEventsFromRelayWithAuth(parent context.Context, relayURL *url.URL, filt
 	case <-conn.Errors():
 		conn, err = redialAndWaitForAuth(ctx, relayURL, signingKeyHex)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		defer conn.Close()
 	case <-conn.Closed():
 		conn, err = redialAndWaitForAuth(ctx, relayURL, signingKeyHex)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		defer conn.Close()
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, false, ctx.Err()
 	}
 
-	events, _, err = subscribeOnce(ctx, conn, filters)
-	return events, err
+	events, restricted, err = subscribeOnce(ctx, conn, filters)
+	return events, restricted, err
 }
 
 // redialAndWaitForAuth dials relayURL fresh and waits out authRetryWindow
