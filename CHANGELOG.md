@@ -31,6 +31,15 @@ NIP-43 membership exactly as REQ is).
   caller here exactly as it would refuse their REQ, rather than serving
   everyone who can produce a valid signature; no membership service given
   fails closed rather than open. (#50)
+- `relay/groups.go` hosts real NIP-29 group state for `kind:9007`
+  create / `kind:9008` delete -- `nip29/` was structural validation only
+  before this, with no record of which groups exist. Creation needs no
+  prior NIP-43 relay membership, the creator becomes sole admin, and the
+  group defaults to private+closed, mirrored into self-signed
+  `kind:39000`/`39001`/`39002` the same way `relay/membership.go` mirrors
+  NIP-43 membership. A REQ/COUNT naming a private group's id now requires
+  an authenticated member of that group, or the private default wouldn't
+  mean anything.
 - `huddle/room.Sink` is the seam that makes a room transport-agnostic: a
   peer is admitted with a sink, and a WebSocket peer differs from one
   bridged onto another transport only in which sink it has. `ChannelSink` is

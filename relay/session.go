@@ -155,6 +155,12 @@ type SessionContext struct {
 	// by a later phase.
 	membership *MembershipService
 
+	// groups resolves NIP-29 group existence/admin/membership/visibility
+	// status, the same nil-safe way membership resolves NIP-43 status.
+	// Always non-nil in practice (see SessionHandler.groups); nil only in a
+	// test that constructs a SessionContext directly without wiring one in.
+	groups *GroupsService
+
 	*replyer
 }
 
@@ -610,6 +616,14 @@ type SessionHandler struct {
 	// see capabilities.go) and relayMetadata.Limitation.MembershipRequired
 	// (the REQ/EVENT access gate).
 	membership *MembershipService
+
+	// groups hosts NIP-29 groups, shared across every Session this handler
+	// serves (each Session's own SessionContext.groups points at this same
+	// instance -- see ServeHTTP). Always non-nil, mirroring membership
+	// above; nip29/relayreg (blank-imported separately) governs NIP-11
+	// declaration and structural validation of the group-related event
+	// kinds, not whether group hosting itself is active.
+	groups *GroupsService
 }
 
 // NewSessionHandler constructs a SessionHandler ready to be used as an
@@ -631,6 +645,12 @@ func NewSessionHandler(store *EventStore, relayMetadata *nip11.Metadata, searchS
 		cfg.Logger.Error().Err(err).Msg("failed to load NIP-43 membership cache at startup")
 	}
 
+	groups := NewGroupsService(store)
+	if err := groups.LoadFromStore(); err != nil {
+		// Non-fatal, for the same reason as the membership cache above.
+		cfg.Logger.Error().Err(err).Msg("failed to load NIP-29 groups cache at startup")
+	}
+
 	return &SessionHandler{
 		store:              store,
 		sessions:           sync.Map{},
@@ -639,6 +659,7 @@ func NewSessionHandler(store *EventStore, relayMetadata *nip11.Metadata, searchS
 		searchService:      searchService,
 		VerificationWorker: NewProfileVerificationWorker(store, searchService),
 		membership:         membership,
+		groups:             groups,
 	}
 }
 
@@ -681,6 +702,7 @@ func (sh *SessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	sc := NewSessionContext(sh.store, info, sh.relayMetadata, sh.searchService, sh.VerificationWorker, sh.config)
 	sc.membership = sh.membership
+	sc.groups = sh.groups
 	session := NewSession(sessID, ws, sc, sh.relayMetadata.Limitation.MaxMessageLength)
 	sh.sessions.Store(sessID, session)
 	defer sh.sessions.Delete(sessID)
@@ -705,6 +727,12 @@ func (sh *SessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // every Session it serves. Never nil.
 func (sh *SessionHandler) Membership() *MembershipService {
 	return sh.membership
+}
+
+// Groups returns this handler's NIP-29 GroupsService, shared by every
+// Session it serves. Never nil.
+func (sh *SessionHandler) Groups() *GroupsService {
+	return sh.groups
 }
 
 // SessionCount returns the number of currently connected sessions.
