@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -11,6 +12,8 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/ohstr/nmilat/nip01"
+	"github.com/ohstr/nmilat/nip42"
+	"github.com/ohstr/nmilat/wire"
 )
 
 // testPrivKey is an arbitrary, never-funded key used only to sign throwaway
@@ -235,6 +238,123 @@ func TestConnection_ErrorsDeliveredWhenListened(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Errors() never delivered the read error -- the fix may have over-guarded the send and dropped it instead of just adding an escape hatch")
+	}
+}
+
+// TestConnection_RespondsToAuthChallengeWhenSigningKeyConfigured is the fix
+// for the gap where a generic Connection never answered NIP-42 AUTH: a
+// Connection built with ConnectionConfig.SigningKeyHex set must build, sign,
+// and send back a kind:22242 event matching the relay's challenge, the way
+// huddleclient.go already does over its own separate protocol.
+func TestConnection_RespondsToAuthChallengeWhenSigningKeyConfigured(t *testing.T) {
+	const challenge = "test-challenge-123"
+
+	authPacketCh := make(chan *wire.AuthPacket, 1)
+
+	mux := http.NewServeMux()
+	upgrader := websocket.Upgrader{}
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+
+		if err := conn.WriteJSON([]interface{}{"AUTH", challenge}); err != nil {
+			return
+		}
+
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			return
+		}
+		var rp wire.RelayPayload
+		if err := json.Unmarshal(raw, &rp); err != nil {
+			return
+		}
+		if ap, ok := rp.Packet.(*wire.AuthPacket); ok {
+			authPacketCh <- ap
+		}
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	u, err := url.Parse("ws" + server.URL[len("http"):])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	conn, err := NewConnection(ctx, u, &ConnectionConfig{SigningKeyHex: testPrivKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	select {
+	case ap := <-authPacketCh:
+		if err := nip42.ValidateAuthEvent(ap.Event.Kind, ap.Event.Tags, ap.Event.CreatedAt, challenge, u.String()); err != nil {
+			t.Errorf("ValidateAuthEvent() error = %v", err)
+		}
+		if err := ap.Event.Verify(); err != nil {
+			t.Errorf("auth event signature invalid: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("relay never received an AUTH response to its challenge")
+	}
+}
+
+// TestConnection_IgnoresAuthChallengeWithoutSigningKey asserts the other half
+// of the fix's contract: with no SigningKeyHex configured, an AUTH challenge
+// gets no response at all -- the connection stays anonymous/public-only,
+// exactly as it behaved before this existed.
+func TestConnection_IgnoresAuthChallengeWithoutSigningKey(t *testing.T) {
+	const challenge = "test-challenge-456"
+
+	gotUnexpectedMessage := make(chan []byte, 1)
+
+	mux := http.NewServeMux()
+	upgrader := websocket.Upgrader{}
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+
+		if err := conn.WriteJSON([]interface{}{"AUTH", challenge}); err != nil {
+			return
+		}
+
+		_ = conn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+		if _, raw, err := conn.ReadMessage(); err == nil {
+			gotUnexpectedMessage <- raw
+		}
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	u, err := url.Parse("ws" + server.URL[len("http"):])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	conn, err := Connect(ctx, u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	select {
+	case raw := <-gotUnexpectedMessage:
+		t.Fatalf("connection responded to AUTH challenge with no signing key configured: %s", raw)
+	case <-time.After(500 * time.Millisecond):
+		// expected: no response
 	}
 }
 
