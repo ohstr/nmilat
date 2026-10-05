@@ -1,9 +1,8 @@
 # Community relay readiness — gap analysis and test plan
 
-Status: **planned, not started.** This worktree
-(`worktree-community-relay-readiness`, branched off `main` at `dd9d304`,
-after PR #65 landed) exists so a follow-up agent can pick this up directly.
-Companion doc: `orgs/ohstr/ncli/.claude/worktrees/community-relay-readiness/docs/private/community-relay-readiness-plan.md`.
+Status: **P0 #1 fixed and tested** (test #1 below is green; see this
+worktree's own PR for the fix). P1 items #2-#4 remain open. Companion doc:
+`orgs/ohstr/ncli/.claude/worktrees/community-relay-readiness/docs/private/community-relay-readiness-plan.md`.
 
 ## Why this exists
 
@@ -121,13 +120,26 @@ listed for completeness, to show what's already locked in.
 
 ### nmilat — `relay/` and `relay/client/`
 
-1. **(new, P0)** Untagged broad query (`kind:39000/39001/39002`, no `d`/`h`
+1. **(done)** Untagged broad query (`kind:39000/39001/39002`, no `d`/`h`
    tag) against a relay with one public and one private group: anonymous
    caller gets only the public group's events; an authenticated member of
    the private group gets both; an authenticated non-member still gets
-   only the public one. This is the regression test for finding #1 above
-   — write it failing first, against current `main`, to prove it
-   reproduces, then fix, then confirm green.
+   only the public one.
+   `TestPrivateGroup_UntaggedQueryHidesPrivateGroupFromNonMembers`
+   (`relay/client/private_group_integration_test.go`) — confirmed failing
+   against pre-fix `main` (leaked the private group to both the anonymous
+   and non-member cases), fixed via `deniedPrivateGroupEvent`/
+   `deniedPrivateGroupPotentialEvent` (`relay/groups.go`, wired into
+   `relay/handlers.go`'s `StandardRequestHandler.Handle`), confirmed green
+   including under `-race -count=20`. Closing this also required a
+   companion fix in `relay/client.ReadEventsFromRelayWithAuth` (see
+   CHANGELOG): an untagged query has no restricted-CLOSED signal to retry
+   on, so a fresh connection's first REQ could race its own NIP-42
+   handshake and silently under-report a member's own private-group
+   content; `subscribeOnce` now also reports whether it ended via *any*
+   CLOSED, and the caller retries once more on a race (EOSE reached while
+   the handshake was still unresolved) the same way it already retried
+   once on an explicit restricted CLOSED.
 2. **(new, P1)** `kind:9007` specifically hits the rate limiter after N
    creations from one pubkey in a window (whatever the generic limiter's
    actual unit is) — confirms finding #3 isn't a blind spot in practice.

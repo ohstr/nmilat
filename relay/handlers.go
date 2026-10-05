@@ -136,6 +136,11 @@ func (h *StandardRequestHandler) Handle(ctx context.Context, s *Session, rp *wir
 		return true, nil
 	}
 
+	// Computed once per subscription rather than per event: most
+	// subscriptions (anything not asking for a group-metadata kind) can
+	// skip deniedPrivateGroupPotentialEvent's bytes-parsing entirely.
+	checkGroupPrivacy := mayDeliverGroupMetadataKind(rp.Filters)
+
 	go func() {
 		// async subscription loop (same as original)
 		ctx, cancel := context.WithCancel(ctx)
@@ -149,6 +154,10 @@ func (h *StandardRequestHandler) Handle(ctx context.Context, s *Session, rp *wir
 		for {
 			select {
 			case event := <-toSend:
+				if checkGroupPrivacy && s.groups.deniedPrivateGroupPotentialEvent(s, event) {
+					wg.Done()
+					continue
+				}
 				s.reply(&wire.EventSubscriptionResponse{SubscriptionID: sub.id, EventBytes: event.Bytes})
 				wg.Done()
 

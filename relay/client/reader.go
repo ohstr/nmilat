@@ -143,6 +143,21 @@ const restrictedClosePrefix = "restricted:"
 // relay refused this query" instead of both reading as an empty result.
 // signingKeyHex == "" delegates straight to ReadEventsFromRelay, which
 // has no such signal to report, so restricted is always false there.
+//
+// A query naming no specific group at all -- e.g. "groups list"'s own
+// bare {"kinds":[39000]} -- never trips the relay's request-level
+// restricted gate in the first place (relay/groups.go's per-event
+// deniedPrivateGroupEvent gates at delivery instead, precisely so an
+// untagged query can't bypass privacy by naming nothing to deny), so the
+// REQ above races the handshake exactly like the restricted case does,
+// but ends via a normal EOSE instead of a CLOSED -- with no restricted
+// signal for this function to notice and retry on. So this also retries
+// once, the same way, whenever the first attempt ended via EOSE (not an
+// unrelated non-restricted CLOSED, which must not be retried -- see
+// TestReadEventsFromRelayWithAuth_NonRestrictedCloseIsNotRetried) while
+// the handshake itself was still unresolved, since that attempt's result
+// may have silently excluded content the caller's identity actually has
+// access to.
 func ReadEventsFromRelayWithAuth(parent context.Context, relayURL *url.URL, filters *nip01.SubscriptionFilterGroup, signingKeyHex string) (events []*nip01.Event, restricted bool, err error) {
 	if signingKeyHex == "" {
 		events, err = ReadEventsFromRelay(parent, relayURL, filters)
@@ -158,8 +173,11 @@ func ReadEventsFromRelayWithAuth(parent context.Context, relayURL *url.URL, filt
 	}
 	defer conn.Close()
 
-	events, restricted, err = subscribeOnce(ctx, conn, filters)
-	if err != nil || !restricted {
+	events, restricted, closed, err := subscribeOnce(ctx, conn, filters)
+	if err != nil {
+		return events, restricted, err
+	}
+	if !restricted && (closed || conn.AuthState() != AuthStateNone) {
 		return events, restricted, err
 	}
 
@@ -182,7 +200,7 @@ func ReadEventsFromRelayWithAuth(parent context.Context, relayURL *url.URL, filt
 		return nil, false, ctx.Err()
 	}
 
-	events, restricted, err = subscribeOnce(ctx, conn, filters)
+	events, restricted, _, err = subscribeOnce(ctx, conn, filters)
 	return events, restricted, err
 }
 
@@ -211,13 +229,16 @@ func redialAndWaitForAuth(ctx context.Context, relayURL *url.URL, signingKeyHex 
 }
 
 // subscribeOnce drives one REQ/EOSE round trip over conn (already dialed)
-// and reports whether it ended via a CLOSED citing a restriction rather
-// than a normal EOSE or a connection close -- the signal
-// ReadEventsFromRelayWithAuth retries on.
-func subscribeOnce(ctx context.Context, conn *Connection, filters *nip01.SubscriptionFilterGroup) (events []*nip01.Event, restricted bool, err error) {
+// and reports whether it ended via a CLOSED at all (closed) and, if so,
+// whether that CLOSED cited a restriction (restricted) rather than some
+// unrelated reason (e.g. a malformed filter) -- a normal EOSE or a
+// connection close leaves both false. ReadEventsFromRelayWithAuth retries
+// on restricted, and also -- unlike a non-restricted CLOSED, which must
+// not be retried -- on an EOSE whose handshake hadn't settled yet.
+func subscribeOnce(ctx context.Context, conn *Connection, filters *nip01.SubscriptionFilterGroup) (events []*nip01.Event, restricted, closed bool, err error) {
 	subID := uuid.NewString()
 	if !conn.SubscribeWithID(subID, filters) {
-		return nil, false, ErrConnectionClosed
+		return nil, false, false, ErrConnectionClosed
 	}
 	defer conn.CloseSubscription(subID)
 
@@ -225,7 +246,7 @@ func subscribeOnce(ctx context.Context, conn *Connection, filters *nip01.Subscri
 		select {
 		case res, ok := <-conn.Read():
 			if !ok {
-				return events, false, nil
+				return events, false, false, nil
 			}
 			switch m := res.(type) {
 			case *wire.EventSubscriptionResponse:
@@ -234,19 +255,19 @@ func subscribeOnce(ctx context.Context, conn *Connection, filters *nip01.Subscri
 				}
 			case *wire.EOSESubscriptionResponse:
 				if m.SubscriptionID == subID {
-					return events, false, nil
+					return events, false, false, nil
 				}
 			case *wire.ClosedSubscriptionResponse:
 				if m.SubscriptionID == subID {
-					return events, strings.HasPrefix(m.Message, restrictedClosePrefix), nil
+					return events, strings.HasPrefix(m.Message, restrictedClosePrefix), true, nil
 				}
 			}
 
 		case err := <-conn.errors:
-			return nil, false, err
+			return nil, false, false, err
 
 		case <-ctx.Done():
-			return nil, false, ctx.Err()
+			return nil, false, false, ctx.Err()
 		}
 	}
 }
