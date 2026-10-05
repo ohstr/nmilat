@@ -19,7 +19,7 @@ serialization fix that had made every tagless event's id wrong.
   `kind:39000`/`39001`/`39002` the same way `relay/membership.go` mirrors
   NIP-43 membership. A REQ/COUNT naming a private group's id now requires
   an authenticated member of that group, or the private default wouldn't
-  mean anything.
+  mean anything. (#55)
 - `huddle/room.Sink` is the seam that makes a room transport-agnostic: a
   peer is admitted with a sink, and a WebSocket peer differs from one
   bridged onto another transport only in which sink it has. `ChannelSink` is
