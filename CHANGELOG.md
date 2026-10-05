@@ -22,6 +22,21 @@ where `nip29/` had previously been structural validation only.
 
 ### Added
 
+- `relay/client.ReadEventsFromRelayWithAuth` redials and re-authenticates
+  once if its connection dies while waiting out the NIP-42 handshake
+  (`#61`'s retry-after-restricted-CLOSED window), rather than retrying
+  against a connection that's already gone. Against a real relay process,
+  every authenticated read of a private/restricted target -- including
+  the exact case `--auth-identity` exists for, a group's own creator
+  reading its private metadata -- failed deterministically with
+  "connection closed": nothing was reading `Connection.Errors()`/
+  `Closed()` during that wait, so `handle()`'s read loop sat blocked
+  trying to report the close (its `errors<-` send has no other escape
+  hatch once ctx isn't done and nobody's listening), and it surfaced as
+  already-dead only once the retry's own `subscribeOnce` ran into it.
+  Covered end to end against a real relay (`relay.New`, not a mock) for
+  the creator, an anonymous reader, and an authenticated non-member, on
+  top of the existing mock-relay retry coverage.
 - `relay.NewQueryHandler` serves `POST /query`: a NIP-98-authenticated HTTP
   bridge that takes a JSON array of plain NIP-01 filters and returns the
   matching stored events as a flat JSON array, a one-shot alternative to a

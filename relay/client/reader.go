@@ -120,6 +120,22 @@ const restrictedClosePrefix = "restricted:"
 // that response does this wait (bounded by authRetryWindow) for the
 // handshake to settle and retry the same filters once. An open relay never
 // sends that CLOSED, so it never waits at all, identity configured or not.
+//
+// A real relay has been observed sending a WS close frame while this wait
+// is in flight (root cause not pinned down -- a session-cleanup race on
+// the relay's side is one candidate, but it doesn't matter here: the
+// client has to cope with it regardless of origin). Earlier, nothing read
+// Connection.Errors()/Closed() during the wait, so handle()'s read loop
+// sat blocked trying to report the close (its errors<- send has no other
+// escape hatch once ctx isn't done and nobody's listening), and the
+// connection surfaced as already-dead only once the retry's own
+// subscribeOnce ran into it -- every authenticated read of a
+// private/restricted target failed this way, deterministically, since
+// the retry had no fallback for a connection that died instead of a
+// handshake that simply never resolved. Watching for it here instead
+// redials and re-authenticates once before retrying, the same way the
+// restricted-CLOSED case above gets one retry rather than being treated
+// as terminal.
 func ReadEventsFromRelayWithAuth(parent context.Context, relayURL *url.URL, filters *nip01.SubscriptionFilterGroup, signingKeyHex string) ([]*nip01.Event, error) {
 	if signingKeyHex == "" {
 		return ReadEventsFromRelay(parent, relayURL, filters)
@@ -142,12 +158,48 @@ func ReadEventsFromRelayWithAuth(parent context.Context, relayURL *url.URL, filt
 	select {
 	case <-conn.AuthSettled():
 	case <-time.After(authRetryWindow):
+	case <-conn.Errors():
+		conn, err = redialAndWaitForAuth(ctx, relayURL, signingKeyHex)
+		if err != nil {
+			return nil, err
+		}
+		defer conn.Close()
+	case <-conn.Closed():
+		conn, err = redialAndWaitForAuth(ctx, relayURL, signingKeyHex)
+		if err != nil {
+			return nil, err
+		}
+		defer conn.Close()
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
 
 	events, _, err = subscribeOnce(ctx, conn, filters)
 	return events, err
+}
+
+// redialAndWaitForAuth dials relayURL fresh and waits out authRetryWindow
+// for its own handshake to settle -- for ReadEventsFromRelayWithAuth to
+// call once it notices its original connection died mid-wait. Dialing
+// fresh re-runs the whole handshake from scratch, which a dead connection
+// needs regardless of why it died; the caller is responsible for closing
+// the connection this returns (on success, it's a live connection the
+// caller still needs for its own retry).
+func redialAndWaitForAuth(ctx context.Context, relayURL *url.URL, signingKeyHex string) (*Connection, error) {
+	conn, err := NewConnection(ctx, relayURL, &ConnectionConfig{SigningKeyHex: signingKeyHex})
+	if err != nil {
+		return nil, err
+	}
+
+	select {
+	case <-conn.AuthSettled():
+	case <-time.After(authRetryWindow):
+	case <-ctx.Done():
+		conn.Close()
+		return nil, ctx.Err()
+	}
+
+	return conn, nil
 }
 
 // subscribeOnce drives one REQ/EOSE round trip over conn (already dialed)
