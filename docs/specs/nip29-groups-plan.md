@@ -1,8 +1,10 @@
 # NIP-29 groups — Phase 1 implementation plan
 
-Status: **planned, not started.** This worktree (`worktree-nip29-groups-phase1`,
-branched off `main` at `888a6ea`) exists so a follow-up agent can pick this up
-directly without re-deriving scope.
+Status: **Phase 1 implemented.** Tracked in ohstr/nmilat#54. This worktree
+(`worktree-nip29-groups-phase1`, branched off `main` at `888a6ea`) carries
+`relay/groups.go`, `relay/groups_cache.go`, `relay/store_groups.go`, their
+tests, and the REQ/COUNT private-group visibility gate described below.
+Phase 2 and Phase 3 remain separate follow-ups.
 
 ## Why
 
