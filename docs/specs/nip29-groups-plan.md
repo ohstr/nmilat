@@ -74,6 +74,36 @@ Create/delete — the actual missing piece:
   `relay/groups.go` too — decide at implementation time whether that's a
   second blank-importable package or folds into the existing `relayreg`.
 
+### Visibility gating — added 2026-10-05, do not skip
+
+Decision 2 (private+closed default) is a no-op without this. "Private"
+must mean something at REQ time, not just at creation time, or every group
+is public in practice the moment it's created.
+
+- `relay/packet.go` already has the pattern to copy: it rejects restricted
+  REQ/EVENT with `"restricted: valid NIP-42 authentication required"` and
+  `"restricted: valid NIP-43 membership required"` (see the existing calls
+  around `relay/packet.go:54,58,69,313,475,480`). A private group's own
+  `kind:39000`/`39001`/`39002` events — and, once Phase 2 ships, any
+  group-addressed content — need the equivalent: a REQ naming a private
+  group's `d`/`h` tag MUST come from a session that passed NIP-42 AUTH
+  *and* whose authenticated pubkey is in that group's own 39002 roster
+  (checked via `GroupsCache`, not the relay-wide `MembershipService`).
+  Public groups skip this; closed-vs-open only gates *join*, not *read*.
+- This means `GroupsCache` needs a membership-check method shaped like
+  `MembershipCache.IsMember`, but keyed by (group id, pubkey) instead of
+  just pubkey, and `relay/packet.go`'s REQ path needs a new branch calling
+  it for group-tagged filters.
+- Coordinate with `ncli`: its generic connection path (used by
+  `find`/`publish`/`stream`/`sync`/`inspect`) does not perform a NIP-42
+  handshake at all today — only the huddle path does
+  (`huddleclient.go:238`). Until ncli's side of this ships too (tracked in
+  a matching plan in the `ncli` repo, see
+  `docs/private/nip42-generic-auth-plan.md` there), a legitimate member
+  running `ncli find` against their own private group will get a silent
+  empty result, indistinguishable from "group doesn't exist" — do not
+  mistake that for a relay-side bug while testing.
+
 ## Phase 2 (not this worktree — separate follow-up)
 
 Membership/roles: `kind:9000`/`9001` (put/remove user) and `kind:9021`/`9022`
