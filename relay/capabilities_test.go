@@ -27,7 +27,14 @@ func TestSupportedNIPsCore(t *testing.T) {
 			t.Errorf("SupportedNIPs() = %v, want core NIP %d present", got, want)
 		}
 	}
-	for _, conditional := range []int{42, 43, 26, 50} {
+	// NIP-42 is unconditional (Session.Start sends the AUTH challenge on
+	// every connection now, not just when AuthRequired is on), so it
+	// belongs with the "always present" NIPs here, not the conditional
+	// ones below.
+	if !hasNIP(got, 42) {
+		t.Errorf("SupportedNIPs() = %v, want NIP 42 present unconditionally", got)
+	}
+	for _, conditional := range []int{43, 26, 50} {
 		if hasNIP(got, conditional) {
 			t.Errorf("SupportedNIPs() = %v, did not expect conditional NIP %d with no auth/self/delegation/search configured", got, conditional)
 		}

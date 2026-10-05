@@ -106,13 +106,21 @@ func TestEmbeddingPatternComposesRelayAndManagementAPI(t *testing.T) {
 
 	deadline := time.Now().Add(5 * time.Second)
 	_ = conn.SetReadDeadline(deadline)
-	var okPayload wire.ClientPayload
-	if err := conn.ReadJSON(&okPayload); err != nil {
-		t.Fatalf("reading OK response: %v", err)
+	// Session.Start now sends a NIP-42 AUTH challenge on every connection
+	// unconditionally, so the OK for this publish is no longer
+	// guaranteed to be the very first message -- skip past it (this test
+	// doesn't exercise auth at all, the relay has no restrictions
+	// configured).
+	var okResp *wire.OkSubscriptionResponse
+	for okResp == nil {
+		var payload wire.ClientPayload
+		if err := conn.ReadJSON(&payload); err != nil {
+			t.Fatalf("reading OK response: %v", err)
+		}
+		okResp, _ = payload.SubscriptionResponse.(*wire.OkSubscriptionResponse)
 	}
-	okResp, isOK := okPayload.SubscriptionResponse.(*wire.OkSubscriptionResponse)
-	if !isOK || !okResp.Accepted {
-		t.Fatalf("publish not accepted: %#v", okPayload.SubscriptionResponse)
+	if !okResp.Accepted {
+		t.Fatalf("publish not accepted: %#v", okResp)
 	}
 
 	req := wire.NewRequestPacket("embedding-sub", CreateFilter([]int{1}, 10))

@@ -127,9 +127,12 @@ func TestReadEventsFromRelayWithAuth_NoKeyMatchesPlainRead(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	events, err := ReadEventsFromRelayWithAuth(ctx, u, filters, "")
+	events, restricted, err := ReadEventsFromRelayWithAuth(ctx, u, filters, "")
 	if err != nil {
 		t.Fatalf("ReadEventsFromRelayWithAuth(no key) error = %v", err)
+	}
+	if restricted {
+		t.Error("restricted = true, want false -- this relay never sent a restricted CLOSED")
 	}
 	if len(events) != 1 || events[0].ID != event.ID {
 		t.Fatalf("ReadEventsFromRelayWithAuth(no key) events = %v, want [%s]", events, event.ID)
@@ -151,9 +154,12 @@ func TestReadEventsFromRelayWithAuth_RetriesOnceAfterAuthenticating(t *testing.T
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	events, err := ReadEventsFromRelayWithAuth(ctx, u, filters, testPrivKey)
+	events, restricted, err := ReadEventsFromRelayWithAuth(ctx, u, filters, testPrivKey)
 	if err != nil {
 		t.Fatalf("ReadEventsFromRelayWithAuth error = %v", err)
+	}
+	if restricted {
+		t.Error("restricted = true, want false -- the retry succeeded, it should report the final attempt's own outcome")
 	}
 	if len(events) != 1 || events[0].ID != event.ID {
 		t.Fatalf("events = %v, want exactly [%s] after authenticating and retrying", events, event.ID)
@@ -181,7 +187,7 @@ func TestReadEventsFromRelayWithAuth_GivesUpAfterWindowIfNeverAuthenticated(t *t
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, _ = ReadEventsFromRelayWithAuth(ctx, u, filters, testPrivKey)
+		_, _, _ = ReadEventsFromRelayWithAuth(ctx, u, filters, testPrivKey)
 	}()
 
 	select {
@@ -341,9 +347,12 @@ func TestReadEventsFromRelayWithAuth_RedialsAfterConnectionDiesMidWait(t *testin
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	events, err := ReadEventsFromRelayWithAuth(ctx, u, filters, testPrivKey)
+	events, restricted, err := ReadEventsFromRelayWithAuth(ctx, u, filters, testPrivKey)
 	if err != nil {
 		t.Fatalf("ReadEventsFromRelayWithAuth error = %v, want it to redial past the dead connection and succeed", err)
+	}
+	if restricted {
+		t.Error("restricted = true, want false -- the redial's own retry succeeded")
 	}
 	if len(events) != 1 || events[0].ID != event.ID {
 		t.Fatalf("events = %v, want exactly [%s] after redialing", events, event.ID)
@@ -396,9 +405,12 @@ func TestReadEventsFromRelayWithAuth_NonRestrictedCloseIsNotRetried(t *testing.T
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	events, err := ReadEventsFromRelayWithAuth(ctx, u, filters, testPrivKey)
+	events, restricted, err := ReadEventsFromRelayWithAuth(ctx, u, filters, testPrivKey)
 	if err != nil {
 		t.Fatalf("ReadEventsFromRelayWithAuth error = %v", err)
+	}
+	if restricted {
+		t.Error("restricted = true, want false -- this CLOSED wasn't the \"restricted: ...\" kind")
 	}
 	if len(events) != 0 {
 		t.Errorf("events = %v, want none", events)
