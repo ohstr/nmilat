@@ -74,6 +74,21 @@ type ConnectionConfig struct {
 	SigningKeyHex string
 }
 
+// AuthState reports the outcome of this connection's NIP-42 handshake, as
+// last observed by Connection.AuthState(). It only ever advances forward
+// (None -> Succeeded/Failed); a relay that challenges again mid-connection
+// (not something this relay does today) would restart it from None.
+type AuthState int
+
+const (
+	// AuthStateNone means SigningKeyHex was never set, the relay hasn't
+	// sent a challenge yet, or a challenge arrived but signing/sending the
+	// response hasn't resolved yet.
+	AuthStateNone AuthState = iota
+	AuthStateSucceeded
+	AuthStateFailed
+)
+
 func DefaultConnectionConfig() *ConnectionConfig {
 	return &ConnectionConfig{
 		HandshakeTimeout: wsHandshakeTimeout,
@@ -112,6 +127,13 @@ type Connection struct {
 
 	subsMu sync.Mutex
 	subs   map[string]*subDispatch
+
+	authMu        sync.Mutex
+	authState     AuthState
+	authEventID   string
+	authMessage   string
+	authSettled   chan struct{}
+	authSettledOk sync.Once
 }
 
 // Connect dials relayURL with default timeouts and intervals. This is the
@@ -148,6 +170,7 @@ func NewConnection(ctx context.Context, relayURL *url.URL, cfg *ConnectionConfig
 		config:        cfg,
 		signingKeyHex: cfg.SigningKeyHex,
 		subs:          make(map[string]*subDispatch),
+		authSettled:   make(chan struct{}),
 	}
 
 	d := websocket.Dialer{
@@ -336,6 +359,8 @@ func (c *Connection) dispatch(res wire.SubscriptionResponse) {
 		c.closeSub(m.SubscriptionID)
 	case *wire.AuthChallengeResponse:
 		c.handleAuthChallenge(m)
+	case *wire.OkSubscriptionResponse:
+		c.handleAuthResult(m)
 	}
 }
 
@@ -346,6 +371,9 @@ func (c *Connection) dispatch(res wire.SubscriptionResponse) {
 // AUTH packet. Signing and sending happen in their own goroutine so a slow
 // write never blocks the read loop that drives dispatch. With no signing
 // key configured, this is a no-op -- the same anonymous behavior as today.
+// Records the event's ID (authEventID) so handleAuthResult can recognize
+// the relay's OK for it, and settles AuthState to Failed if signing itself
+// errors, since no AUTH packet will ever go out to get an OK at all.
 func (c *Connection) handleAuthChallenge(m *wire.AuthChallengeResponse) {
 	if c.signingKeyHex == "" {
 		return
@@ -353,13 +381,70 @@ func (c *Connection) handleAuthChallenge(m *wire.AuthChallengeResponse) {
 	go func() {
 		event := nip42.NewAuthEvent(m.Challenge, c.relay.String())
 		if err := event.Sign(c.signingKeyHex); err != nil {
+			c.authMu.Lock()
+			c.authState = AuthStateFailed
+			c.authMessage = fmt.Sprintf("signing auth event: %v", err)
+			c.authMu.Unlock()
+			c.authSettledOk.Do(func() { close(c.authSettled) })
 			return
 		}
+
+		c.authMu.Lock()
+		c.authEventID = event.ID
+		c.authMu.Unlock()
+
 		select {
 		case c.outgoing <- &wire.AuthPacket{Event: event}:
 		case <-c.closeCh:
 		}
 	}()
+}
+
+// handleAuthResult records the relay's OK for the one event this
+// connection itself sent to answer an AUTH challenge (if any) -- it never
+// touches the result of a caller's own Send/Publish, which that caller
+// observes on Read()/Publish's own return value instead, same as before
+// this existed.
+func (c *Connection) handleAuthResult(ok *wire.OkSubscriptionResponse) {
+	c.authMu.Lock()
+	if c.authEventID == "" || ok.EventID != c.authEventID {
+		c.authMu.Unlock()
+		return
+	}
+	if ok.Accepted {
+		c.authState = AuthStateSucceeded
+	} else {
+		c.authState = AuthStateFailed
+	}
+	c.authMessage = ok.Message
+	c.authMu.Unlock()
+	c.authSettledOk.Do(func() { close(c.authSettled) })
+}
+
+// AuthState reports this connection's current NIP-42 handshake state: see
+// AuthState's own doc for what each value means. AuthMessage returns the
+// relay's OK message once the state is Succeeded or Failed (the relay's
+// own "auth-success" text, or its rejection reason); it is empty while the
+// state is None.
+func (c *Connection) AuthState() AuthState {
+	c.authMu.Lock()
+	defer c.authMu.Unlock()
+	return c.authState
+}
+
+func (c *Connection) AuthMessage() string {
+	c.authMu.Lock()
+	defer c.authMu.Unlock()
+	return c.authMessage
+}
+
+// AuthSettled closes once this connection's NIP-42 handshake resolves one
+// way or the other (AuthState() becomes Succeeded or Failed) -- never, if
+// SigningKeyHex was never set or the relay never challenges. A caller that
+// wants to wait for the outcome should select on this alongside its own
+// timeout/context, rather than poll AuthState().
+func (c *Connection) AuthSettled() <-chan struct{} {
+	return c.authSettled
 }
 
 // closeSub removes and closes a subscription's channels exactly once. Safe

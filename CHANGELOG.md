@@ -58,6 +58,21 @@ where `nip29/` had previously been structural validation only.
   private+closed NIP-29 groups above) with no way to tell "no events"
   apart from "unauthenticated." No signing key configured leaves behavior
   unchanged: anonymous/public-only, as before. (#59)
+- `relay/client.Connection.AuthState()`/`AuthMessage()`/`AuthSettled()`
+  report what became of the handshake #59 added above -- it only sent the
+  AUTH response and stopped, with nothing recording whether the relay
+  actually accepted it. `AuthSettled()` closes once the outcome is known,
+  for a caller that wants to wait on it rather than poll. (ncli#99)
+- `relay/client.ReadEventsFromRelayWithAuth` is `ReadEventsFromRelay`'s
+  counterpart for a caller with an identity to authenticate with: the REQ
+  it sends usually loses the race against the handshake's own round trip
+  (REQ and the relay's AUTH challenge cross on the wire independently), so
+  a restricted relay's realistic first answer is its own `"restricted:
+  ..."` CLOSED (processRequest's wording for its NIP-42/NIP-43/group-
+  privacy gates), not a silent empty result. Only on exactly that response
+  does this wait (via the field above) for the handshake to settle and
+  retry the same filters once; an open relay never sends that CLOSED and
+  never waits at all, identity configured or not. (ncli#99)
 - `huddle/room.Sink` is the seam that makes a room transport-agnostic: a
   peer is admitted with a sink, and a WebSocket peer differs from one
   bridged onto another transport only in which sink it has. `ChannelSink` is
