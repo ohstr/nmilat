@@ -34,6 +34,16 @@ where `nip29/` had previously been structural validation only.
   membership-required relay through it. No `PrivateKey` given is the same
   anonymous-only behavior as before this existed: a challenge still just
   arrives on `Read()`/`Events()` unanswered. (ncli#99)
+- `relay/client.ReadEventsFromRelayWithAuth` is `ReadEventsFromRelay`'s
+  counterpart for a caller with an identity to authenticate with: the REQ
+  it sends usually loses the race against the handshake above's own round
+  trip (REQ and the relay's AUTH challenge cross on the wire
+  independently), so a restricted relay's realistic first answer is its
+  own `"restricted: ..."` CLOSED (processRequest's wording for its NIP-42/
+  NIP-43/group-privacy gates), not a silent empty result. Only on exactly
+  that response does this wait for the handshake to settle and retry the
+  same filters once; an open relay never sends that CLOSED and never
+  waits at all, identity configured or not. (ncli#99)
 - `relay.NewQueryHandler` serves `POST /query`: a NIP-98-authenticated HTTP
   bridge that takes a JSON array of plain NIP-01 filters and returns the
   matching stored events as a flat JSON array, a one-shot alternative to a

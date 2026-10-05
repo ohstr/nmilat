@@ -127,10 +127,12 @@ type Connection struct {
 	subsMu sync.Mutex
 	subs   map[string]*subDispatch
 
-	authMu      sync.Mutex
-	authState   AuthState
-	authEventID string
-	authMessage string
+	authMu        sync.Mutex
+	authState     AuthState
+	authEventID   string
+	authMessage   string
+	authSettled   chan struct{}
+	authSettledOk sync.Once
 }
 
 // Connect dials relayURL with default timeouts and intervals. This is the
@@ -164,8 +166,9 @@ func NewConnection(ctx context.Context, relayURL *url.URL, cfg *ConnectionConfig
 		incoming: make(chan wire.SubscriptionResponse, incomingEventBufferSize),
 		errors:   make(chan error),
 		closeCh:  make(chan interface{}),
-		config:   cfg,
-		subs:     make(map[string]*subDispatch),
+		config:      cfg,
+		subs:        make(map[string]*subDispatch),
+		authSettled: make(chan struct{}),
 	}
 
 	d := websocket.Dialer{
@@ -439,6 +442,7 @@ func (c *Connection) handleAuthChallenge(challenge string) {
 		c.authState = AuthStateFailed
 		c.authMessage = fmt.Sprintf("signing auth event: %v", err)
 		c.authMu.Unlock()
+		c.authSettledOk.Do(func() { close(c.authSettled) })
 		return
 	}
 	c.authEventID = ev.ID
@@ -457,8 +461,8 @@ func (c *Connection) handleAuthChallenge(challenge string) {
 // this existed.
 func (c *Connection) handleAuthResult(ok *wire.OkSubscriptionResponse) {
 	c.authMu.Lock()
-	defer c.authMu.Unlock()
 	if c.authEventID == "" || ok.EventID != c.authEventID {
+		c.authMu.Unlock()
 		return
 	}
 	if ok.Accepted {
@@ -467,6 +471,17 @@ func (c *Connection) handleAuthResult(ok *wire.OkSubscriptionResponse) {
 		c.authState = AuthStateFailed
 	}
 	c.authMessage = ok.Message
+	c.authMu.Unlock()
+	c.authSettledOk.Do(func() { close(c.authSettled) })
+}
+
+// AuthSettled closes once this connection's NIP-42 handshake resolves one
+// way or the other (AuthState() becomes Succeeded or Failed) -- never, if
+// PrivateKey was never set or the relay never challenges. A caller that
+// wants to wait for the outcome should select on this alongside its own
+// timeout/context, rather than poll AuthState().
+func (c *Connection) AuthSettled() <-chan struct{} {
+	return c.authSettled
 }
 
 // AuthState reports this connection's current NIP-42 handshake state: see

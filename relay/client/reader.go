@@ -3,7 +3,9 @@ package client
 import (
 	"context"
 	"net/url"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/ohstr/nmilat/nip01"
@@ -83,6 +85,108 @@ func ReadEventsFromRelay(parent context.Context, relayURL *url.URL, filters *nip
 			// turning that into a conn.errors send -- a round trip through
 			// a forced disconnect instead of an immediate return.
 			return nil, ctx.Err()
+		}
+	}
+}
+
+// authRetryWindow bounds how long ReadEventsFromRelayWithAuth waits for a
+// NIP-42 handshake to resolve before retrying a subscription the relay
+// closed as restricted. It only ever comes into play after an actual
+// "restricted: ..." CLOSED (this relay's own wording for its NIP-42/
+// NIP-43 gates, in processRequest) -- an open relay's calls never hit it.
+// A var, not a const, so tests can shrink it instead of waiting out the
+// real window.
+var authRetryWindow = 5 * time.Second
+
+// restrictedClosePrefix is the message prefix this relay's processRequest
+// uses for every CLOSED it sends for an auth/membership/group-privacy
+// gate -- see relay/packet.go's processRequest and
+// deniedPrivateGroupFilter. Matched as a prefix, not an exact restriction
+// list, so this stays correct if the relay adds another gate under the
+// same convention without this package needing to know its exact wording.
+const restrictedClosePrefix = "restricted:"
+
+// ReadEventsFromRelayWithAuth is ReadEventsFromRelay's counterpart for a
+// caller that has (or might have) an identity to authenticate with.
+// privKeyHex empty behaves exactly like ReadEventsFromRelay -- no
+// behavior change for a caller that passes no identity.
+//
+// Given a key, the connection answers a NIP-42 challenge on its own
+// (Connection's PrivateKey config). The very first subscription attempt is
+// usually sent before that handshake's own round trip finishes -- REQ and
+// the relay's AUTH challenge cross on the wire independently -- so a
+// restricted relay's expected response to that first attempt is its own
+// "restricted: ..." CLOSED, not a silent empty result. Only on exactly
+// that response does this wait (bounded by authRetryWindow) for the
+// handshake to settle and retry the same filters once. An open relay never
+// sends that CLOSED, so it never waits at all, identity configured or not.
+func ReadEventsFromRelayWithAuth(parent context.Context, relayURL *url.URL, filters *nip01.SubscriptionFilterGroup, privKeyHex string) ([]*nip01.Event, error) {
+	if privKeyHex == "" {
+		return ReadEventsFromRelay(parent, relayURL, filters)
+	}
+
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+
+	conn, err := NewConnection(ctx, relayURL, &ConnectionConfig{PrivateKey: privKeyHex})
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	events, restricted, err := subscribeOnce(ctx, conn, filters)
+	if err != nil || !restricted {
+		return events, err
+	}
+
+	select {
+	case <-conn.AuthSettled():
+	case <-time.After(authRetryWindow):
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+
+	events, _, err = subscribeOnce(ctx, conn, filters)
+	return events, err
+}
+
+// subscribeOnce drives one REQ/EOSE round trip over conn (already dialed)
+// and reports whether it ended via a CLOSED citing a restriction rather
+// than a normal EOSE or a connection close -- the signal
+// ReadEventsFromRelayWithAuth retries on.
+func subscribeOnce(ctx context.Context, conn *Connection, filters *nip01.SubscriptionFilterGroup) (events []*nip01.Event, restricted bool, err error) {
+	subID := uuid.NewString()
+	if !conn.SubscribeWithID(subID, filters) {
+		return nil, false, ErrConnectionClosed
+	}
+	defer conn.CloseSubscription(subID)
+
+	for {
+		select {
+		case res, ok := <-conn.Read():
+			if !ok {
+				return events, false, nil
+			}
+			switch m := res.(type) {
+			case *wire.EventSubscriptionResponse:
+				if m.SubscriptionID == subID {
+					events = append(events, m.Event)
+				}
+			case *wire.EOSESubscriptionResponse:
+				if m.SubscriptionID == subID {
+					return events, false, nil
+				}
+			case *wire.ClosedSubscriptionResponse:
+				if m.SubscriptionID == subID {
+					return events, strings.HasPrefix(m.Message, restrictedClosePrefix), nil
+				}
+			}
+
+		case err := <-conn.errors:
+			return nil, false, err
+
+		case <-ctx.Done():
+			return nil, false, ctx.Err()
 		}
 	}
 }
