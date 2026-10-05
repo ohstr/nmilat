@@ -50,6 +50,14 @@ where `nip29/` had previously been structural validation only.
   the same way `relay/membership.go` mirrors NIP-43 membership. A REQ/COUNT
   naming a private group's id now requires an authenticated member of that
   group, or the private default wouldn't mean anything. (#56)
+- `relay/client.Connection` answers a relay's NIP-42 AUTH challenge when
+  given a signing key (`ConnectionConfig.SigningKeyHex`), the same
+  handshake `huddle/wsaudio` already does over its own separate protocol.
+  Previously every generic connection -- not just huddle's -- silently
+  read back nothing from a relay's member-gated content (e.g. the
+  private+closed NIP-29 groups above) with no way to tell "no events"
+  apart from "unauthenticated." No signing key configured leaves behavior
+  unchanged: anonymous/public-only, as before. (#58)
 - `huddle/room.Sink` is the seam that makes a room transport-agnostic: a
   peer is admitted with a sink, and a WebSocket peer differs from one
   bridged onto another transport only in which sink it has. `ChannelSink` is

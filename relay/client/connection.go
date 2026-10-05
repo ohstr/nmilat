@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/ohstr/nmilat/nip01"
+	"github.com/ohstr/nmilat/nip42"
 	"github.com/ohstr/nmilat/wire"
 )
 
@@ -64,6 +65,13 @@ type ConnectionConfig struct {
 	PingInterval     time.Duration
 	PongTimeout      time.Duration
 	WriteTimeout     time.Duration
+
+	// SigningKeyHex, if set, answers the relay's NIP-42 AUTH challenge with
+	// a signed kind:22242 event (see nip42.NewAuthEvent) -- the same
+	// handshake huddleclient.go already does over its own protocol. Left
+	// empty (the default), the connection never responds to AUTH and stays
+	// anonymous/public-only, exactly as before this field existed.
+	SigningKeyHex string
 }
 
 func DefaultConnectionConfig() *ConnectionConfig {
@@ -100,6 +108,8 @@ type Connection struct {
 
 	config *ConnectionConfig
 
+	signingKeyHex string
+
 	subsMu sync.Mutex
 	subs   map[string]*subDispatch
 }
@@ -130,13 +140,14 @@ func NewConnection(ctx context.Context, relayURL *url.URL, cfg *ConnectionConfig
 	}
 
 	c := &Connection{
-		relay:    relayURL,
-		outgoing: make(chan interface{}),
-		incoming: make(chan wire.SubscriptionResponse, incomingEventBufferSize),
-		errors:   make(chan error),
-		closeCh:  make(chan interface{}),
-		config:   cfg,
-		subs:     make(map[string]*subDispatch),
+		relay:         relayURL,
+		outgoing:      make(chan interface{}),
+		incoming:      make(chan wire.SubscriptionResponse, incomingEventBufferSize),
+		errors:        make(chan error),
+		closeCh:       make(chan interface{}),
+		config:        cfg,
+		signingKeyHex: cfg.SigningKeyHex,
+		subs:          make(map[string]*subDispatch),
 	}
 
 	d := websocket.Dialer{
@@ -323,7 +334,32 @@ func (c *Connection) dispatch(res wire.SubscriptionResponse) {
 		c.closeSub(m.SubscriptionID)
 	case *wire.ClosedSubscriptionResponse:
 		c.closeSub(m.SubscriptionID)
+	case *wire.AuthChallengeResponse:
+		c.handleAuthChallenge(m)
 	}
+}
+
+// handleAuthChallenge answers a relay's NIP-42 AUTH challenge if this
+// Connection was constructed with a signing key (ConnectionConfig's
+// SigningKeyHex), mirroring the handshake huddleclient.go already does over
+// its own protocol: build the kind:22242 event, sign it, send it back as an
+// AUTH packet. Signing and sending happen in their own goroutine so a slow
+// write never blocks the read loop that drives dispatch. With no signing
+// key configured, this is a no-op -- the same anonymous behavior as today.
+func (c *Connection) handleAuthChallenge(m *wire.AuthChallengeResponse) {
+	if c.signingKeyHex == "" {
+		return
+	}
+	go func() {
+		event := nip42.NewAuthEvent(m.Challenge, c.relay.String())
+		if err := event.Sign(c.signingKeyHex); err != nil {
+			return
+		}
+		select {
+		case c.outgoing <- &wire.AuthPacket{Event: event}:
+		case <-c.closeCh:
+		}
+	}()
 }
 
 // closeSub removes and closes a subscription's channels exactly once. Safe
