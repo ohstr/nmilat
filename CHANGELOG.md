@@ -62,7 +62,7 @@ where `nip29/` had previously been structural validation only.
   report what became of the handshake #59 added above -- it only sent the
   AUTH response and stopped, with nothing recording whether the relay
   actually accepted it. `AuthSettled()` closes once the outcome is known,
-  for a caller that wants to wait on it rather than poll. (ncli#99)
+  for a caller that wants to wait on it rather than poll. (#61)
 - `relay/client.ReadEventsFromRelayWithAuth` is `ReadEventsFromRelay`'s
   counterpart for a caller with an identity to authenticate with: the REQ
   it sends usually loses the race against the handshake's own round trip
@@ -72,7 +72,7 @@ where `nip29/` had previously been structural validation only.
   privacy gates), not a silent empty result. Only on exactly that response
   does this wait (via the field above) for the handshake to settle and
   retry the same filters once; an open relay never sends that CLOSED and
-  never waits at all, identity configured or not. (ncli#99)
+  never waits at all, identity configured or not. (#61)
 - `huddle/room.Sink` is the seam that makes a room transport-agnostic: a
   peer is admitted with a sink, and a WebSocket peer differs from one
   bridged onto another transport only in which sink it has. `ChannelSink` is
