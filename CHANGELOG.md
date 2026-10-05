@@ -2,7 +2,7 @@
 
 ## [0.5.0]
 
-_Cut as `v0.5.0-rc.3` on 2026-10-04._ This section stays open: 0.5.0 itself has
+_Cut as `v0.5.0-rc.5` on 2026-10-05._ This section stays open: 0.5.0 itself has
 not been released, so everything under it is still pre-release and accumulating.
 rc.2 is where the NIP-CASH private transport became usable from a client: the
 batch API that spends many bills in one relay event, the breaking changes three
@@ -12,7 +12,13 @@ the embeddable relay SDK -- `examples/`, a README "Embedding nmilat" section --
 alongside the `PotentialEvent.Bytes` hot-path fix that removes a second
 read transaction from REQ delivery, and adds the NIP-98-authenticated
 `POST /query` HTTP bridge for buzz-relay compatibility (access-scoped by
-NIP-43 membership exactly as REQ is).
+NIP-43 membership exactly as REQ is). rc.4 adds the write-side counterpart,
+`POST /events`, fixes a NIP-98 anti-replay nonce colliding with NIP-13's own
+proof-of-work tag name, and fixes `POST /query` ignoring its own `Limit`
+plus the same-second pagination tie-break bug that fix had been masking.
+rc.5 gives NIP-29 groups real server-side state -- create/delete,
+membership and roles, metadata/invites/pins, and moderator delete-event --
+where `nip29/` had previously been structural validation only.
 
 ### Added
 
