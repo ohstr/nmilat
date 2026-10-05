@@ -141,7 +141,7 @@ func (m *MembershipService) handleJoin(ctx context.Context, s *Session, ev *nip0
 	}
 
 	if s.config.MembershipPublishAddRemove {
-		m.publishSelfSigned(ctx, s, nip43.NewAddUser(s.selfPubkey, ev.PubKey))
+		publishSelfSigned(ctx, s, nip43.NewAddUser(s.selfPubkey, ev.PubKey))
 	}
 
 	s.reply(&wire.OkSubscriptionResponse{
@@ -173,7 +173,7 @@ func (m *MembershipService) handleLeave(ctx context.Context, s *Session, ev *nip
 	}
 
 	if s.config.MembershipPublishAddRemove {
-		m.publishSelfSigned(ctx, s, nip43.NewRemoveUser(s.selfPubkey, ev.PubKey))
+		publishSelfSigned(ctx, s, nip43.NewRemoveUser(s.selfPubkey, ev.PubKey))
 	}
 
 	s.reply(&wire.OkSubscriptionResponse{
@@ -185,13 +185,15 @@ func (m *MembershipService) handleLeave(ctx context.Context, s *Session, ev *nip
 
 // publishSelfSigned signs ev with the relay's own PrivKey and inserts it
 // directly into the store, bypassing the async EventInsertTask/OK-reply
-// machinery entirely -- this is a relay-initiated side effect (kind
-// 8000/8001), not something the requesting client is waiting on an OK
-// for. Failures are logged, not propagated: a failed advisory
-// add/remove-user broadcast must never fail the join/leave itself, since
-// the authoritative membership state (relay/store_membership.go) was
-// already committed by the time this runs.
-func (m *MembershipService) publishSelfSigned(ctx context.Context, s *Session, ev *nip01.Event) {
+// machinery entirely -- this is a relay-initiated side effect (e.g. kind
+// 8000/8001 for NIP-43, or kind 39000-39002 for NIP-29), not something the
+// requesting client is waiting on an OK for. Failures are logged, not
+// propagated: a failed relay-authored mirror event must never fail the
+// triggering action itself, since the authoritative state (bbolt) was
+// already committed by the time this runs. Package-level rather than a
+// method on *MembershipService since it is equally used by GroupsService
+// (relay/groups.go) and does not touch any MembershipService state.
+func publishSelfSigned(ctx context.Context, s *Session, ev *nip01.Event) {
 	if s.config.PrivKey == "" {
 		return
 	}
