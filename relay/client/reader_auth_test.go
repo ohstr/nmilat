@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -187,6 +188,165 @@ func TestReadEventsFromRelayWithAuth_GivesUpAfterWindowIfNeverAuthenticated(t *t
 	case <-done:
 	case <-time.After(3 * time.Second):
 		t.Fatal("ReadEventsFromRelayWithAuth did not return within 3s -- the retry wait may not be honoring authRetryWindow/ctx")
+	}
+}
+
+// newRelayThatDiesRightAfterTheRestrictedClose starts an in-process relay
+// reproducing a real relay's observed behavior: it challenges on connect
+// and closes a REQ as restricted exactly like
+// newMembershipGatedRelayServer, but on its FIRST connection, the moment
+// it has both (a) answered that REQ and (b) validated the client's AUTH
+// event, it sends a WS close frame instead of the OK the client is
+// waiting on -- root cause not reproduced here (the real relay's own
+// cause was never pinned down either, see ReadEventsFromRelayWithAuth's
+// doc comment), just the observable effect: the connection dies during
+// exactly the window ReadEventsFromRelayWithAuth waits in. The ordering
+// is forced deterministically (not left to whichever of REQ/AUTH happens
+// to arrive first on the wire) so this test isn't racy: a validated AUTH
+// that arrives before REQ is answered is held back until the REQ's own
+// CLOSED has actually been sent. Its second connection (what a redial
+// produces) behaves normally throughout.
+func newRelayThatDiesRightAfterTheRestrictedClose(t *testing.T, challenge string, event *nip01.Event) *httptest.Server {
+	upgrader := websocket.Upgrader{}
+	mux := http.NewServeMux()
+	var connCount atomic.Int32
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		isFirstConn := connCount.Add(1) == 1
+
+		challengeJSON, err := (&wire.AuthChallengeResponse{Challenge: challenge}).MarshalJSON()
+		if err != nil {
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, challengeJSON); err != nil {
+			return
+		}
+
+		authed := false
+		reqAnswered := false
+		pendingAuthEventID := ""
+		die := func() {
+			msg := websocket.FormatCloseMessage(websocket.CloseNormalClosure, "")
+			_ = conn.WriteControl(websocket.CloseMessage, msg, time.Now().Add(time.Second))
+		}
+
+		for {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			var payload wire.RelayPayload
+			if err := json.Unmarshal(data, &payload); err != nil {
+				return
+			}
+
+			switch p := payload.Packet.(type) {
+			case *wire.AuthPacket:
+				if err := nip42.ValidateAuthEvent(p.Event.Kind, p.Event.Tags, p.Event.CreatedAt, challenge, "ws://"+r.Host); err != nil {
+					t.Errorf("server-side ValidateAuthEvent: %v", err)
+				}
+				if err := p.Event.Verify(); err != nil {
+					t.Errorf("server-side Verify: %v", err)
+				}
+				if isFirstConn {
+					if reqAnswered {
+						die()
+						return
+					}
+					// REQ hasn't been answered yet -- hold this and fire
+					// once it is, rather than racing send order on the wire.
+					pendingAuthEventID = p.Event.ID
+					continue
+				}
+				authed = true
+				okJSON, err := (&wire.OkSubscriptionResponse{EventID: p.Event.ID, Accepted: true, Message: "auth-success"}).MarshalJSON()
+				if err != nil {
+					return
+				}
+				if err := conn.WriteMessage(websocket.TextMessage, okJSON); err != nil {
+					return
+				}
+
+			case *wire.RequestPacket:
+				if !authed {
+					closedJSON, err := (&wire.ClosedSubscriptionResponse{
+						SubscriptionID: p.SubscriptionID,
+						Message:        "restricted: valid NIP-43 membership required",
+					}).MarshalJSON()
+					if err != nil {
+						return
+					}
+					if err := conn.WriteMessage(websocket.TextMessage, closedJSON); err != nil {
+						return
+					}
+					reqAnswered = true
+					if isFirstConn && pendingAuthEventID != "" {
+						die()
+						return
+					}
+					continue
+				}
+
+				if event != nil {
+					eventBytes, err := json.Marshal(event)
+					if err != nil {
+						return
+					}
+					evJSON, err := (&wire.EventSubscriptionResponse{SubscriptionID: p.SubscriptionID, EventBytes: eventBytes}).MarshalJSON()
+					if err != nil {
+						return
+					}
+					if err := conn.WriteMessage(websocket.TextMessage, evJSON); err != nil {
+						return
+					}
+				}
+				eoseJSON, err := (&wire.EOSESubscriptionResponse{SubscriptionID: p.SubscriptionID}).MarshalJSON()
+				if err != nil {
+					return
+				}
+				if err := conn.WriteMessage(websocket.TextMessage, eoseJSON); err != nil {
+					return
+				}
+			}
+		}
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	return server
+}
+
+// TestReadEventsFromRelayWithAuth_RedialsAfterConnectionDiesMidWait is the
+// regression test for the real-world failure this package's own report
+// described: every authenticated read of a private/restricted target
+// failed with "connection closed" because the wait between attempts
+// didn't notice its connection had died, and the retry ran against a
+// connection that was already gone. With the fix, the same scenario
+// redials and authenticates fresh instead of surfacing that error.
+func TestReadEventsFromRelayWithAuth_RedialsAfterConnectionDiesMidWait(t *testing.T) {
+	const challenge = "dies-right-after-restricted-close"
+	event := nip01.NewEvent(1, "members only, reached via redial")
+	if err := event.Sign(testPrivKey); err != nil {
+		t.Fatal(err)
+	}
+	server := newRelayThatDiesRightAfterTheRestrictedClose(t, challenge, event)
+	u := dialURL(t, server)
+
+	filters := nip01.NewSubscriptionFilterGroup()
+	filters.Add(&nip01.SubscriptionFilter{Kinds: []int{1}})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	events, err := ReadEventsFromRelayWithAuth(ctx, u, filters, testPrivKey)
+	if err != nil {
+		t.Fatalf("ReadEventsFromRelayWithAuth error = %v, want it to redial past the dead connection and succeed", err)
+	}
+	if len(events) != 1 || events[0].ID != event.ID {
+		t.Fatalf("events = %v, want exactly [%s] after redialing", events, event.ID)
 	}
 }
 
