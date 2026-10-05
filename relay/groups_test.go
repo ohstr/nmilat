@@ -296,7 +296,7 @@ func TestProcessRequest_PrivateGroupVisibilityGate_AllowsMember(t *testing.T) {
 func TestProcessRequest_PrivateGroupVisibilityGate_PublicGroupUnaffected(t *testing.T) {
 	sess := newGroupsEnabledTestSession(t)
 	rec := newGroupRecord(groupA, authTestPubKey)
-	rec.Private = false
+	rec.Metadata.Private = false
 	if err := sess.groups.Create(rec); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -386,5 +386,494 @@ func TestDeniedPrivateGroupFilter_NilSafety(t *testing.T) {
 
 	if _, denied := sess.groups.deniedPrivateGroupFilter(sess, nil); denied {
 		t.Fatal("deniedPrivateGroupFilter(nil filters) denied = true, want false")
+	}
+}
+
+/////////////////////////////////////////////////////////////////////
+// Phase 2 + Phase 3 event builders
+/////////////////////////////////////////////////////////////////////
+
+// secondTestPrivKey is a second, distinct keypair from authTestPrivKey's,
+// used across these tests for "signed by someone who isn't the group's
+// creator/admin."
+const secondTestPrivKey = "0000000000000000000000000000000000000000000000000000000000000001"
+
+func secondTestPubKey(t *testing.T) string {
+	t.Helper()
+	ev := &nip01.Event{Kind: 1}
+	if err := ev.Sign(secondTestPrivKey); err != nil {
+		t.Fatalf("derive secondTestPrivKey's pubkey: %v", err)
+	}
+	return ev.PubKey
+}
+
+func putUserEvent(t *testing.T, groupID, memberPubkey, privKey string, roles ...string) *nip01.Event {
+	t.Helper()
+	ev := nip29.NewPutUser("", groupID, memberPubkey, roles...)
+	if err := ev.Sign(privKey); err != nil {
+		t.Fatalf("sign put-user: %v", err)
+	}
+	return ev
+}
+
+func removeUserEvent(t *testing.T, groupID, memberPubkey, privKey string) *nip01.Event {
+	t.Helper()
+	ev := nip29.NewRemoveUser("", groupID, memberPubkey)
+	if err := ev.Sign(privKey); err != nil {
+		t.Fatalf("sign remove-user: %v", err)
+	}
+	return ev
+}
+
+func editMetadataEvent(t *testing.T, groupID, privKey string, p nip29.GroupMetadataParams) *nip01.Event {
+	t.Helper()
+	ev := nip29.NewEditMetadata("", groupID, p)
+	if err := ev.Sign(privKey); err != nil {
+		t.Fatalf("sign edit-metadata: %v", err)
+	}
+	return ev
+}
+
+func deleteEventEvent(t *testing.T, groupID, eventID, privKey string) *nip01.Event {
+	t.Helper()
+	ev := nip29.NewDeleteEvent("", groupID, eventID)
+	if err := ev.Sign(privKey); err != nil {
+		t.Fatalf("sign moderator delete-event: %v", err)
+	}
+	return ev
+}
+
+func createInviteEvent(t *testing.T, groupID, code, privKey string) *nip01.Event {
+	t.Helper()
+	ev := nip29.NewCreateInvite("", groupID, code)
+	if err := ev.Sign(privKey); err != nil {
+		t.Fatalf("sign create-invite: %v", err)
+	}
+	return ev
+}
+
+func updatePinListEvent(t *testing.T, groupID, privKey string, events, addresses []string) *nip01.Event {
+	t.Helper()
+	ev := nip29.NewUpdatePinList("", groupID, events, addresses)
+	if err := ev.Sign(privKey); err != nil {
+		t.Fatalf("sign update-pin-list: %v", err)
+	}
+	return ev
+}
+
+func groupJoinRequestEvent(t *testing.T, groupID, code, privKey string) *nip01.Event {
+	t.Helper()
+	ev := nip29.NewJoinRequest("", groupID, code, "")
+	if err := ev.Sign(privKey); err != nil {
+		t.Fatalf("sign group join-request: %v", err)
+	}
+	return ev
+}
+
+func groupLeaveRequestEvent(t *testing.T, groupID, privKey string) *nip01.Event {
+	t.Helper()
+	ev := nip29.NewLeaveRequest("", groupID, "")
+	if err := ev.Sign(privKey); err != nil {
+		t.Fatalf("sign group leave-request: %v", err)
+	}
+	return ev
+}
+
+/////////////////////////////////////////////////////////////////////
+// kind:9000 put-user / kind:9001 remove-user
+/////////////////////////////////////////////////////////////////////
+
+func TestHandleEvent_PutUser_Success(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
+	newMember := secondTestPubKey(t)
+
+	resp := sendEventAndAwaitOKForSession(t, sess, putUserEvent(t, groupA, newMember, authTestPrivKey, "moderator"))
+	if !resp.Accepted {
+		t.Fatalf("Accepted = false, want true (message: %s)", resp.Message)
+	}
+	if !sess.groups.IsMember(groupA, newMember) {
+		t.Fatal("IsMember(newMember) = false after put-user, want true")
+	}
+	rec, err := sess.groups.Get(groupA)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if roles := rec.RolesFor(newMember); len(roles) != 1 || roles[0] != "moderator" {
+		t.Fatalf("RolesFor(newMember) = %v, want [moderator]", roles)
+	}
+
+	members, err := sess.store.QueryEvents(context.Background(), &nip01.SubscriptionFilter{Kinds: []int{nip29.KindGroupMembers}, Limit: 10})
+	if err != nil {
+		t.Fatalf("QueryEvents(members): %v", err)
+	}
+	if len(members) != 1 {
+		t.Fatalf("stored kind:39002 events = %d, want 1 (republished after put-user)", len(members))
+	}
+	parsed, err := nip29.ParseGroupMembers(members[0])
+	if err != nil {
+		t.Fatalf("ParseGroupMembers: %v", err)
+	}
+	if !parsed.Contains(newMember) {
+		t.Fatalf("republished GroupMembers = %+v, want to contain %s", parsed, newMember)
+	}
+}
+
+func TestHandleEvent_PutUser_NotAdmin(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
+	newMember := secondTestPubKey(t)
+
+	resp := sendEventAndAwaitOKForSession(t, sess, putUserEvent(t, groupA, newMember, secondTestPrivKey))
+	if resp.Accepted {
+		t.Fatal("Accepted = true for a put-user signed by a non-admin, want false")
+	}
+	if resp.Message != "restricted: you may not add members to this group." {
+		t.Fatalf("Message = %q, want the not-admin wording", resp.Message)
+	}
+	if sess.groups.IsMember(groupA, newMember) {
+		t.Fatal("IsMember(newMember) = true after a rejected put-user, want false")
+	}
+}
+
+func TestHandleEvent_PutUser_NoSuchGroup(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	resp := sendEventAndAwaitOKForSession(t, sess, putUserEvent(t, "no-such-group", secondTestPubKey(t), authTestPrivKey))
+	if resp.Accepted {
+		t.Fatal("Accepted = true for put-user on a non-existent group, want false")
+	}
+	if resp.Message != "restricted: no such group." {
+		t.Fatalf("Message = %q, want the no-such-group wording", resp.Message)
+	}
+}
+
+func TestHandleEvent_RemoveUser_Success(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
+	newMember := secondTestPubKey(t)
+	sendEventAndAwaitOKForSession(t, sess, putUserEvent(t, groupA, newMember, authTestPrivKey))
+
+	resp := sendEventAndAwaitOKForSession(t, sess, removeUserEvent(t, groupA, newMember, authTestPrivKey))
+	if !resp.Accepted {
+		t.Fatalf("Accepted = false, want true (message: %s)", resp.Message)
+	}
+	if sess.groups.IsMember(groupA, newMember) {
+		t.Fatal("IsMember(newMember) = true after remove-user, want false")
+	}
+}
+
+func TestHandleEvent_RemoveUser_NotAdmin(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
+
+	resp := sendEventAndAwaitOKForSession(t, sess, removeUserEvent(t, groupA, authTestPubKey, secondTestPrivKey))
+	if resp.Accepted {
+		t.Fatal("Accepted = true for a remove-user signed by a non-admin, want false")
+	}
+	if resp.Message != "restricted: you may not remove members from this group." {
+		t.Fatalf("Message = %q, want the not-admin wording", resp.Message)
+	}
+}
+
+/////////////////////////////////////////////////////////////////////
+// kind:9002 edit-metadata
+/////////////////////////////////////////////////////////////////////
+
+func TestHandleEvent_EditMetadata_Success(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
+
+	resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupA, authTestPrivKey, nip29.GroupMetadataParams{
+		Name: "renamed", Private: false, Closed: false,
+	}))
+	if !resp.Accepted {
+		t.Fatalf("Accepted = false, want true (message: %s)", resp.Message)
+	}
+	if sess.groups.IsPrivate(groupA) {
+		t.Fatal("IsPrivate() after edit-metadata(Private: false) = true, want false")
+	}
+	if sess.groups.IsClosed(groupA) {
+		t.Fatal("IsClosed() after edit-metadata(Closed: false) = true, want false")
+	}
+
+	metaEvents, err := sess.store.QueryEvents(context.Background(), &nip01.SubscriptionFilter{Kinds: []int{nip29.KindGroupMetadata}, Limit: 10})
+	if err != nil {
+		t.Fatalf("QueryEvents(metadata): %v", err)
+	}
+	if len(metaEvents) != 1 {
+		t.Fatalf("stored kind:39000 events = %d, want 1 (republished after edit-metadata)", len(metaEvents))
+	}
+	meta, err := nip29.ParseGroupMetadata(metaEvents[0])
+	if err != nil {
+		t.Fatalf("ParseGroupMetadata: %v", err)
+	}
+	if meta.Name != "renamed" || meta.Private || meta.Closed {
+		t.Fatalf("republished GroupMetadata = %+v, want Name=renamed Private=false Closed=false", meta)
+	}
+}
+
+func TestHandleEvent_EditMetadata_NotAdmin(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
+
+	resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupA, secondTestPrivKey, nip29.GroupMetadataParams{Private: false}))
+	if resp.Accepted {
+		t.Fatal("Accepted = true for edit-metadata signed by a non-admin, want false")
+	}
+	if !sess.groups.IsPrivate(groupA) {
+		t.Fatal("a rejected edit-metadata should not have changed Private")
+	}
+}
+
+/////////////////////////////////////////////////////////////////////
+// kind:9005 moderator delete-event
+/////////////////////////////////////////////////////////////////////
+
+func TestHandleEvent_DeleteEvent_Success(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
+
+	target := CreateEvent(t, 1, []string{"h", groupA})
+	if err := sess.store.InsertEvents(context.Background(), []*nip01.Event{target}); err != nil {
+		t.Fatalf("InsertEvents: %v", err)
+	}
+
+	resp := sendEventAndAwaitOKForSession(t, sess, deleteEventEvent(t, groupA, target.ID, authTestPrivKey))
+	if !resp.Accepted {
+		t.Fatalf("Accepted = false, want true (message: %s)", resp.Message)
+	}
+
+	got, err := sess.store.QueryEvents(context.Background(), &nip01.SubscriptionFilter{IDs: []string{target.ID}, Limit: 1})
+	if err != nil {
+		t.Fatalf("QueryEvents: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatal("target event still present after a successful moderator delete, want gone")
+	}
+}
+
+func TestHandleEvent_DeleteEvent_WrongGroup(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
+	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupB))
+
+	target := CreateEvent(t, 1, []string{"h", groupB})
+	if err := sess.store.InsertEvents(context.Background(), []*nip01.Event{target}); err != nil {
+		t.Fatalf("InsertEvents: %v", err)
+	}
+
+	// groupA's admin tries to delete an event that belongs to groupB.
+	resp := sendEventAndAwaitOKForSession(t, sess, deleteEventEvent(t, groupA, target.ID, authTestPrivKey))
+	if resp.Accepted {
+		t.Fatal("Accepted = true for deleting an event that belongs to a different group, want false")
+	}
+	if resp.Message != "restricted: that event does not belong to this group." {
+		t.Fatalf("Message = %q, want the wrong-group wording", resp.Message)
+	}
+
+	got, err := sess.store.QueryEvents(context.Background(), &nip01.SubscriptionFilter{IDs: []string{target.ID}, Limit: 1})
+	if err != nil {
+		t.Fatalf("QueryEvents: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatal("target event should survive a rejected cross-group delete")
+	}
+}
+
+func TestHandleEvent_DeleteEvent_NotAdmin(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
+	target := CreateEvent(t, 1, []string{"h", groupA})
+	if err := sess.store.InsertEvents(context.Background(), []*nip01.Event{target}); err != nil {
+		t.Fatalf("InsertEvents: %v", err)
+	}
+
+	resp := sendEventAndAwaitOKForSession(t, sess, deleteEventEvent(t, groupA, target.ID, secondTestPrivKey))
+	if resp.Accepted {
+		t.Fatal("Accepted = true for a moderator delete signed by a non-admin, want false")
+	}
+}
+
+/////////////////////////////////////////////////////////////////////
+// kind:9009 create-invite
+/////////////////////////////////////////////////////////////////////
+
+func TestHandleEvent_CreateInvite_Success(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
+
+	resp := sendEventAndAwaitOKForSession(t, sess, createInviteEvent(t, groupA, "my-code", authTestPrivKey))
+	if !resp.Accepted {
+		t.Fatalf("Accepted = false, want true (message: %s)", resp.Message)
+	}
+
+	inv, err := sess.store.GetGroupInvite(groupA, "my-code")
+	if err != nil {
+		t.Fatalf("GetGroupInvite: %v", err)
+	}
+	if inv == nil || inv.Used {
+		t.Fatalf("GetGroupInvite() = %+v, want a fresh, unused invite", inv)
+	}
+}
+
+func TestHandleEvent_CreateInvite_NotAdmin(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
+
+	resp := sendEventAndAwaitOKForSession(t, sess, createInviteEvent(t, groupA, "my-code", secondTestPrivKey))
+	if resp.Accepted {
+		t.Fatal("Accepted = true for create-invite signed by a non-admin, want false")
+	}
+	if inv, _ := sess.store.GetGroupInvite(groupA, "my-code"); inv != nil {
+		t.Fatal("a rejected create-invite should not have persisted anything")
+	}
+}
+
+/////////////////////////////////////////////////////////////////////
+// kind:9010 update-pin-list
+/////////////////////////////////////////////////////////////////////
+
+func TestHandleEvent_UpdatePinList_Success(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
+
+	resp := sendEventAndAwaitOKForSession(t, sess, updatePinListEvent(t, groupA, authTestPrivKey, []string{authTestPubKey}, nil))
+	if !resp.Accepted {
+		t.Fatalf("Accepted = false, want true (message: %s)", resp.Message)
+	}
+
+	pinEvents, err := sess.store.QueryEvents(context.Background(), &nip01.SubscriptionFilter{Kinds: []int{nip29.KindGroupPinnedEvents}, Limit: 10})
+	if err != nil {
+		t.Fatalf("QueryEvents(pins): %v", err)
+	}
+	if len(pinEvents) != 1 {
+		t.Fatalf("stored kind:39005 events = %d, want 1", len(pinEvents))
+	}
+}
+
+func TestHandleEvent_UpdatePinList_NotAdmin(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
+
+	resp := sendEventAndAwaitOKForSession(t, sess, updatePinListEvent(t, groupA, secondTestPrivKey, nil, nil))
+	if resp.Accepted {
+		t.Fatal("Accepted = true for update-pin-list signed by a non-admin, want false")
+	}
+}
+
+/////////////////////////////////////////////////////////////////////
+// kind:9021 group join / kind:9022 group leave
+/////////////////////////////////////////////////////////////////////
+
+func TestHandleEvent_GroupJoin_OpenGroup(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
+	sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupA, authTestPrivKey, nip29.GroupMetadataParams{Closed: false}))
+
+	joiner := secondTestPubKey(t)
+	resp := sendEventAndAwaitOKForSession(t, sess, groupJoinRequestEvent(t, groupA, "", secondTestPrivKey))
+	if !resp.Accepted {
+		t.Fatalf("Accepted = false, want true for joining an open group (message: %s)", resp.Message)
+	}
+	if !sess.groups.IsMember(groupA, joiner) {
+		t.Fatal("IsMember(joiner) = false after a successful open-group join, want true")
+	}
+}
+
+func TestHandleEvent_GroupJoin_ClosedGroup_NoCode(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA)) // closed by default
+
+	resp := sendEventAndAwaitOKForSession(t, sess, groupJoinRequestEvent(t, groupA, "", secondTestPrivKey))
+	if resp.Accepted {
+		t.Fatal("Accepted = true for joining a closed group with no code, want false")
+	}
+	if sess.groups.IsMember(groupA, secondTestPubKey(t)) {
+		t.Fatal("a rejected join should not have added a member")
+	}
+}
+
+func TestHandleEvent_GroupJoin_ClosedGroup_ValidCode(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
+	sendEventAndAwaitOKForSession(t, sess, createInviteEvent(t, groupA, "secret", authTestPrivKey))
+
+	joiner := secondTestPubKey(t)
+	resp := sendEventAndAwaitOKForSession(t, sess, groupJoinRequestEvent(t, groupA, "secret", secondTestPrivKey))
+	if !resp.Accepted {
+		t.Fatalf("Accepted = false, want true for a closed group with a valid code (message: %s)", resp.Message)
+	}
+	if !sess.groups.IsMember(groupA, joiner) {
+		t.Fatal("IsMember(joiner) = false after a successful invite-code join, want true")
+	}
+
+	// The code is single-use -- a second join attempt with the same code,
+	// from a different pubkey, must fail.
+	thirdPrivKey := "0000000000000000000000000000000000000000000000000000000000000002"
+	resp = sendEventAndAwaitOKForSession(t, sess, groupJoinRequestEvent(t, groupA, "secret", thirdPrivKey))
+	if resp.Accepted {
+		t.Fatal("Accepted = true for reusing an already-consumed invite code, want false")
+	}
+}
+
+func TestHandleEvent_GroupJoin_AlreadyMember(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
+
+	resp := sendEventAndAwaitOKForSession(t, sess, groupJoinRequestEvent(t, groupA, "", authTestPrivKey))
+	if !resp.Accepted {
+		t.Fatalf("Accepted = false, want true for an already-member duplicate join (message: %s)", resp.Message)
+	}
+	if resp.Message != nip29.DuplicateErrorPrefix+"you are already a member of this group." {
+		t.Fatalf("Message = %q, want the duplicate wording", resp.Message)
+	}
+}
+
+func TestHandleEvent_GroupLeave_Success(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
+	member := secondTestPubKey(t)
+	sendEventAndAwaitOKForSession(t, sess, putUserEvent(t, groupA, member, authTestPrivKey))
+
+	resp := sendEventAndAwaitOKForSession(t, sess, groupLeaveRequestEvent(t, groupA, secondTestPrivKey))
+	if !resp.Accepted {
+		t.Fatalf("Accepted = false, want true (message: %s)", resp.Message)
+	}
+	if sess.groups.IsMember(groupA, member) {
+		t.Fatal("IsMember(member) = true after a successful leave, want false")
+	}
+}
+
+func TestHandleEvent_GroupLeave_NotAMember(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
+
+	resp := sendEventAndAwaitOKForSession(t, sess, groupLeaveRequestEvent(t, groupA, secondTestPrivKey))
+	if !resp.Accepted {
+		t.Fatalf("Accepted = false, want true for a non-member leave (message: %s)", resp.Message)
+	}
+	if resp.Message != nip29.DuplicateErrorPrefix+"you are not a member of this group." {
+		t.Fatalf("Message = %q, want the non-member-leave wording", resp.Message)
+	}
+}
+
+/////////////////////////////////////////////////////////////////////
+// Unsupported moderation kind (default case)
+/////////////////////////////////////////////////////////////////////
+
+func TestHandleEvent_UnsupportedModerationKind(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+
+	ev := &nip01.Event{Kind: 9011, Tags: [][]string{{"h", groupA}}}
+	if err := ev.Sign(authTestPrivKey); err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	resp := sendEventAndAwaitOKForSession(t, sess, ev)
+	if resp.Accepted {
+		t.Fatal("Accepted = true for an unsupported moderation kind, want false")
+	}
+	if resp.Message != "restricted: unsupported NIP-29 event kind" {
+		t.Fatalf("Message = %q, want the unsupported-kind wording", resp.Message)
 	}
 }

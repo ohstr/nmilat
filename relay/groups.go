@@ -2,22 +2,23 @@ package relay
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip29"
 	"github.com/ohstr/nmilat/wire"
 )
 
-// HandleEvent processes a NIP-29 kind:9007 (create group) or kind:9008
-// (delete group) request -- Phase 1's two group-lifecycle actions --
-// replying via s and mutating group state as a side effect. Callers
-// (processEvent) should invoke this only for those two kinds; it always
-// replies (never falls through silently), since a client sending one of
-// these kinds is unambiguously attempting to use this feature -- including
-// when g is nil (NIP-29 group hosting isn't configured on this relay at
-// all), which gets an explicit "restricted" reply rather than being
-// silently accepted as an ordinary event.
+// HandleEvent processes any NIP-29 moderation event (kind:9000-9020) or
+// group-scoped user request (kind:9021/9022), replying via s and mutating
+// group state as a side effect. Callers (processEvent) should invoke this
+// only for those kinds; it always replies (never falls through silently),
+// since a client sending one of these kinds is unambiguously attempting to
+// use this feature -- including when g is nil (NIP-29 group hosting isn't
+// configured on this relay at all), which gets an explicit "restricted"
+// reply rather than being silently accepted as an ordinary event.
 func (g *GroupsService) HandleEvent(ctx context.Context, s *Session, ev *nip01.Event) {
 	if g == nil {
 		s.reply(&wire.OkSubscriptionResponse{
@@ -31,9 +32,42 @@ func (g *GroupsService) HandleEvent(ctx context.Context, s *Session, ev *nip01.E
 	case nip29.KindCreateGroup:
 		g.handleCreate(ctx, s, ev)
 	case nip29.KindDeleteGroup:
-		g.handleDelete(s, ev)
+		g.handleDeleteGroup(s, ev)
+	case nip29.KindPutUser:
+		g.handlePutUser(ctx, s, ev)
+	case nip29.KindRemoveUser:
+		g.handleRemoveUser(ctx, s, ev)
+	case nip29.KindEditMetadata:
+		g.handleEditMetadata(ctx, s, ev)
+	case nip29.KindDeleteEvent:
+		g.handleDeleteEvent(ctx, s, ev)
+	case nip29.KindCreateInvite:
+		g.handleCreateInvite(s, ev)
+	case nip29.KindUpdatePinList:
+		g.handleUpdatePinList(ctx, s, ev)
+	case nip29.KindJoinRequest:
+		g.handleJoinRequest(ctx, s, ev)
+	case nip29.KindLeaveRequest:
+		g.handleLeaveRequest(ctx, s, ev)
+	default:
+		// A moderation kind inside 9000-9020 this build doesn't give any
+		// specific meaning to (see nip29.IsModerationKind's own doc
+		// comment: an unrecognized kind in the range still parses, so a
+		// relay can forward/store one it predates). Phase 1-3 implement
+		// every currently-specified kind, so reaching here means either a
+		// future NIP-29 revision or a client mistake -- either way, still
+		// answered explicitly rather than silently dropped.
+		s.reply(&wire.OkSubscriptionResponse{
+			EventID:  ev.ID,
+			Accepted: false,
+			Message:  "restricted: unsupported NIP-29 event kind",
+		})
 	}
 }
+
+/////////////////////////////////////////////////////////////////////
+// kind:9007 create / kind:9008 delete
+/////////////////////////////////////////////////////////////////////
 
 // handleCreate implements kind:9007. Decision 1 (docs/specs/nip29-groups-plan.md):
 // group creation requires no prior NIP-43 relay membership -- anyone may
@@ -65,25 +99,8 @@ func (g *GroupsService) handleCreate(ctx context.Context, s *Session, ev *nip01.
 		return
 	}
 
-	// Relay-authored mirror events, so clients can discover the group's
-	// metadata/admin/member roster -- the same publishSelfSigned pattern
-	// membership.go uses for kind:8000/8001. Private+closed per decision 2.
-	publishSelfSigned(ctx, s, nip29.NewGroupMetadata(nip29.GroupMetadataParams{
-		SelfPubkey: s.selfPubkey,
-		ID:         groupID,
-		Private:    true,
-		Closed:     true,
-	}))
-	publishSelfSigned(ctx, s, nip29.NewGroupAdmins(nip29.GroupAdminsParams{
-		SelfPubkey: s.selfPubkey,
-		ID:         groupID,
-		Admins:     []nip29.Admin{{Pubkey: ev.PubKey}},
-	}))
-	publishSelfSigned(ctx, s, nip29.NewGroupMembers(nip29.GroupMembersParams{
-		SelfPubkey: s.selfPubkey,
-		ID:         groupID,
-		Members:    []string{ev.PubKey},
-	}))
+	publishGroupMetadataMirror(ctx, s, rec)
+	publishGroupRosterMirrors(ctx, s, rec)
 
 	s.reply(&wire.OkSubscriptionResponse{
 		EventID:  ev.ID,
@@ -92,10 +109,10 @@ func (g *GroupsService) handleCreate(ctx context.Context, s *Session, ev *nip01.
 	})
 }
 
-// handleDelete implements kind:9008: admin-gated teardown, checked against
-// the group's own 39001 roster (not relay-wide NIP-43 role) -- a relay-wide
-// admin with no role in this specific group may not delete it.
-func (g *GroupsService) handleDelete(s *Session, ev *nip01.Event) {
+// handleDeleteGroup implements kind:9008: admin-gated teardown, checked
+// against the group's own roster (not relay-wide NIP-43 role) -- a
+// relay-wide admin with no role in this specific group may not delete it.
+func (g *GroupsService) handleDeleteGroup(s *Session, ev *nip01.Event) {
 	groupID, err := nip29.GroupIDFromTags(ev.Tags)
 	if err != nil {
 		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: " + err.Error()})
@@ -107,7 +124,7 @@ func (g *GroupsService) handleDelete(s *Session, ev *nip01.Event) {
 		return
 	}
 
-	if !g.IsAdmin(groupID, ev.PubKey) {
+	if !g.CanPerform(groupID, ev.PubKey, nip29.KindDeleteGroup) {
 		s.reply(&wire.OkSubscriptionResponse{
 			EventID:  ev.ID,
 			Accepted: false,
@@ -127,6 +144,431 @@ func (g *GroupsService) handleDelete(s *Session, ev *nip01.Event) {
 		Accepted: true,
 		Message:  fmt.Sprintf("info: group %s deleted.", groupID),
 	})
+}
+
+/////////////////////////////////////////////////////////////////////
+// kind:9000 put-user / kind:9001 remove-user (Phase 2)
+/////////////////////////////////////////////////////////////////////
+
+// handlePutUser implements kind:9000: an admin (per ModerationPolicy) adds
+// pubkey to the group's roster, optionally with roles.
+func (g *GroupsService) handlePutUser(ctx context.Context, s *Session, ev *nip01.Event) {
+	action, err := nip29.ParseModerationAction(ev)
+	if err != nil {
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: " + err.Error()})
+		return
+	}
+	if !g.Exists(action.GroupID) {
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: no such group."})
+		return
+	}
+	if !g.CanPerform(action.GroupID, ev.PubKey, nip29.KindPutUser) {
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: you may not add members to this group."})
+		return
+	}
+
+	rec, err := g.UpsertMember(action.GroupID, GroupMember{Pubkey: action.Pubkey, Roles: action.Roles})
+	if err != nil {
+		s.config.Logger.Error().Err(err).Str("group", action.GroupID).Msg("failed to add group member")
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not update group roster"})
+		return
+	}
+
+	publishGroupRosterMirrors(ctx, s, rec)
+	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: member added."})
+}
+
+// handleRemoveUser implements kind:9001: an admin (per ModerationPolicy)
+// removes pubkey from the group's roster.
+func (g *GroupsService) handleRemoveUser(ctx context.Context, s *Session, ev *nip01.Event) {
+	action, err := nip29.ParseModerationAction(ev)
+	if err != nil {
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: " + err.Error()})
+		return
+	}
+	if !g.Exists(action.GroupID) {
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: no such group."})
+		return
+	}
+	if !g.CanPerform(action.GroupID, ev.PubKey, nip29.KindRemoveUser) {
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: you may not remove members from this group."})
+		return
+	}
+
+	rec, err := g.RemoveMember(action.GroupID, action.Pubkey)
+	if err != nil {
+		s.config.Logger.Error().Err(err).Str("group", action.GroupID).Msg("failed to remove group member")
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not update group roster"})
+		return
+	}
+
+	publishGroupRosterMirrors(ctx, s, rec)
+	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: member removed."})
+}
+
+/////////////////////////////////////////////////////////////////////
+// kind:9002 edit-metadata (Phase 3)
+/////////////////////////////////////////////////////////////////////
+
+// handleEditMetadata implements kind:9002: an admin (per ModerationPolicy)
+// replaces the group's metadata wholesale -- the event carries the complete
+// desired state, not a patch (every access flag is a presence tag, so a
+// flag the submitter omits is cleared, not left alone).
+func (g *GroupsService) handleEditMetadata(ctx context.Context, s *Session, ev *nip01.Event) {
+	action, err := nip29.ParseModerationAction(ev)
+	if err != nil {
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: " + err.Error()})
+		return
+	}
+	if !g.Exists(action.GroupID) {
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: no such group."})
+		return
+	}
+	if !g.CanPerform(action.GroupID, ev.PubKey, nip29.KindEditMetadata) {
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: only a group admin may edit this group's metadata."})
+		return
+	}
+
+	rec, err := g.SetMetadata(action.GroupID, groupMetadataFieldsFromAction(action.Metadata))
+	if err != nil {
+		s.config.Logger.Error().Err(err).Str("group", action.GroupID).Msg("failed to update group metadata")
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not update group metadata"})
+		return
+	}
+
+	publishGroupMetadataMirror(ctx, s, rec)
+	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: group metadata updated."})
+}
+
+func groupMetadataFieldsFromAction(m *nip29.GroupMetadata) GroupMetadataFields {
+	if m == nil {
+		return GroupMetadataFields{}
+	}
+	return GroupMetadataFields{
+		Name:              m.Name,
+		Picture:           m.Picture,
+		Banner:            m.Banner,
+		About:             m.About,
+		Parent:            m.Parent,
+		Private:           m.Private,
+		Restricted:        m.Restricted,
+		Hidden:            m.Hidden,
+		Closed:            m.Closed,
+		LiveKit:           m.LiveKit,
+		SupportedKinds:    m.SupportedKinds,
+		SupportedKindsSet: m.SupportedKindsSet,
+	}
+}
+
+/////////////////////////////////////////////////////////////////////
+// kind:9005 moderator delete-event (Phase 3)
+/////////////////////////////////////////////////////////////////////
+
+// handleDeleteEvent implements kind:9005: an admin (per ModerationPolicy)
+// deletes a specific event belonging to the group, identified by its "e"
+// tag. Unlike NIP-09's own kind:5 deletion (self-delete only --
+// relay/store.go's insert() path enforces delEvent.PubKey == event.PubKey),
+// this is a moderation action: an admin may delete any member's event, so
+// it goes through the store's unrestricted EventStore.DeleteAll rather than
+// NIP-09's author-scoped path. The one check that replaces NIP-09's
+// authorship gate is scope: the target event must itself carry this
+// group's own id in its "h" tag, so an admin can only delete events that
+// belong to their own group.
+func (g *GroupsService) handleDeleteEvent(ctx context.Context, s *Session, ev *nip01.Event) {
+	action, err := nip29.ParseModerationAction(ev)
+	if err != nil {
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: " + err.Error()})
+		return
+	}
+	if !g.Exists(action.GroupID) {
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: no such group."})
+		return
+	}
+	if !g.CanPerform(action.GroupID, ev.PubKey, nip29.KindDeleteEvent) {
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: only a group admin may delete group events."})
+		return
+	}
+
+	targets, err := s.store.QueryEvents(ctx, &nip01.SubscriptionFilter{IDs: []string{action.EventID}, Limit: 1})
+	if err != nil {
+		s.config.Logger.Error().Err(err).Str("event", action.EventID).Msg("failed to look up event for group moderator delete")
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not look up that event"})
+		return
+	}
+	if len(targets) == 0 {
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: no such event."})
+		return
+	}
+	targetGroupID, err := nip29.GroupIDFromTags(targets[0].Tags)
+	if err != nil || targetGroupID != action.GroupID {
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: that event does not belong to this group."})
+		return
+	}
+
+	pes, err := s.store.FindEvents(ctx, &nip01.SubscriptionFilter{IDs: []string{action.EventID}, Limit: 1})
+	if err != nil {
+		s.config.Logger.Error().Err(err).Str("event", action.EventID).Msg("failed to resolve event for group moderator delete")
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not delete that event"})
+		return
+	}
+	if err := s.store.DeleteAll(pes); err != nil {
+		s.config.Logger.Error().Err(err).Str("event", action.EventID).Msg("failed to delete group event")
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not delete that event"})
+		return
+	}
+
+	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: event deleted."})
+}
+
+/////////////////////////////////////////////////////////////////////
+// kind:9009 create-invite / kind:9021 join (Phase 3 + Phase 2)
+/////////////////////////////////////////////////////////////////////
+
+// handleCreateInvite implements kind:9009: an admin (per ModerationPolicy)
+// creates a group-scoped invite code, stored separately from NIP-43's own
+// invite claims (relay/store_groups.go's indexGroupInvites).
+func (g *GroupsService) handleCreateInvite(s *Session, ev *nip01.Event) {
+	action, err := nip29.ParseModerationAction(ev)
+	if err != nil {
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: " + err.Error()})
+		return
+	}
+	if !g.Exists(action.GroupID) {
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: no such group."})
+		return
+	}
+	if !g.CanPerform(action.GroupID, ev.PubKey, nip29.KindCreateInvite) {
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: only a group admin may create invites."})
+		return
+	}
+
+	if err := g.store.PutGroupInvite(&GroupInvite{GroupID: action.GroupID, Code: action.Code, CreatedAt: time.Now().Unix()}); err != nil {
+		s.config.Logger.Error().Err(err).Str("group", action.GroupID).Msg("failed to persist group invite")
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not store invite"})
+		return
+	}
+
+	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: invite created."})
+}
+
+// handleJoinRequest implements kind:9021 -- NIP-29's own group-scoped join
+// request, distinct from NIP-43's relay-wide kind:28934. An open group
+// (Metadata.Closed == false) admits any request outright; a closed one
+// requires a valid, unused invite code (kind:9009) in the request's "code"
+// tag -- there is no pending-approval queue in this build, so without a
+// code a closed group's join is simply refused, with the admin's own
+// kind:9000 put-user as the only other path in.
+func (g *GroupsService) handleJoinRequest(ctx context.Context, s *Session, ev *nip01.Event) {
+	jr, err := nip29.ParseJoinRequest(ev)
+	if err != nil {
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: " + err.Error()})
+		return
+	}
+	if !g.Exists(jr.GroupID) {
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: no such group."})
+		return
+	}
+	if g.IsMember(jr.GroupID, ev.PubKey) {
+		s.reply(&wire.OkSubscriptionResponse{
+			EventID:  ev.ID,
+			Accepted: true,
+			Message:  nip29.DuplicateErrorPrefix + "you are already a member of this group.",
+		})
+		return
+	}
+
+	if g.IsClosed(jr.GroupID) {
+		if jr.Code == "" {
+			s.reply(&wire.OkSubscriptionResponse{
+				EventID:  ev.ID,
+				Accepted: false,
+				Message:  "restricted: this group is closed; an invite code or admin approval is required.",
+			})
+			return
+		}
+		if _, err := s.store.ConsumeGroupInvite(jr.GroupID, jr.Code); err != nil {
+			msg := "restricted: that is an invalid invite code."
+			if !isKnownGroupInviteError(err) {
+				s.config.Logger.Error().Err(err).Str("group", jr.GroupID).Msg("failed to consume group invite claim")
+				msg = "error: could not validate invite code"
+			}
+			s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: msg})
+			return
+		}
+	}
+
+	rec, err := g.UpsertMember(jr.GroupID, GroupMember{Pubkey: ev.PubKey})
+	if err != nil {
+		s.config.Logger.Error().Err(err).Str("group", jr.GroupID).Msg("failed to add joining member")
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not store membership"})
+		return
+	}
+
+	publishGroupRosterMirrors(ctx, s, rec)
+	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: welcome to the group!"})
+}
+
+// handleLeaveRequest implements kind:9022 -- NIP-29's own group-scoped
+// leave request, distinct from NIP-43's relay-wide kind:28936.
+func (g *GroupsService) handleLeaveRequest(ctx context.Context, s *Session, ev *nip01.Event) {
+	lr, err := nip29.ParseLeaveRequest(ev)
+	if err != nil {
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: " + err.Error()})
+		return
+	}
+	if !g.Exists(lr.GroupID) {
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: no such group."})
+		return
+	}
+	if !g.IsMember(lr.GroupID, ev.PubKey) {
+		s.reply(&wire.OkSubscriptionResponse{
+			EventID:  ev.ID,
+			Accepted: true,
+			Message:  nip29.DuplicateErrorPrefix + "you are not a member of this group.",
+		})
+		return
+	}
+
+	rec, err := g.RemoveMember(lr.GroupID, ev.PubKey)
+	if err != nil {
+		s.config.Logger.Error().Err(err).Str("group", lr.GroupID).Msg("failed to remove leaving member")
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not update membership"})
+		return
+	}
+
+	publishGroupRosterMirrors(ctx, s, rec)
+	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: you have left the group."})
+}
+
+// isKnownGroupInviteError reports whether err is one of the two "normal,
+// expected" ConsumeGroupInvite outcomes (as opposed to a real storage
+// failure) -- both read identically to the requester as "invalid code".
+func isKnownGroupInviteError(err error) bool {
+	return errors.Is(err, ErrGroupInviteNotFound) || errors.Is(err, ErrGroupInviteExhausted)
+}
+
+/////////////////////////////////////////////////////////////////////
+// kind:9010 update-pin-list (Phase 3)
+/////////////////////////////////////////////////////////////////////
+
+// handleUpdatePinList implements kind:9010: an admin (per ModerationPolicy)
+// replaces the group's pinned list wholesale -- zero references is
+// legitimate (nip29.ParseModerationAction's own doc comment: "an empty
+// list clears every pin").
+func (g *GroupsService) handleUpdatePinList(ctx context.Context, s *Session, ev *nip01.Event) {
+	action, err := nip29.ParseModerationAction(ev)
+	if err != nil {
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: " + err.Error()})
+		return
+	}
+	if !g.Exists(action.GroupID) {
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: no such group."})
+		return
+	}
+	if !g.CanPerform(action.GroupID, ev.PubKey, nip29.KindUpdatePinList) {
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: only a group admin may update this group's pinned list."})
+		return
+	}
+
+	rec, err := g.SetPins(action.GroupID, GroupPins{Events: action.PinnedEvents, Addresses: action.PinnedAddresses})
+	if err != nil {
+		s.config.Logger.Error().Err(err).Str("group", action.GroupID).Msg("failed to update group pins")
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not update pinned list"})
+		return
+	}
+
+	publishGroupPinsMirror(ctx, s, rec)
+	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: pinned list updated."})
+}
+
+/////////////////////////////////////////////////////////////////////
+// Relay-authored mirror events (kind:39000-39002, 39005)
+/////////////////////////////////////////////////////////////////////
+
+// mirrorCreatedAt returns a created_at for a republished kind:3900x mirror
+// event that is guaranteed to be newer than any event of the same kind
+// already stored for this group's "d" tag. These kinds are NIP-33
+// parameterized-replaceable: when two events of the same kind+d-tag share
+// the same created_at (entirely possible here -- two admin actions on the
+// same group within the same wall-clock second, e.g. kind:9007 immediately
+// followed by kind:9002), NIP-01 breaks the tie by keeping whichever has
+// the lower event id, which has nothing to do with which one was actually
+// published more recently. Left alone, that could silently leave a
+// group's publicly-visible metadata/roster/pins stuck on stale content
+// even though GroupsService's own authoritative state (relay/store_groups.go)
+// updated correctly. Bumping forward past the current latest sidesteps
+// the tie entirely, at the cost of one extra point lookup per mirror
+// publish -- an infrequent admin action, not the request hot path.
+func mirrorCreatedAt(ctx context.Context, s *Session, kind int, groupID string) uint64 {
+	now := uint64(time.Now().Unix())
+	existing, err := s.store.QueryEvents(ctx, &nip01.SubscriptionFilter{
+		Kinds: []int{kind},
+		Tags:  map[string][]string{"d": {groupID}},
+		Limit: 1,
+	})
+	if err != nil || len(existing) == 0 || now > existing[0].CreatedAt {
+		return now
+	}
+	return existing[0].CreatedAt + 1
+}
+
+// publishGroupMetadataMirror self-signs+stores rec's current metadata as a
+// kind:39000 event, via the same publishSelfSigned pattern
+// relay/membership.go first used for NIP-43's own relay-authored events.
+func publishGroupMetadataMirror(ctx context.Context, s *Session, rec *GroupRecord) {
+	ev := nip29.NewGroupMetadata(nip29.GroupMetadataParams{
+		SelfPubkey:        s.selfPubkey,
+		ID:                rec.ID,
+		Name:              rec.Metadata.Name,
+		Picture:           rec.Metadata.Picture,
+		Banner:            rec.Metadata.Banner,
+		About:             rec.Metadata.About,
+		Parent:            rec.Metadata.Parent,
+		Private:           rec.Metadata.Private,
+		Restricted:        rec.Metadata.Restricted,
+		Hidden:            rec.Metadata.Hidden,
+		Closed:            rec.Metadata.Closed,
+		LiveKit:           rec.Metadata.LiveKit,
+		SupportedKinds:    rec.Metadata.SupportedKinds,
+		SupportedKindsSet: rec.Metadata.SupportedKindsSet,
+	})
+	ev.CreatedAt = mirrorCreatedAt(ctx, s, nip29.KindGroupMetadata, rec.ID)
+	publishSelfSigned(ctx, s, ev)
+}
+
+// publishGroupRosterMirrors self-signs+stores rec's current roster as a
+// kind:39001 (every member holding at least one role) and kind:39002
+// (every member) event.
+func publishGroupRosterMirrors(ctx context.Context, s *Session, rec *GroupRecord) {
+	var admins []nip29.Admin
+	members := make([]string, 0, len(rec.Members))
+	for _, m := range rec.Members {
+		members = append(members, m.Pubkey)
+		if len(m.Roles) > 0 {
+			admins = append(admins, nip29.Admin{Pubkey: m.Pubkey, Roles: m.Roles})
+		}
+	}
+
+	adminsEv := nip29.NewGroupAdmins(nip29.GroupAdminsParams{SelfPubkey: s.selfPubkey, ID: rec.ID, Admins: admins})
+	adminsEv.CreatedAt = mirrorCreatedAt(ctx, s, nip29.KindGroupAdmins, rec.ID)
+	publishSelfSigned(ctx, s, adminsEv)
+
+	membersEv := nip29.NewGroupMembers(nip29.GroupMembersParams{SelfPubkey: s.selfPubkey, ID: rec.ID, Members: members})
+	membersEv.CreatedAt = mirrorCreatedAt(ctx, s, nip29.KindGroupMembers, rec.ID)
+	publishSelfSigned(ctx, s, membersEv)
+}
+
+// publishGroupPinsMirror self-signs+stores rec's current pinned list as a
+// kind:39005 event.
+func publishGroupPinsMirror(ctx context.Context, s *Session, rec *GroupRecord) {
+	ev := nip29.NewGroupPinnedEvents(nip29.GroupPinnedEventsParams{
+		SelfPubkey: s.selfPubkey,
+		ID:         rec.ID,
+		Events:     rec.Pins.Events,
+		Addresses:  rec.Pins.Addresses,
+	})
+	ev.CreatedAt = mirrorCreatedAt(ctx, s, nip29.KindGroupPinnedEvents, rec.ID)
+	publishSelfSigned(ctx, s, ev)
 }
 
 /////////////////////////////////////////////////////////////////////

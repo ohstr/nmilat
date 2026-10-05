@@ -488,14 +488,18 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 		return nil
 	}
 
-	// NIP-29: kind:9007 (create group) and kind:9008 (delete group) are
-	// fully owned by GroupsService from here, the same way Join/Leave above
-	// are fully owned by MembershipService -- structural validation already
-	// passed above (runEventValidators, when nip29/relayreg is
-	// blank-imported), the signature is verified, and ep.Event.PubKey can be
-	// trusted. Like Join/Leave, these are commands, not content to
-	// persist/broadcast through the generic store-and-OK path below.
-	if ep.Event.Kind == nip29.KindCreateGroup || ep.Event.Kind == nip29.KindDeleteGroup {
+	// NIP-29: every moderation event (kind:9000-9020: create/delete group,
+	// put/remove user, edit metadata, moderator delete-event, create
+	// invite, update pin list) and group-scoped user request (kind:9021/
+	// 9022 join/leave, distinct from NIP-43's own relay-wide join/leave) is
+	// fully owned by GroupsService from here, the same way NIP-43's
+	// Join/Leave above are fully owned by MembershipService -- structural
+	// validation already passed above (runEventValidators, when
+	// nip29/relayreg is blank-imported), the signature is verified, and
+	// ep.Event.PubKey can be trusted. Like Join/Leave, these are commands,
+	// not content to persist/broadcast through the generic store-and-OK
+	// path below.
+	if nip29.IsModerationKind(ep.Event.Kind) || nip29.IsUserRequestKind(ep.Event.Kind) {
 		s.groups.HandleEvent(ctx, s, ep.Event)
 		return nil
 	}
