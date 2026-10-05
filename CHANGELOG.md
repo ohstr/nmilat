@@ -387,6 +387,36 @@ where `nip29/` had previously been structural validation only.
   naming the three independent `http.Handler`s an embedder composes
   (relay, NIP-86, Huddle audio) and the performance guarantees that
   composition relies on. (#50)
+- NIP-29 group privacy is now enforced per-event at delivery, not just on
+  the request's own "d"/"h" tags. `deniedPrivateGroupFilter`
+  (`relay/groups.go`) only ever looked at a filter's own group-id tags, so
+  a bare `{"kinds":[39000]}` REQ -- exactly what `ncli groups list` sends
+  for legitimate public-group discovery -- named no group at all and sailed
+  through unfiltered: verified live, this handed back every group's
+  kind:39000/39001/39002 mirror on the relay, private or not, to anyone,
+  authenticated or not. The fix (`deniedPrivateGroupEvent`/
+  `deniedPrivateGroupPotentialEvent`, wired into
+  `StandardRequestHandler.Handle`'s delivery loop in `relay/handlers.go`)
+  checks each candidate kind:39000-39005 event against its own group's
+  current privacy+membership state right before sending it, regardless of
+  what the request's filter named; public groups and every other kind are
+  unaffected, and a cheap per-subscription pre-check
+  (`mayDeliverGroupMetadataKind`) skips the extra bytes-parsing entirely
+  for subscriptions that could never match that kind range. Closing this
+  also exposed a second, narrower bug in
+  `relay/client.ReadEventsFromRelayWithAuth`: an untagged query like this
+  never trips the relay's own restricted-CLOSED branch, so unlike a
+  tagged query, this package's existing "wait for the handshake, retry
+  once" logic never engaged for it, leaving a real race between a fresh
+  connection's first REQ (sent immediately) and its own NIP-42 handshake
+  settling -- a legitimate member's own private-group content could be
+  silently dropped from exactly this kind of query's very first,
+  unretried attempt. `subscribeOnce` now also reports whether its
+  attempt ended via any CLOSED at all (not only a restricted one), and
+  `ReadEventsFromRelayWithAuth` retries once more whenever an attempt
+  ended via a normal EOSE while the handshake was still unresolved --
+  leaving the already-covered restricted-CLOSED retry, and the
+  non-restricted-CLOSED-is-never-retried guarantee, exactly as before.
 
 ### Changed
 

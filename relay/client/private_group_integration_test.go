@@ -336,3 +336,101 @@ func TestPrivateGroup_LazyChallengeWithoutRelayWideAuthRequired(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// TestPrivateGroup_UntaggedQueryHidesPrivateGroupFromNonMembers is the
+// real-relay regression test for the untagged-query privacy bypass
+// (docs/specs/community-relay-readiness-plan.md's P0 #1):
+// deniedPrivateGroupFilter (relay/groups.go) only ever inspected the
+// REQUEST's own "d"/"h" tags, so a bare {"kinds":[39000]} query -- exactly
+// what "ncli groups list" sends for legitimate public-group discovery --
+// named no group at all and sailed straight through unfiltered, handing
+// back every group's metadata, private or not, to anyone at all,
+// authenticated or not.
+//
+// The fix (relay/groups.go's deniedPrivateGroupEvent/
+// deniedPrivateGroupPotentialEvent, wired into relay/handlers.go's
+// StandardRequestHandler.Handle) moves enforcement to delivery time:
+// every candidate event is checked against its own group's current
+// privacy+membership state right before being sent, regardless of
+// whether the request's filter named a group at all. This test uses
+// authRequired=false deliberately (like
+// TestPrivateGroup_LazyChallengeWithoutRelayWideAuthRequired above) --
+// the relay-wide AuthRequired gate would otherwise reject the entire
+// anonymous sub-test's REQ outright, before this fix's own per-event
+// check ever gets a chance to run; NIP-29 group privacy must hold on its
+// own, independent of that unrelated setting.
+func TestPrivateGroup_UntaggedQueryHidesPrivateGroupFromNonMembers(t *testing.T) {
+	relayURL := newPrivateGroupTestRelay(t, false)
+
+	const publicGroupID = "untagged-query-public-group"
+	const privateGroupID = "untagged-query-private-group"
+
+	createPrivateGroup(t, relayURL, testPrivKey, publicGroupID)
+	createPrivateGroup(t, relayURL, testPrivKey, privateGroupID)
+
+	// A fresh group defaults to private+closed -- flip publicGroupID's own
+	// privacy flag off so this test actually has one of each kind, rather
+	// than two private groups that would pass trivially.
+	edit := nip29.NewEditMetadata("", publicGroupID, nip29.GroupMetadataParams{Private: false, Closed: false})
+	if err := edit.Sign(testPrivKey); err != nil {
+		t.Fatal(err)
+	}
+	if accepted := authenticateAndPublish(t, relayURL, testPrivKey, edit); !accepted {
+		t.Fatal("edit-metadata to public was not accepted")
+	}
+
+	outsiderPrivKey := generateTestPrivKey(t)
+
+	newUntaggedGroupMetadataFilter := func() *nip01.SubscriptionFilterGroup {
+		filters := nip01.NewSubscriptionFilterGroup()
+		filters.Add(&nip01.SubscriptionFilter{Kinds: []int{39000}})
+		return filters
+	}
+
+	groupIDsSeen := func(t *testing.T, signingKeyHex string) map[string]bool {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		events, _, err := ReadEventsFromRelayWithAuth(ctx, relayURL, newUntaggedGroupMetadataFilter(), signingKeyHex)
+		if err != nil {
+			t.Fatalf("untagged query (signingKeyHex set: %v): %v", signingKeyHex != "", err)
+		}
+		ids := make(map[string]bool, len(events))
+		for _, ev := range events {
+			if meta, perr := nip29.ParseGroupMetadata(ev); perr == nil {
+				ids[meta.ID] = true
+			}
+		}
+		return ids
+	}
+
+	t.Run("anonymous sees only the public group", func(t *testing.T) {
+		ids := groupIDsSeen(t, "")
+		if !ids[publicGroupID] {
+			t.Error("public group missing from an anonymous untagged query")
+		}
+		if ids[privateGroupID] {
+			t.Error("private group leaked to an anonymous untagged query")
+		}
+	})
+
+	t.Run("the creator (a member) sees both", func(t *testing.T) {
+		ids := groupIDsSeen(t, testPrivKey)
+		if !ids[publicGroupID] {
+			t.Error("public group missing from the creator's untagged query")
+		}
+		if !ids[privateGroupID] {
+			t.Error("private group missing from its own creator's untagged query")
+		}
+	})
+
+	t.Run("an authenticated non-member still sees only the public group", func(t *testing.T) {
+		ids := groupIDsSeen(t, outsiderPrivKey)
+		if !ids[publicGroupID] {
+			t.Error("public group missing from an authenticated outsider's untagged query")
+		}
+		if ids[privateGroupID] {
+			t.Error("private group leaked to an authenticated non-member's untagged query")
+		}
+	})
+}

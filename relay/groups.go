@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -627,4 +628,72 @@ func groupIDsInFilter(filter *nip01.SubscriptionFilter) []string {
 	ids = append(ids, filter.Tags["d"]...)
 	ids = append(ids, filter.Tags["h"]...)
 	return ids
+}
+
+/////////////////////////////////////////////////////////////////////
+// Visibility gating (per-event, at delivery time)
+/////////////////////////////////////////////////////////////////////
+
+// mayDeliverGroupMetadataKind reports whether filters could possibly
+// deliver a relay-authored group-metadata event (kind 39000-39005) -- an
+// unset Kinds list matches any kind, so that counts as "may" too. This is
+// a cheap pre-check so deniedPrivateGroupPotentialEvent's per-event bytes
+// parsing below only runs for subscriptions that could plausibly see one.
+func mayDeliverGroupMetadataKind(filters *nip01.SubscriptionFilterGroup) bool {
+	if filters == nil {
+		return false
+	}
+	for _, f := range filters.GetAll() {
+		if len(f.Kinds) == 0 {
+			return true
+		}
+		for _, k := range f.Kinds {
+			if nip29.IsGroupMetadataKind(k) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// deniedPrivateGroupEvent reports whether ev -- a candidate event about to
+// be delivered to s -- is a relay-authored group-metadata event
+// (kind 39000-39005) belonging to a private group that none of s's
+// authenticated identities is a member of.
+//
+// This is deniedPrivateGroupFilter's companion, applied to the event
+// actually being delivered rather than the request's own "d"/"h" tags.
+// groupIDsInFilter can only see a group id the client's own filter named;
+// a bare {"kinds":[39000]} REQ names none at all, so deniedPrivateGroupFilter
+// has nothing to check and the query would otherwise run unrestricted
+// against every group's metadata in the store, private or not. Gating at
+// delivery instead of at the request closes that bypass while leaving
+// public groups, and any kind outside this range, untouched.
+func (g *GroupsService) deniedPrivateGroupEvent(s *Session, ev *nip01.Event) bool {
+	if g == nil || ev == nil || !nip29.IsGroupMetadataKind(ev.Kind) {
+		return false
+	}
+	groupID, err := nip29.GroupIDFromDTag(ev.Tags)
+	if err != nil || !g.IsPrivate(groupID) {
+		return false
+	}
+	return !g.anyIdentityIsMember(s, groupID)
+}
+
+// deniedPrivateGroupPotentialEvent is deniedPrivateGroupEvent's entry point
+// from the delivery loop, which only has the candidate's raw JSON bytes
+// (relay/store.go's PotentialEvent.Bytes) on hand rather than a parsed
+// *nip01.Event. A malformed payload is passed through rather than denied:
+// the store only ever writes what it accepted at ingest, which is already
+// validated JSON, so a parse failure here would mean a bug elsewhere, not
+// an attacker-controlled bypass.
+func (g *GroupsService) deniedPrivateGroupPotentialEvent(s *Session, pe *PotentialEvent) bool {
+	if g == nil || pe == nil {
+		return false
+	}
+	var ev nip01.Event
+	if err := json.Unmarshal(pe.Bytes, &ev); err != nil {
+		return false
+	}
+	return g.deniedPrivateGroupEvent(s, &ev)
 }
