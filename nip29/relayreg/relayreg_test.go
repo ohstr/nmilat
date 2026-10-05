@@ -40,7 +40,12 @@ func TestRelayValidatesEachModerationKind(t *testing.T) {
 	}
 
 	tests := []struct {
-		name         string
+		name string
+		// setup runs on the same connection/store before event, for cases
+		// that now need real group state behind them -- relay/groups.go
+		// (not just structural validation) is live in this package's own
+		// test relay, so e.g. a leave request needs a real group to leave.
+		setup        func(t *testing.T, conn *websocket.Conn)
 		event        func() *nip01.Event
 		wantAccepted bool
 		wantInMsg    string
@@ -89,7 +94,14 @@ func TestRelayValidatesEachModerationKind(t *testing.T) {
 			wantInMsg:    "h tag",
 		},
 		{
-			name:         "leave request is accepted",
+			name: "leave request is accepted",
+			setup: func(t *testing.T, conn *websocket.Conn) {
+				t.Helper()
+				accepted, msg := publish(t, conn, sign(t, nip29.NewCreateGroup(pubkey, "huddle-1")))
+				if !accepted {
+					t.Fatalf("setup: create-group failed: %s", msg)
+				}
+			},
 			event:        func() *nip01.Event { return nip29.NewLeaveRequest(pubkey, "huddle-1", "bye") },
 			wantAccepted: true,
 		},
@@ -104,6 +116,9 @@ func TestRelayValidatesEachModerationKind(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			conn := newRelayConn(t)
+			if tc.setup != nil {
+				tc.setup(t, conn)
+			}
 			ev := tc.event()
 			ev.CreatedAt = uint64(time.Now().Unix())
 			accepted, message := publish(t, conn, sign(t, ev))
@@ -118,19 +133,24 @@ func TestRelayValidatesEachModerationKind(t *testing.T) {
 }
 
 // buzz builds its huddle backing channel out of these kinds, so a relay that
-// silently stopped validating them would break interop quietly.
+// silently stopped validating them would break interop quietly. They are a
+// real lifecycle against one group -- create, then edit, then leave -- so
+// this runs them over a single connection/store, not a fresh one per event:
+// relay/groups.go backs these with real state now, not just structural
+// validation, and edit/leave only succeed against a group that actually
+// exists (and, for edit, one this pubkey actually administers).
 func TestRelayAcceptsBuzzHuddleLifecycleEvents(t *testing.T) {
 	pubkey, err := utils.GetPublicKey(testPrivKey)
 	if err != nil {
 		t.Fatalf("GetPublicKey: %v", err)
 	}
 
+	conn := newRelayConn(t)
 	for _, ev := range []*nip01.Event{
 		nip29.NewCreateGroup(pubkey, "huddle-1"),
 		nip29.NewEditMetadata(pubkey, "huddle-1", nip29.GroupMetadataParams{Name: "archived"}),
 		nip29.NewLeaveRequest(pubkey, "huddle-1", ""),
 	} {
-		conn := newRelayConn(t)
 		ev.CreatedAt = uint64(time.Now().Unix())
 		accepted, message := publish(t, conn, sign(t, ev))
 		if !accepted {

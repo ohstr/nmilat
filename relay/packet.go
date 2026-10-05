@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ohstr/nmilat/nip01"
+	"github.com/ohstr/nmilat/nip29"
 	"github.com/ohstr/nmilat/nip42"
 	"github.com/ohstr/nmilat/nip43"
 	"github.com/ohstr/nmilat/nip70"
@@ -71,6 +72,21 @@ func (s *Session) processRequest(ctx context.Context, rp *wire.RequestPacket) er
 		s.reply(&wire.ClosedSubscriptionResponse{
 			SubscriptionID: rp.SubscriptionID,
 			Message:        "restricted: valid NIP-43 membership required",
+		})
+		return nil
+	}
+
+	// NIP-29: a REQ naming a private group's id (via a "d"/"h" tag filter)
+	// must come from a session with a member identity in that group -- see
+	// GroupsService.deniedPrivateGroupFilter and
+	// docs/specs/nip29-groups-plan.md's "Visibility gating" section. Public
+	// groups, and ids naming no known group, are unaffected.
+	if groupID, denied := s.groups.deniedPrivateGroupFilter(s, rp.Filters); denied {
+		msg := fmt.Sprintf("restricted: valid membership in group %s is required", groupID)
+		s.reply(&wire.NoticeSubscriptionResponse{Message: msg})
+		s.reply(&wire.ClosedSubscriptionResponse{
+			SubscriptionID: rp.SubscriptionID,
+			Message:        msg,
 		})
 		return nil
 	}
@@ -235,6 +251,14 @@ func (s *Session) processCount(parent context.Context, cp *wire.CountPacket) err
 	if s.limitation.MembershipRequired && !s.HasMembership() {
 		s.reply(&wire.NoticeSubscriptionResponse{
 			Message: "restricted: valid NIP-43 membership required",
+		})
+		return nil
+	}
+
+	// NIP-29: see the matching gate in processRequest.
+	if groupID, denied := s.groups.deniedPrivateGroupFilter(s, cp.Filters); denied {
+		s.reply(&wire.NoticeSubscriptionResponse{
+			Message: fmt.Sprintf("restricted: valid membership in group %s is required", groupID),
 		})
 		return nil
 	}
@@ -461,6 +485,22 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 	// anyway).
 	if ep.Event.Kind == nip43.KindJoinRequest || ep.Event.Kind == nip43.KindLeaveRequest {
 		s.membership.HandleEvent(ctx, s, ep.Event)
+		return nil
+	}
+
+	// NIP-29: every moderation event (kind:9000-9020: create/delete group,
+	// put/remove user, edit metadata, moderator delete-event, create
+	// invite, update pin list) and group-scoped user request (kind:9021/
+	// 9022 join/leave, distinct from NIP-43's own relay-wide join/leave) is
+	// fully owned by GroupsService from here, the same way NIP-43's
+	// Join/Leave above are fully owned by MembershipService -- structural
+	// validation already passed above (runEventValidators, when
+	// nip29/relayreg is blank-imported), the signature is verified, and
+	// ep.Event.PubKey can be trusted. Like Join/Leave, these are commands,
+	// not content to persist/broadcast through the generic store-and-OK
+	// path below.
+	if nip29.IsModerationKind(ep.Event.Kind) || nip29.IsUserRequestKind(ep.Event.Kind) {
+		s.groups.HandleEvent(ctx, s, ep.Event)
 		return nil
 	}
 
