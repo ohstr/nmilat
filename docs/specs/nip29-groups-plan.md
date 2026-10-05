@@ -2,7 +2,9 @@
 
 Status: **Phases 1, 2, and 3 all implemented**, in this same worktree
 (`worktree-nip29-groups-phase1`, branched off `main` at `888a6ea`), tracked
-in ohstr/nmilat#54 and shipped in ohstr/nmilat#55. `relay/groups.go`,
+in ohstr/nmilat#54 and shipped in ohstr/nmilat#56 (#55 was its predecessor,
+closed as unmergeable after an upstream commit-message rewrite orphaned its
+branch's base commit). `relay/groups.go`,
 `relay/groups_cache.go`, and `relay/store_groups.go` now cover every kind
 listed below (9000/9001/9002/9005/9007/9008/9009/9010/9021/9022), plus the
 REQ/COUNT private-group visibility gate. See each phase's own section for

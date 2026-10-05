@@ -43,7 +43,7 @@ NIP-43 membership exactly as REQ is).
   private+closed, mirrored into self-signed `kind:39000`-`39002`/`39005`
   the same way `relay/membership.go` mirrors NIP-43 membership. A REQ/COUNT
   naming a private group's id now requires an authenticated member of that
-  group, or the private default wouldn't mean anything. (#55)
+  group, or the private default wouldn't mean anything. (#56)
 - `huddle/room.Sink` is the seam that makes a room transport-agnostic: a
   peer is admitted with a sink, and a WebSocket peer differs from one
   bridged onto another transport only in which sink it has. `ChannelSink` is
