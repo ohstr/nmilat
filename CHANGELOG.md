@@ -443,6 +443,12 @@ unauthenticated prober.
   example also flags `NewEditMetadata`'s kind:9002 being a full replace,
   not a patch -- omitting `Private`/`Closed` silently flips a group
   public. (#68)
+- README gets a NIP-43 quick start ("Enroll and remove a relay member"),
+  the same gap nip29/nip53 just had: `nip43` has the same tier of
+  consumer-facing `New*` API, just never got an example. Documents that
+  its admin writes (kind:8000/8001) carry a NIP-70 "protected" tag, so
+  the connection itself must authenticate as the relay's own `self` key
+  or the relay rejects them outright.
 - NIP-29 "Subgroups" is now fully implemented, not just the bare `parent`
   tag nip29 already round-tripped. `GroupMetadata`/`GroupMetadataFields`
   gain an ordered `Children` list; a group's own kind:9002 edit-metadata
