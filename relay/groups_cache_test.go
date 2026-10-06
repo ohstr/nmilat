@@ -134,8 +134,8 @@ func TestGroupsService_NilIsSafe(t *testing.T) {
 	if err := svc.Create(&GroupRecord{ID: groupA}); err != nil {
 		t.Fatalf("nil *GroupsService.Create() = %v, want nil", err)
 	}
-	if err := svc.Delete(groupA); err != nil {
-		t.Fatalf("nil *GroupsService.Delete() = %v, want nil", err)
+	if rec, err := svc.Delete(groupA); rec != nil || err != nil {
+		t.Fatalf("nil *GroupsService.Delete() = (%v, %v), want (nil, nil)", rec, err)
 	}
 	if got, err := svc.Get(groupA); got != nil || err != nil {
 		t.Fatalf("nil *GroupsService.Get() = (%v, %v), want (nil, nil)", got, err)
@@ -197,8 +197,12 @@ func TestGroupsService_CreateAndDelegation(t *testing.T) {
 		t.Fatalf("Get() = %+v, want a persisted record for %s", persisted, groupA)
 	}
 
-	if err := svc.Delete(groupA); err != nil {
+	deleted, err := svc.Delete(groupA)
+	if err != nil {
 		t.Fatalf("Delete: %v", err)
+	}
+	if deleted == nil || deleted.ID != groupA {
+		t.Fatalf("Delete() record = %+v, want the just-deleted record for %s", deleted, groupA)
 	}
 	if svc.Exists(groupA) {
 		t.Fatal("Exists(groupA) = true after Delete, want false")

@@ -33,7 +33,7 @@ func (g *GroupsService) HandleEvent(ctx context.Context, s *Session, ev *nip01.E
 	case nip29.KindCreateGroup:
 		g.handleCreate(ctx, s, ev)
 	case nip29.KindDeleteGroup:
-		g.handleDeleteGroup(s, ev)
+		g.handleDeleteGroup(ctx, s, ev)
 	case nip29.KindPutUser:
 		g.handlePutUser(ctx, s, ev)
 	case nip29.KindRemoveUser:
@@ -113,7 +113,13 @@ func (g *GroupsService) handleCreate(ctx context.Context, s *Session, ev *nip01.
 // handleDeleteGroup implements kind:9008: admin-gated teardown, checked
 // against the group's own roster (not relay-wide NIP-43 role) -- a
 // relay-wide admin with no role in this specific group may not delete it.
-func (g *GroupsService) handleDeleteGroup(s *Session, ev *nip01.Event) {
+//
+// NIP-29 "Subgroups": when a parent is deleted, its remaining children
+// automatically become roots. Delete returns the record as it stood
+// immediately before removal, so its own Children list -- the parent's
+// reverse index, already paid for by the reparent bookkeeping below --
+// is exactly what needs detaching; no scan over every other group.
+func (g *GroupsService) handleDeleteGroup(ctx context.Context, s *Session, ev *nip01.Event) {
 	groupID, err := nip29.GroupIDFromTags(ev.Tags)
 	if err != nil {
 		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: " + err.Error()})
@@ -134,10 +140,34 @@ func (g *GroupsService) handleDeleteGroup(s *Session, ev *nip01.Event) {
 		return
 	}
 
-	if err := g.Delete(groupID); err != nil {
+	// See GroupsService.linkMu's own doc comment: Delete reads this
+	// group's own Children before removing it, then this function
+	// mutates each of them -- the same kind of multi-record sequence a
+	// concurrent reparent elsewhere must not interleave with.
+	g.linkMu.Lock()
+	defer g.linkMu.Unlock()
+
+	deleted, err := g.Delete(groupID)
+	if err != nil {
 		s.config.Logger.Error().Err(err).Str("group", groupID).Msg("failed to delete group")
 		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not delete group"})
 		return
+	}
+
+	var children []string
+	if deleted != nil {
+		children = deleted.Metadata.Children
+	}
+	for _, childID := range children {
+		child, err := g.SetParent(childID, "")
+		if err != nil {
+			s.config.Logger.Error().Err(err).Str("group", groupID).Str("child", childID).
+				Msg("failed to promote child to root after parent deletion")
+			continue
+		}
+		if child != nil {
+			publishGroupMetadataMirror(ctx, s, child)
+		}
 	}
 
 	s.reply(&wire.OkSubscriptionResponse{
@@ -215,6 +245,14 @@ func (g *GroupsService) handleRemoveUser(ctx context.Context, s *Session, ev *ni
 // replaces the group's metadata wholesale -- the event carries the complete
 // desired state, not a patch (every access flag is a presence tag, so a
 // flag the submitter omits is cleared, not left alone).
+//
+// NIP-29 "Subgroups" adds two more concerns on top of that same full-replace
+// event, evaluated independently since a group simultaneously has one
+// Parent and can itself be the Parent of others (Children) -- the existing
+// admin-of-the-edited-group check above already covers "may I set my own
+// parent" and "may I reorder my own children" (both fields on the record
+// ev's own "h" tag names); only the *new* parent side of a reparent needs
+// an extra check, because that group isn't the one ev names.
 func (g *GroupsService) handleEditMetadata(ctx context.Context, s *Session, ev *nip01.Event) {
 	action, err := nip29.ParseModerationAction(ev)
 	if err != nil {
@@ -230,15 +268,118 @@ func (g *GroupsService) handleEditMetadata(ctx context.Context, s *Session, ev *
 		return
 	}
 
+	// Held for the rest of this call: a reparent reads and mutates up to
+	// three records (this group, its old parent, its new parent), and
+	// that whole sequence needs to run as one unit against a concurrent
+	// edit elsewhere -- see GroupsService.linkMu's own doc comment.
+	g.linkMu.Lock()
+	defer g.linkMu.Unlock()
+
+	current := g.cache.Get(action.GroupID)
+	var oldParent string
+	if current != nil {
+		oldParent = current.Metadata.Parent
+	}
+	newParent := action.Metadata.Parent
+	reparenting := newParent != oldParent
+
+	if reparenting && newParent != "" {
+		switch {
+		case newParent == action.GroupID:
+			s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: a group cannot be its own parent."})
+			return
+		case !g.Exists(newParent):
+			s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: the named parent group does not exist."})
+			return
+		case g.createsCycle(newParent, action.GroupID):
+			s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: that parent assignment would create a cycle."})
+			return
+		case !g.IsAdmin(newParent, ev.PubKey):
+			s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: you must also be an admin of the new parent group."})
+			return
+		case g.IsPrivate(action.GroupID) != g.IsPrivate(newParent):
+			// A kind:39000 mirror is self-signed once and cached, so its
+			// tags can't be redacted per viewer -- a public parent's
+			// child tag (or a private parent's public child) would
+			// permanently reveal the other group's id to every viewer of
+			// the visible side, regardless of their own membership. Both
+			// groups must share the same Private setting before they can
+			// be linked.
+			s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: cannot link groups with different privacy settings."})
+			return
+		}
+	}
+
+	// Children-list completeness + no-unilateral-annexation. Unconditional
+	// on whether this edit meant to touch Children at all: kind:9002 is a
+	// full replace, so if the group being edited currently has any
+	// children, every edit on it -- even one only renaming it -- must
+	// re-list every one of them or they'd be silently detached. The
+	// submitted list must also be an exact permutation of the current one
+	// (same set, any order): reordering is fine, but adding an id lets a
+	// parent unilaterally annex a group that never named it as parent
+	// (bypassing the child-initiated model above), and omitting one is the
+	// same silent-detach risk the completeness rule exists to prevent.
+	if current != nil {
+		if !isPermutation(current.Metadata.Children, action.Metadata.Children) {
+			s.reply(&wire.OkSubscriptionResponse{
+				EventID:  ev.ID,
+				Accepted: false,
+				Message:  "restricted: this edit must re-list every current subgroup; none may be added or omitted here.",
+			})
+			return
+		}
+	}
+
 	rec, err := g.SetMetadata(action.GroupID, groupMetadataFieldsFromAction(action.Metadata))
 	if err != nil {
 		s.config.Logger.Error().Err(err).Str("group", action.GroupID).Msg("failed to update group metadata")
 		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not update group metadata"})
 		return
 	}
-
 	publishGroupMetadataMirror(ctx, s, rec)
+
+	if reparenting {
+		if oldParent != "" {
+			if oldRec, err := g.removeChild(oldParent, action.GroupID); err != nil {
+				s.config.Logger.Error().Err(err).Str("group", oldParent).Str("child", action.GroupID).
+					Msg("failed to detach child from its old parent")
+			} else if oldRec != nil {
+				publishGroupMetadataMirror(ctx, s, oldRec)
+			}
+		}
+		if newParent != "" {
+			if newRec, err := g.addChild(newParent, action.GroupID); err != nil {
+				s.config.Logger.Error().Err(err).Str("group", newParent).Str("child", action.GroupID).
+					Msg("failed to attach child to its new parent")
+			} else if newRec != nil {
+				publishGroupMetadataMirror(ctx, s, newRec)
+			}
+		}
+	}
+
 	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: group metadata updated."})
+}
+
+// isPermutation reports whether b contains exactly the same elements as
+// a, in any order -- no additions, no omissions. Used to enforce that a
+// parent's own child-list edit may reorder but never add or drop a
+// subgroup.
+func isPermutation(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	counts := make(map[string]int, len(a))
+	for _, x := range a {
+		counts[x]++
+	}
+	for _, x := range b {
+		counts[x]--
+		if counts[x] < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func groupMetadataFieldsFromAction(m *nip29.GroupMetadata) GroupMetadataFields {
@@ -251,6 +392,7 @@ func groupMetadataFieldsFromAction(m *nip29.GroupMetadata) GroupMetadataFields {
 		Banner:            m.Banner,
 		About:             m.About,
 		Parent:            m.Parent,
+		Children:          m.Children,
 		Private:           m.Private,
 		Restricted:        m.Restricted,
 		Hidden:            m.Hidden,
@@ -525,6 +667,7 @@ func publishGroupMetadataMirror(ctx context.Context, s *Session, rec *GroupRecor
 		Banner:            rec.Metadata.Banner,
 		About:             rec.Metadata.About,
 		Parent:            rec.Metadata.Parent,
+		Children:          rec.Metadata.Children,
 		Private:           rec.Metadata.Private,
 		Restricted:        rec.Metadata.Restricted,
 		Hidden:            rec.Metadata.Hidden,
@@ -577,24 +720,41 @@ func publishGroupPinsMirror(ctx context.Context, s *Session, rec *GroupRecord) {
 /////////////////////////////////////////////////////////////////////
 
 // deniedPrivateGroupFilter scans filters for a "d" or "h" tag naming a
-// private group (the two tags group-related events carry a group id in --
-// see nip29.GroupIDFromTags/GroupIDFromDTag) that none of s's authenticated
-// identities is a member of. It returns the offending group id and true on
-// the first such filter found; ("", false) if every private group
-// referenced has a member among s's authenticated identities, including
-// when none are referenced at all, filters is nil, or g is nil.
+// group (the two tags group-related events carry a group id in -- see
+// nip29.GroupIDFromTags/GroupIDFromDTag) that the session may not see: a
+// private group none of s's authenticated identities is a member of, or a
+// group that doesn't exist on this relay at all. It returns the offending
+// group id and true on the first such filter found; ("", false) if every
+// group referenced is either public or one a member of s's authenticated
+// identities, including when none are referenced at all, filters is nil,
+// or g is nil.
 //
 // Without this, decision 2's private+closed default (see
 // docs/specs/nip29-groups-plan.md's "Visibility gating" section) is a
 // no-op: a group's own kind:39000/39001/39002 events would be
 // world-readable by REQ the moment handleCreate publishes them, regardless
 // of the "private" flag they carry.
+//
+// The nonexistent-group case deliberately returns the exact same denial
+// as a private-no-access one, not a distinct "(nothing found)" success:
+// without this, an unauthenticated prober could brute-force group ids and
+// learn, for each one, whether it exists and is private, by telling a
+// restricted CLOSED (exists, private, no access) apart from a normal
+// empty EOSE (anything else) -- an existence oracle that never reveals a
+// group's content but does reveal its id. Converging on the restricted
+// response (rather than making the private-no-access case silently
+// empty) keeps this signal meaningful for a legitimate caller: "you don't
+// get this," for whatever reason, instead of both cases quietly saying
+// "nothing here."
 func (g *GroupsService) deniedPrivateGroupFilter(s *Session, filters *nip01.SubscriptionFilterGroup) (string, bool) {
 	if g == nil || filters == nil {
 		return "", false
 	}
 	for _, filter := range filters.GetAll() {
 		for _, groupID := range groupIDsInFilter(filter) {
+			if !g.Exists(groupID) {
+				return groupID, true
+			}
 			if !g.IsPrivate(groupID) {
 				continue
 			}

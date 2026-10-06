@@ -320,6 +320,31 @@ func main() {
 		panic(err)
 	}
 	fmt.Println("member added:", res.Accepted, res.Message)
+
+	noteEv := nip29.NewCreateGroup(ownerPubkeyHex, "standup-notes")
+	if err := noteEv.Sign(ownerPrivateKeyHex); err != nil {
+		panic(err)
+	}
+	if _, err := conn.Publish(context.Background(), noteEv); err != nil {
+		panic(err)
+	}
+
+	// NIP-29 "Subgroups": standup-notes hangs off standup. The submitter
+	// must be an admin of both groups, and both must share the same
+	// Private setting -- a signed kind:39000 can't be redacted per
+	// viewer, so linking groups with different visibility would leak
+	// one group's id through the other's public side.
+	subEv := nip29.NewEditMetadata(ownerPubkeyHex, "standup-notes", nip29.GroupMetadataParams{
+		Parent:  "standup",
+		Private: true,
+		Closed:  true,
+	})
+	if err := subEv.Sign(ownerPrivateKeyHex); err != nil {
+		panic(err)
+	}
+	if _, err := conn.Publish(context.Background(), subEv); err != nil {
+		panic(err)
+	}
 }
 ```
 

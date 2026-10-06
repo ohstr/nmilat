@@ -102,6 +102,24 @@ func RegisteredNIPs() []nip11.NIPID {
 	return nips
 }
 
+// nip29Registered reports whether this build has NIP-29 group hosting
+// linked in at all (nip29/relayreg blank-imported, which calls
+// RegisterNIP(29) from its own init) -- the same thing that already puts
+// 29 into supported_nips via RegisteredNIPs() above. Subgroup support has
+// no separate opt-in: any relay that hosts NIP-29 groups at all handles
+// the "parent"/"child" tags on them, so the NIP-11 nip29.subgroups flag
+// (relay/session.go's ServeHTTP) is gated on exactly this, not on
+// SessionHandler.groups being non-nil -- that field is always non-nil in
+// practice regardless of whether NIP-29 is even registered.
+func nip29Registered() bool {
+	for _, id := range RegisteredNIPs() {
+		if id == nip11.NIP(29) {
+			return true
+		}
+	}
+	return false
+}
+
 // SupportedNIPs derives the set of NIPs this SessionHandler actually
 // implements from its wired-in configuration and services. Operators cannot
 // override this list — it is computed, not configured.

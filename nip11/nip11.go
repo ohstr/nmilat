@@ -161,6 +161,22 @@ type Metadata struct {
 	// from the NIP-11 document entirely when unset, matching the field's
 	// own MAY/optional status.
 	Self string `mapstructure:"-" json:"self,omitempty"`
+
+	// NIP29 advertises NIP-29 "Subgroups" support per that section's own
+	// SHOULD: a relay hosting hierarchical groups sets `{"subgroups":
+	// true}` so a client knows hierarchy might be present before relying
+	// on it. Not settable via config (mapstructure:"-"), same convention
+	// as SupportedNips -- derived from whether NIP-29 group hosting is
+	// actually wired in, never a standalone toggle. omitempty: absent
+	// entirely when nil, matching a relay that doesn't host groups at
+	// all (no NIP-29 object, not one with subgroups:false).
+	NIP29 *NIP29Capabilities `mapstructure:"-" json:"nip29,omitempty"`
+}
+
+// NIP29Capabilities is the "nip29" object NIP-29's "Subgroups" section
+// defines for the NIP-11 document.
+type NIP29Capabilities struct {
+	Subgroups bool `json:"subgroups"`
 }
 
 type Limitation struct {

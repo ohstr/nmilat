@@ -97,6 +97,7 @@ var (
 	ErrInvalidATag        = errors.New("nip29: invalid a tag")
 	ErrInvalidReference   = errors.New("nip29: invalid previous reference")
 	ErrInvalidSignature   = errors.New("nip29: invalid signature")
+	ErrDuplicateParentTag = errors.New("nip29: more than one parent tag")
 )
 
 /////////////////////////////////////////////////////////////////////
@@ -272,12 +273,17 @@ func (p ModerationPolicy) RoleNames() []string {
 // present-but-empty one, which the spec gives opposite meanings: absent means
 // every kind is supported, empty means none are (the AV-only group case).
 type GroupMetadata struct {
-	ID                string
-	Name              string
-	Picture           string
-	Banner            string
-	About             string
-	Parent            string
+	ID      string
+	Name    string
+	Picture string
+	Banner  string
+	About   string
+	Parent  string
+	// Children is this group's own ordered ["child", "<id>"] tags -- set
+	// only on a group that is itself a parent (NIP-29 "Subgroups"). Order
+	// is significant (the parent admin's own display/arrangement), so
+	// callers must not treat it as an unordered set.
+	Children          []string
 	Private           bool
 	Restricted        bool
 	Hidden            bool
@@ -312,6 +318,7 @@ func ParseGroupMetadata(event *nip01.Event) (*GroupMetadata, error) {
 
 	meta := &GroupMetadata{}
 	haveD := false
+	haveParent := false
 	for _, tag := range event.Tags {
 		if len(tag) < 1 {
 			continue
@@ -360,7 +367,16 @@ func ParseGroupMetadata(event *nip01.Event) (*GroupMetadata, error) {
 		case "about":
 			meta.About = tag[1]
 		case "parent":
+			// Spec: a kind:9002 MAY carry at most one parent tag, so the
+			// resulting kind:39000 does too -- a second one is malformed,
+			// not "last one wins" silently.
+			if haveParent {
+				return nil, ErrDuplicateParentTag
+			}
+			haveParent = true
 			meta.Parent = tag[1]
+		case "child":
+			meta.Children = append(meta.Children, tag[1])
 		}
 	}
 	if !haveD {
@@ -383,13 +399,16 @@ func ValidateGroupMetadata(event *nip01.Event) error {
 // GroupMetadataParams describes a kind:39000 event. SelfPubkey and ID are
 // required.
 type GroupMetadataParams struct {
-	SelfPubkey        string
-	ID                string
-	Name              string
-	Picture           string
-	Banner            string
-	About             string
-	Parent            string
+	SelfPubkey string
+	ID         string
+	Name       string
+	Picture    string
+	Banner     string
+	About      string
+	Parent     string
+	// Children is this group's ordered list of subgroup ids, emitted as
+	// one ["child", id] tag per entry. See GroupMetadata.Children.
+	Children          []string
 	Private           bool
 	Restricted        bool
 	Hidden            bool
@@ -409,6 +428,9 @@ func NewGroupMetadata(p GroupMetadataParams) *nip01.Event {
 	tags = appendIfSet(tags, "banner", p.Banner)
 	tags = appendIfSet(tags, "about", p.About)
 	tags = appendIfSet(tags, "parent", p.Parent)
+	for _, child := range p.Children {
+		tags = append(tags, []string{"child", child})
+	}
 	tags = appendFlag(tags, "private", p.Private)
 	tags = appendFlag(tags, "restricted", p.Restricted)
 	tags = appendFlag(tags, "hidden", p.Hidden)

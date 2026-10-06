@@ -44,18 +44,24 @@ type GroupMember struct {
 // nip29.GroupMetadata's shape with explicit json tags, since that type
 // belongs to a pure-protocol package not designed around bbolt storage.
 type GroupMetadataFields struct {
-	Name              string `json:"name,omitempty"`
-	Picture           string `json:"picture,omitempty"`
-	Banner            string `json:"banner,omitempty"`
-	About             string `json:"about,omitempty"`
-	Parent            string `json:"parent,omitempty"`
-	Private           bool   `json:"private"`
-	Restricted        bool   `json:"restricted,omitempty"`
-	Hidden            bool   `json:"hidden,omitempty"`
-	Closed            bool   `json:"closed"`
-	LiveKit           bool   `json:"livekit,omitempty"`
-	SupportedKinds    []int  `json:"supported_kinds,omitempty"`
-	SupportedKindsSet bool   `json:"supported_kinds_set,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Picture string `json:"picture,omitempty"`
+	Banner  string `json:"banner,omitempty"`
+	About   string `json:"about,omitempty"`
+	Parent  string `json:"parent,omitempty"`
+	// Children is this group's ordered subgroup ids (NIP-29 "Subgroups"),
+	// set only on a group that is itself a parent. See
+	// GroupsService.SetChildren -- mutate it only through that, never via
+	// SetMetadata's own full-replace, or an unrelated edit silently drops
+	// every subgroup link.
+	Children          []string `json:"children,omitempty"`
+	Private           bool     `json:"private"`
+	Restricted        bool     `json:"restricted,omitempty"`
+	Hidden            bool     `json:"hidden,omitempty"`
+	Closed            bool     `json:"closed"`
+	LiveKit           bool     `json:"livekit,omitempty"`
+	SupportedKinds    []int    `json:"supported_kinds,omitempty"`
+	SupportedKindsSet bool     `json:"supported_kinds_set,omitempty"`
 }
 
 // GroupPins is the persisted subset of a NIP-29 group's kind:39005 pinned
