@@ -434,6 +434,15 @@ unauthenticated prober.
   ended via a normal EOSE while the handshake was still unresolved --
   leaving the already-covered restricted-CLOSED retry, and the
   non-restricted-CLOSED-is-never-retried guarantee, exactly as before.
+- README documents `ReadEventsFromRelayWithAuth`'s `restricted` signal
+  (previously shown only via its unauthenticated `ReadEventsFromRelay`
+  counterpart), and gets two quick starts that were missing despite
+  having the same consumer-facing `New*` API as nip57/nip47/NIP-CASH/
+  nip34/nip19/nip17-59: "Create and manage a NIP-29 group" and "Create a
+  meeting space and send a live chat message (NIP-53)". The NIP-29
+  example also flags `NewEditMetadata`'s kind:9002 being a full replace,
+  not a patch -- omitting `Private`/`Closed` silently flips a group
+  public. (#68)
 - NIP-29 "Subgroups" is now fully implemented, not just the bare `parent`
   tag nip29 already round-tripped. `GroupMetadata`/`GroupMetadataFields`
   gain an ordered `Children` list; a group's own kind:9002 edit-metadata
