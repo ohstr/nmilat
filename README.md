@@ -267,6 +267,133 @@ func main() {
 }
 ```
 
+### Create and manage a NIP-29 group
+
+`nip29` covers the self-service group surface -- create/edit/delete,
+membership and roles, invites, and pins. A group defaults to **private
+and closed** on creation. `NewEditMetadata`'s kind:9002 is a full replace
+of the relay's mirrored metadata, not a patch -- every field you want kept
+(including `Private`/`Closed`) has to be passed on every edit, or it
+reverts to false. None of the constructors below add the "previous" tag
+NIP-29 recommends on writes (it needs a relay round trip of its own to
+fill in); see `ncli groups` if you want that handled for you:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"net/url"
+
+	"github.com/ohstr/nmilat/nip29"
+	relayclient "github.com/ohstr/nmilat/relay/client"
+)
+
+func main() {
+	relayURL, _ := url.Parse("wss://relay.ohstr.com")
+	conn, err := relayclient.Connect(context.Background(), relayURL)
+	if err != nil {
+		panic(err)
+	}
+	defer conn.Close()
+
+	createEv := nip29.NewCreateGroup(ownerPubkeyHex, "standup")
+	if err := createEv.Sign(ownerPrivateKeyHex); err != nil {
+		panic(err)
+	}
+	if _, err := conn.Publish(context.Background(), createEv); err != nil {
+		panic(err)
+	}
+
+	editEv := nip29.NewEditMetadata(ownerPubkeyHex, "standup", nip29.GroupMetadataParams{
+		Name:    "Standup",
+		About:   "Daily sync",
+		Private: true, // omitting this would flip the group public
+		Closed:  true,
+	})
+	if err := editEv.Sign(ownerPrivateKeyHex); err != nil {
+		panic(err)
+	}
+	if _, err := conn.Publish(context.Background(), editEv); err != nil {
+		panic(err)
+	}
+
+	addEv := nip29.NewPutUser(ownerPubkeyHex, "standup", memberPubkeyHex, "admin")
+	if err := addEv.Sign(ownerPrivateKeyHex); err != nil {
+		panic(err)
+	}
+	res, err := conn.Publish(context.Background(), addEv)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("member added:", res.Accepted, res.Message)
+}
+```
+
+### Create a meeting space and send a live chat message (NIP-53)
+
+`nip53` covers live streams, meeting spaces and their rooms, presence,
+and live chat. A meeting space (kind:30312) requires a `d` tag, a `room`,
+a `status`, a `service`, and at least one `Host` provider:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"net/url"
+
+	"github.com/ohstr/nmilat/nip53"
+	relayclient "github.com/ohstr/nmilat/relay/client"
+)
+
+func main() {
+	spaceEv := nip53.NewMeetingSpace(nip53.MeetingSpaceParams{
+		Pubkey:     hostPubkeyHex,
+		Identifier: "standup-space",
+		Room:       "standup-space",
+		Status:     "live",
+		Service:    "https://ohstr.com",
+		Providers:  []nip53.Participant{{Pubkey: hostPubkeyHex, Role: nip53.RoleHost}},
+	})
+	if err := spaceEv.Sign(hostPrivateKeyHex); err != nil {
+		panic(err)
+	}
+
+	spaceAddr, err := nip53.SpaceATag(hostPubkeyHex, "standup-space")
+	if err != nil {
+		panic(err)
+	}
+
+	chatEv := nip53.NewLiveChatMessage(nip53.LiveChatMessageParams{
+		Pubkey:   senderPubkeyHex,
+		Activity: spaceAddr,
+		Content:  "on my way, 2 min",
+	})
+	if err := chatEv.Sign(senderPrivateKeyHex); err != nil {
+		panic(err)
+	}
+
+	relayURL, _ := url.Parse("wss://relay.ohstr.com")
+	conn, err := relayclient.Connect(context.Background(), relayURL)
+	if err != nil {
+		panic(err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.Publish(context.Background(), spaceEv); err != nil {
+		panic(err)
+	}
+	res, err := conn.Publish(context.Background(), chatEv)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("chat message accepted:", res.Accepted, res.Message)
+}
+```
+
 ### Send a private direct message (NIP-17/59)
 
 Build a chat message, seal and gift-wrap it so only the recipient can read it
