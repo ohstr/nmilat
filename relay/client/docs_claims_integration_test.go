@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip29"
 	"github.com/ohstr/nmilat/nip43"
 )
@@ -165,17 +164,9 @@ func TestNIP29EditMetadata_OmittingPrivateClosedFlipsGroupPublic(t *testing.T) {
 	}
 }
 
-// pubkeyFor derives the pubkey a private key would sign with, the same
-// way relaySelfEvent does in private_group_integration_test.go, without
-// needing a throwaway event at every call site.
-func pubkeyFor(t *testing.T, privKeyHex string) string {
-	t.Helper()
-	ev := nip01.NewEvent(0, "")
-	if err := ev.Sign(privKeyHex); err != nil {
-		t.Fatalf("derive pubkey: %v", err)
-	}
-	return ev.PubKey
-}
+// pubkeyFor is defined in subgroups_integration_test.go (same package),
+// added by a sibling PR after this file was originally written -- reused
+// here rather than redeclared.
 
 // fetchGroupMetadata reads back a group's kind:39000 mirror and parses
 // it, failing the test on any read or parse error.
