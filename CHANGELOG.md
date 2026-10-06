@@ -428,6 +428,47 @@ delivery time exposed in `ReadEventsFromRelayWithAuth`.
   ended via a normal EOSE while the handshake was still unresolved --
   leaving the already-covered restricted-CLOSED retry, and the
   non-restricted-CLOSED-is-never-retried guarantee, exactly as before.
+- NIP-29 "Subgroups" is now fully implemented, not just the bare `parent`
+  tag nip29 already round-tripped. `GroupMetadata`/`GroupMetadataFields`
+  gain an ordered `Children` list; a group's own kind:9002 edit-metadata
+  can set its `parent` (triggering the relay to add a matching `child`
+  tag to the new parent's own kind:39000, and remove it from the old
+  one) or reorder its own `Children`. The relay now enforces every spec
+  `MUST`: rejects a self-reference or any cycle in the parent chain,
+  rejects naming a parent that doesn't exist, requires the submitter to
+  also be an admin of the new parent (not just of the group being
+  edited), and -- since kind:9002 is a full replace -- rejects any edit
+  on a group with existing children that doesn't re-list every one of
+  them (closing both the silent-detach-all footgun and a unilateral-
+  annexation path a parent could otherwise use to claim a group that
+  never consented). Deleting a parent (kind:9008) cascades: its
+  remaining children automatically become roots. A relay hosting NIP-29
+  groups at all now advertises `{"subgroups": true}` under a new `nip29`
+  object in its NIP-11 document, per the spec's own recommendation.
+  New `GroupsService.linkMu` serializes the cross-group record mutation
+  a reparent or a delete-cascade requires, closing a lost-update race
+  two concurrent reparents of the same child could otherwise hit.
+  Also closes a privacy gap the feature's own design surfaced: linking a
+  private group's id into a public group's child/parent reference would
+  permanently reveal it to every viewer of the public side (a signed
+  kind:39000 can't be redacted per viewer), so a reparent across the
+  public/private boundary is rejected outright -- both groups must share
+  the same `Private` setting before they can be linked.
+- Closes two more privacy gaps the subgroups work's own adversarial
+  review surfaced, both independent of subgroups and already live:
+  `processCount` only ever applied the request-level tag gate
+  (`deniedPrivateGroupFilter`), never the delivery-time one `processRequest`
+  already uses -- an anonymous, untagged `COUNT {"kinds":[39000]}` returned
+  the relay's *total* group count, private ones included, a number the
+  identical REQ could never actually deliver that many events for. COUNT
+  now routes exactly the kinds that could be group metadata through the
+  same per-event predicate before counting (new
+  `EventStore.CountEventsFiltered`). Separately, a REQ/COUNT naming a
+  private group you can't see and one naming a group that doesn't exist
+  at all used to be distinguishable (restricted-CLOSED vs. an ordinary
+  empty success) -- letting an unauthenticated prober brute-force which
+  private group ids exist on the relay. Both cases now get the identical
+  restricted response.
 
 ### Changed
 

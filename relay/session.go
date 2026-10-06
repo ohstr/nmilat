@@ -678,7 +678,16 @@ func NewSessionHandler(store *EventStore, relayMetadata *nip11.Metadata, searchS
 func (sh *SessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if r.Header.Get("Accept") == nip11.ContentTypeHeader {
-		nip11.NewHandler(sh.relayMetadata, sh.SupportedNIPs()).ServeHTTP(w, r)
+		metadata := sh.relayMetadata
+		if nip29Registered() {
+			// A shallow copy, never a mutation of sh.relayMetadata itself
+			// -- that value is shared, long-lived config state, read
+			// concurrently by every other request this handler serves.
+			withNIP29 := *sh.relayMetadata
+			withNIP29.NIP29 = &nip11.NIP29Capabilities{Subgroups: true}
+			metadata = &withNIP29
+		}
+		nip11.NewHandler(metadata, sh.SupportedNIPs()).ServeHTTP(w, r)
 		return
 	}
 

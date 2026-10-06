@@ -1069,6 +1069,20 @@ func (s *EventStore) resolveEvsidByID(idHex string) (evsid uint64, found bool, e
 }
 
 func (s *EventStore) CountEvents(ctx context.Context, filters *nip01.SubscriptionFilterGroup) (int64, error) {
+	return s.countEvents(ctx, filters, nil)
+}
+
+// CountEventsFiltered is CountEvents with an extra per-candidate deny
+// predicate, run on the same *PotentialEvent the REQ delivery loop
+// filters (relay/handlers.go) checks before ever counting a match --
+// callers that need COUNT to respect the same visibility rules REQ
+// already does (e.g. relay/packet.go's processCount and NIP-29 group
+// privacy) use this instead of the raw CountEvents.
+func (s *EventStore) CountEventsFiltered(ctx context.Context, filters *nip01.SubscriptionFilterGroup, deny func(*PotentialEvent) bool) (int64, error) {
+	return s.countEvents(ctx, filters, deny)
+}
+
+func (s *EventStore) countEvents(ctx context.Context, filters *nip01.SubscriptionFilterGroup, deny func(*PotentialEvent) bool) (int64, error) {
 	scan, err := NewStoreQuery(s, filters)
 	if err != nil {
 		return 0, err
@@ -1079,8 +1093,10 @@ func (s *EventStore) CountEvents(ctx context.Context, filters *nip01.Subscriptio
 	var count int64
 
 	go func() {
-		for range potEventsCh {
-			count++
+		for pe := range potEventsCh {
+			if deny == nil || !deny(pe) {
+				count++
+			}
 			wg.Done()
 		}
 	}()

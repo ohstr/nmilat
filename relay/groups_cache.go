@@ -131,6 +131,21 @@ type GroupsService struct {
 	// data-race against CanPerform reading it from a concurrent request --
 	// the same reasoning groupsCache's own snap field documents.
 	policy atomic.Pointer[nip29.ModerationPolicy]
+
+	// linkMu serializes NIP-29 "Subgroups" cross-group mutation: a
+	// reparent touches up to three records (the group itself, its old
+	// parent, its new parent), and a delete cascades over every one of
+	// the deleted group's own children. groupsCache's own writeMu keeps
+	// each *individual* Get/put memory-safe, but gives no atomicity
+	// across that multi-record sequence -- two concurrent reparents of
+	// the same child to two different new parents could otherwise both
+	// successfully addChild on their own target, leaving the "losing"
+	// parent's Children listing a child whose own Parent no longer
+	// points back at it. Held for the whole validate-then-mutate
+	// sequence in handleEditMetadata's reparent path and
+	// handleDeleteGroup's cascade, never for a same-group-only edit
+	// (which groupsCache's own synchronization already covers alone).
+	linkMu sync.Mutex
 }
 
 // NewGroupsService constructs a GroupsService backed by store, using
@@ -252,16 +267,21 @@ func (g *GroupsService) Create(rec *GroupRecord) error {
 }
 
 // Delete removes group id from the authoritative store and the in-memory
-// cache.
-func (g *GroupsService) Delete(id string) error {
+// cache, returning the record as it stood immediately before deletion (or
+// (nil, nil) if id named no known group) so a caller that needs to act on
+// what the group last contained -- NIP-29 subgroup cascade-to-root reads
+// the deleted parent's own Children here -- gets it atomically, rather
+// than racing a second read against a concurrent second delete.
+func (g *GroupsService) Delete(id string) (*GroupRecord, error) {
 	if g == nil {
-		return nil
+		return nil, nil
 	}
+	rec := g.cache.Get(id)
 	if err := g.store.DeleteGroup(id); err != nil {
-		return err
+		return nil, err
 	}
 	g.cache.remove(id)
-	return nil
+	return rec, nil
 }
 
 // Get returns id's persisted record, or (nil, nil) if id is not a
@@ -359,6 +379,112 @@ func (g *GroupsService) SetPins(id string, pins GroupPins) (*GroupRecord, error)
 	}
 	g.cache.put(&next)
 	return &next, nil
+}
+
+// SetChildren replaces group id's ordered subgroup-id list wholesale
+// (kind:9002 edit-metadata's "parent reorders its own children" path).
+// Returns the updated record, or (nil, nil) if id names no known group.
+//
+// Deliberately a dedicated mutator, not routed through SetMetadata:
+// SetMetadata replaces the *entire* Metadata struct, so building a bare
+// GroupMetadataFields{Children: children} and passing it there would
+// silently wipe Name/Private/Closed/every other field on the group
+// being updated -- exactly the footgun this helper exists to make
+// structurally impossible.
+func (g *GroupsService) SetChildren(id string, children []string) (*GroupRecord, error) {
+	if g == nil {
+		return nil, nil
+	}
+	cur := g.cache.Get(id)
+	if cur == nil {
+		return nil, nil
+	}
+	next := *cur
+	next.Metadata.Children = children
+	if err := g.store.PutGroup(&next); err != nil {
+		return nil, err
+	}
+	g.cache.put(&next)
+	return &next, nil
+}
+
+// SetParent replaces group id's own parent reference (empty string
+// detaches to root). Returns the updated record, or (nil, nil) if id
+// names no known group. Same rationale as SetChildren: a dedicated
+// single-field mutator so a reparent or a delete-cascade can't
+// accidentally wipe the rest of the group's metadata.
+func (g *GroupsService) SetParent(id string, parent string) (*GroupRecord, error) {
+	if g == nil {
+		return nil, nil
+	}
+	cur := g.cache.Get(id)
+	if cur == nil {
+		return nil, nil
+	}
+	next := *cur
+	next.Metadata.Parent = parent
+	if err := g.store.PutGroup(&next); err != nil {
+		return nil, err
+	}
+	g.cache.put(&next)
+	return &next, nil
+}
+
+// removeChild drops childID from parentID's Children list, if present.
+// Returns the updated parent record, or (nil, nil) if parentID names no
+// known group.
+func (g *GroupsService) removeChild(parentID, childID string) (*GroupRecord, error) {
+	parent := g.cache.Get(parentID)
+	if parent == nil {
+		return nil, nil
+	}
+	children := make([]string, 0, len(parent.Metadata.Children))
+	for _, id := range parent.Metadata.Children {
+		if id != childID {
+			children = append(children, id)
+		}
+	}
+	return g.SetChildren(parentID, children)
+}
+
+// addChild appends childID to parentID's Children list. Returns the
+// updated parent record, or (nil, nil) if parentID names no known group.
+// Callers are responsible for not calling this with a childID already
+// present (handleEditMetadata's own validation is what actually decides
+// whether an addition is allowed at all).
+func (g *GroupsService) addChild(parentID, childID string) (*GroupRecord, error) {
+	parent := g.cache.Get(parentID)
+	if parent == nil {
+		return nil, nil
+	}
+	children := append(append([]string{}, parent.Metadata.Children...), childID)
+	return g.SetChildren(parentID, children)
+}
+
+// createsCycle reports whether setting groupID's parent to startParent
+// would create a cycle in the parent chain -- including startParent
+// itself eventually leading back to groupID. Walks via a visited-set,
+// not a bounded counter, so it always terminates in O(chain length)
+// even against a pre-existing cycle elsewhere that doesn't involve
+// groupID at all.
+func (g *GroupsService) createsCycle(startParent, groupID string) bool {
+	visited := map[string]bool{}
+	current := startParent
+	for current != "" {
+		if current == groupID {
+			return true
+		}
+		if visited[current] {
+			return false
+		}
+		visited[current] = true
+		rec := g.cache.Get(current)
+		if rec == nil {
+			return false
+		}
+		current = rec.Metadata.Parent
+	}
+	return false
 }
 
 // newGroupRecord builds the GroupRecord a kind:9007 creates: creator as

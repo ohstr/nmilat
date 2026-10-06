@@ -274,8 +274,27 @@ func (s *Session) processCount(parent context.Context, cp *wire.CountPacket) err
 		return nil
 	}
 
-	// We calculate count immediately and return
-	count, err := s.store.CountEvents(parent, cp.Filters)
+	// We calculate count immediately and return.
+	//
+	// NIP-29: deniedPrivateGroupFilter above only catches a filter that
+	// names a group by its own "d"/"h" tag -- an untagged query like
+	// {"kinds":[39000]} names none, so it reaches here unfiltered. A raw
+	// CountEvents would then return the total number of groups on the
+	// relay, private ones included, even though a REQ for the identical
+	// filter would never deliver that many events (relay/handlers.go's
+	// delivery loop drops each one deniedPrivateGroupPotentialEvent
+	// denies). Route exactly the kinds that could be group metadata
+	// through the same per-event predicate before counting; every other
+	// kind keeps the fast raw-count path.
+	var count int64
+	var err error
+	if mayDeliverGroupMetadataKind(cp.Filters) {
+		count, err = s.store.CountEventsFiltered(parent, cp.Filters, func(pe *PotentialEvent) bool {
+			return s.groups.deniedPrivateGroupPotentialEvent(s, pe)
+		})
+	} else {
+		count, err = s.store.CountEvents(parent, cp.Filters)
+	}
 	if err != nil {
 		s.reply(&wire.NoticeSubscriptionResponse{
 			Message: fmt.Sprintf("count failed: %s", err.Error()),

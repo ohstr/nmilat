@@ -308,6 +308,29 @@ func TestParseGroupMetadata(t *testing.T) {
 		}
 	})
 
+	t.Run("parent group carries an ordered child list", func(t *testing.T) {
+		meta, err := ParseGroupMetadata(ev(KindGroupMetadata, []string{"d", "root"},
+			[]string{"child", "nostr"}, []string{"child", "nip29"}))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if meta.IsSubgroup() {
+			t.Error("a group with children but no parent tag is not itself a subgroup")
+		}
+		want := []string{"nostr", "nip29"}
+		if len(meta.Children) != len(want) || meta.Children[0] != want[0] || meta.Children[1] != want[1] {
+			t.Errorf("Children = %v, want %v (order preserved)", meta.Children, want)
+		}
+	})
+
+	t.Run("duplicate parent tag is rejected", func(t *testing.T) {
+		_, err := ParseGroupMetadata(ev(KindGroupMetadata, []string{"d", "child"},
+			[]string{"parent", "root"}, []string{"parent", "other"}))
+		if !errors.Is(err, ErrDuplicateParentTag) {
+			t.Fatalf("err = %v, want ErrDuplicateParentTag", err)
+		}
+	})
+
 	t.Run("missing d tag", func(t *testing.T) {
 		_, err := ParseGroupMetadata(ev(KindGroupMetadata, []string{"name", "x"}))
 		if !errors.Is(err, ErrMissingDTag) {
@@ -351,6 +374,26 @@ func TestParseGroupMetadata(t *testing.T) {
 		}
 		if !meta.SupportedKindsSet || meta.SupportsKind(9) {
 			t.Error("empty-but-set supported_kinds did not survive")
+		}
+	})
+
+	t.Run("round trip preserves parent and ordered children", func(t *testing.T) {
+		built := NewGroupMetadata(GroupMetadataParams{
+			SelfPubkey: testPubkeyA,
+			ID:         "root",
+			Parent:     "grandparent",
+			Children:   []string{"nostr", "nip29"},
+		})
+		meta, err := ParseGroupMetadata(built)
+		if err != nil {
+			t.Fatalf("round-trip failed: %v", err)
+		}
+		if meta.Parent != "grandparent" {
+			t.Errorf("Parent = %q, want %q", meta.Parent, "grandparent")
+		}
+		want := []string{"nostr", "nip29"}
+		if len(meta.Children) != len(want) || meta.Children[0] != want[0] || meta.Children[1] != want[1] {
+			t.Errorf("Children = %v, want %v", meta.Children, want)
 		}
 	})
 }
