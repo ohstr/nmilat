@@ -663,6 +663,20 @@ func NewSessionHandler(store *EventStore, relayMetadata *nip11.Metadata, searchS
 		cfg.Logger.Error().Err(err).Msg("failed to load NIP-29 groups cache at startup")
 	}
 
+	// Not fatal: a relay that only ever hosts public groups works fine
+	// without relayMetadata.URL. But NIP-42 AUTH validates a client's
+	// "relay" tag against exactly this field (nip42.ValidateAuthEvent),
+	// and a freshly created NIP-29 group defaults to private+closed -- so
+	// an operator who enables group hosting without also setting it gets
+	// a relay where AUTH silently fails its relay-tag check on every
+	// connection, and every private group ends up invisible even to its
+	// own creator (ncli groups show/list come back exactly as empty as
+	// "this group doesn't exist"). Warn once at startup rather than
+	// leaving that to be discovered the hard way.
+	if nip29Registered() && relayMetadata != nil && relayMetadata.URL == "" {
+		cfg.Logger.Warn().Msg("NIP-29 group hosting is enabled but nip11.url is not set: NIP-42 AUTH will fail its relay-tag check on every connection, so a private group (the default on creation) will be invisible even to its own creator. Set nip11.url to this relay's own canonical address (e.g. wss://relay.example.com).")
+	}
+
 	return &SessionHandler{
 		store:              store,
 		sessions:           sync.Map{},
