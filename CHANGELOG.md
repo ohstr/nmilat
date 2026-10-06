@@ -2,7 +2,7 @@
 
 ## [0.5.0]
 
-_Cut as `v0.5.0-rc.5` on 2026-10-05._ This section stays open: 0.5.0 itself has
+_Cut as `v0.5.0-rc.7` on 2026-10-06._ This section stays open: 0.5.0 itself has
 not been released, so everything under it is still pre-release and accumulating.
 rc.2 is where the NIP-CASH private transport became usable from a client: the
 batch API that spends many bills in one relay event, the breaking changes three
@@ -18,7 +18,18 @@ proof-of-work tag name, and fixes `POST /query` ignoring its own `Limit`
 plus the same-second pagination tie-break bug that fix had been masking.
 rc.5 gives NIP-29 groups real server-side state -- create/delete,
 membership and roles, metadata/invites/pins, and moderator delete-event --
-where `nip29/` had previously been structural validation only.
+where `nip29/` had previously been structural validation only. rc.6 sends
+the NIP-42 AUTH challenge on every connection unconditionally instead of
+only when `auth_required` is on, fixes `processClose` killing a session
+over a harmless redundant CLOSE, and exposes
+`ReadEventsFromRelayWithAuth`'s `restricted` signal instead of discarding
+it. rc.7 closes the privacy bypass those fixes' own follow-up testing
+found: an untagged group-kind query (e.g. `{"kinds":[39000]}`, exactly
+what `ncli groups list` sends) bypassed NIP-29's private-group gate
+entirely, since that gate only ever inspected the request's own "d"/"h"
+tags -- visibility is now enforced per-event at delivery instead, and a
+companion fix closes the client-side auth race that moving the check to
+delivery time exposed in `ReadEventsFromRelayWithAuth`.
 
 ### Added
 
