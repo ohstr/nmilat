@@ -220,13 +220,9 @@ func main() {
 ```
 
 `ReadEventsFromRelayWithAuth` is the counterpart for a private/restricted
-target: pass a `signingKeyHex` and it answers the relay's NIP-42 challenge
-itself, retrying once if the relay's first response is its own
-"restricted: ..." CLOSED sent before that handshake settles. It returns an
-extra `restricted bool` so a caller can tell "nothing matched" apart from
-"the relay refused this query" -- an empty `events` with `restricted ==
-false` is a real empty result, `restricted == true` means read it as a
-refusal instead.
+target: pass a `signingKeyHex` and it handles the NIP-42 handshake itself.
+It also returns a `restricted bool` -- an empty `events` with `restricted
+== true` means the relay refused the query, not that nothing matched.
 
 ### Build, sign, and publish an event
 
@@ -271,12 +267,8 @@ func main() {
 
 `nip29` covers the self-service group surface -- create/edit/delete,
 membership and roles, invites, and pins. A group defaults to **private
-and closed** on creation. `NewEditMetadata`'s kind:9002 is a full replace
-of the relay's mirrored metadata, not a patch -- every field you want kept
-(including `Private`/`Closed`) has to be passed on every edit, or it
-reverts to false. None of the constructors below add the "previous" tag
-NIP-29 recommends on writes (it needs a relay round trip of its own to
-fill in); see `ncli groups` if you want that handled for you:
+and closed** on creation; see `ncli groups` for a CLI that also adds
+NIP-29's recommended "previous" tag, which these constructors don't:
 
 ```go
 package main
@@ -334,8 +326,8 @@ func main() {
 ### Create a meeting space and send a live chat message (NIP-53)
 
 `nip53` covers live streams, meeting spaces and their rooms, presence,
-and live chat. A meeting space (kind:30312) requires a `d` tag, a `room`,
-a `status`, a `service`, and at least one `Host` provider:
+and live chat. A meeting space (kind:30312) needs a `d` tag, `room`,
+`status`, `service`, and at least one `Host` provider:
 
 ```go
 package main
