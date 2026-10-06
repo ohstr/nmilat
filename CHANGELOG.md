@@ -2,7 +2,7 @@
 
 ## [0.5.0]
 
-_Cut as `v0.5.0-rc.7` on 2026-10-06._ This section stays open: 0.5.0 itself has
+_Cut as `v0.5.0-rc.8` on 2026-10-06._ This section stays open: 0.5.0 itself has
 not been released, so everything under it is still pre-release and accumulating.
 rc.2 is where the NIP-CASH private transport became usable from a client: the
 batch API that spends many bills in one relay event, the breaking changes three
@@ -29,7 +29,13 @@ what `ncli groups list` sends) bypassed NIP-29's private-group gate
 entirely, since that gate only ever inspected the request's own "d"/"h"
 tags -- visibility is now enforced per-event at delivery instead, and a
 companion fix closes the client-side auth race that moving the check to
-delivery time exposed in `ReadEventsFromRelayWithAuth`.
+delivery time exposed in `ReadEventsFromRelayWithAuth`. rc.8 implements
+NIP-29's "Subgroups" section in full -- parent/child linkage, cycle and
+cross-group-admin validation, cascade-on-delete, NIP-11 advertisement --
+and closes two more privacy leaks its own adversarial test pass found
+along the way: `COUNT` leaking private groups' existence in aggregate,
+and a private group vs. a nonexistent one being distinguishable to an
+unauthenticated prober.
 
 ### Added
 
