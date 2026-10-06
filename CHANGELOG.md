@@ -2,7 +2,7 @@
 
 ## [0.5.0]
 
-_Cut as `v0.5.0-rc.8` on 2026-10-06._ This section stays open: 0.5.0 itself has
+_Cut as `v0.5.0-rc.9` on 2026-10-06._ This section stays open: 0.5.0 itself has
 not been released, so everything under it is still pre-release and accumulating.
 rc.2 is where the NIP-CASH private transport became usable from a client: the
 batch API that spends many bills in one relay event, the breaking changes three
@@ -35,7 +35,13 @@ cross-group-admin validation, cascade-on-delete, NIP-11 advertisement --
 and closes two more privacy leaks its own adversarial test pass found
 along the way: `COUNT` leaking private groups' existence in aggregate,
 and a private group vs. a nonexistent one being distinguishable to an
-unauthenticated prober.
+unauthenticated prober. rc.9 adds a startup warning when NIP-29 group
+hosting is enabled with no `nip11.url` configured -- found while
+investigating a report that looked exactly like "the relay never
+created my group," which turned out to be this: without `nip11.url`,
+NIP-42 AUTH silently fails its relay-tag check on every connection, so
+a private group (the default on creation) is invisible even to its own
+creator.
 
 ### Added
 
@@ -490,6 +496,14 @@ unauthenticated prober.
   empty success) -- letting an unauthenticated prober brute-force which
   private group ids exist on the relay. Both cases now get the identical
   restricted response.
+- `NewSessionHandler` warns once at startup if NIP-29 group hosting is
+  registered but `relayMetadata.URL` is empty. Nothing previously
+  surfaced this: a relay hosting only public groups works fine without
+  it, but a private group (the default on creation) needs `nip11.url`
+  for NIP-42 AUTH to validate a connection's `relay` tag at all --
+  without it every AUTH silently fails that check, and the private-group
+  visibility gate never sees an authenticated identity to match against,
+  which looks exactly like the group never having been created.
 
 ### Changed
 
