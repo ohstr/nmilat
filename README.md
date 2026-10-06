@@ -219,6 +219,15 @@ func main() {
 }
 ```
 
+`ReadEventsFromRelayWithAuth` is the counterpart for a private/restricted
+target: pass a `signingKeyHex` and it answers the relay's NIP-42 challenge
+itself, retrying once if the relay's first response is its own
+"restricted: ..." CLOSED sent before that handshake settles. It returns an
+extra `restricted bool` so a caller can tell "nothing matched" apart from
+"the relay refused this query" -- an empty `events` with `restricted ==
+false` is a real empty result, `restricted == true` means read it as a
+refusal instead.
+
 ### Build, sign, and publish an event
 
 Create an event, sign it with your private key, and publish it to a relay:
