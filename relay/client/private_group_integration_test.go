@@ -26,13 +26,17 @@ import (
 // don't prove the fix actually holds against the real
 // processRequest/processAuth/GroupsService code paths on the other end.
 //
+// Returns the relay's own URL and the privkey configured as its NIP-11
+// "self" identity (relay/membership.go's CheckSelfAuthored gates every
+// NIP-43 relay-authored kind on this exact key).
+//
 // authRequired controls nip11.limitation.auth_required -- true matches
 // the relay-wide-authenticated setup the redial fix was originally
 // reproduced against; false exercises the lazy, REQ-time-only challenge
 // deniedPrivateGroupFilter's own branch issues instead, which is what
 // lets write access (kind:9007 group creation) stay anonymous while
 // reads of a private group still end up authenticatable.
-func newPrivateGroupTestRelay(t *testing.T, authRequired bool) *url.URL {
+func newPrivateGroupTestRelay(t *testing.T, authRequired bool) (*url.URL, string) {
 	t.Helper()
 	f, err := os.CreateTemp("", "private-group-integration-*.db")
 	if err != nil {
@@ -90,7 +94,7 @@ func newPrivateGroupTestRelay(t *testing.T, authRequired bool) *url.URL {
 	srv.Start()
 	t.Cleanup(srv.Close)
 
-	return wsURL
+	return wsURL, relayPrivKey
 }
 
 // generateTestPrivKey returns a fresh, arbitrary, never-funded private key
@@ -198,7 +202,7 @@ func groupMetadataFilter(groupID string) *nip01.SubscriptionFilterGroup {
 // group requires membership to read even its own metadata, and the
 // creator is the identity that just proved it by creating the group.
 func TestPrivateGroup_CreatorReadsOwnGroup_EndToEnd(t *testing.T) {
-	relayURL := newPrivateGroupTestRelay(t, true)
+	relayURL, _ := newPrivateGroupTestRelay(t, true)
 	const groupID = "end-to-end-private-group"
 	createPrivateGroup(t, relayURL, testPrivKey, groupID)
 
@@ -230,7 +234,7 @@ func TestPrivateGroup_CreatorReadsOwnGroup_EndToEnd(t *testing.T) {
 // ReadEventsFromRelay, which has no restricted-vs-empty signal to report
 // at all -- not because the relay didn't restrict it (it did).
 func TestPrivateGroup_AnonymousReadIsDenied(t *testing.T) {
-	relayURL := newPrivateGroupTestRelay(t, true)
+	relayURL, _ := newPrivateGroupTestRelay(t, true)
 	const groupID = "anon-denied-private-group"
 	createPrivateGroup(t, relayURL, testPrivKey, groupID)
 
@@ -257,7 +261,7 @@ func TestPrivateGroup_AnonymousReadIsDenied(t *testing.T) {
 // accidentally degrading into "any authenticated pubkey may read any
 // group."
 func TestPrivateGroup_NonMemberReadIsDenied(t *testing.T) {
-	relayURL := newPrivateGroupTestRelay(t, true)
+	relayURL, _ := newPrivateGroupTestRelay(t, true)
 	const groupID = "non-member-denied-private-group"
 	createPrivateGroup(t, relayURL, testPrivKey, groupID)
 
@@ -289,7 +293,7 @@ func TestPrivateGroup_NonMemberReadIsDenied(t *testing.T) {
 // handshake that could never start; deniedPrivateGroupFilter's branch
 // now issues one itself, independent of that flag.
 func TestPrivateGroup_LazyChallengeWithoutRelayWideAuthRequired(t *testing.T) {
-	relayURL := newPrivateGroupTestRelay(t, false)
+	relayURL, _ := newPrivateGroupTestRelay(t, false)
 	const groupID = "lazy-challenge-no-auth-required"
 
 	// Anonymous write: no identity configured at all -- exactly the write
@@ -360,7 +364,7 @@ func TestPrivateGroup_LazyChallengeWithoutRelayWideAuthRequired(t *testing.T) {
 // check ever gets a chance to run; NIP-29 group privacy must hold on its
 // own, independent of that unrelated setting.
 func TestPrivateGroup_UntaggedQueryHidesPrivateGroupFromNonMembers(t *testing.T) {
-	relayURL := newPrivateGroupTestRelay(t, false)
+	relayURL, _ := newPrivateGroupTestRelay(t, false)
 
 	const publicGroupID = "untagged-query-public-group"
 	const privateGroupID = "untagged-query-private-group"

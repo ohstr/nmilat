@@ -411,6 +411,59 @@ func main() {
 }
 ```
 
+### Enroll and remove a relay member (NIP-43)
+
+`nip43` is relay-wide membership, independent of NIP-29 groups. Its
+admin writes (kind:8000/8001) carry a NIP-70 "protected" tag, so the
+relay only accepts them from a connection authenticated as the relay's
+own `self` key -- the invite/join/leave flow (`NewClaim`,
+`NewInviteResponse`, `NewJoinRequest`, `NewLeaveRequest`) exists for
+self-service enrollment instead:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"net/url"
+
+	"github.com/ohstr/nmilat/nip43"
+	relayclient "github.com/ohstr/nmilat/relay/client"
+)
+
+func main() {
+	relayURL, _ := url.Parse("wss://relay.ohstr.com")
+	conn, err := relayclient.NewConnection(context.Background(), relayURL, &relayclient.ConnectionConfig{
+		SigningKeyHex: relaySelfPrivateKeyHex,
+	})
+	if err != nil {
+		panic(err)
+	}
+	defer conn.Close()
+
+	addEv := nip43.NewAddUser(relaySelfPubkeyHex, memberPubkeyHex)
+	if err := addEv.Sign(relaySelfPrivateKeyHex); err != nil {
+		panic(err)
+	}
+	res, err := conn.Publish(context.Background(), addEv)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("member added:", res.Accepted, res.Message)
+
+	removeEv := nip43.NewRemoveUser(relaySelfPubkeyHex, memberPubkeyHex)
+	if err := removeEv.Sign(relaySelfPrivateKeyHex); err != nil {
+		panic(err)
+	}
+	res, err = conn.Publish(context.Background(), removeEv)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("member removed:", res.Accepted, res.Message)
+}
+```
+
 ### Send a private direct message (NIP-17/59)
 
 Build a chat message, seal and gift-wrap it so only the recipient can read it

@@ -85,7 +85,7 @@ func fetchGroupMetadataOverWire(t *testing.T, relayURL *url.URL, readerPrivKey, 
 }
 
 func TestNIP29Subgroups_ReparentPublishesChildTagOnParentMirror(t *testing.T) {
-	relayURL := newPrivateGroupTestRelay(t, false)
+	relayURL, _ := newPrivateGroupTestRelay(t, false)
 	creatorPrivKey := generateTestPrivKey(t)
 	createPrivateGroup(t, relayURL, creatorPrivKey, groupA)
 	createPrivateGroup(t, relayURL, creatorPrivKey, groupB)
@@ -105,7 +105,7 @@ func TestNIP29Subgroups_ReparentPublishesChildTagOnParentMirror(t *testing.T) {
 }
 
 func TestNIP29Subgroups_CycleRejectedEndToEnd(t *testing.T) {
-	relayURL := newPrivateGroupTestRelay(t, false)
+	relayURL, _ := newPrivateGroupTestRelay(t, false)
 	creatorPrivKey := generateTestPrivKey(t)
 	createPrivateGroup(t, relayURL, creatorPrivKey, groupA)
 	createPrivateGroup(t, relayURL, creatorPrivKey, groupB)
@@ -120,7 +120,7 @@ func TestNIP29Subgroups_CycleRejectedEndToEnd(t *testing.T) {
 }
 
 func TestNIP29Subgroups_CrossGroupAdminRequiredEndToEnd(t *testing.T) {
-	relayURL := newPrivateGroupTestRelay(t, false)
+	relayURL, _ := newPrivateGroupTestRelay(t, false)
 	ownerAPrivKey := generateTestPrivKey(t)
 	ownerBPrivKey := generateTestPrivKey(t)
 	createPrivateGroup(t, relayURL, ownerAPrivKey, groupA)
@@ -151,7 +151,7 @@ func TestNIP29Subgroups_CrossGroupAdminRequiredEndToEnd(t *testing.T) {
 }
 
 func TestNIP29Subgroups_DeleteParentCascadesOverRealRelay(t *testing.T) {
-	relayURL := newPrivateGroupTestRelay(t, false)
+	relayURL, _ := newPrivateGroupTestRelay(t, false)
 	creatorPrivKey := generateTestPrivKey(t)
 	createPrivateGroup(t, relayURL, creatorPrivKey, groupA)
 	createPrivateGroup(t, relayURL, creatorPrivKey, groupB)
@@ -171,7 +171,7 @@ func TestNIP29Subgroups_DeleteParentCascadesOverRealRelay(t *testing.T) {
 }
 
 func TestNIP29Subgroups_NIP11AdvertisesSubgroupsCapability(t *testing.T) {
-	relayURL := newPrivateGroupTestRelay(t, false)
+	relayURL, _ := newPrivateGroupTestRelay(t, false)
 
 	req, err := http.NewRequest(http.MethodGet, "http://"+relayURL.Host, nil)
 	if err != nil {

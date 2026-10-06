@@ -434,6 +434,21 @@ unauthenticated prober.
   ended via a normal EOSE while the handshake was still unresolved --
   leaving the already-covered restricted-CLOSED retry, and the
   non-restricted-CLOSED-is-never-retried guarantee, exactly as before.
+- README documents `ReadEventsFromRelayWithAuth`'s `restricted` signal
+  (previously shown only via its unauthenticated `ReadEventsFromRelay`
+  counterpart), and gets two quick starts that were missing despite
+  having the same consumer-facing `New*` API as nip57/nip47/NIP-CASH/
+  nip34/nip19/nip17-59: "Create and manage a NIP-29 group" and "Create a
+  meeting space and send a live chat message (NIP-53)". The NIP-29
+  example also flags `NewEditMetadata`'s kind:9002 being a full replace,
+  not a patch -- omitting `Private`/`Closed` silently flips a group
+  public. (#68)
+- README gets a NIP-43 quick start ("Enroll and remove a relay member"),
+  the same gap nip29/nip53 just had: `nip43` has the same tier of
+  consumer-facing `New*` API, just never got an example. Documents that
+  its admin writes (kind:8000/8001) carry a NIP-70 "protected" tag, so
+  the connection itself must authenticate as the relay's own `self` key
+  or the relay rejects them outright.
 - NIP-29 "Subgroups" is now fully implemented, not just the bare `parent`
   tag nip29 already round-tripped. `GroupMetadata`/`GroupMetadataFields`
   gain an ordered `Children` list; a group's own kind:9002 edit-metadata
