@@ -613,6 +613,10 @@ creator.
 
 ### Fixed
 
+- Anyone could post into a private or closed NIP-29 group: content events
+  tagged into a group (`h`) were never checked against its roster. Only
+  members may now post into a private or closed group; a public, open one
+  still takes posts from anyone, and join requests are unaffected.
 - `NewConnection` dialed without the caller's context, so a relay that
   accepted the TCP connection and stayed silent held the caller for the
   full handshake timeout (5s) regardless of its own deadline or cancel.

@@ -535,6 +535,12 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 		return nil
 	}
 
+	// NIP-29 content: only members post into a private or closed group.
+	if msg := s.groups.deniedGroupWrite(ep.Event); msg != "" {
+		s.reply(&wire.OkSubscriptionResponse{EventID: ep.Event.ID, Accepted: false, Message: msg})
+		return nil
+	}
+
 	// NIP-43: relay-authored kinds already passed the stricter
 	// self-authored check above; everything else needs active-or-virtual
 	// membership on the specific pubkey that signed this event, when

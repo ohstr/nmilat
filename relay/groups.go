@@ -814,6 +814,25 @@ func dNamesGroup(filter *nip01.SubscriptionFilter) bool {
 // Visibility gating (per-event, at delivery time)
 /////////////////////////////////////////////////////////////////////
 
+// deniedGroupWrite returns why ev may not be posted into a group it names
+// with "h", or "" if it may: a private or closed group takes posts from
+// its members only; a public, open one from anyone.
+func (g *GroupsService) deniedGroupWrite(ev *nip01.Event) string {
+	if g == nil || ev == nil {
+		return ""
+	}
+	for _, tag := range ev.Tags {
+		if len(tag) < 2 || tag[0] != "h" || !g.Exists(tag[1]) {
+			continue
+		}
+		id := tag[1]
+		if (g.IsPrivate(id) || g.IsClosed(id)) && !g.IsMember(id, ev.PubKey) {
+			return "restricted: only members may post in group " + id
+		}
+	}
+	return ""
+}
+
 // needsPrivacyCheck reports whether results for filters must go through
 // deniedPrivateGroupPotentialEvent: whenever a private group exists, since
 // its content can match any filter, not just a group-metadata one.
