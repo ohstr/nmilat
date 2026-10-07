@@ -613,6 +613,15 @@ creator.
 
 ### Fixed
 
+- COUNT skipped the `auth_required` gate REQ enforces, so an
+  unauthenticated client got real counts for any filter (by author, `#p`,
+  ...). COUNT now shares REQ's auth/membership gate, and every refused
+  COUNT (including a failed one) is answered with CLOSED instead of a lone
+  NOTICE that left the client waiting.
+- An unauthenticated client is refused with NIP-42's `auth-required:`
+  prefix, not `restricted:` (now reserved for "authenticated, still not
+  allowed"), on EVENT, REQ and COUNT. `ReadEventsFromRelayWithAuth` treats
+  both prefixes as gated.
 - Removing a NIP-43 member (`MembershipService.Leave`, or a replacement
   kind:13534 list) didn't reach connections that member had already
   authenticated: membership is cached per session at AUTH, so they kept

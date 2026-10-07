@@ -106,6 +106,10 @@ var authRetryWindow = 5 * time.Second
 // same convention without this package needing to know its exact wording.
 const restrictedClosePrefix = "restricted:"
 
+// authRequiredClosePrefix is NIP-42's prefix for a client that hasn't
+// authenticated yet; treated the same as restricted here.
+const authRequiredClosePrefix = "auth-required:"
+
 // ReadEventsFromRelayWithAuth is ReadEventsFromRelay's counterpart for a
 // caller that has (or might have) an identity to authenticate with.
 // signingKeyHex empty behaves exactly like ReadEventsFromRelay -- no
@@ -259,7 +263,9 @@ func subscribeOnce(ctx context.Context, conn *Connection, filters *nip01.Subscri
 				}
 			case *wire.ClosedSubscriptionResponse:
 				if m.SubscriptionID == subID {
-					return events, strings.HasPrefix(m.Message, restrictedClosePrefix), true, nil
+					gated := strings.HasPrefix(m.Message, restrictedClosePrefix) ||
+						strings.HasPrefix(m.Message, authRequiredClosePrefix)
+					return events, gated, true, nil
 				}
 			}
 
