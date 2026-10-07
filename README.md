@@ -55,8 +55,10 @@ go get github.com/ohstr/nmilat
 - **[`nip53`](https://github.com/nostr-protocol/nips/blob/master/53.md)** — Live streaming and spaces: live streams, meeting spaces and their rooms, listener presence, live chat
 - **[`nip57`](https://github.com/nostr-protocol/nips/blob/master/57.md)** — Lightning zaps
 - **[`nip65`](https://github.com/nostr-protocol/nips/blob/master/65.md)** — Relay list metadata
+- **[`nip70`](https://github.com/nostr-protocol/nips/blob/master/70.md)** — Protected events: the `-` tag, accepted only from their authenticated author
 - **[`nip71`](https://github.com/nostr-protocol/nips/blob/master/71.md)** — Video events: normal, short and addressable videos with imeta variants
 - **[`nip77`](https://github.com/nostr-protocol/nips/blob/master/77.md)** — Negentropy sync
+- **[`nip86`](https://github.com/nostr-protocol/nips/blob/master/86.md)** — Relay Management API: NIP-98-authenticated JSON-RPC to administer a relay over HTTP
 - **[`nip88`](https://github.com/nostr-protocol/nips/blob/master/88.md)** — Polls
 - **[`nip90`](https://github.com/nostr-protocol/nips/blob/master/90.md)** — Data Vending Machines
 - **[`nipA0`](https://github.com/nostr-protocol/nips/blob/master/A0.md)** — Voice messages
