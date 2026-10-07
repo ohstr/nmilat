@@ -136,9 +136,11 @@ func TestHandleEvent_CreateGroup_Duplicate(t *testing.T) {
 		t.Fatalf("sign: %v", err)
 	}
 
+	// Another key's create of a taken id changed nothing: it must not
+	// read as success.
 	resp := sendEventAndAwaitOKForSession(t, sess, ev)
-	if !resp.Accepted {
-		t.Fatalf("Accepted = false, want true for a duplicate create (message: %s)", resp.Message)
+	if resp.Accepted {
+		t.Fatalf("Accepted = true for another key's duplicate create (message: %s)", resp.Message)
 	}
 	if resp.Message != "duplicate: a group with that id already exists." {
 		t.Fatalf("Message = %q, want the spec's exact duplicate wording", resp.Message)
@@ -148,6 +150,22 @@ func TestHandleEvent_CreateGroup_Duplicate(t *testing.T) {
 	}
 	if sess.groups.IsAdmin(groupA, ev.PubKey) {
 		t.Fatal("the duplicate attempt's signer should not have become admin")
+	}
+}
+
+// The group's own admin re-sending create (a retry) stays accepted.
+func TestHandleEvent_CreateGroup_DuplicateByOwnAdmin(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
+
+	retry := nip29.NewCreateGroup("", groupA)
+	retry.CreatedAt++ // a new event, not the same one resent
+	if err := retry.Sign(authTestPrivKey); err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	resp := sendEventAndAwaitOKForSession(t, sess, retry)
+	if !resp.Accepted || resp.Message != "duplicate: a group with that id already exists." {
+		t.Fatalf("own admin's retry: accepted=%v %q", resp.Accepted, resp.Message)
 	}
 }
 

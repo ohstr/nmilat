@@ -613,6 +613,10 @@ creator.
 
 ### Fixed
 
+- A NIP-29 create (kind:9007) for an id that already exists was OK'd as
+  accepted even from a key with no role in that group, so the client
+  reported success for a create that changed nothing. It is now rejected
+  (`duplicate:`), except as the group's own admin's retry.
 - COUNT skipped the `auth_required` gate REQ enforces, so an
   unauthenticated client got real counts for any filter (by author, `#p`,
   ...). COUNT now shares REQ's auth/membership gate, and every refused

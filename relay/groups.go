@@ -85,9 +85,11 @@ func (g *GroupsService) handleCreate(ctx context.Context, s *Session, ev *nip01.
 	}
 
 	if g.Exists(groupID) {
+		// Accepted only as its own admin's idempotent retry; anyone else's
+		// create changed nothing and must not read as success.
 		s.reply(&wire.OkSubscriptionResponse{
 			EventID:  ev.ID,
-			Accepted: true,
+			Accepted: g.IsAdmin(groupID, ev.PubKey),
 			Message:  "duplicate: a group with that id already exists.",
 		})
 		return
