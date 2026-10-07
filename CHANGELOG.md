@@ -620,6 +620,10 @@ creator.
 
 ### Fixed
 
+- NIP-26 delegation tokens signed and verified `delegation:<pubkey>:<conds>`
+  instead of the spec's `nostr:delegation:<pubkey>:<conds>`, so no other
+  implementation accepted them (and theirs failed here). Tokens minted
+  before this no longer verify; re-issue them.
 - Anyone could post into a private or closed NIP-29 group: content events
   tagged into a group (`h`) were never checked against its roster. Only
   members may now post into a private or closed group; a public, open one
