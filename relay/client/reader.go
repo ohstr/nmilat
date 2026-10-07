@@ -184,11 +184,16 @@ func ReadEventsFromRelayWithAuth(parent context.Context, relayURL *url.URL, filt
 	}
 	defer conn.Close()
 
+	// Sampled before the REQ: a relay reads one connection in order, so
+	// only a handshake settled before sending makes the answer authoritative.
+	// Sampling after EOSE races the reader, which can settle AUTH OK before
+	// we drain an EOSE the relay sent anonymously.
+	authBeforeReq := conn.AuthState()
 	events, restricted, closed, err := subscribeOnce(ctx, conn, filters)
 	if err != nil {
 		return events, restricted, err
 	}
-	if !restricted && (closed || conn.AuthState() != AuthStateNone) {
+	if !restricted && (closed || authBeforeReq != AuthStateNone) {
 		return events, restricted, err
 	}
 

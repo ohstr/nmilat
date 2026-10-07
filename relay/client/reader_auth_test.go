@@ -359,6 +359,81 @@ func TestReadEventsFromRelayWithAuth_RedialsAfterConnectionDiesMidWait(t *testin
 	}
 }
 
+// TestReadEventsFromRelayWithAuth_RetriesEOSEServedBeforeAuth: the relay
+// answers a REQ anonymously with a silently filtered EOSE (as NIP-29 does
+// for private groups), but the client reads the AUTH OK first. The result
+// was served anonymously, so it must still be retried.
+func TestReadEventsFromRelayWithAuth_RetriesEOSEServedBeforeAuth(t *testing.T) {
+	const challenge = "late-challenge"
+	event := nip01.NewEvent(1, "private group metadata")
+	if err := event.Sign(testPrivKey); err != nil {
+		t.Fatal(err)
+	}
+
+	upgrader := websocket.Upgrader{}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+
+		write := func(m interface{ MarshalJSON() ([]byte, error) }) {
+			b, err := m.MarshalJSON()
+			if err == nil {
+				_ = conn.WriteMessage(websocket.TextMessage, b)
+			}
+		}
+		authed := false
+		pendingSub := ""
+		for {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			var payload wire.RelayPayload
+			if err := json.Unmarshal(data, &payload); err != nil {
+				return
+			}
+			switch p := payload.Packet.(type) {
+			case *wire.RequestPacket:
+				if !authed {
+					// Challenge only now, so the REQ is guaranteed to precede AUTH.
+					pendingSub = p.SubscriptionID
+					write(&wire.AuthChallengeResponse{Challenge: challenge})
+					continue
+				}
+				eventBytes, _ := json.Marshal(event)
+				write(&wire.EventSubscriptionResponse{SubscriptionID: p.SubscriptionID, EventBytes: eventBytes})
+				write(&wire.EOSESubscriptionResponse{SubscriptionID: p.SubscriptionID})
+			case *wire.AuthPacket:
+				authed = true
+				write(&wire.OkSubscriptionResponse{EventID: p.Event.ID, Accepted: true})
+				if pendingSub != "" {
+					write(&wire.EOSESubscriptionResponse{SubscriptionID: pendingSub})
+					pendingSub = ""
+				}
+			}
+		}
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	filters := nip01.NewSubscriptionFilterGroup()
+	filters.Add(&nip01.SubscriptionFilter{Kinds: []int{1}})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	events, _, err := ReadEventsFromRelayWithAuth(ctx, dialURL(t, server), filters, testPrivKey)
+	if err != nil {
+		t.Fatalf("ReadEventsFromRelayWithAuth error = %v", err)
+	}
+	if len(events) != 1 || events[0].ID != event.ID {
+		t.Fatalf("events = %v, want [%s] from the authenticated retry", events, event.ID)
+	}
+}
+
 func TestReadEventsFromRelayWithAuth_NonRestrictedCloseIsNotRetried(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	mux := http.NewServeMux()
