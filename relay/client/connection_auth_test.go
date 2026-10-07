@@ -221,14 +221,14 @@ func TestNewConnection_HandshakeHonorsContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 	go func() {
 		for {
 			c, err := l.Accept()
 			if err != nil {
 				return
 			}
-			defer c.Close()
+			defer func() { _ = c.Close() }()
 		}
 	}()
 	u, _ := url.Parse("ws://" + l.Addr().String())
