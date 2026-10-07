@@ -2,7 +2,7 @@
 
 ## [0.5.0]
 
-_Cut as `v0.5.0-rc.9` on 2026-10-06._ This section stays open: 0.5.0 itself has
+_Cut as `v0.5.0-rc.10` on 2026-10-07._ This section stays open: 0.5.0 itself has
 not been released, so everything under it is still pre-release and accumulating.
 rc.2 is where the NIP-CASH private transport became usable from a client: the
 batch API that spends many bills in one relay event, the breaking changes three
@@ -41,7 +41,11 @@ investigating a report that looked exactly like "the relay never
 created my group," which turned out to be this: without `nip11.url`,
 NIP-42 AUTH silently fails its relay-tag check on every connection, so
 a private group (the default on creation) is invisible even to its own
-creator.
+creator. rc.10 is the access-gate and privacy pass from ncli's black-box
+command matrix and agent eval: NIP-43 membership changes now reach open
+connections and publish the kind:13534 list, COUNT and refusals follow
+NIP-42's prefixes, private group content is withheld by any filter, and a
+deleted private group no longer leaves its roster readable.
 
 ### Added
 
@@ -611,8 +615,75 @@ creator.
   at scan time, rather than silently dropped -- a deliberate
   snapshot-consistency choice, not a live re-check. (#50)
 
+### Changed
+
+- `NewQueryHandler` takes the `*GroupsService` too, so `POST /query` applies
+  the same NIP-29 visibility as REQ for its NIP-98 signer (pass nil to host
+  no groups). The group checks now take a reader (a session's identities or
+  a signer), shared by both paths.
+
 ### Fixed
 
+- NIP-26 delegation tokens signed and verified `delegation:<pubkey>:<conds>`
+  instead of the spec's `nostr:delegation:<pubkey>:<conds>`, so no other
+  implementation accepted them (and theirs failed here). Tokens minted
+  before this no longer verify; re-issue them.
+- Anyone could post into a private or closed NIP-29 group: content events
+  tagged into a group (`h`) were never checked against its roster. Only
+  members may now post into a private or closed group; a public, open one
+  still takes posts from anyone, and join requests are unaffected.
+- `NewConnection` dialed without the caller's context, so a relay that
+  accepted the TCP connection and stayed silent held the caller for the
+  full handshake timeout (5s) regardless of its own deadline or cancel.
+- A private NIP-29 group's messages were readable by anyone, anonymous
+  included, through any filter that didn't name the group by `#h` (by
+  kind, id or author): delivery-time privacy only covered the group's
+  metadata kinds. Every event tagged into a private group with `h` is now
+  withheld from non-members, live subscriptions included, and COUNT agrees.
+- Every REQ/COUNT with a `#d` filter naming no NIP-29 group was refused,
+  whatever its kinds, because the private-group gate read any `d` value as
+  a group id. That blocked NIP-33 lookups (articles, meeting spaces, naddr
+  resolution). `d` now names a group only when the filter can return group
+  metadata (no kinds, or 39000-39005); `h` still always does.
+- `ReadEventsFromRelayWithAuth` with no signing key reported
+  `restricted=false` even when the relay refused the read, so an anonymous
+  caller couldn't tell "refused" from "nothing matched". It now reports a
+  gated CLOSED (no retry, there's nothing to authenticate with).
+- A NIP-29 create (kind:9007) for an id that already exists was OK'd as
+  accepted even from a key with no role in that group, so the client
+  reported success for a create that changed nothing. It is now rejected
+  (`duplicate:`), except as the group's own admin's retry.
+- COUNT skipped the `auth_required` gate REQ enforces, so an
+  unauthenticated client got real counts for any filter (by author, `#p`,
+  ...). COUNT now shares REQ's auth/membership gate, and every refused
+  COUNT (including a failed one) is answered with CLOSED instead of a lone
+  NOTICE that left the client waiting.
+- An unauthenticated client is refused with NIP-42's `auth-required:`
+  prefix, not `restricted:` (now reserved for "authenticated, still not
+  allowed"), on EVENT, REQ and COUNT. `ReadEventsFromRelayWithAuth` treats
+  both prefixes as gated.
+- Removing a NIP-43 member (`MembershipService.Leave`, or a replacement
+  kind:13534 list) didn't reach connections that member had already
+  authenticated: membership is cached per session at AUTH, so they kept
+  reading and writing. Removal now revokes direct membership on live
+  sessions and, on a membership-required relay, closes their open
+  subscriptions with `restricted:`. NIP-AA virtual identities are unchanged.
+- A NIP-43 join (invite claim or `MembershipService.Join`) didn't reach the
+  member's open connections either: they stayed refused until they
+  reconnected. A join now grants membership on live sessions.
+- The relay never published its kind:13534 member list. Every join and
+  leave now republishes it, relay-signed, with each member's roles.
+- A private NIP-29 group read refused before AUTH said `restricted:`; it
+  now says `auth-required:` until the client authenticates.
+- Deleting a private NIP-29 group left its 39000-39002 mirrors and its
+  messages stored, and with the group gone nothing gated them: its
+  metadata, admin and member lists were readable by anyone, and it kept
+  appearing in group lists. Deletion now purges them, and a mirror of a
+  group that no longer exists is never served.
+- `ReadEventsFromRelayWithAuth` sampled the AUTH state after EOSE, so a
+  read the relay answered before AUTH landed (silently filtered, e.g. a
+  private group) could be returned as final. It now retries unless AUTH
+  had settled before the REQ was sent.
 - A filter's `limit` returned the oldest matching events instead of the
   newest. NIP-01 defines it as the last n events by `created_at`, but the
   query indexes were keyed by arrival sequence, so walking one backwards

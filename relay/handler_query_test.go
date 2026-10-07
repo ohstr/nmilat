@@ -20,7 +20,7 @@ const (
 
 func newQueryTestServer(t *testing.T, store *EventStore) string {
 	t.Helper()
-	srv := httptest.NewServer(NewQueryHandler(store, nil, nil))
+	srv := httptest.NewServer(NewQueryHandler(store, nil, nil, nil))
 	t.Cleanup(srv.Close)
 	return srv.URL
 }
@@ -32,7 +32,7 @@ func newQueryTestServerWithMembership(t *testing.T, store *EventStore) (url stri
 	t.Helper()
 	membership = NewMembershipService(store)
 	limitation := &nip11.Limitation{MembershipRequired: true}
-	srv := httptest.NewServer(NewQueryHandler(store, limitation, membership))
+	srv := httptest.NewServer(NewQueryHandler(store, limitation, membership, nil))
 	t.Cleanup(srv.Close)
 	return srv.URL, membership
 }
@@ -305,7 +305,7 @@ func TestQueryHandlerAllowsMemberWhenMembershipRequired(t *testing.T) {
 func TestQueryHandlerFailsClosedWithoutMembershipService(t *testing.T) {
 	store := newStore(t)
 	limitation := &nip11.Limitation{MembershipRequired: true}
-	srv := httptest.NewServer(NewQueryHandler(store, limitation, nil))
+	srv := httptest.NewServer(NewQueryHandler(store, limitation, nil, nil))
 	t.Cleanup(srv.Close)
 	body := []byte(`[{"kinds":[1]}]`)
 

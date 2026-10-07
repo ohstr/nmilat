@@ -37,8 +37,7 @@ func SignDelegationToken(privkey, delegatePubkey, conditions string) (string, er
 
 	privKey, _ := btcec.PrivKeyFromBytes(privateKeyBytes)
 
-	// String to sign: delegation:<delegate_pubkey>:<conditions>
-	tokenStr := fmt.Sprintf("delegation:%s:%s", delegatePubkey, conditions)
+	tokenStr := delegationString(delegatePubkey, conditions)
 	h := sha256.Sum256([]byte(tokenStr))
 
 	sig, err := schnorr.Sign(privKey, h[:])
@@ -71,7 +70,7 @@ func VerifyDelegationToken(issuerPubkey, delegatePubkey, conditions, sigHex stri
 		return fmt.Errorf("%w: %w", ErrInvalidSignature, err)
 	}
 
-	tokenStr := fmt.Sprintf("delegation:%s:%s", delegatePubkey, conditions)
+	tokenStr := delegationString(delegatePubkey, conditions)
 	h := sha256.Sum256([]byte(tokenStr))
 
 	if !sig.Verify(h[:], issuer) {
@@ -79,6 +78,12 @@ func VerifyDelegationToken(issuerPubkey, delegatePubkey, conditions, sigHex stri
 	}
 
 	return nil
+}
+
+// delegationString is what NIP-26 signs:
+// "nostr:delegation:<delegatee pubkey>:<conditions query string>".
+func delegationString(delegatePubkey, conditions string) string {
+	return fmt.Sprintf("nostr:delegation:%s:%s", delegatePubkey, conditions)
 }
 
 // ValidateConditions checks if an event satisfies the delegation conditions.

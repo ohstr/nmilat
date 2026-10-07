@@ -15,8 +15,10 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip11"
 	"github.com/ohstr/nmilat/nip42"
+	"github.com/ohstr/nmilat/nip43"
 	"github.com/ohstr/nmilat/nip77"
 	"github.com/ohstr/nmilat/nipOA"
 	"github.com/ohstr/nmilat/search"
@@ -307,6 +309,47 @@ func (s *Session) HasMembership() bool {
 		}
 	}
 	return false
+}
+
+// grantActiveMembership marks pubkey's identities on this connection as
+// direct members, reporting whether any changed.
+func (s *Session) grantActiveMembership(pubkey string) bool {
+	s.identityMu.Lock()
+	defer s.identityMu.Unlock()
+
+	changed := false
+	if s.primary.Pubkey == pubkey && s.primary.Membership == MembershipNone {
+		s.primary.Membership = MembershipActive
+		changed = true
+	}
+	for i := range s.extra {
+		if s.extra[i].Pubkey == pubkey && s.extra[i].Membership == MembershipNone {
+			s.extra[i].Membership = MembershipActive
+			changed = true
+		}
+	}
+	return changed
+}
+
+// revokeActiveMembership drops pubkey's direct NIP-43 membership on this
+// connection, reporting whether it held one. Virtual (NIP-AA) identities
+// are left alone: NIP-AA checks them per connection, not mid-session.
+func (s *Session) revokeActiveMembership(pubkey string) bool {
+	s.identityMu.Lock()
+	defer s.identityMu.Unlock()
+
+	changed := false
+	if s.primary.Pubkey == pubkey && s.primary.Membership == MembershipActive {
+		s.primary.Membership = MembershipNone
+		changed = true
+	}
+	for i := range s.extra {
+		if s.extra[i].Pubkey == pubkey && s.extra[i].Membership == MembershipActive {
+			s.extra[i].Membership = MembershipNone
+			changed = true
+		}
+	}
+	return changed
 }
 
 // IdentityMembership looks up pubkey's own status among this connection's
@@ -677,7 +720,7 @@ func NewSessionHandler(store *EventStore, relayMetadata *nip11.Metadata, searchS
 		cfg.Logger.Warn().Msg("NIP-29 group hosting is enabled but nip11.url is not set: NIP-42 AUTH will fail its relay-tag check on every connection, so a private group (the default on creation) will be invisible even to its own creator. Set nip11.url to this relay's own canonical address (e.g. wss://relay.example.com).")
 	}
 
-	return &SessionHandler{
+	sh := &SessionHandler{
 		store:              store,
 		sessions:           sync.Map{},
 		relayMetadata:      relayMetadata,
@@ -687,6 +730,10 @@ func NewSessionHandler(store *EventStore, relayMetadata *nip11.Metadata, searchS
 		membership:         membership,
 		groups:             groups,
 	}
+	membership.onRemove = sh.revokeMembership
+	membership.onAdd = sh.grantMembership
+	membership.onChange = sh.publishMembershipList
+	return sh
 }
 
 func (sh *SessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -768,6 +815,76 @@ func (sh *SessionHandler) Membership() *MembershipService {
 // Session it serves. Never nil.
 func (sh *SessionHandler) Groups() *GroupsService {
 	return sh.groups
+}
+
+// revokeMembership applies a NIP-43 removal to live connections. Status is
+// cached per session at AUTH, so without this a removed member keeps
+// reading and writing on the connection it already had. A session left
+// with no membership on a membership-required relay also loses its open
+// subscriptions.
+func (sh *SessionHandler) revokeMembership(pubkey string) {
+	required := sh.relayMetadata != nil && sh.relayMetadata.Limitation.MembershipRequired
+	sh.sessions.Range(func(_, v any) bool {
+		s, ok := v.(*Session)
+		if !ok || !s.revokeActiveMembership(pubkey) || !required || s.HasMembership() {
+			return true
+		}
+		ids := s.subscriptions.StopAllIDs()
+		// reply blocks on a slow client; don't hold up the caller.
+		go func() {
+			for _, id := range ids {
+				s.reply(&wire.ClosedSubscriptionResponse{
+					SubscriptionID: id,
+					Message:        "restricted: NIP-43 membership revoked",
+				})
+			}
+		}()
+		return true
+	})
+}
+
+// grantMembership applies a NIP-43 join to live connections: one already
+// authenticated as pubkey gains access without reconnecting.
+func (sh *SessionHandler) grantMembership(pubkey string) {
+	sh.sessions.Range(func(_, v any) bool {
+		if s, ok := v.(*Session); ok {
+			s.grantActiveMembership(pubkey)
+		}
+		return true
+	})
+}
+
+// publishMembershipList stores the relay-signed kind:13534 list of every
+// member and their roles, replacing the previous one.
+func (sh *SessionHandler) publishMembershipList() {
+	if sh.config.PrivKey == "" || sh.relayMetadata == nil || sh.relayMetadata.Self == "" {
+		return
+	}
+	records, err := sh.membership.List()
+	if err != nil {
+		sh.config.Logger.Error().Err(err).Msg("failed to list members for kind:13534")
+		return
+	}
+	members := make([]nip43.Member, 0, len(records))
+	for _, r := range records {
+		members = append(members, nip43.Member{Pubkey: r.Pubkey, Roles: r.Roles})
+	}
+	ev := nip43.NewMembershipList(nip43.MembershipListParams{SelfPubkey: sh.relayMetadata.Self, Members: members})
+	// Strictly newer than the stored list: two changes in one second would
+	// otherwise tie, and a replaceable tie may keep the older list.
+	ctx := context.Background()
+	if prev, err := sh.store.QueryEvents(ctx, &nip01.SubscriptionFilter{
+		Kinds: []int{nip43.KindMembershipList}, Authors: []string{sh.relayMetadata.Self}, Limit: 1,
+	}); err == nil && len(prev) == 1 && ev.CreatedAt <= prev[0].CreatedAt {
+		ev.CreatedAt = prev[0].CreatedAt + 1
+	}
+	if err := ev.Sign(sh.config.PrivKey); err != nil {
+		sh.config.Logger.Error().Err(err).Msg("failed to sign kind:13534")
+		return
+	}
+	if err := sh.store.InsertEvents(ctx, []*nip01.Event{ev}); err != nil {
+		sh.config.Logger.Error().Err(err).Msg("failed to store kind:13534")
+	}
 }
 
 // SessionCount returns the number of currently connected sessions.

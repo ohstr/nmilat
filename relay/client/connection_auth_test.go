@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -209,5 +210,35 @@ func TestConnection_AuthStateStaysNoneWithoutSigningKey(t *testing.T) {
 
 	if got := conn.AuthState(); got != AuthStateNone {
 		t.Errorf("AuthState() = %v, want AuthStateNone", got)
+	}
+}
+
+// The caller's context bounds the handshake: a relay that accepts the TCP
+// connection and never answers the upgrade must not hold NewConnection for
+// the whole HandshakeTimeout.
+func TestNewConnection_HandshakeHonorsContext(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = l.Close() }()
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			defer func() { _ = c.Close() }()
+		}
+	}()
+	u, _ := url.Parse("ws://" + l.Addr().String())
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := NewConnection(ctx, u, nil); err == nil {
+		t.Fatal("NewConnection succeeded against a silent listener")
+	}
+	if took := time.Since(start); took > 2*time.Second {
+		t.Fatalf("NewConnection took %s; the 300ms context deadline didn't apply", took)
 	}
 }

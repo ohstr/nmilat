@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -85,9 +86,11 @@ func (g *GroupsService) handleCreate(ctx context.Context, s *Session, ev *nip01.
 	}
 
 	if g.Exists(groupID) {
+		// Accepted only as its own admin's idempotent retry; anyone else's
+		// create changed nothing and must not read as success.
 		s.reply(&wire.OkSubscriptionResponse{
 			EventID:  ev.ID,
-			Accepted: true,
+			Accepted: g.IsAdmin(groupID, ev.PubKey),
 			Message:  "duplicate: a group with that id already exists.",
 		})
 		return
@@ -154,6 +157,8 @@ func (g *GroupsService) handleDeleteGroup(ctx context.Context, s *Session, ev *n
 		return
 	}
 
+	purgeGroupEvents(ctx, s, groupID)
+
 	var children []string
 	if deleted != nil {
 		children = deleted.Metadata.Children
@@ -175,6 +180,30 @@ func (g *GroupsService) handleDeleteGroup(ctx context.Context, s *Session, ev *n
 		Accepted: true,
 		Message:  fmt.Sprintf("info: group %s deleted.", groupID),
 	})
+}
+
+// purgeGroupEvents removes a deleted group's stored events: the relay's own
+// 39000-39005 mirrors and everything tagged into it. Left in the store
+// they'd be served to anyone, since the group whose privacy gated them is
+// gone.
+func purgeGroupEvents(ctx context.Context, s *Session, groupID string) {
+	filters := []*nip01.SubscriptionFilter{
+		{
+			Kinds:   []int{nip29.KindGroupMetadata, nip29.KindGroupAdmins, nip29.KindGroupMembers, nip29.KindGroupRoles, nip29.KindLiveParticipants, nip29.KindGroupPinnedEvents},
+			Authors: []string{s.selfPubkey},
+			Tags:    map[string][]string{"d": {groupID}},
+		},
+		{Tags: map[string][]string{"h": {groupID}}},
+	}
+	for _, f := range filters {
+		pes, err := s.store.FindEvents(ctx, f)
+		if err == nil && len(pes) > 0 {
+			err = s.store.DeleteAll(pes)
+		}
+		if err != nil {
+			s.config.Logger.Error().Err(err).Str("group", groupID).Msg("failed to purge a deleted group's events")
+		}
+	}
 }
 
 /////////////////////////////////////////////////////////////////////
@@ -746,7 +775,7 @@ func publishGroupPinsMirror(ctx context.Context, s *Session, rec *GroupRecord) {
 // empty) keeps this signal meaningful for a legitimate caller: "you don't
 // get this," for whatever reason, instead of both cases quietly saying
 // "nothing here."
-func (g *GroupsService) deniedPrivateGroupFilter(s *Session, filters *nip01.SubscriptionFilterGroup) (string, bool) {
+func (g *GroupsService) deniedPrivateGroupFilter(s groupReader, filters *nip01.SubscriptionFilterGroup) (string, bool) {
 	if g == nil || filters == nil {
 		return "", false
 	}
@@ -769,30 +798,111 @@ func (g *GroupsService) deniedPrivateGroupFilter(s *Session, filters *nip01.Subs
 // anyIdentityIsMember reports whether any identity authenticated on s is a
 // member of groupID -- the connection-level "at least one identity passes"
 // semantics NIP-43's own Session.HasMembership uses, applied per-group.
-func (g *GroupsService) anyIdentityIsMember(s *Session, groupID string) bool {
-	for _, id := range s.Identities() {
-		if g.IsMember(groupID, id.Pubkey) {
+func (g *GroupsService) anyIdentityIsMember(s groupReader, groupID string) bool {
+	for _, pk := range s.readerPubkeys() {
+		if g.IsMember(groupID, pk) {
 			return true
 		}
 	}
 	return false
 }
 
+// groupReader is whoever a group-visibility check is for: a WebSocket
+// session (every identity it authenticated) or an HTTP caller (its NIP-98
+// signer) -- so REQ and the /query bridge run the very same checks.
+type groupReader interface {
+	readerPubkeys() []string
+}
+
+func (s *Session) readerPubkeys() []string {
+	ids := s.Identities()
+	out := make([]string, len(ids))
+	for i, id := range ids {
+		out[i] = id.Pubkey
+	}
+	return out
+}
+
+// pubkeyReader is a groupReader for a fixed set of pubkeys.
+type pubkeyReader []string
+
+func (p pubkeyReader) readerPubkeys() []string { return p }
+
 // groupIDsInFilter collects the group ids a filter's "d" and "h" tag
-// filters name.
+// filters name. "h" always names a group; "d" only when the filter can
+// return group metadata (no kinds, or a 39000-39005 kind) -- for any other
+// kind it is a NIP-33 identifier, and treating it as a group id refused
+// every addressable lookup (articles, spaces) naming no group.
 func groupIDsInFilter(filter *nip01.SubscriptionFilter) []string {
 	if filter == nil {
 		return nil
 	}
 	var ids []string
-	ids = append(ids, filter.Tags["d"]...)
+	if dNamesGroup(filter) {
+		ids = append(ids, filter.Tags["d"]...)
+	}
 	ids = append(ids, filter.Tags["h"]...)
 	return ids
+}
+
+func dNamesGroup(filter *nip01.SubscriptionFilter) bool {
+	if len(filter.Kinds) == 0 {
+		return true
+	}
+	for _, k := range filter.Kinds {
+		if nip29.IsGroupMetadataKind(k) {
+			return true
+		}
+	}
+	return false
 }
 
 /////////////////////////////////////////////////////////////////////
 // Visibility gating (per-event, at delivery time)
 /////////////////////////////////////////////////////////////////////
+
+// deniedGroupWrite returns why ev may not be posted into a group it names
+// with "h", or "" if it may: a private or closed group takes posts from
+// its members only; a public, open one from anyone.
+func (g *GroupsService) deniedGroupWrite(ev *nip01.Event) string {
+	if g == nil || ev == nil {
+		return ""
+	}
+	for _, tag := range ev.Tags {
+		if len(tag) < 2 || tag[0] != "h" || !g.Exists(tag[1]) {
+			continue
+		}
+		id := tag[1]
+		if (g.IsPrivate(id) || g.IsClosed(id)) && !g.IsMember(id, ev.PubKey) {
+			return "restricted: only members may post in group " + id
+		}
+	}
+	return ""
+}
+
+// needsPrivacyCheck reports whether results for filters must go through
+// deniedPrivateGroupPotentialEvent: whenever a private group exists, since
+// its content can match any filter, not just a group-metadata one.
+func (g *GroupsService) needsPrivacyCheck(filters *nip01.SubscriptionFilterGroup) bool {
+	return g.anyPrivate() || mayDeliverGroupMetadataKind(filters)
+}
+
+// anyPrivate reports whether any hosted group is private.
+func (g *GroupsService) anyPrivate() bool {
+	if g == nil {
+		return false
+	}
+	snap := g.cache.snap.Load()
+	if snap == nil {
+		return false
+	}
+	for _, rec := range snap.groups {
+		if rec != nil && rec.Metadata.Private {
+			return true
+		}
+	}
+	return false
+}
 
 // mayDeliverGroupMetadataKind reports whether filters could possibly
 // deliver a relay-authored group-metadata event (kind 39000-39005) -- an
@@ -829,15 +939,30 @@ func mayDeliverGroupMetadataKind(filters *nip01.SubscriptionFilterGroup) bool {
 // against every group's metadata in the store, private or not. Gating at
 // delivery instead of at the request closes that bypass while leaving
 // public groups, and any kind outside this range, untouched.
-func (g *GroupsService) deniedPrivateGroupEvent(s *Session, ev *nip01.Event) bool {
-	if g == nil || ev == nil || !nip29.IsGroupMetadataKind(ev.Kind) {
+func (g *GroupsService) deniedPrivateGroupEvent(s groupReader, ev *nip01.Event) bool {
+	if g == nil || ev == nil {
 		return false
 	}
-	groupID, err := nip29.GroupIDFromDTag(ev.Tags)
-	if err != nil || !g.IsPrivate(groupID) {
-		return false
+	if nip29.IsGroupMetadataKind(ev.Kind) {
+		groupID, err := nip29.GroupIDFromDTag(ev.Tags)
+		if err == nil && g.IsPrivate(groupID) && !g.anyIdentityIsMember(s, groupID) {
+			return true
+		}
+		// A mirror whose group is gone (deleted before its events were
+		// purged) has no privacy left to check: never serve it.
+		if err == nil && !g.Exists(groupID) {
+			return true
+		}
 	}
-	return !g.anyIdentityIsMember(s, groupID)
+	// Group content: anything tagged into a private group. Without this a
+	// non-member read a private group's messages by asking by kind, id or
+	// author instead of by #h.
+	for _, tag := range ev.Tags {
+		if len(tag) >= 2 && tag[0] == "h" && g.IsPrivate(tag[1]) && !g.anyIdentityIsMember(s, tag[1]) {
+			return true
+		}
+	}
+	return false
 }
 
 // deniedPrivateGroupPotentialEvent is deniedPrivateGroupEvent's entry point
@@ -847,8 +972,13 @@ func (g *GroupsService) deniedPrivateGroupEvent(s *Session, ev *nip01.Event) boo
 // the store only ever writes what it accepted at ingest, which is already
 // validated JSON, so a parse failure here would mean a bug elsewhere, not
 // an attacker-controlled bypass.
-func (g *GroupsService) deniedPrivateGroupPotentialEvent(s *Session, pe *PotentialEvent) bool {
+func (g *GroupsService) deniedPrivateGroupPotentialEvent(s groupReader, pe *PotentialEvent) bool {
 	if g == nil || pe == nil {
+		return false
+	}
+	// Only an event carrying a "d" or "h" tag can belong to a group; skip
+	// the parse for everything else.
+	if !bytes.Contains(pe.Bytes, []byte(`"h"`)) && !bytes.Contains(pe.Bytes, []byte(`"d"`)) {
 		return false
 	}
 	var ev nip01.Event

@@ -181,8 +181,11 @@ func NewConnection(ctx context.Context, relayURL *url.URL, cfg *ConnectionConfig
 		EnableCompression: true,
 	}
 
+	// DialContext, not Dial: the caller's deadline/cancel must bound the
+	// handshake too, or a relay that accepts and then stays silent holds
+	// the caller for the full HandshakeTimeout regardless.
 	var err error
-	c.conn, _, err = d.Dial(relayURL.String(), nil)
+	c.conn, _, err = d.DialContext(ctx, relayURL.String(), nil)
 	if err != nil {
 		return nil, NewConnectionError(relayURL, "failed to connect", err)
 	}

@@ -65,7 +65,7 @@ func main() {
 	// to both surfaces immediately, and so it enforces the same
 	// MembershipRequired gate relayHandler already would for an
 	// equivalent REQ.
-	mux.Handle("/query", relay.NewQueryHandler(store, &metadata.Limitation, relayHandler.Membership()))
+	mux.Handle("/query", relay.NewQueryHandler(store, &metadata.Limitation, relayHandler.Membership(), relayHandler.Groups()))
 
 	log.Fatal(http.ListenAndServe(":8080", mux))
 }

@@ -136,9 +136,11 @@ func TestHandleEvent_CreateGroup_Duplicate(t *testing.T) {
 		t.Fatalf("sign: %v", err)
 	}
 
+	// Another key's create of a taken id changed nothing: it must not
+	// read as success.
 	resp := sendEventAndAwaitOKForSession(t, sess, ev)
-	if !resp.Accepted {
-		t.Fatalf("Accepted = false, want true for a duplicate create (message: %s)", resp.Message)
+	if resp.Accepted {
+		t.Fatalf("Accepted = true for another key's duplicate create (message: %s)", resp.Message)
 	}
 	if resp.Message != "duplicate: a group with that id already exists." {
 		t.Fatalf("Message = %q, want the spec's exact duplicate wording", resp.Message)
@@ -148,6 +150,22 @@ func TestHandleEvent_CreateGroup_Duplicate(t *testing.T) {
 	}
 	if sess.groups.IsAdmin(groupA, ev.PubKey) {
 		t.Fatal("the duplicate attempt's signer should not have become admin")
+	}
+}
+
+// The group's own admin re-sending create (a retry) stays accepted.
+func TestHandleEvent_CreateGroup_DuplicateByOwnAdmin(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
+
+	retry := nip29.NewCreateGroup("", groupA)
+	retry.CreatedAt++ // a new event, not the same one resent
+	if err := retry.Sign(authTestPrivKey); err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	resp := sendEventAndAwaitOKForSession(t, sess, retry)
+	if !resp.Accepted || resp.Message != "duplicate: a group with that id already exists." {
+		t.Fatalf("own admin's retry: accepted=%v %q", resp.Accepted, resp.Message)
 	}
 }
 
@@ -206,6 +224,61 @@ func TestHandleEvent_DeleteGroup_Success(t *testing.T) {
 	}
 }
 
+// Deleting a group purges its mirrors and its content: left stored, a
+// deleted private group's roster and messages were served to anyone.
+func TestHandleEvent_DeleteGroup_PurgesItsEvents(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
+	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupB))
+	ctx := context.Background()
+	msg := nip01.NewEvent(9, "members only", []string{"h", groupA})
+	if err := msg.Sign(authTestPrivKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.store.InsertEvents(ctx, []*nip01.Event{msg}); err != nil {
+		t.Fatal(err)
+	}
+
+	if resp := sendEventAndAwaitOKForSession(t, sess, deleteGroupEvent(t, groupA, authTestPrivKey)); !resp.Accepted {
+		t.Fatalf("delete: %s", resp.Message)
+	}
+
+	left, err := sess.store.QueryEvents(ctx, &nip01.SubscriptionFilter{Tags: map[string][]string{"d": {groupA}}, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 0 {
+		t.Errorf("%d mirror events of the deleted group still stored", len(left))
+	}
+	content, err := sess.store.QueryEvents(ctx, &nip01.SubscriptionFilter{Tags: map[string][]string{"h": {groupA}}, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(content) != 0 {
+		t.Errorf("%d events tagged into the deleted group still stored", len(content))
+	}
+	other, err := sess.store.QueryEvents(ctx, &nip01.SubscriptionFilter{Tags: map[string][]string{"d": {groupB}}, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(other) == 0 {
+		t.Error("another group's mirrors were purged too")
+	}
+}
+
+// A metadata mirror for a group that no longer exists (stored before the
+// purge above existed) is never delivered.
+func TestDeniedPrivateGroupEvent_DeletedGroupMirror(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	ghost := nip29.NewGroupMetadata(nip29.GroupMetadataParams{SelfPubkey: authTestPubKey, ID: "ghost", Private: true})
+	if err := ghost.Sign(authTestPrivKey); err != nil {
+		t.Fatal(err)
+	}
+	if !sess.groups.deniedPrivateGroupEvent(sess, ghost) {
+		t.Fatal("metadata of a group that doesn't exist was delivered")
+	}
+}
+
 func TestHandleEvent_DeleteGroup_NotAdmin(t *testing.T) {
 	sess := newGroupsEnabledTestSession(t)
 	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
@@ -258,7 +331,7 @@ func TestProcessRequest_PrivateGroupVisibilityGate_DeniesNonMember(t *testing.T)
 		t.Fatalf("processRequest: %v", err)
 	}
 
-	wantMsg := "restricted: valid membership in group " + groupA + " is required"
+	wantMsg := "auth-required: valid membership in group " + groupA + " is required"
 
 	notice, ok := (<-sess.incoming).(*wire.NoticeSubscriptionResponse)
 	if !ok {
@@ -330,7 +403,7 @@ func TestProcessRequest_PrivateGroupVisibilityGate_UnknownGroupDeniedLikePrivate
 		t.Fatalf("processRequest: %v", err)
 	}
 
-	wantMsg := "restricted: valid membership in group no-such-group is required"
+	wantMsg := "auth-required: valid membership in group no-such-group is required"
 
 	notice, ok := (<-sess.incoming).(*wire.NoticeSubscriptionResponse)
 	if !ok {
@@ -367,7 +440,7 @@ func TestProcessCount_PrivateGroupVisibilityGate_UnknownGroupDeniedLikePrivate(t
 	if !ok {
 		t.Fatal("reply was not a *wire.NoticeSubscriptionResponse")
 	}
-	wantMsg := "restricted: valid membership in group no-such-group is required"
+	wantMsg := "auth-required: valid membership in group no-such-group is required"
 	if notice.Message != wantMsg {
 		t.Fatalf("Message = %q, want %q", notice.Message, wantMsg)
 	}
@@ -439,7 +512,8 @@ func TestProcessCount_PrivateGroupVisibilityGate_DeniesNonMember(t *testing.T) {
 	if !ok {
 		t.Fatal("reply was not a *wire.NoticeSubscriptionResponse")
 	}
-	wantMsg := "restricted: valid membership in group " + groupA + " is required"
+	// Unauthenticated: NIP-42's "auth-required:", not "restricted:".
+	wantMsg := "auth-required: valid membership in group " + groupA + " is required"
 	if notice.Message != wantMsg {
 		t.Fatalf("Message = %q, want %q", notice.Message, wantMsg)
 	}
@@ -455,6 +529,26 @@ func TestGroupIDsInFilter(t *testing.T) {
 	for _, id := range got {
 		if !want[id] {
 			t.Fatalf("groupIDsInFilter() returned unexpected id %q", id)
+		}
+	}
+}
+
+// "d" is a NIP-33 identifier for every non-group kind: only "h" names a
+// group there, so an article or space lookup by "d" isn't gated.
+func TestGroupIDsInFilter_DOnlyForGroupMetadataKinds(t *testing.T) {
+	for _, tc := range []struct {
+		kinds []int
+		want  int
+	}{
+		{nil, 2},
+		{[]int{nip29.KindGroupMetadata}, 2},
+		{[]int{1, nip29.KindGroupAdmins}, 2},
+		{[]int{30023}, 1},
+		{[]int{30312, 1}, 1},
+	} {
+		filter := &nip01.SubscriptionFilter{Kinds: tc.kinds, Tags: map[string][]string{"d": {groupA}, "h": {groupB}}}
+		if got := groupIDsInFilter(filter); len(got) != tc.want {
+			t.Errorf("kinds %v: groupIDsInFilter() = %v, want %d ids", tc.kinds, got, tc.want)
 		}
 	}
 }
@@ -1373,5 +1467,66 @@ func TestHandleEvent_UnsupportedModerationKind(t *testing.T) {
 	}
 	if resp.Message != "restricted: unsupported NIP-29 event kind" {
 		t.Fatalf("Message = %q, want the unsupported-kind wording", resp.Message)
+	}
+}
+
+// A private group's content (any event tagged into it with "h") is hidden
+// from non-members at delivery, not just its metadata: otherwise a
+// non-member reads it by asking by kind, id or author instead of by #h.
+func TestDeniedPrivateGroupEvent_GroupContent(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA)) // private by default
+
+	msg := nip01.NewEvent(9, "members only", []string{"h", groupA})
+	if err := msg.Sign(authTestPrivKey); err != nil {
+		t.Fatal(err)
+	}
+	if !sess.groups.deniedPrivateGroupEvent(sess, msg) {
+		t.Fatal("private group content delivered to a session with no member identity")
+	}
+
+	stray := nip01.NewEvent(9, "no such group", []string{"h", "not-a-group"})
+	if err := stray.Sign(authTestPrivKey); err != nil {
+		t.Fatal(err)
+	}
+	if sess.groups.deniedPrivateGroupEvent(sess, stray) {
+		t.Fatal("content tagged into no hosted group was denied")
+	}
+
+	sess.addIdentity(AuthedIdentity{Pubkey: authTestPubKey})
+	if sess.groups.deniedPrivateGroupEvent(sess, msg) {
+		t.Fatal("private group content denied to its own member")
+	}
+}
+
+// Only members post into a private or closed group (a new group is both);
+// a public, open group takes posts from anyone.
+func TestDeniedGroupWrite(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
+
+	outsider := "0000000000000000000000000000000000000000000000000000000000000001"
+	post := func(priv, group string) *nip01.Event {
+		ev := nip01.NewEvent(9, "hi", []string{"h", group})
+		if err := ev.Sign(priv); err != nil {
+			t.Fatal(err)
+		}
+		return ev
+	}
+	if msg := sess.groups.deniedGroupWrite(post(authTestPrivKey, groupA)); msg != "" {
+		t.Errorf("member refused: %s", msg)
+	}
+	if msg := sess.groups.deniedGroupWrite(post(outsider, groupA)); msg == "" {
+		t.Error("outsider allowed into a private, closed group")
+	}
+	if msg := sess.groups.deniedGroupWrite(post(outsider, "no-such-group")); msg != "" {
+		t.Errorf("post naming no hosted group refused: %s", msg)
+	}
+
+	open := *sess.groups.cache.Get(groupA)
+	open.Metadata.Private, open.Metadata.Closed = false, false
+	sess.groups.cache.put(&open)
+	if msg := sess.groups.deniedGroupWrite(post(outsider, groupA)); msg != "" {
+		t.Errorf("outsider refused by a public, open group: %s", msg)
 	}
 }

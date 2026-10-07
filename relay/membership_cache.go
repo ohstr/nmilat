@@ -82,6 +82,19 @@ func (c *membershipCache) replace(pubkeys []string) {
 	c.snap.Store(next)
 }
 
+// pubkeys returns the current member set as hex pubkeys.
+func (c *membershipCache) pubkeys() []string {
+	snap := c.snap.Load()
+	if snap == nil {
+		return nil
+	}
+	out := make([]string, 0, len(snap.members))
+	for key := range snap.members {
+		out = append(out, hex.EncodeToString(key[:]))
+	}
+	return out
+}
+
 // add copy-on-writes pubkeyHex into the member set. A no-op if pubkeyHex is
 // malformed. writeMu is held across the copy so concurrent add/remove/
 // replace calls serialize against each other -- readers are never blocked
@@ -145,6 +158,16 @@ func (c *membershipCache) remove(pubkeyHex string) {
 type MembershipService struct {
 	store *EventStore
 	cache membershipCache
+
+	// onRemove, if set, is told each pubkey that stops being a member, so
+	// live sessions holding it can be revoked (see SessionHandler).
+	onRemove func(pubkey string)
+	// onAdd, if set, is told each pubkey that becomes a member, so live
+	// sessions already authenticated as it gain access without reconnecting.
+	onAdd func(pubkey string)
+	// onChange, if set, runs after a Join or Leave changed the member set
+	// (the relay republishes its kind:13534 list).
+	onChange func()
 }
 
 // NewMembershipService constructs a MembershipService backed by store.
@@ -192,6 +215,12 @@ func (m *MembershipService) Join(pubkey string, roles []string) error {
 		return err
 	}
 	m.cache.add(pubkey)
+	if m.onAdd != nil {
+		m.onAdd(pubkey)
+	}
+	if m.onChange != nil {
+		m.onChange()
+	}
 	return nil
 }
 
@@ -205,6 +234,12 @@ func (m *MembershipService) Leave(pubkey string) error {
 		return err
 	}
 	m.cache.remove(pubkey)
+	if m.onRemove != nil {
+		m.onRemove(pubkey)
+	}
+	if m.onChange != nil {
+		m.onChange()
+	}
 	return nil
 }
 
@@ -274,6 +309,19 @@ func (m *MembershipService) ReplaceFromEvent(ev *nip01.Event) error {
 			return err
 		}
 	}
+	before := m.cache.pubkeys()
 	m.cache.replace(pubkeys)
+	if m.onRemove != nil {
+		for _, pk := range before {
+			if !m.cache.IsMember(pk) {
+				m.onRemove(pk)
+			}
+		}
+	}
+	if m.onAdd != nil {
+		for _, pk := range pubkeys {
+			m.onAdd(pk)
+		}
+	}
 	return nil
 }

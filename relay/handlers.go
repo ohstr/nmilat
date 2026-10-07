@@ -136,10 +136,11 @@ func (h *StandardRequestHandler) Handle(ctx context.Context, s *Session, rp *wir
 		return true, nil
 	}
 
-	// Computed once per subscription rather than per event: most
-	// subscriptions (anything not asking for a group-metadata kind) can
-	// skip deniedPrivateGroupPotentialEvent's bytes-parsing entirely.
-	checkGroupPrivacy := mayDeliverGroupMetadataKind(rp.Filters)
+	// Checked per delivered event, live tail included: a group made private
+	// after this subscription opened must not keep leaking to it.
+	// deniedPrivateGroupPotentialEvent skips the parse for events with no
+	// "d"/"h" tag, so this stays cheap.
+	checkGroupPrivacy := s.groups != nil
 
 	go func() {
 		// async subscription loop (same as original)

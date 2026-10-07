@@ -225,14 +225,10 @@ func TestPrivateGroup_CreatorReadsOwnGroup_EndToEnd(t *testing.T) {
 }
 
 // TestPrivateGroup_AnonymousReadIsDenied is the gate's other side: with no
-// identity at all, the read comes back empty rather than erroring --
-// ReadEventsFromRelayWithAuth(..., "") never attempts NIP-42 at all (no
-// behavior change from before --auth-identity existed), and the relay's
-// deniedPrivateGroupFilter closes the REQ as restricted since an
-// unauthenticated connection is a member of nothing. restricted is false
-// here specifically because signingKeyHex == "" delegates straight to
-// ReadEventsFromRelay, which has no restricted-vs-empty signal to report
-// at all -- not because the relay didn't restrict it (it did).
+// identity at all, the read comes back empty rather than erroring, and
+// with restricted set -- ReadEventsFromRelayWithAuth(..., "") never
+// attempts NIP-42, but it still reports the relay's restricted CLOSED, so
+// a caller can tell "refused" from "nothing matched".
 func TestPrivateGroup_AnonymousReadIsDenied(t *testing.T) {
 	relayURL, _ := newPrivateGroupTestRelay(t, true)
 	const groupID = "anon-denied-private-group"
@@ -245,8 +241,8 @@ func TestPrivateGroup_AnonymousReadIsDenied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("anonymous read error = %v, want nil (an empty result, not an error)", err)
 	}
-	if restricted {
-		t.Error("restricted = true, want false -- an anonymous read has no identity to retry with, so it can't observe this signal")
+	if !restricted {
+		t.Error("restricted = false, want true -- the relay refused this read, and an empty result must not look like \"nothing matched\"")
 	}
 	if len(events) != 0 {
 		t.Fatalf("anonymous read returned %d events, want 0 -- a non-member must not see a private group's metadata", len(events))

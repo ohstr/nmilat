@@ -106,6 +106,10 @@ var authRetryWindow = 5 * time.Second
 // same convention without this package needing to know its exact wording.
 const restrictedClosePrefix = "restricted:"
 
+// authRequiredClosePrefix is NIP-42's prefix for a client that hasn't
+// authenticated yet; treated the same as restricted here.
+const authRequiredClosePrefix = "auth-required:"
+
 // ReadEventsFromRelayWithAuth is ReadEventsFromRelay's counterpart for a
 // caller that has (or might have) an identity to authenticate with.
 // signingKeyHex empty behaves exactly like ReadEventsFromRelay -- no
@@ -159,13 +163,20 @@ const restrictedClosePrefix = "restricted:"
 // may have silently excluded content the caller's identity actually has
 // access to.
 func ReadEventsFromRelayWithAuth(parent context.Context, relayURL *url.URL, filters *nip01.SubscriptionFilterGroup, signingKeyHex string) (events []*nip01.Event, restricted bool, err error) {
-	if signingKeyHex == "" {
-		events, err = ReadEventsFromRelay(parent, relayURL, filters)
-		return events, false, err
-	}
-
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
+
+	// Anonymous: nothing to authenticate with, so no retry -- but still
+	// report a gated CLOSED, so the caller can tell "refused" from "empty".
+	if signingKeyHex == "" {
+		conn, err := Connect(ctx, relayURL)
+		if err != nil {
+			return nil, false, err
+		}
+		defer conn.Close()
+		events, restricted, _, err = subscribeOnce(ctx, conn, filters)
+		return events, restricted, err
+	}
 
 	conn, err := NewConnection(ctx, relayURL, &ConnectionConfig{SigningKeyHex: signingKeyHex})
 	if err != nil {
@@ -173,11 +184,16 @@ func ReadEventsFromRelayWithAuth(parent context.Context, relayURL *url.URL, filt
 	}
 	defer conn.Close()
 
+	// Sampled before the REQ: a relay reads one connection in order, so
+	// only a handshake settled before sending makes the answer authoritative.
+	// Sampling after EOSE races the reader, which can settle AUTH OK before
+	// we drain an EOSE the relay sent anonymously.
+	authBeforeReq := conn.AuthState()
 	events, restricted, closed, err := subscribeOnce(ctx, conn, filters)
 	if err != nil {
 		return events, restricted, err
 	}
-	if !restricted && (closed || conn.AuthState() != AuthStateNone) {
+	if !restricted && (closed || authBeforeReq != AuthStateNone) {
 		return events, restricted, err
 	}
 
@@ -259,7 +275,9 @@ func subscribeOnce(ctx context.Context, conn *Connection, filters *nip01.Subscri
 				}
 			case *wire.ClosedSubscriptionResponse:
 				if m.SubscriptionID == subID {
-					return events, strings.HasPrefix(m.Message, restrictedClosePrefix), true, nil
+					gated := strings.HasPrefix(m.Message, restrictedClosePrefix) ||
+						strings.HasPrefix(m.Message, authRequiredClosePrefix)
+					return events, gated, true, nil
 				}
 			}
 

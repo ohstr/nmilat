@@ -48,31 +48,46 @@ func (s *Session) ProcessPacket(ctx context.Context, p wire.Packet) error {
 // REQ
 /////////////////////////////////////////////////////////////////////
 
+// readGate is the connection-level check REQ and COUNT share, returning
+// the refusal reason or "". NIP-42: "auth-required:" when the client has
+// not authenticated (so it knows to AUTH), "restricted:" when it has and
+// still may not read. NIP-43: a request passes "if at least one
+// authenticated pubkey on the connection holds active or virtual
+// membership" -- unlike the per-event gate in processEvent.
+// groupRefusal is the reason a private group read is refused: NIP-42's
+// "auth-required:" until the client authenticates, then "restricted:".
+func groupRefusal(s *Session, groupID string) string {
+	if s.AuthedPubkey() == "" {
+		return fmt.Sprintf("auth-required: valid membership in group %s is required", groupID)
+	}
+	return fmt.Sprintf("restricted: valid membership in group %s is required", groupID)
+}
+
+func (s *Session) readGate() string {
+	authed := s.AuthedPubkey() != ""
+	if s.limitation.AuthRequired && !authed {
+		return "auth-required: valid NIP-42 authentication required"
+	}
+	if s.limitation.MembershipRequired && !s.HasMembership() {
+		if !authed {
+			return "auth-required: valid NIP-43 membership required"
+		}
+		return "restricted: valid NIP-43 membership required"
+	}
+	return ""
+}
+
+// refuse answers a REQ/COUNT the relay won't serve: a NOTICE, and the
+// CLOSED NIP-01 and NIP-45 call for so the client stops waiting.
+func (s *Session) refuse(subID, msg string) {
+	s.reply(&wire.NoticeSubscriptionResponse{Message: msg})
+	s.reply(&wire.ClosedSubscriptionResponse{SubscriptionID: subID, Message: msg})
+}
+
 func (s *Session) processRequest(ctx context.Context, rp *wire.RequestPacket) error {
 
-	if s.limitation.AuthRequired && s.AuthedPubkey() == "" {
-		s.reply(&wire.NoticeSubscriptionResponse{
-			Message: "restricted: valid NIP-42 authentication required",
-		})
-		s.reply(&wire.ClosedSubscriptionResponse{
-			SubscriptionID: rp.SubscriptionID,
-			Message:        "restricted: valid NIP-42 authentication required",
-		})
-		return nil
-	}
-
-	// NIP-43: REQ/COUNT pass "if at least one authenticated pubkey on the
-	// connection holds active or virtual membership" (matches NIP-AA's own
-	// later wording) -- a connection-level check, unlike the per-event
-	// gate in processEvent.
-	if s.limitation.MembershipRequired && !s.HasMembership() {
-		s.reply(&wire.NoticeSubscriptionResponse{
-			Message: "restricted: valid NIP-43 membership required",
-		})
-		s.reply(&wire.ClosedSubscriptionResponse{
-			SubscriptionID: rp.SubscriptionID,
-			Message:        "restricted: valid NIP-43 membership required",
-		})
+	if msg := s.readGate(); msg != "" {
+		s.refuse(rp.SubscriptionID, msg)
 		return nil
 	}
 
@@ -82,7 +97,7 @@ func (s *Session) processRequest(ctx context.Context, rp *wire.RequestPacket) er
 	// docs/specs/nip29-groups-plan.md's "Visibility gating" section. Public
 	// groups, and ids naming no known group, are unaffected.
 	if groupID, denied := s.groups.deniedPrivateGroupFilter(s, rp.Filters); denied {
-		msg := fmt.Sprintf("restricted: valid membership in group %s is required", groupID)
+		msg := groupRefusal(s, groupID)
 		s.reply(&wire.NoticeSubscriptionResponse{Message: msg})
 		s.reply(&wire.ClosedSubscriptionResponse{
 			SubscriptionID: rp.SubscriptionID,
@@ -259,18 +274,15 @@ func (s *Session) rejectAuth(eventID, message string) error {
 
 func (s *Session) processCount(parent context.Context, cp *wire.CountPacket) error {
 
-	if s.limitation.MembershipRequired && !s.HasMembership() {
-		s.reply(&wire.NoticeSubscriptionResponse{
-			Message: "restricted: valid NIP-43 membership required",
-		})
+	// Same gates as REQ: a count is a read too.
+	if msg := s.readGate(); msg != "" {
+		s.refuse(cp.SubscriptionID, msg)
 		return nil
 	}
 
 	// NIP-29: see the matching gate in processRequest.
 	if groupID, denied := s.groups.deniedPrivateGroupFilter(s, cp.Filters); denied {
-		s.reply(&wire.NoticeSubscriptionResponse{
-			Message: fmt.Sprintf("restricted: valid membership in group %s is required", groupID),
-		})
+		s.refuse(cp.SubscriptionID, groupRefusal(s, groupID))
 		return nil
 	}
 
@@ -288,7 +300,7 @@ func (s *Session) processCount(parent context.Context, cp *wire.CountPacket) err
 	// kind keeps the fast raw-count path.
 	var count int64
 	var err error
-	if mayDeliverGroupMetadataKind(cp.Filters) {
+	if s.groups.needsPrivacyCheck(cp.Filters) {
 		count, err = s.store.CountEventsFiltered(parent, cp.Filters, func(pe *PotentialEvent) bool {
 			return s.groups.deniedPrivateGroupPotentialEvent(s, pe)
 		})
@@ -296,9 +308,7 @@ func (s *Session) processCount(parent context.Context, cp *wire.CountPacket) err
 		count, err = s.store.CountEvents(parent, cp.Filters)
 	}
 	if err != nil {
-		s.reply(&wire.NoticeSubscriptionResponse{
-			Message: fmt.Sprintf("count failed: %s", err.Error()),
-		})
+		s.refuse(cp.SubscriptionID, fmt.Sprintf("error: count failed: %s", err.Error()))
 		return nil
 	}
 
@@ -364,7 +374,7 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 		s.reply(&wire.OkSubscriptionResponse{
 			EventID:  ep.Event.ID,
 			Accepted: false,
-			Message:  "restricted: valid NIP-42 authentication required",
+			Message:  "auth-required: valid NIP-42 authentication required",
 		})
 		return nil
 	}
@@ -534,6 +544,12 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 		return nil
 	}
 
+	// NIP-29 content: only members post into a private or closed group.
+	if msg := s.groups.deniedGroupWrite(ep.Event); msg != "" {
+		s.reply(&wire.OkSubscriptionResponse{EventID: ep.Event.ID, Accepted: false, Message: msg})
+		return nil
+	}
+
 	// NIP-43: relay-authored kinds already passed the stricter
 	// self-authored check above; everything else needs active-or-virtual
 	// membership on the specific pubkey that signed this event, when
@@ -544,10 +560,16 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 	// versus AuthRequired's own connection-level-only semantics above).
 	if s.limitation.MembershipRequired && !nip43.IsRelayAuthoredKind(ep.Event.Kind) {
 		if id, ok := s.IdentityMembership(ep.Event.PubKey); !ok || id.Membership == MembershipNone {
+			msg := "restricted: valid NIP-43 membership required"
+			if !ok {
+				// The signer never authenticated here: NIP-42 says so with
+				// auth-required, so the client can AUTH as it and retry.
+				msg = "auth-required: valid NIP-43 membership required"
+			}
 			s.reply(&wire.OkSubscriptionResponse{
 				EventID:  ep.Event.ID,
 				Accepted: false,
-				Message:  "restricted: valid NIP-43 membership required",
+				Message:  msg,
 			})
 			return nil
 		}
