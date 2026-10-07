@@ -1442,3 +1442,35 @@ func TestDeniedPrivateGroupEvent_GroupContent(t *testing.T) {
 		t.Fatal("private group content denied to its own member")
 	}
 }
+
+// Only members post into a private or closed group (a new group is both);
+// a public, open group takes posts from anyone.
+func TestDeniedGroupWrite(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
+
+	outsider := "0000000000000000000000000000000000000000000000000000000000000001"
+	post := func(priv, group string) *nip01.Event {
+		ev := nip01.NewEvent(9, "hi", []string{"h", group})
+		if err := ev.Sign(priv); err != nil {
+			t.Fatal(err)
+		}
+		return ev
+	}
+	if msg := sess.groups.deniedGroupWrite(post(authTestPrivKey, groupA)); msg != "" {
+		t.Errorf("member refused: %s", msg)
+	}
+	if msg := sess.groups.deniedGroupWrite(post(outsider, groupA)); msg == "" {
+		t.Error("outsider allowed into a private, closed group")
+	}
+	if msg := sess.groups.deniedGroupWrite(post(outsider, "no-such-group")); msg != "" {
+		t.Errorf("post naming no hosted group refused: %s", msg)
+	}
+
+	open := *sess.groups.cache.Get(groupA)
+	open.Metadata.Private, open.Metadata.Closed = false, false
+	sess.groups.cache.put(&open)
+	if msg := sess.groups.deniedGroupWrite(post(outsider, groupA)); msg != "" {
+		t.Errorf("outsider refused by a public, open group: %s", msg)
+	}
+}
