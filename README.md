@@ -55,8 +55,10 @@ go get github.com/ohstr/nmilat
 - **[`nip53`](https://github.com/nostr-protocol/nips/blob/master/53.md)** — Live streaming and spaces: live streams, meeting spaces and their rooms, listener presence, live chat
 - **[`nip57`](https://github.com/nostr-protocol/nips/blob/master/57.md)** — Lightning zaps
 - **[`nip65`](https://github.com/nostr-protocol/nips/blob/master/65.md)** — Relay list metadata
+- **[`nip70`](https://github.com/nostr-protocol/nips/blob/master/70.md)** — Protected events: the `-` tag, accepted only from their authenticated author
 - **[`nip71`](https://github.com/nostr-protocol/nips/blob/master/71.md)** — Video events: normal, short and addressable videos with imeta variants
 - **[`nip77`](https://github.com/nostr-protocol/nips/blob/master/77.md)** — Negentropy sync
+- **[`nip86`](https://github.com/nostr-protocol/nips/blob/master/86.md)** — Relay Management API: NIP-98-authenticated JSON-RPC to administer a relay over HTTP
 - **[`nip88`](https://github.com/nostr-protocol/nips/blob/master/88.md)** — Polls
 - **[`nip90`](https://github.com/nostr-protocol/nips/blob/master/90.md)** — Data Vending Machines
 - **[`nipA0`](https://github.com/nostr-protocol/nips/blob/master/A0.md)** — Voice messages
@@ -108,10 +110,11 @@ itself — nmilat ships no router or mux of its own:
   which is NIP-CASH's Circle Wallet and merely shares the short name).
   NIP-98 binds identity/freshness, not authorization by itself, but this
   endpoint is not exempt from whatever access control an equivalent REQ
-  would get: pass the relay's `*nip11.Limitation` and `*relay.MembershipService`
-  (the same instance `SessionHandler.Membership()` returns, not a second
-  one) and a `MembershipRequired` relay refuses a non-member here exactly
-  as it would refuse their REQ.
+  would get: pass the relay's `*nip11.Limitation`, `*relay.MembershipService`
+  and `*relay.GroupsService` (the same instances `SessionHandler.Membership()`
+  and `SessionHandler.Groups()` return, not second ones) and a
+  `MembershipRequired` relay refuses a non-member here exactly as it would
+  refuse their REQ, and private NIP-29 groups stay hidden from non-members.
 - **[`huddle/wsaudio`](huddle/wsaudio)**'s handler — Huddle audio, on its
   own WebSocket upgrader because a binary audio frame would be a parse
   error on the Nostr socket's JSON decoder.
@@ -413,56 +416,41 @@ func main() {
 
 ### Enroll and remove a relay member (NIP-43)
 
-`nip43` is relay-wide membership, independent of NIP-29 groups. Its
-admin writes (kind:8000/8001) carry a NIP-70 "protected" tag, so the
-relay only accepts them from a connection authenticated as the relay's
-own `self` key -- the invite/join/leave flow (`NewClaim`,
-`NewInviteResponse`, `NewJoinRequest`, `NewLeaveRequest`) exists for
-self-service enrollment instead:
+`nip43` is relay-wide membership, independent of NIP-29 groups. A
+relay's kind:8000/8001 events only *announce* an add or remove; publishing
+one changes nothing. Membership changes come from a user's invite claim
+(`NewJoinRequest`, `NewLeaveRequest`), or from the embedder through the
+relay's `MembershipService`:
 
 ```go
 package main
 
 import (
-	"context"
-	"fmt"
-	"net/url"
-
-	"github.com/ohstr/nmilat/nip43"
-	relayclient "github.com/ohstr/nmilat/relay/client"
+	"github.com/ohstr/nmilat/nip11"
+	"github.com/ohstr/nmilat/relay"
 )
 
 func main() {
-	relayURL, _ := url.Parse("wss://relay.ohstr.com")
-	conn, err := relayclient.NewConnection(context.Background(), relayURL, &relayclient.ConnectionConfig{
-		SigningKeyHex: relaySelfPrivateKeyHex,
-	})
+	meta := &nip11.Metadata{Self: relaySelfPubkeyHex}
+	store, err := relay.NewEventStore("relay.db", &meta.Limitation)
 	if err != nil {
 		panic(err)
 	}
-	defer conn.Close()
+	defer store.Close()
+	// the self key signs the kind:13534 member list each change publishes
+	sh := relay.NewSessionHandler(store, meta, nil, relay.WithSessionPrivKey(relaySelfPrivateKeyHex))
 
-	addEv := nip43.NewAddUser(relaySelfPubkeyHex, memberPubkeyHex)
-	if err := addEv.Sign(relaySelfPrivateKeyHex); err != nil {
+	if err := sh.Membership().Join(memberPubkeyHex, []string{"vip"}); err != nil {
 		panic(err)
 	}
-	res, err := conn.Publish(context.Background(), addEv)
-	if err != nil {
+	if err := sh.Membership().Leave(memberPubkeyHex); err != nil {
 		panic(err)
 	}
-	fmt.Println("member added:", res.Accepted, res.Message)
-
-	removeEv := nip43.NewRemoveUser(relaySelfPubkeyHex, memberPubkeyHex)
-	if err := removeEv.Sign(relaySelfPrivateKeyHex); err != nil {
-		panic(err)
-	}
-	res, err = conn.Publish(context.Background(), removeEv)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println("member removed:", res.Accepted, res.Message)
 }
 ```
+
+Each `Join`/`Leave` takes effect on the member's already-open connections
+and republishes the relay-signed kind:13534 member list, with roles.
 
 ### Send a private direct message (NIP-17/59)
 
@@ -1545,11 +1533,16 @@ func main() {
 Uses [`just`](https://github.com/casey/just) for build automation:
 
 ```sh
-just build   # compile-check (library, no binary)
-just test    # go test ./...
-just vet     # go vet ./...
-just tidy    # go mod tidy
-just check   # build + vet + test
+# compile-check (library, no binary)
+just build
+# go test ./...
+just test
+# go vet ./...
+just vet
+# go mod tidy
+just tidy
+# build + vet + test
+just check
 ```
 
 ## License
