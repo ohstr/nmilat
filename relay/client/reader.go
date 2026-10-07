@@ -163,13 +163,20 @@ const authRequiredClosePrefix = "auth-required:"
 // may have silently excluded content the caller's identity actually has
 // access to.
 func ReadEventsFromRelayWithAuth(parent context.Context, relayURL *url.URL, filters *nip01.SubscriptionFilterGroup, signingKeyHex string) (events []*nip01.Event, restricted bool, err error) {
-	if signingKeyHex == "" {
-		events, err = ReadEventsFromRelay(parent, relayURL, filters)
-		return events, false, err
-	}
-
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
+
+	// Anonymous: nothing to authenticate with, so no retry -- but still
+	// report a gated CLOSED, so the caller can tell "refused" from "empty".
+	if signingKeyHex == "" {
+		conn, err := Connect(ctx, relayURL)
+		if err != nil {
+			return nil, false, err
+		}
+		defer conn.Close()
+		events, restricted, _, err = subscribeOnce(ctx, conn, filters)
+		return events, restricted, err
+	}
 
 	conn, err := NewConnection(ctx, relayURL, &ConnectionConfig{SigningKeyHex: signingKeyHex})
 	if err != nil {

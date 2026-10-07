@@ -613,6 +613,10 @@ creator.
 
 ### Fixed
 
+- `ReadEventsFromRelayWithAuth` with no signing key reported
+  `restricted=false` even when the relay refused the read, so an anonymous
+  caller couldn't tell "refused" from "nothing matched". It now reports a
+  gated CLOSED (no retry, there's nothing to authenticate with).
 - A NIP-29 create (kind:9007) for an id that already exists was OK'd as
   accepted even from a key with no role in that group, so the client
   reported success for a create that changed nothing. It is now rejected
