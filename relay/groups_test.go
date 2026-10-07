@@ -477,6 +477,26 @@ func TestGroupIDsInFilter(t *testing.T) {
 	}
 }
 
+// "d" is a NIP-33 identifier for every non-group kind: only "h" names a
+// group there, so an article or space lookup by "d" isn't gated.
+func TestGroupIDsInFilter_DOnlyForGroupMetadataKinds(t *testing.T) {
+	for _, tc := range []struct {
+		kinds []int
+		want  int
+	}{
+		{nil, 2},
+		{[]int{nip29.KindGroupMetadata}, 2},
+		{[]int{1, nip29.KindGroupAdmins}, 2},
+		{[]int{30023}, 1},
+		{[]int{30312, 1}, 1},
+	} {
+		filter := &nip01.SubscriptionFilter{Kinds: tc.kinds, Tags: map[string][]string{"d": {groupA}, "h": {groupB}}}
+		if got := groupIDsInFilter(filter); len(got) != tc.want {
+			t.Errorf("kinds %v: groupIDsInFilter() = %v, want %d ids", tc.kinds, got, tc.want)
+		}
+	}
+}
+
 func TestGroupIDsInFilter_NilFilter(t *testing.T) {
 	if got := groupIDsInFilter(nil); got != nil {
 		t.Fatalf("groupIDsInFilter(nil) = %v, want nil", got)

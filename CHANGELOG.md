@@ -613,6 +613,11 @@ creator.
 
 ### Fixed
 
+- Every REQ/COUNT with a `#d` filter naming no NIP-29 group was refused,
+  whatever its kinds, because the private-group gate read any `d` value as
+  a group id. That blocked NIP-33 lookups (articles, meeting spaces, naddr
+  resolution). `d` now names a group only when the filter can return group
+  metadata (no kinds, or 39000-39005); `h` still always does.
 - `ReadEventsFromRelayWithAuth` with no signing key reported
   `restricted=false` even when the relay refused the read, so an anonymous
   caller couldn't tell "refused" from "nothing matched". It now reports a

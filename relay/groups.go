@@ -781,15 +781,32 @@ func (g *GroupsService) anyIdentityIsMember(s *Session, groupID string) bool {
 }
 
 // groupIDsInFilter collects the group ids a filter's "d" and "h" tag
-// filters name.
+// filters name. "h" always names a group; "d" only when the filter can
+// return group metadata (no kinds, or a 39000-39005 kind) -- for any other
+// kind it is a NIP-33 identifier, and treating it as a group id refused
+// every addressable lookup (articles, spaces) naming no group.
 func groupIDsInFilter(filter *nip01.SubscriptionFilter) []string {
 	if filter == nil {
 		return nil
 	}
 	var ids []string
-	ids = append(ids, filter.Tags["d"]...)
+	if dNamesGroup(filter) {
+		ids = append(ids, filter.Tags["d"]...)
+	}
 	ids = append(ids, filter.Tags["h"]...)
 	return ids
+}
+
+func dNamesGroup(filter *nip01.SubscriptionFilter) bool {
+	if len(filter.Kinds) == 0 {
+		return true
+	}
+	for _, k := range filter.Kinds {
+		if nip29.IsGroupMetadataKind(k) {
+			return true
+		}
+	}
+	return false
 }
 
 /////////////////////////////////////////////////////////////////////
