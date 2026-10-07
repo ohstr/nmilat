@@ -104,13 +104,16 @@ type SubscriptionsMap struct {
 	maxSubscription int
 }
 
+// NewSubscriptions never writes to cfg: every session shares the relay's
+// one Limitation, so defaulting it here raced between connections.
 func NewSubscriptions(cfg *nip11.Limitation) *SubscriptionsMap {
-	if cfg.MaxSubscriptions == 0 {
-		cfg.MaxSubscriptions = defaultMaxSubscriptions
+	maxSubs := cfg.MaxSubscriptions
+	if maxSubs == 0 {
+		maxSubs = defaultMaxSubscriptions
 	}
 	return &SubscriptionsMap{
 		subs:            make(map[string]*Subscription),
-		maxSubscription: cfg.MaxSubscriptions,
+		maxSubscription: maxSubs,
 	}
 }
 

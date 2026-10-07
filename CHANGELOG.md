@@ -2,7 +2,7 @@
 
 ## [0.5.0]
 
-_Cut as `v0.5.0-rc.10` on 2026-10-07._ This section stays open: 0.5.0 itself has
+_Cut as `v0.5.0-rc.11` on 2026-10-07._ This section stays open: 0.5.0 itself has
 not been released, so everything under it is still pre-release and accumulating.
 rc.2 is where the NIP-CASH private transport became usable from a client: the
 batch API that spends many bills in one relay event, the breaking changes three
@@ -45,7 +45,8 @@ creator. rc.10 is the access-gate and privacy pass from ncli's black-box
 command matrix and agent eval: NIP-43 membership changes now reach open
 connections and publish the kind:13534 list, COUNT and refusals follow
 NIP-42's prefixes, private group content is withheld by any filter, and a
-deleted private group no longer leaves its roster readable.
+deleted private group no longer leaves its roster readable. rc.11 fixes a
+data race between connections opening at the same time.
 
 ### Added
 
@@ -684,6 +685,9 @@ deleted private group no longer leaves its roster readable.
   read the relay answered before AUTH landed (silently filtered, e.g. a
   private group) could be returned as final. It now retries unless AUTH
   had settled before the REQ was sent.
+- Every new session wrote the subscription-limit default into the relay's
+  shared NIP-11 `Limitation`, a data race between connections opening at
+  once. The default is now applied per session.
 - A filter's `limit` returned the oldest matching events instead of the
   newest. NIP-01 defines it as the last n events by `created_at`, but the
   query indexes were keyed by arrival sequence, so walking one backwards
