@@ -439,12 +439,18 @@ func TestFrameReachesTheOtherPeerAndNotItsSender(t *testing.T) {
 	if err := bobConn.SetReadDeadline(time.Now().Add(readWindow)); err != nil {
 		t.Fatalf("set read deadline: %v", err)
 	}
-	kind, got, err := bobConn.ReadMessage()
-	if err != nil {
-		t.Fatalf("bob read: %v", err)
-	}
-	if kind != websocket.BinaryMessage {
-		t.Fatalf("bob got kind %d, want binary", kind)
+	// Control messages (text) may be interleaved ahead of the frame; the
+	// frame is the first binary message.
+	var got []byte
+	for {
+		kind, data, err := bobConn.ReadMessage()
+		if err != nil {
+			t.Fatalf("bob read: %v", err)
+		}
+		if kind == websocket.BinaryMessage {
+			got = data
+			break
+		}
 	}
 
 	index, epoch, payload, ok := wire.ParseRelayFrame(3, got)
