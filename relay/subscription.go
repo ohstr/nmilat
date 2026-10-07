@@ -144,6 +144,21 @@ func (s *SubscriptionsMap) StopAll() {
 	}
 }
 
+// StopAllIDs is StopAll, returning the ids it stopped so the caller can
+// tell the client.
+func (s *SubscriptionsMap) StopAllIDs() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ids := make([]string, 0, len(s.subs))
+	for id, sub := range s.subs {
+		sub.Stop()
+		delete(s.subs, id)
+		ids = append(ids, id)
+	}
+	return ids
+}
+
 func (s *SubscriptionsMap) Close(subID string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()

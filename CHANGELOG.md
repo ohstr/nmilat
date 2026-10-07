@@ -613,6 +613,12 @@ creator.
 
 ### Fixed
 
+- Removing a NIP-43 member (`MembershipService.Leave`, or a replacement
+  kind:13534 list) didn't reach connections that member had already
+  authenticated: membership is cached per session at AUTH, so they kept
+  reading and writing. Removal now revokes direct membership on live
+  sessions and, on a membership-required relay, closes their open
+  subscriptions with `restricted:`. NIP-AA virtual identities are unchanged.
 - A filter's `limit` returned the oldest matching events instead of the
   newest. NIP-01 defines it as the last n events by `created_at`, but the
   query indexes were keyed by arrival sequence, so walking one backwards

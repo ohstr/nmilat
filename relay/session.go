@@ -309,6 +309,27 @@ func (s *Session) HasMembership() bool {
 	return false
 }
 
+// revokeActiveMembership drops pubkey's direct NIP-43 membership on this
+// connection, reporting whether it held one. Virtual (NIP-AA) identities
+// are left alone: NIP-AA checks them per connection, not mid-session.
+func (s *Session) revokeActiveMembership(pubkey string) bool {
+	s.identityMu.Lock()
+	defer s.identityMu.Unlock()
+
+	changed := false
+	if s.primary.Pubkey == pubkey && s.primary.Membership == MembershipActive {
+		s.primary.Membership = MembershipNone
+		changed = true
+	}
+	for i := range s.extra {
+		if s.extra[i].Pubkey == pubkey && s.extra[i].Membership == MembershipActive {
+			s.extra[i].Membership = MembershipNone
+			changed = true
+		}
+	}
+	return changed
+}
+
 // IdentityMembership looks up pubkey's own status among this connection's
 // authenticated identities. This is the EVENT gate: per NIP-AA, the relay
 // "MUST verify event.pubkey is authenticated on the connection AND holds
@@ -677,7 +698,7 @@ func NewSessionHandler(store *EventStore, relayMetadata *nip11.Metadata, searchS
 		cfg.Logger.Warn().Msg("NIP-29 group hosting is enabled but nip11.url is not set: NIP-42 AUTH will fail its relay-tag check on every connection, so a private group (the default on creation) will be invisible even to its own creator. Set nip11.url to this relay's own canonical address (e.g. wss://relay.example.com).")
 	}
 
-	return &SessionHandler{
+	sh := &SessionHandler{
 		store:              store,
 		sessions:           sync.Map{},
 		relayMetadata:      relayMetadata,
@@ -687,6 +708,8 @@ func NewSessionHandler(store *EventStore, relayMetadata *nip11.Metadata, searchS
 		membership:         membership,
 		groups:             groups,
 	}
+	membership.onRemove = sh.revokeMembership
+	return sh
 }
 
 func (sh *SessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -768,6 +791,32 @@ func (sh *SessionHandler) Membership() *MembershipService {
 // Session it serves. Never nil.
 func (sh *SessionHandler) Groups() *GroupsService {
 	return sh.groups
+}
+
+// revokeMembership applies a NIP-43 removal to live connections. Status is
+// cached per session at AUTH, so without this a removed member keeps
+// reading and writing on the connection it already had. A session left
+// with no membership on a membership-required relay also loses its open
+// subscriptions.
+func (sh *SessionHandler) revokeMembership(pubkey string) {
+	required := sh.relayMetadata != nil && sh.relayMetadata.Limitation.MembershipRequired
+	sh.sessions.Range(func(_, v any) bool {
+		s, ok := v.(*Session)
+		if !ok || !s.revokeActiveMembership(pubkey) || !required || s.HasMembership() {
+			return true
+		}
+		ids := s.subscriptions.StopAllIDs()
+		// reply blocks on a slow client; don't hold up the caller.
+		go func() {
+			for _, id := range ids {
+				s.reply(&wire.ClosedSubscriptionResponse{
+					SubscriptionID: id,
+					Message:        "restricted: NIP-43 membership revoked",
+				})
+			}
+		}()
+		return true
+	})
 }
 
 // SessionCount returns the number of currently connected sessions.
