@@ -224,6 +224,61 @@ func TestHandleEvent_DeleteGroup_Success(t *testing.T) {
 	}
 }
 
+// Deleting a group purges its mirrors and its content: left stored, a
+// deleted private group's roster and messages were served to anyone.
+func TestHandleEvent_DeleteGroup_PurgesItsEvents(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
+	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupB))
+	ctx := context.Background()
+	msg := nip01.NewEvent(9, "members only", []string{"h", groupA})
+	if err := msg.Sign(authTestPrivKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.store.InsertEvents(ctx, []*nip01.Event{msg}); err != nil {
+		t.Fatal(err)
+	}
+
+	if resp := sendEventAndAwaitOKForSession(t, sess, deleteGroupEvent(t, groupA, authTestPrivKey)); !resp.Accepted {
+		t.Fatalf("delete: %s", resp.Message)
+	}
+
+	left, err := sess.store.QueryEvents(ctx, &nip01.SubscriptionFilter{Tags: map[string][]string{"d": {groupA}}, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 0 {
+		t.Errorf("%d mirror events of the deleted group still stored", len(left))
+	}
+	content, err := sess.store.QueryEvents(ctx, &nip01.SubscriptionFilter{Tags: map[string][]string{"h": {groupA}}, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(content) != 0 {
+		t.Errorf("%d events tagged into the deleted group still stored", len(content))
+	}
+	other, err := sess.store.QueryEvents(ctx, &nip01.SubscriptionFilter{Tags: map[string][]string{"d": {groupB}}, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(other) == 0 {
+		t.Error("another group's mirrors were purged too")
+	}
+}
+
+// A metadata mirror for a group that no longer exists (stored before the
+// purge above existed) is never delivered.
+func TestDeniedPrivateGroupEvent_DeletedGroupMirror(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	ghost := nip29.NewGroupMetadata(nip29.GroupMetadataParams{SelfPubkey: authTestPubKey, ID: "ghost", Private: true})
+	if err := ghost.Sign(authTestPrivKey); err != nil {
+		t.Fatal(err)
+	}
+	if !sess.groups.deniedPrivateGroupEvent(sess, ghost) {
+		t.Fatal("metadata of a group that doesn't exist was delivered")
+	}
+}
+
 func TestHandleEvent_DeleteGroup_NotAdmin(t *testing.T) {
 	sess := newGroupsEnabledTestSession(t)
 	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))

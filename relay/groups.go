@@ -157,6 +157,8 @@ func (g *GroupsService) handleDeleteGroup(ctx context.Context, s *Session, ev *n
 		return
 	}
 
+	purgeGroupEvents(ctx, s, groupID)
+
 	var children []string
 	if deleted != nil {
 		children = deleted.Metadata.Children
@@ -178,6 +180,30 @@ func (g *GroupsService) handleDeleteGroup(ctx context.Context, s *Session, ev *n
 		Accepted: true,
 		Message:  fmt.Sprintf("info: group %s deleted.", groupID),
 	})
+}
+
+// purgeGroupEvents removes a deleted group's stored events: the relay's own
+// 39000-39005 mirrors and everything tagged into it. Left in the store
+// they'd be served to anyone, since the group whose privacy gated them is
+// gone.
+func purgeGroupEvents(ctx context.Context, s *Session, groupID string) {
+	filters := []*nip01.SubscriptionFilter{
+		{
+			Kinds:   []int{nip29.KindGroupMetadata, nip29.KindGroupAdmins, nip29.KindGroupMembers, nip29.KindGroupRoles, nip29.KindLiveParticipants, nip29.KindGroupPinnedEvents},
+			Authors: []string{s.selfPubkey},
+			Tags:    map[string][]string{"d": {groupID}},
+		},
+		{Tags: map[string][]string{"h": {groupID}}},
+	}
+	for _, f := range filters {
+		pes, err := s.store.FindEvents(ctx, f)
+		if err == nil && len(pes) > 0 {
+			err = s.store.DeleteAll(pes)
+		}
+		if err != nil {
+			s.config.Logger.Error().Err(err).Str("group", groupID).Msg("failed to purge a deleted group's events")
+		}
+	}
 }
 
 /////////////////////////////////////////////////////////////////////
@@ -920,6 +946,11 @@ func (g *GroupsService) deniedPrivateGroupEvent(s groupReader, ev *nip01.Event) 
 	if nip29.IsGroupMetadataKind(ev.Kind) {
 		groupID, err := nip29.GroupIDFromDTag(ev.Tags)
 		if err == nil && g.IsPrivate(groupID) && !g.anyIdentityIsMember(s, groupID) {
+			return true
+		}
+		// A mirror whose group is gone (deleted before its events were
+		// purged) has no privacy left to check: never serve it.
+		if err == nil && !g.Exists(groupID) {
 			return true
 		}
 	}
