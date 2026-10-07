@@ -15,8 +15,10 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip11"
 	"github.com/ohstr/nmilat/nip42"
+	"github.com/ohstr/nmilat/nip43"
 	"github.com/ohstr/nmilat/nip77"
 	"github.com/ohstr/nmilat/nipOA"
 	"github.com/ohstr/nmilat/search"
@@ -307,6 +309,26 @@ func (s *Session) HasMembership() bool {
 		}
 	}
 	return false
+}
+
+// grantActiveMembership marks pubkey's identities on this connection as
+// direct members, reporting whether any changed.
+func (s *Session) grantActiveMembership(pubkey string) bool {
+	s.identityMu.Lock()
+	defer s.identityMu.Unlock()
+
+	changed := false
+	if s.primary.Pubkey == pubkey && s.primary.Membership == MembershipNone {
+		s.primary.Membership = MembershipActive
+		changed = true
+	}
+	for i := range s.extra {
+		if s.extra[i].Pubkey == pubkey && s.extra[i].Membership == MembershipNone {
+			s.extra[i].Membership = MembershipActive
+			changed = true
+		}
+	}
+	return changed
 }
 
 // revokeActiveMembership drops pubkey's direct NIP-43 membership on this
@@ -709,6 +731,8 @@ func NewSessionHandler(store *EventStore, relayMetadata *nip11.Metadata, searchS
 		groups:             groups,
 	}
 	membership.onRemove = sh.revokeMembership
+	membership.onAdd = sh.grantMembership
+	membership.onChange = sh.publishMembershipList
 	return sh
 }
 
@@ -817,6 +841,50 @@ func (sh *SessionHandler) revokeMembership(pubkey string) {
 		}()
 		return true
 	})
+}
+
+// grantMembership applies a NIP-43 join to live connections: one already
+// authenticated as pubkey gains access without reconnecting.
+func (sh *SessionHandler) grantMembership(pubkey string) {
+	sh.sessions.Range(func(_, v any) bool {
+		if s, ok := v.(*Session); ok {
+			s.grantActiveMembership(pubkey)
+		}
+		return true
+	})
+}
+
+// publishMembershipList stores the relay-signed kind:13534 list of every
+// member and their roles, replacing the previous one.
+func (sh *SessionHandler) publishMembershipList() {
+	if sh.config.PrivKey == "" || sh.relayMetadata == nil || sh.relayMetadata.Self == "" {
+		return
+	}
+	records, err := sh.membership.List()
+	if err != nil {
+		sh.config.Logger.Error().Err(err).Msg("failed to list members for kind:13534")
+		return
+	}
+	members := make([]nip43.Member, 0, len(records))
+	for _, r := range records {
+		members = append(members, nip43.Member{Pubkey: r.Pubkey, Roles: r.Roles})
+	}
+	ev := nip43.NewMembershipList(nip43.MembershipListParams{SelfPubkey: sh.relayMetadata.Self, Members: members})
+	// Strictly newer than the stored list: two changes in one second would
+	// otherwise tie, and a replaceable tie may keep the older list.
+	ctx := context.Background()
+	if prev, err := sh.store.QueryEvents(ctx, &nip01.SubscriptionFilter{
+		Kinds: []int{nip43.KindMembershipList}, Authors: []string{sh.relayMetadata.Self}, Limit: 1,
+	}); err == nil && len(prev) == 1 && ev.CreatedAt <= prev[0].CreatedAt {
+		ev.CreatedAt = prev[0].CreatedAt + 1
+	}
+	if err := ev.Sign(sh.config.PrivKey); err != nil {
+		sh.config.Logger.Error().Err(err).Msg("failed to sign kind:13534")
+		return
+	}
+	if err := sh.store.InsertEvents(ctx, []*nip01.Event{ev}); err != nil {
+		sh.config.Logger.Error().Err(err).Msg("failed to store kind:13534")
+	}
 }
 
 // SessionCount returns the number of currently connected sessions.

@@ -331,7 +331,7 @@ func TestProcessRequest_PrivateGroupVisibilityGate_DeniesNonMember(t *testing.T)
 		t.Fatalf("processRequest: %v", err)
 	}
 
-	wantMsg := "restricted: valid membership in group " + groupA + " is required"
+	wantMsg := "auth-required: valid membership in group " + groupA + " is required"
 
 	notice, ok := (<-sess.incoming).(*wire.NoticeSubscriptionResponse)
 	if !ok {
@@ -403,7 +403,7 @@ func TestProcessRequest_PrivateGroupVisibilityGate_UnknownGroupDeniedLikePrivate
 		t.Fatalf("processRequest: %v", err)
 	}
 
-	wantMsg := "restricted: valid membership in group no-such-group is required"
+	wantMsg := "auth-required: valid membership in group no-such-group is required"
 
 	notice, ok := (<-sess.incoming).(*wire.NoticeSubscriptionResponse)
 	if !ok {
@@ -440,7 +440,7 @@ func TestProcessCount_PrivateGroupVisibilityGate_UnknownGroupDeniedLikePrivate(t
 	if !ok {
 		t.Fatal("reply was not a *wire.NoticeSubscriptionResponse")
 	}
-	wantMsg := "restricted: valid membership in group no-such-group is required"
+	wantMsg := "auth-required: valid membership in group no-such-group is required"
 	if notice.Message != wantMsg {
 		t.Fatalf("Message = %q, want %q", notice.Message, wantMsg)
 	}
@@ -512,7 +512,8 @@ func TestProcessCount_PrivateGroupVisibilityGate_DeniesNonMember(t *testing.T) {
 	if !ok {
 		t.Fatal("reply was not a *wire.NoticeSubscriptionResponse")
 	}
-	wantMsg := "restricted: valid membership in group " + groupA + " is required"
+	// Unauthenticated: NIP-42's "auth-required:", not "restricted:".
+	wantMsg := "auth-required: valid membership in group " + groupA + " is required"
 	if notice.Message != wantMsg {
 		t.Fatalf("Message = %q, want %q", notice.Message, wantMsg)
 	}

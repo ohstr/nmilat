@@ -162,6 +162,12 @@ type MembershipService struct {
 	// onRemove, if set, is told each pubkey that stops being a member, so
 	// live sessions holding it can be revoked (see SessionHandler).
 	onRemove func(pubkey string)
+	// onAdd, if set, is told each pubkey that becomes a member, so live
+	// sessions already authenticated as it gain access without reconnecting.
+	onAdd func(pubkey string)
+	// onChange, if set, runs after a Join or Leave changed the member set
+	// (the relay republishes its kind:13534 list).
+	onChange func()
 }
 
 // NewMembershipService constructs a MembershipService backed by store.
@@ -209,6 +215,12 @@ func (m *MembershipService) Join(pubkey string, roles []string) error {
 		return err
 	}
 	m.cache.add(pubkey)
+	if m.onAdd != nil {
+		m.onAdd(pubkey)
+	}
+	if m.onChange != nil {
+		m.onChange()
+	}
 	return nil
 }
 
@@ -224,6 +236,9 @@ func (m *MembershipService) Leave(pubkey string) error {
 	m.cache.remove(pubkey)
 	if m.onRemove != nil {
 		m.onRemove(pubkey)
+	}
+	if m.onChange != nil {
+		m.onChange()
 	}
 	return nil
 }
@@ -301,6 +316,11 @@ func (m *MembershipService) ReplaceFromEvent(ev *nip01.Event) error {
 			if !m.cache.IsMember(pk) {
 				m.onRemove(pk)
 			}
+		}
+	}
+	if m.onAdd != nil {
+		for _, pk := range pubkeys {
+			m.onAdd(pk)
 		}
 	}
 	return nil

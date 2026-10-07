@@ -54,6 +54,15 @@ func (s *Session) ProcessPacket(ctx context.Context, p wire.Packet) error {
 // still may not read. NIP-43: a request passes "if at least one
 // authenticated pubkey on the connection holds active or virtual
 // membership" -- unlike the per-event gate in processEvent.
+// groupRefusal is the reason a private group read is refused: NIP-42's
+// "auth-required:" until the client authenticates, then "restricted:".
+func groupRefusal(s *Session, groupID string) string {
+	if s.AuthedPubkey() == "" {
+		return fmt.Sprintf("auth-required: valid membership in group %s is required", groupID)
+	}
+	return fmt.Sprintf("restricted: valid membership in group %s is required", groupID)
+}
+
 func (s *Session) readGate() string {
 	authed := s.AuthedPubkey() != ""
 	if s.limitation.AuthRequired && !authed {
@@ -88,7 +97,7 @@ func (s *Session) processRequest(ctx context.Context, rp *wire.RequestPacket) er
 	// docs/specs/nip29-groups-plan.md's "Visibility gating" section. Public
 	// groups, and ids naming no known group, are unaffected.
 	if groupID, denied := s.groups.deniedPrivateGroupFilter(s, rp.Filters); denied {
-		msg := fmt.Sprintf("restricted: valid membership in group %s is required", groupID)
+		msg := groupRefusal(s, groupID)
 		s.reply(&wire.NoticeSubscriptionResponse{Message: msg})
 		s.reply(&wire.ClosedSubscriptionResponse{
 			SubscriptionID: rp.SubscriptionID,
@@ -273,7 +282,7 @@ func (s *Session) processCount(parent context.Context, cp *wire.CountPacket) err
 
 	// NIP-29: see the matching gate in processRequest.
 	if groupID, denied := s.groups.deniedPrivateGroupFilter(s, cp.Filters); denied {
-		s.refuse(cp.SubscriptionID, fmt.Sprintf("restricted: valid membership in group %s is required", groupID))
+		s.refuse(cp.SubscriptionID, groupRefusal(s, groupID))
 		return nil
 	}
 
