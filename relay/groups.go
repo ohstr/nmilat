@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -813,6 +814,30 @@ func dNamesGroup(filter *nip01.SubscriptionFilter) bool {
 // Visibility gating (per-event, at delivery time)
 /////////////////////////////////////////////////////////////////////
 
+// needsPrivacyCheck reports whether results for filters must go through
+// deniedPrivateGroupPotentialEvent: whenever a private group exists, since
+// its content can match any filter, not just a group-metadata one.
+func (g *GroupsService) needsPrivacyCheck(filters *nip01.SubscriptionFilterGroup) bool {
+	return g.anyPrivate() || mayDeliverGroupMetadataKind(filters)
+}
+
+// anyPrivate reports whether any hosted group is private.
+func (g *GroupsService) anyPrivate() bool {
+	if g == nil {
+		return false
+	}
+	snap := g.cache.snap.Load()
+	if snap == nil {
+		return false
+	}
+	for _, rec := range snap.groups {
+		if rec != nil && rec.Metadata.Private {
+			return true
+		}
+	}
+	return false
+}
+
 // mayDeliverGroupMetadataKind reports whether filters could possibly
 // deliver a relay-authored group-metadata event (kind 39000-39005) -- an
 // unset Kinds list matches any kind, so that counts as "may" too. This is
@@ -849,14 +874,24 @@ func mayDeliverGroupMetadataKind(filters *nip01.SubscriptionFilterGroup) bool {
 // delivery instead of at the request closes that bypass while leaving
 // public groups, and any kind outside this range, untouched.
 func (g *GroupsService) deniedPrivateGroupEvent(s *Session, ev *nip01.Event) bool {
-	if g == nil || ev == nil || !nip29.IsGroupMetadataKind(ev.Kind) {
+	if g == nil || ev == nil {
 		return false
 	}
-	groupID, err := nip29.GroupIDFromDTag(ev.Tags)
-	if err != nil || !g.IsPrivate(groupID) {
-		return false
+	if nip29.IsGroupMetadataKind(ev.Kind) {
+		groupID, err := nip29.GroupIDFromDTag(ev.Tags)
+		if err == nil && g.IsPrivate(groupID) && !g.anyIdentityIsMember(s, groupID) {
+			return true
+		}
 	}
-	return !g.anyIdentityIsMember(s, groupID)
+	// Group content: anything tagged into a private group. Without this a
+	// non-member read a private group's messages by asking by kind, id or
+	// author instead of by #h.
+	for _, tag := range ev.Tags {
+		if len(tag) >= 2 && tag[0] == "h" && g.IsPrivate(tag[1]) && !g.anyIdentityIsMember(s, tag[1]) {
+			return true
+		}
+	}
+	return false
 }
 
 // deniedPrivateGroupPotentialEvent is deniedPrivateGroupEvent's entry point
@@ -868,6 +903,11 @@ func (g *GroupsService) deniedPrivateGroupEvent(s *Session, ev *nip01.Event) boo
 // an attacker-controlled bypass.
 func (g *GroupsService) deniedPrivateGroupPotentialEvent(s *Session, pe *PotentialEvent) bool {
 	if g == nil || pe == nil {
+		return false
+	}
+	// Only an event carrying a "d" or "h" tag can belong to a group; skip
+	// the parse for everything else.
+	if !bytes.Contains(pe.Bytes, []byte(`"h"`)) && !bytes.Contains(pe.Bytes, []byte(`"d"`)) {
 		return false
 	}
 	var ev nip01.Event

@@ -1413,3 +1413,32 @@ func TestHandleEvent_UnsupportedModerationKind(t *testing.T) {
 		t.Fatalf("Message = %q, want the unsupported-kind wording", resp.Message)
 	}
 }
+
+// A private group's content (any event tagged into it with "h") is hidden
+// from non-members at delivery, not just its metadata: otherwise a
+// non-member reads it by asking by kind, id or author instead of by #h.
+func TestDeniedPrivateGroupEvent_GroupContent(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA)) // private by default
+
+	msg := nip01.NewEvent(9, "members only", []string{"h", groupA})
+	if err := msg.Sign(authTestPrivKey); err != nil {
+		t.Fatal(err)
+	}
+	if !sess.groups.deniedPrivateGroupEvent(sess, msg) {
+		t.Fatal("private group content delivered to a session with no member identity")
+	}
+
+	stray := nip01.NewEvent(9, "no such group", []string{"h", "not-a-group"})
+	if err := stray.Sign(authTestPrivKey); err != nil {
+		t.Fatal(err)
+	}
+	if sess.groups.deniedPrivateGroupEvent(sess, stray) {
+		t.Fatal("content tagged into no hosted group was denied")
+	}
+
+	sess.addIdentity(AuthedIdentity{Pubkey: authTestPubKey})
+	if sess.groups.deniedPrivateGroupEvent(sess, msg) {
+		t.Fatal("private group content denied to its own member")
+	}
+}

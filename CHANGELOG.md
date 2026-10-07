@@ -613,6 +613,11 @@ creator.
 
 ### Fixed
 
+- A private NIP-29 group's messages were readable by anyone, anonymous
+  included, through any filter that didn't name the group by `#h` (by
+  kind, id or author): delivery-time privacy only covered the group's
+  metadata kinds. Every event tagged into a private group with `h` is now
+  withheld from non-members, live subscriptions included, and COUNT agrees.
 - Every REQ/COUNT with a `#d` filter naming no NIP-29 group was refused,
   whatever its kinds, because the private-group gate read any `d` value as
   a group id. That blocked NIP-33 lookups (articles, meeting spaces, naddr

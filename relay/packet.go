@@ -291,7 +291,7 @@ func (s *Session) processCount(parent context.Context, cp *wire.CountPacket) err
 	// kind keeps the fast raw-count path.
 	var count int64
 	var err error
-	if mayDeliverGroupMetadataKind(cp.Filters) {
+	if s.groups.needsPrivacyCheck(cp.Filters) {
 		count, err = s.store.CountEventsFiltered(parent, cp.Filters, func(pe *PotentialEvent) bool {
 			return s.groups.deniedPrivateGroupPotentialEvent(s, pe)
 		})
