@@ -46,14 +46,16 @@ const MaxQueryBodyBytes = 1 << 20
 // serving everyone who can produce a valid signature. AuthRequired has no
 // separate equivalent here -- a NIP-98 signature is already mandatory for
 // every request to this endpoint, required or not.
-func NewQueryHandler(store *EventStore, limitation *nip11.Limitation, membership *MembershipService) http.Handler {
-	return &queryHandler{store: store, limitation: limitation, membership: membership}
+func NewQueryHandler(store *EventStore, limitation *nip11.Limitation, membership *MembershipService, groups *GroupsService) http.Handler {
+	return &queryHandler{store: store, limitation: limitation, membership: membership, groups: groups}
 }
 
 type queryHandler struct {
 	store      *EventStore
 	limitation *nip11.Limitation
 	membership *MembershipService
+	// groups applies the same NIP-29 visibility REQ does, for the signer.
+	groups *GroupsService
 }
 
 func (h *queryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -100,6 +102,15 @@ func (h *queryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// NIP-29: the same visibility REQ applies, for the NIP-98 signer -- a
+	// filter naming a group it can't see is refused, and anything else a
+	// private group holds is withheld per event.
+	reader := pubkeyReader{pubkey}
+	if groupID, denied := h.groups.deniedPrivateGroupFilter(reader, nip01.NewSubscriptionFilterGroup(filters...)); denied {
+		http.Error(w, "restricted: valid membership in group "+groupID+" is required", http.StatusForbidden)
+		return
+	}
+
 	// Filters are OR'd together per NIP-01: an event matching more than one
 	// of them is still delivered once.
 	seen := make(map[uint64]bool)
@@ -112,7 +123,7 @@ func (h *queryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for _, pe := range potEvents {
-			if seen[pe.Evsid] {
+			if seen[pe.Evsid] || h.groups.deniedPrivateGroupPotentialEvent(reader, pe) {
 				continue
 			}
 			seen[pe.Evsid] = true

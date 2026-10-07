@@ -749,7 +749,7 @@ func publishGroupPinsMirror(ctx context.Context, s *Session, rec *GroupRecord) {
 // empty) keeps this signal meaningful for a legitimate caller: "you don't
 // get this," for whatever reason, instead of both cases quietly saying
 // "nothing here."
-func (g *GroupsService) deniedPrivateGroupFilter(s *Session, filters *nip01.SubscriptionFilterGroup) (string, bool) {
+func (g *GroupsService) deniedPrivateGroupFilter(s groupReader, filters *nip01.SubscriptionFilterGroup) (string, bool) {
 	if g == nil || filters == nil {
 		return "", false
 	}
@@ -772,14 +772,35 @@ func (g *GroupsService) deniedPrivateGroupFilter(s *Session, filters *nip01.Subs
 // anyIdentityIsMember reports whether any identity authenticated on s is a
 // member of groupID -- the connection-level "at least one identity passes"
 // semantics NIP-43's own Session.HasMembership uses, applied per-group.
-func (g *GroupsService) anyIdentityIsMember(s *Session, groupID string) bool {
-	for _, id := range s.Identities() {
-		if g.IsMember(groupID, id.Pubkey) {
+func (g *GroupsService) anyIdentityIsMember(s groupReader, groupID string) bool {
+	for _, pk := range s.readerPubkeys() {
+		if g.IsMember(groupID, pk) {
 			return true
 		}
 	}
 	return false
 }
+
+// groupReader is whoever a group-visibility check is for: a WebSocket
+// session (every identity it authenticated) or an HTTP caller (its NIP-98
+// signer) -- so REQ and the /query bridge run the very same checks.
+type groupReader interface {
+	readerPubkeys() []string
+}
+
+func (s *Session) readerPubkeys() []string {
+	ids := s.Identities()
+	out := make([]string, len(ids))
+	for i, id := range ids {
+		out[i] = id.Pubkey
+	}
+	return out
+}
+
+// pubkeyReader is a groupReader for a fixed set of pubkeys.
+type pubkeyReader []string
+
+func (p pubkeyReader) readerPubkeys() []string { return p }
 
 // groupIDsInFilter collects the group ids a filter's "d" and "h" tag
 // filters name. "h" always names a group; "d" only when the filter can
@@ -892,7 +913,7 @@ func mayDeliverGroupMetadataKind(filters *nip01.SubscriptionFilterGroup) bool {
 // against every group's metadata in the store, private or not. Gating at
 // delivery instead of at the request closes that bypass while leaving
 // public groups, and any kind outside this range, untouched.
-func (g *GroupsService) deniedPrivateGroupEvent(s *Session, ev *nip01.Event) bool {
+func (g *GroupsService) deniedPrivateGroupEvent(s groupReader, ev *nip01.Event) bool {
 	if g == nil || ev == nil {
 		return false
 	}
@@ -920,7 +941,7 @@ func (g *GroupsService) deniedPrivateGroupEvent(s *Session, ev *nip01.Event) boo
 // the store only ever writes what it accepted at ingest, which is already
 // validated JSON, so a parse failure here would mean a bug elsewhere, not
 // an attacker-controlled bypass.
-func (g *GroupsService) deniedPrivateGroupPotentialEvent(s *Session, pe *PotentialEvent) bool {
+func (g *GroupsService) deniedPrivateGroupPotentialEvent(s groupReader, pe *PotentialEvent) bool {
 	if g == nil || pe == nil {
 		return false
 	}

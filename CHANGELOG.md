@@ -611,6 +611,13 @@ creator.
   at scan time, rather than silently dropped -- a deliberate
   snapshot-consistency choice, not a live re-check. (#50)
 
+### Changed
+
+- `NewQueryHandler` takes the `*GroupsService` too, so `POST /query` applies
+  the same NIP-29 visibility as REQ for its NIP-98 signer (pass nil to host
+  no groups). The group checks now take a reader (a session's identities or
+  a signer), shared by both paths.
+
 ### Fixed
 
 - Anyone could post into a private or closed NIP-29 group: content events
