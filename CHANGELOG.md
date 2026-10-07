@@ -613,6 +613,9 @@ creator.
 
 ### Fixed
 
+- `NewConnection` dialed without the caller's context, so a relay that
+  accepted the TCP connection and stayed silent held the caller for the
+  full handshake timeout (5s) regardless of its own deadline or cancel.
 - A private NIP-29 group's messages were readable by anyone, anonymous
   included, through any filter that didn't name the group by `#h` (by
   kind, id or author): delivery-time privacy only covered the group's
