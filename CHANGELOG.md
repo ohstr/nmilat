@@ -523,6 +523,10 @@ no longer rejects its whole batch, and concurrent query scans are capped.
 
 ### Changed
 
+- Live subscriptions wake when a write commits instead of polling every
+  50ms: new events reach open REQs sooner, and idle subscriptions cost
+  nothing between writes. Passes are still at most one per 50ms per
+  subscription, with a 1s fallback tick.
 - `relay.RegisterLetteredNIP` now trims and upper-cases the id it is given,
   so `"b7"` and `"B7"` declare one NIP instead of two entries that both
   reach `supported_nips`. Every id this SDK registers was already

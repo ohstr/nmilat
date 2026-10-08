@@ -143,6 +143,48 @@ func TestLiveTailDeliversABacklogLargerThanOnePass(t *testing.T) {
 	}
 }
 
+// TestLiveTailWakesOnCommit: with the fallback tick out of reach, a new
+// event still arrives, because the write itself wakes the subscription.
+func TestLiveTailWakesOnCommit(t *testing.T) {
+	store := newStore(t)
+	InsertTestEvents(t, store, probeEvents(t, 2))
+
+	sub, events, errs, eose := NewSubscription("wake", newQuery(t, store, filterGroup(&nip01.SubscriptionFilter{Kinds: []int{1}, Limit: 1})))
+	sub.minGap, sub.fallback = 0, time.Hour
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var wg sync.WaitGroup
+	go sub.Start(ctx, &wg)
+	defer sub.Stop()
+
+	for done := false; !done; {
+		select {
+		case <-events:
+			wg.Done()
+		case <-eose:
+			done = true
+		case err := <-errs:
+			t.Fatal(err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("no EOSE")
+		}
+	}
+
+	fresh := signEventAt(t, probeKeyA, 1, uint64(time.Now().Unix())+5, "fresh")
+	InsertTestEvents(t, store, []*nip01.Event{fresh})
+	select {
+	case pe := <-events:
+		wg.Done()
+		if pe.EventID != fresh.ID {
+			t.Fatalf("delivered %s, want the fresh event", pe.EventID[:8])
+		}
+	case err := <-errs:
+		t.Fatal(err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("new event not delivered: the commit didn't wake the live tail")
+	}
+}
+
 func storeWithOneSlot(t *testing.T, opts ...EventStoreOption) *EventStore {
 	t.Helper()
 	f, err := os.CreateTemp("", "test.db")

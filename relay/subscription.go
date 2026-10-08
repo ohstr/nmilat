@@ -14,6 +14,11 @@ const (
 	eventBufferCapacity     = 55
 )
 
+const (
+	liveTailMinGap   = 50 * time.Millisecond
+	liveTailFallback = time.Second
+)
+
 var (
 	ErrSubscriptionClosed = errors.New("subscription closed")
 )
@@ -28,6 +33,9 @@ type Subscription struct {
 	closer   sync.Once
 	cancelMu sync.Mutex
 	cancel   context.CancelFunc
+	// Live-tail pacing; fields so a test can isolate the commit wake-up.
+	minGap   time.Duration
+	fallback time.Duration
 }
 
 func NewSubscription(id string, query *StoreQuery) (*Subscription, <-chan *PotentialEvent, <-chan error, <-chan bool) {
@@ -38,6 +46,8 @@ func NewSubscription(id string, query *StoreQuery) (*Subscription, <-chan *Poten
 		errors:   make(chan error, 1),
 		eose:     make(chan bool),
 		closeCh:  make(chan interface{}),
+		minGap:   liveTailMinGap,
+		fallback: liveTailFallback,
 	}
 	return sub, sub.outgoing, sub.errors, sub.eose
 }
@@ -62,22 +72,40 @@ func (sub *Subscription) Start(parent context.Context, wg *sync.WaitGroup) {
 	case sub.eose <- true:
 	}
 
-	ticker := time.NewTicker(time.Millisecond * 50)
-	defer ticker.Stop()
-
 	defer wg.Wait()
 
+	// Live tail: run when a write commits, at most once per minGap so a busy
+	// ingest can't multiply passes, and at least every fallback in case a
+	// write path doesn't signal.
+	timer := time.NewTimer(0)
+	defer timer.Stop()
+	<-timer.C
 	for {
+		changed := sub.query.changed()
+		last := time.Now()
+		if err := sub.query.Fetch(ctx, sub.outgoing, wg, true); err != nil {
+			sub.errors <- err
+			return
+		}
+
+		timer.Reset(sub.fallback)
 		select {
-		case <-ticker.C:
-			// Continuous query for new events
-			err := sub.query.Fetch(ctx, sub.outgoing, wg, true)
-			if err != nil {
-				sub.errors <- err
-				return
+		case <-changed:
+			if !timer.Stop() {
+				<-timer.C
 			}
+		case <-timer.C:
 		case <-sub.closeCh:
 			return
+		}
+
+		if gap := sub.minGap - time.Since(last); gap > 0 {
+			timer.Reset(gap)
+			select {
+			case <-timer.C:
+			case <-sub.closeCh:
+				return
+			}
 		}
 	}
 }

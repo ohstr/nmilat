@@ -103,6 +103,7 @@ func (eit *EventInsertTask) Execute(store *EventStore) error {
 		if err != nil {
 			return err
 		}
+		store.signalCommit()
 	}
 	return nil
 }
@@ -189,6 +190,10 @@ type EventStore struct {
 	scanSlots chan struct{}
 	// scanSlotWait bounds the wait for a slot; 0 means no bound.
 	scanSlotWait time.Duration
+	// commitCh is closed and replaced after every write that may have added
+	// events, waking live tails instead of having them poll.
+	commitMu sync.Mutex
+	commitCh chan struct{}
 }
 
 func NewEventStore(path string, limitation *nip11.Limitation, opts ...EventStoreOption) (*EventStore, error) {
@@ -284,6 +289,7 @@ func NewEventStore(path string, limitation *nip11.Limitation, opts ...EventStore
 	if cfg.ScanSlotWait > 0 {
 		es.scanSlotWait = cfg.ScanSlotWait
 	}
+	es.commitCh = make(chan struct{})
 
 	es.startWorkers()
 
@@ -313,6 +319,21 @@ func (s *EventStore) viewScan(ctx context.Context, fn func(*bolt.Tx) error) erro
 		}
 	}
 	return s.db.View(fn)
+}
+
+// commitSignal returns a channel closed by the next write that may add
+// events. Take it before reading, so a write in between still wakes.
+func (s *EventStore) commitSignal() <-chan struct{} {
+	s.commitMu.Lock()
+	defer s.commitMu.Unlock()
+	return s.commitCh
+}
+
+func (s *EventStore) signalCommit() {
+	s.commitMu.Lock()
+	close(s.commitCh)
+	s.commitCh = make(chan struct{})
+	s.commitMu.Unlock()
 }
 
 func (s *EventStore) Name() string {
@@ -380,6 +401,9 @@ func (s *EventStore) ExecuteBatch(tasks []Task) {
 		}
 		err = nil
 	}
+
+	// Before the acks: subscribers waiting on new events start now.
+	s.signalCommit()
 
 	if d := time.Since(start); d > slowBatchThreshold {
 		s.logger.Warn().Dur("took", d).Int("tasks", len(tasks)).Int("queued", len(s.taskQueue)).Msg("slow store batch")
@@ -2090,6 +2114,15 @@ func NewStoreQuery(store *EventStore, filters *nip01.SubscriptionFilterGroup) (*
 	}
 
 	return sq, nil
+}
+
+// changed is the store's commit signal, or nil (never fires) for a query
+// with no filters.
+func (q *StoreQuery) changed() <-chan struct{} {
+	if len(q.scanners) == 0 {
+		return nil
+	}
+	return q.scanners[0].store.commitSignal()
 }
 
 func (q *StoreQuery) Fetch(ctx context.Context, out chan<- *PotentialEvent, wg *sync.WaitGroup, keepOpen bool) error {
