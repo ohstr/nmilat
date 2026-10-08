@@ -357,11 +357,11 @@ func runLoad(args []string) error {
 			}
 			kind, cat := 1, "ok_kind1"
 			var tags [][]string
-			switch p := r.IntN(10); {
-			case p == 0:
+			switch r.IntN(10) {
+			case 0:
 				kind, cat = 1059, "ok_kind1059"
 				tags = [][]string{{"p", smp.Authors[r.IntN(len(smp.Authors))]}}
-			case p == 1:
+			case 1:
 				kind, cat = 20001, "ok_ephemeral"
 			}
 			ev, err := nip01.NewSignedEvent(kind, fmt.Sprintf("relayload %d %d", i, time.Now().UnixNano()), writerKey, tags...)
