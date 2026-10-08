@@ -2,7 +2,7 @@
 
 ## [0.5.0]
 
-_Cut as `v0.5.0-rc.12` on 2026-10-08._ This section stays open: 0.5.0 itself has
+_Cut as `v0.5.0-rc.13` on 2026-10-08._ This section stays open: 0.5.0 itself has
 not been released, so everything under it is still pre-release and accumulating.
 rc.2 is where the NIP-CASH private transport became usable from a client: the
 batch API that spends many bills in one relay event, the breaking changes three
@@ -49,6 +49,9 @@ deleted private group no longer leaves its roster readable. rc.11 fixes a
 data race between connections opening at the same time. rc.12 keeps writes
 answering under heavy read load: every EVENT gets one OK, a failing event
 no longer rejects its whole batch, and concurrent query scans are capped.
+rc.13 fixes reads starving under many open subscriptions: live tails read
+only new events, wake on commit, and a REQ that can't get a scan slot is
+answered `relay busy` instead of never.
 
 ### Added
 
