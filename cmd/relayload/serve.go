@@ -11,7 +11,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 
 	"github.com/ohstr/nmilat/nip11"
 	"github.com/ohstr/nmilat/relay"
@@ -54,11 +53,7 @@ func collectStats() stats {
 		}
 	}
 
-	var ru syscall.Rusage
-	if syscall.Getrusage(syscall.RUSAGE_SELF, &ru) == nil {
-		s.MajFlt, s.MinFlt = ru.Majflt, ru.Minflt
-		s.CPUSeconds = float64(ru.Utime.Sec+ru.Stime.Sec) + float64(ru.Utime.Usec+ru.Stime.Usec)/1e6
-	}
+	addRusage(&s)
 	if b, err := os.ReadFile("/proc/self/io"); err == nil {
 		for _, l := range strings.Split(string(b), "\n") {
 			if v, ok := strings.CutPrefix(l, "read_bytes: "); ok {

@@ -19,7 +19,6 @@ import (
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip11"
 	"github.com/ohstr/nmilat/relay"
-	"golang.org/x/sys/unix"
 )
 
 // sample is what gen leaves next to the store for load to query with.
@@ -236,17 +235,4 @@ func runGen(args []string) error {
 	fmt.Printf("generated %d events in %s, db %.2f GiB (%d B/event)\n",
 		*total, time.Since(began).Round(time.Second), float64(size)/(1<<30), size/int64(*total))
 	return nil
-}
-
-// runEvict drops the store from the page cache so serve starts cold.
-func runEvict(args []string) error {
-	fs := flag.NewFlagSet("evict", flag.ExitOnError)
-	db := fs.String("db", "notes.db", "store path")
-	_ = fs.Parse(args)
-	f, err := os.Open(*db)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }()
-	return unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_DONTNEED)
 }
