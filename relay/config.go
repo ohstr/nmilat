@@ -21,6 +21,7 @@ const (
 
 	defaultMaxConcurrentStoreTasks = 2048
 	defaultCloseGracePeriod        = 2 * time.Second
+	defaultStoreReplyTimeout       = 10 * time.Second
 
 	// defaultMembershipInviteTTL is used whenever MembershipInviteTTL is
 	// unset (<= 0).
@@ -36,6 +37,10 @@ type SessionConfig struct {
 	CloseGracePeriod        time.Duration
 	OutgoingBufferSize      int
 	MaxConcurrentStoreTasks int
+
+	// StoreReplyTimeout bounds how long an EVENT waits on the store before
+	// it's answered "error: relay busy". <= 0 waits indefinitely.
+	StoreReplyTimeout time.Duration
 
 	// Default limits for cache and search
 	DefaultCacheWindow time.Duration
@@ -146,6 +151,13 @@ func WithSessionCloseGrace(delta time.Duration) SessionOption {
 }
 
 // WithSessionMaxConcurrentTasks limits concurrent store submissions per session.
+// WithSessionStoreReplyTimeout sets SessionConfig.StoreReplyTimeout.
+func WithSessionStoreReplyTimeout(d time.Duration) SessionOption {
+	return func(target *SessionConfig) {
+		target.StoreReplyTimeout = d
+	}
+}
+
 func WithSessionMaxConcurrentTasks(limit int) SessionOption {
 	return func(target *SessionConfig) {
 		target.MaxConcurrentStoreTasks = limit
@@ -244,6 +256,7 @@ func defaultSessionConfig() *SessionConfig {
 		CloseGracePeriod:        defaultCloseGracePeriod,
 		OutgoingBufferSize:      defaultOutgoingBufferSize,
 		MaxConcurrentStoreTasks: defaultMaxConcurrentStoreTasks,
+		StoreReplyTimeout:       defaultStoreReplyTimeout,
 		DefaultCacheWindow:      24 * time.Hour,
 		DefaultCacheLimit:       50,
 		DefaultSearchLimit:      100,
@@ -257,6 +270,11 @@ type EventStoreConfig struct {
 	WorkerCount   int
 	BatchSize     int
 	BatchInterval time.Duration
+
+	// MaxConcurrentScans caps query scan passes reading the store at once,
+	// so read load can't take all the disk I/O the writer needs. <= 0 means
+	// no cap.
+	MaxConcurrentScans int
 
 	// Logger receives store/migration logging. Defaults to zerolog.Nop()
 	// (silent) so an EventStore never writes to the process-global logger
@@ -289,6 +307,13 @@ func WithEventStoreBatchConfig(size int, interval time.Duration) EventStoreOptio
 	}
 }
 
+// WithEventStoreMaxConcurrentScans sets EventStoreConfig.MaxConcurrentScans.
+func WithEventStoreMaxConcurrentScans(n int) EventStoreOption {
+	return func(cfg *EventStoreConfig) {
+		cfg.MaxConcurrentScans = n
+	}
+}
+
 // WithEventStoreLogger configures the logger used for store and migration
 // logging. Defaults to zerolog.Nop() (silent).
 func WithEventStoreLogger(logger zerolog.Logger) EventStoreOption {
@@ -310,7 +335,8 @@ func defaultEventStoreConfig() EventStoreConfig {
 		// still leaving room for concurrent submissions to coalesce into one
 		// bolt transaction; BatchSize remains the safety valve once real
 		// concurrent load fills a batch before the timer would fire anyway.
-		BatchInterval: 10 * time.Millisecond,
-		Logger:        zerolog.Nop(),
+		BatchInterval:      10 * time.Millisecond,
+		MaxConcurrentScans: 2 * workers,
+		Logger:             zerolog.Nop(),
 	}
 }

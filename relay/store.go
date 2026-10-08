@@ -54,7 +54,11 @@ var (
 const (
 	defaultMaxLimit         = 10_000_000 // 500
 	defaultMaxIndexableTags = 5
-	filterMinLimit          = 1
+
+	// slowBatchThreshold is how long a batch commit may take before it's
+	// logged with the queue depth behind it.
+	slowBatchThreshold = time.Second
+	filterMinLimit     = 1
 
 	// maxCursorChunk caps how many index entries one cursor contributes to
 	// a single pass. An absent filter limit is clamped to MaxLimit, so
@@ -177,6 +181,8 @@ type EventStore struct {
 	batchSize     int
 	batchInterval time.Duration
 	logger        zerolog.Logger
+	// scanSlots bounds concurrent query scan passes; nil means unbounded.
+	scanSlots chan struct{}
 }
 
 func NewEventStore(path string, limitation *nip11.Limitation, opts ...EventStoreOption) (*EventStore, error) {
@@ -266,10 +272,29 @@ func NewEventStore(path string, limitation *nip11.Limitation, opts ...EventStore
 		batchInterval: cfg.BatchInterval,
 		logger:        cfg.Logger,
 	}
+	if cfg.MaxConcurrentScans > 0 {
+		es.scanSlots = make(chan struct{}, cfg.MaxConcurrentScans)
+	}
 
 	es.startWorkers()
 
 	return es, nil
+}
+
+// viewScan runs fn in a read transaction once a scan slot is free. A store
+// closing while it waits ends the scan quietly, as runPass itself does.
+func (s *EventStore) viewScan(ctx context.Context, fn func(*bolt.Tx) error) error {
+	if s.scanSlots != nil {
+		select {
+		case s.scanSlots <- struct{}{}:
+			defer func() { <-s.scanSlots }()
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-s.closeCh:
+			return nil
+		}
+	}
+	return s.db.View(fn)
 }
 
 func (s *EventStore) Name() string {
@@ -301,56 +326,78 @@ func (s *EventStore) Close() {
 	}
 }
 
-// ExecuteBatch commits multiple tasks in a single transaction
+// ExecuteBatch commits multiple tasks in a single transaction. If that
+// transaction fails, each task is retried in its own, so one bad or slow task
+// fails alone instead of rejecting every unrelated event batched with it.
 func (s *EventStore) ExecuteBatch(tasks []Task) {
 	if len(tasks) == 0 {
 		return
 	}
 
+	start := time.Now()
 	taskErrors := make([]error, len(tasks))
 
-	// Use a single transaction for the whole batch
 	err := s.db.Update(func(tx *bolt.Tx) error {
 		for i, task := range tasks {
-			var err error
-			switch t := task.(type) {
-			case *EventInsertTask:
-				for _, ev := range t.events {
-					if err = s.checkEventDuplication(tx, ev); err != nil {
-						if errors.Is(err, ErrEventDuplicated) {
-							// Record duplication error but continue batch
-							taskErrors[i] = err
-							err = nil
-							continue // Skip insert for this event
-						}
-						// other errors might be fatal (e.g. storage error)
-						return err
-					}
-					if err = s.insert(tx, ev); err != nil {
-						return err
-					}
-				}
-			case *EventDeleteTask:
-				if err = s.deleteAll(tx, t.pes); err != nil {
-					return err
-				}
-			default:
-				// Fallback or error
-				taskErrors[i] = fmt.Errorf("unsupported task type for batching: %T", t)
+			taskErr, err := s.applyTask(tx, task)
+			if err != nil {
+				return err
 			}
+			taskErrors[i] = taskErr
 		}
 		return nil
 	})
 
-	// Notify all tasks of the result
+	if err != nil && len(tasks) > 1 {
+		s.logger.Warn().Err(err).Int("tasks", len(tasks)).Msg("batch failed, retrying tasks one by one")
+		for i, task := range tasks {
+			taskErrors[i] = nil
+			if txErr := s.db.Update(func(tx *bolt.Tx) error {
+				taskErr, err := s.applyTask(tx, task)
+				taskErrors[i] = taskErr
+				return err
+			}); txErr != nil {
+				taskErrors[i] = txErr
+			}
+		}
+		err = nil
+	}
+
+	if d := time.Since(start); d > slowBatchThreshold {
+		s.logger.Warn().Dur("took", d).Int("tasks", len(tasks)).Int("queued", len(s.taskQueue)).Msg("slow store batch")
+	}
+
 	for i, task := range tasks {
 		if err != nil {
-			// Transaction failed (e.g. disk issue), fail all
 			task.Done(err)
 		} else {
-			// Transaction succeeded, return specific task error (e.g. duplication) or nil
 			task.Done(taskErrors[i])
 		}
+	}
+}
+
+// applyTask runs one task inside tx. taskErr is a per-task outcome that
+// doesn't abort tx (a duplicate); err aborts it.
+func (s *EventStore) applyTask(tx *bolt.Tx, task Task) (taskErr, err error) {
+	switch t := task.(type) {
+	case *EventInsertTask:
+		for _, ev := range t.events {
+			if err := s.checkEventDuplication(tx, ev); err != nil {
+				if errors.Is(err, ErrEventDuplicated) {
+					taskErr = err
+					continue
+				}
+				return nil, err
+			}
+			if err := s.insert(tx, ev); err != nil {
+				return nil, err
+			}
+		}
+		return taskErr, nil
+	case *EventDeleteTask:
+		return nil, s.deleteAll(tx, t.pes)
+	default:
+		return fmt.Errorf("unsupported task type for batching: %T", t), nil
 	}
 }
 
@@ -1716,7 +1763,7 @@ func (ss *storeScan) scan(ctx context.Context, tx *bolt.Tx, potEvents chan<- *Po
 		if tx != nil {
 			err = runPass(tx)
 		} else {
-			err = ss.store.db.View(runPass)
+			err = ss.store.viewScan(ctx, runPass)
 		}
 		if err != nil {
 			return err
