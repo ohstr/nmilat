@@ -59,6 +59,7 @@ answered `relay busy` instead of never.
   slot (default 10s). A REQ that can't get one is answered `CLOSED`
   `error: relay busy, try again later` instead of never; a live tick that
   can't get one is skipped and caught up on the next.
+  ([#81](https://github.com/ohstr/nmilat/pull/81))
 - `WithEventStoreMaxConcurrentScans` caps query scan passes reading the
   store at once (default 2 × NumCPU), so read load can't starve the
   writer of disk I/O. Batches slower than 1s are logged with the queue
@@ -530,6 +531,7 @@ answered `relay busy` instead of never.
   50ms: new events reach open REQs sooner, and idle subscriptions cost
   nothing between writes. Passes are still at most one per 50ms per
   subscription, with a 1s fallback tick.
+  ([#81](https://github.com/ohstr/nmilat/pull/81))
 - `relay.RegisterLetteredNIP` now trims and upper-cases the id it is given,
   so `"b7"` and `"B7"` declare one NIP instead of two entries that both
   reach `supported_nips`. Every id this SDK registers was already
@@ -651,8 +653,10 @@ answered `relay busy` instead of never.
   slot. On a cold 9 GB store with ~290 connections, feed EOSE p99 went from
   52s to 12ms and CPU from 304% to 26%; see
   [docs/benchmarks.md](docs/benchmarks.md).
+  ([#81](https://github.com/ohstr/nmilat/pull/81))
 - NIP-77 and NIP-05 lookups ignored a failed store fetch and answered from
   partial results; they now return the error (NIP-05: 503 when busy).
+  ([#81](https://github.com/ohstr/nmilat/pull/81))
 - Every EVENT now gets exactly one OK. A closed store, closed session or
   canceled context used to send none; they now reply `error: relay
   unavailable`, and an event still queued after
