@@ -113,8 +113,8 @@ type conn struct {
 	mu      sync.Mutex
 	waiters map[string]chan string
 	events  *atomic.Int64
-	// onLive, if set, gets how long ago each writer note on "feed" was
-	// published: write-to-delivery latency, what a follower sees.
+	// onLive, if set, gets how long ago each writer note delivered live on
+	// "feed" (after its EOSE) was published: write-to-delivery latency.
 	onLive func(time.Duration)
 }
 
@@ -156,6 +156,8 @@ func (c *conn) notify(key, msg string) {
 }
 
 func (c *conn) read() {
+	// Subscriptions past EOSE: only their events are live deliveries.
+	live := map[string]bool{}
 	for {
 		_, b, err := c.ws.ReadMessage()
 		if err != nil {
@@ -177,7 +179,7 @@ func (c *conn) read() {
 		switch typ {
 		case "EVENT":
 			c.events.Add(1)
-			if key == "feed" && c.onLive != nil && len(msg) > 2 {
+			if key == "feed" && live[key] && c.onLive != nil && len(msg) > 2 {
 				var ev struct {
 					Content string `json:"content"`
 				}
@@ -190,6 +192,7 @@ func (c *conn) read() {
 				}
 			}
 		case "EOSE":
+			live[key] = true
 			c.notify("sub:"+key, "EOSE")
 		case "CLOSED":
 			var reason string
