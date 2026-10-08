@@ -2,6 +2,7 @@ package relay
 
 import (
 	"bytes"
+	"cmp"
 	"container/heap"
 	"context"
 	"encoding/binary"
@@ -9,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"sync"
@@ -29,6 +31,8 @@ import (
 )
 
 var (
+	// ErrScanBusy: no scan slot freed up within ScanSlotWait.
+	ErrScanBusy        = errors.New("relay busy, try again later")
 	ErrEventDuplicated = errors.New("already have this event")
 	ErrStoreClosed     = errors.New("store is closed")
 	ErrEventNotFound   = errors.New("event not found")
@@ -99,6 +103,7 @@ func (eit *EventInsertTask) Execute(store *EventStore) error {
 		if err != nil {
 			return err
 		}
+		store.signalCommit()
 	}
 	return nil
 }
@@ -183,6 +188,12 @@ type EventStore struct {
 	logger        zerolog.Logger
 	// scanSlots bounds concurrent query scan passes; nil means unbounded.
 	scanSlots chan struct{}
+	// scanSlotWait bounds the wait for a slot; 0 means no bound.
+	scanSlotWait time.Duration
+	// commitCh is closed and replaced after every write that may have added
+	// events, waking live tails instead of having them poll.
+	commitMu sync.Mutex
+	commitCh chan struct{}
 }
 
 func NewEventStore(path string, limitation *nip11.Limitation, opts ...EventStoreOption) (*EventStore, error) {
@@ -275,6 +286,10 @@ func NewEventStore(path string, limitation *nip11.Limitation, opts ...EventStore
 	if cfg.MaxConcurrentScans > 0 {
 		es.scanSlots = make(chan struct{}, cfg.MaxConcurrentScans)
 	}
+	if cfg.ScanSlotWait > 0 {
+		es.scanSlotWait = cfg.ScanSlotWait
+	}
+	es.commitCh = make(chan struct{})
 
 	es.startWorkers()
 
@@ -282,9 +297,16 @@ func NewEventStore(path string, limitation *nip11.Limitation, opts ...EventStore
 }
 
 // viewScan runs fn in a read transaction once a scan slot is free. A store
-// closing while it waits ends the scan quietly, as runPass itself does.
+// closing while it waits ends the scan quietly, as runPass itself does; no
+// slot within scanSlotWait is ErrScanBusy.
 func (s *EventStore) viewScan(ctx context.Context, fn func(*bolt.Tx) error) error {
 	if s.scanSlots != nil {
+		var expired <-chan time.Time
+		if s.scanSlotWait > 0 {
+			t := time.NewTimer(s.scanSlotWait)
+			defer t.Stop()
+			expired = t.C
+		}
 		select {
 		case s.scanSlots <- struct{}{}:
 			defer func() { <-s.scanSlots }()
@@ -292,9 +314,26 @@ func (s *EventStore) viewScan(ctx context.Context, fn func(*bolt.Tx) error) erro
 			return ctx.Err()
 		case <-s.closeCh:
 			return nil
+		case <-expired:
+			return ErrScanBusy
 		}
 	}
 	return s.db.View(fn)
+}
+
+// commitSignal returns a channel closed by the next write that may add
+// events. Take it before reading, so a write in between still wakes.
+func (s *EventStore) commitSignal() <-chan struct{} {
+	s.commitMu.Lock()
+	defer s.commitMu.Unlock()
+	return s.commitCh
+}
+
+func (s *EventStore) signalCommit() {
+	s.commitMu.Lock()
+	close(s.commitCh)
+	s.commitCh = make(chan struct{})
+	s.commitMu.Unlock()
 }
 
 func (s *EventStore) Name() string {
@@ -362,6 +401,9 @@ func (s *EventStore) ExecuteBatch(tasks []Task) {
 		}
 		err = nil
 	}
+
+	// Before the acks: subscribers waiting on new events start now.
+	s.signalCommit()
 
 	if d := time.Since(start); d > slowBatchThreshold {
 		s.logger.Warn().Dur("took", d).Int("tasks", len(tasks)).Int("queued", len(s.taskQueue)).Msg("slow store batch")
@@ -1558,6 +1600,9 @@ type storeScan struct {
 	// query: each scan reads it as boundaryEvsid, then advances it to the
 	// store's current sequence.
 	lastMaxEvsid uint64
+	// hasWatermark is set once a scan has snapshotted lastMaxEvsid, after
+	// which the live tail only reads arrivals above it (see scanTail).
+	hasWatermark bool
 	*scanContext
 }
 
@@ -1649,6 +1694,10 @@ func (ss *storeScan) scan(ctx context.Context, tx *bolt.Tx, potEvents chan<- *Po
 		return nil
 	}
 
+	if fetchUntilEmpty && tx == nil && ss.hasWatermark {
+		return ss.scanTail(ctx, potEvents, wg)
+	}
+
 	resumeKeys := ss.initializeScan()
 
 	exhausted := make([]bool, len(ss.cursors))
@@ -1670,6 +1719,7 @@ func (ss *storeScan) scan(ctx context.Context, tx *bolt.Tx, potEvents chan<- *Po
 				// higher evsids as new -- regardless of where their
 				// created_at places them in the index.
 				ss.lastMaxEvsid = tx.Bucket(indexEvents).Sequence()
+				ss.hasWatermark = true
 				firstPass = false
 			}
 
@@ -1809,6 +1859,111 @@ func (ss *storeScan) scan(ctx context.Context, tx *bolt.Tx, potEvents chan<- *Po
 	return nil
 }
 
+// scanTail is the live tail of a query that has already scanned once: it
+// reads only events that arrived after the watermark, in arrival order,
+// straight from indexEvents (keyed by evsid). Walking the filter's index
+// instead costs the whole index on every tick when the filter has no since,
+// because created_at leads those keys and a backdated insert can sort
+// anywhere -- so nothing below the newest entry can be skipped by position.
+// evsid has no such problem, which is also why backdated inserts still
+// arrive here.
+//
+// The sequence check runs without a scan slot, so an idle tick never queues
+// behind slow historical scans.
+func (ss *storeScan) scanTail(ctx context.Context, potEvents chan<- *PotentialEvent, wg *sync.WaitGroup) error {
+	for {
+		select {
+		case <-ss.store.closeCh:
+			return nil
+		default:
+		}
+
+		var seq uint64
+		if err := ss.store.db.View(func(tx *bolt.Tx) error {
+			seq = tx.Bucket(indexEvents).Sequence()
+			return nil
+		}); err != nil {
+			return err
+		}
+		if seq <= ss.lastMaxEvsid {
+			return nil
+		}
+
+		var batch []*PotentialEvent
+		var more bool
+		err := ss.store.viewScan(ctx, func(tx *bolt.Tx) error {
+			bucket := tx.Bucket(indexEvents)
+			seq := bucket.Sequence()
+			last := ss.lastMaxEvsid
+			var examined int
+			c := bucket.Cursor()
+			for k, v := c.Seek(itob(last + 1)); k != nil; k, v = c.Next() {
+				evsid := btoi(k)
+				if evsid > seq {
+					break
+				}
+				last = evsid
+				if pe, err := ss.tailCandidate(evsid, v); err != nil {
+					return err
+				} else if pe != nil {
+					ss.sentEvents[evsid] = true
+					batch = append(batch, pe)
+				}
+				if examined++; examined >= maxCursorChunk {
+					more = true
+					break
+				}
+			}
+			if !more {
+				last = seq
+			}
+			ss.lastMaxEvsid = last
+			return nil
+		})
+		if errors.Is(err, ErrScanBusy) {
+			// The watermark didn't move, so the next tick picks these up.
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		// Newest first within a tick, as the index walk's heap orders it, so
+		// a fresh event isn't queued behind a burst that arrived with it.
+		slices.SortFunc(batch, func(a, b *PotentialEvent) int {
+			if c := cmp.Compare(b.CreatedAt, a.CreatedAt); c != 0 {
+				return c
+			}
+			return cmp.Compare(b.Evsid, a.Evsid)
+		})
+		if err := deliverBatch(ctx, potEvents, wg, batch); err != nil {
+			return err
+		}
+		if !more {
+			return nil
+		}
+	}
+}
+
+// tailCandidate applies the checks the index walk and collectBatch would,
+// to one event read by evsid. raw points into bolt's mmap.
+func (ss *storeScan) tailCandidate(evsid uint64, raw []byte) (*PotentialEvent, error) {
+	if ss.sentEvents[evsid] {
+		return nil, nil
+	}
+	bytes := append([]byte(nil), raw...)
+	var event *nip01.Event
+	if err := json.Unmarshal(bytes, &event); err != nil {
+		return nil, err
+	}
+	if ss.hasBeforeID && event.CreatedAt == ss.filter.Until && evsid >= ss.beforeIDEvsid {
+		return nil, nil
+	}
+	if !ss.filter.Match(event) {
+		return nil, nil
+	}
+	return &PotentialEvent{Evsid: evsid, CreatedAt: event.CreatedAt, EventID: event.ID, Bytes: bytes}, nil
+}
+
 func (s *EventStore) QueryNip77Items(ctx context.Context, filter *nip01.SubscriptionFilter) ([]nip77.Item, error) {
 	fg := nip01.NewSubscriptionFilterGroup()
 	fg.Add(filter)
@@ -1824,9 +1979,11 @@ func (s *EventStore) QueryNip77Items(ctx context.Context, filter *nip01.Subscrip
 	// Collect items
 	items := make([]nip77.Item, 0)
 
-	// Async fetch
+	// Async fetch. Its error is read only after outgoing closes: a partial
+	// item set would reconcile as "the relay lacks these".
+	var fetchErr error
 	go func() {
-		_ = q.Fetch(ctx, outgoing, &wg, false)
+		fetchErr = q.Fetch(ctx, outgoing, &wg, false)
 		wg.Wait()
 		close(outgoing)
 	}()
@@ -1857,6 +2014,9 @@ func (s *EventStore) QueryNip77Items(ctx context.Context, filter *nip01.Subscrip
 		return items[i].Compare(items[j]) > 0
 	})
 
+	if fetchErr != nil {
+		return nil, fetchErr
+	}
 	return items, nil
 }
 
@@ -1954,6 +2114,15 @@ func NewStoreQuery(store *EventStore, filters *nip01.SubscriptionFilterGroup) (*
 	}
 
 	return sq, nil
+}
+
+// changed is the store's commit signal, or nil (never fires) for a query
+// with no filters.
+func (q *StoreQuery) changed() <-chan struct{} {
+	if len(q.scanners) == 0 {
+		return nil
+	}
+	return q.scanners[0].store.commitSignal()
 }
 
 func (q *StoreQuery) Fetch(ctx context.Context, out chan<- *PotentialEvent, wg *sync.WaitGroup, keepOpen bool) error {

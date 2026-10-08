@@ -2,7 +2,7 @@
 
 ## [0.5.0]
 
-_Cut as `v0.5.0-rc.12` on 2026-10-08._ This section stays open: 0.5.0 itself has
+_Cut as `v0.5.0-rc.13` on 2026-10-08._ This section stays open: 0.5.0 itself has
 not been released, so everything under it is still pre-release and accumulating.
 rc.2 is where the NIP-CASH private transport became usable from a client: the
 batch API that spends many bills in one relay event, the breaking changes three
@@ -49,9 +49,17 @@ deleted private group no longer leaves its roster readable. rc.11 fixes a
 data race between connections opening at the same time. rc.12 keeps writes
 answering under heavy read load: every EVENT gets one OK, a failing event
 no longer rejects its whole batch, and concurrent query scans are capped.
+rc.13 fixes reads starving under many open subscriptions: live tails read
+only new events, wake on commit, and a REQ that can't get a scan slot is
+answered `relay busy` instead of never.
 
 ### Added
 
+- `WithEventStoreScanSlotWait` bounds how long a query waits for a scan
+  slot (default 10s). A REQ that can't get one is answered `CLOSED`
+  `error: relay busy, try again later` instead of never; a live tick that
+  can't get one is skipped and caught up on the next.
+  ([#81](https://github.com/ohstr/nmilat/pull/81))
 - `WithEventStoreMaxConcurrentScans` caps query scan passes reading the
   store at once (default 2 × NumCPU), so read load can't starve the
   writer of disk I/O. Batches slower than 1s are logged with the queue
@@ -519,6 +527,11 @@ no longer rejects its whole batch, and concurrent query scans are capped.
 
 ### Changed
 
+- Live subscriptions wake when a write commits instead of polling every
+  50ms: new events reach open REQs sooner, and idle subscriptions cost
+  nothing between writes. Passes are still at most one per 50ms per
+  subscription, with a 1s fallback tick.
+  ([#81](https://github.com/ohstr/nmilat/pull/81))
 - `relay.RegisterLetteredNIP` now trims and upper-cases the id it is given,
   so `"b7"` and `"B7"` declare one NIP instead of two entries that both
   reach `supported_nips`. Every id this SDK registers was already
@@ -632,6 +645,18 @@ no longer rejects its whole batch, and concurrent query scans are capped.
 
 ### Fixed
 
+- Reads starved under many open subscriptions: every live tick of a REQ
+  without `since` walked its whole index back to the start, so a few
+  hundred feeds held every scan slot and new REQs never reached EOSE. The
+  live tail now reads only events that arrived since the last tick (by
+  evsid), still including backdated ones, and an idle tick takes no scan
+  slot. On a cold 9 GB store with ~290 connections, feed EOSE p99 went from
+  52s to 12ms and CPU from 304% to 26%; see
+  [docs/benchmarks.md](docs/benchmarks.md).
+  ([#81](https://github.com/ohstr/nmilat/pull/81))
+- NIP-77 and NIP-05 lookups ignored a failed store fetch and answered from
+  partial results; they now return the error (NIP-05: 503 when busy).
+  ([#81](https://github.com/ohstr/nmilat/pull/81))
 - Every EVENT now gets exactly one OK. A closed store, closed session or
   canceled context used to send none; they now reply `error: relay
   unavailable`, and an event still queued after
