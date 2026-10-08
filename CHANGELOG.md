@@ -54,6 +54,7 @@ data race between connections opening at the same time.
   store at once (default 2 × NumCPU), so read load can't starve the
   writer of disk I/O. Batches slower than 1s are logged with the queue
   depth, and rejected events are logged with their kind.
+  ([#78](https://github.com/ohstr/nmilat/pull/78))
 - `Session.Start` sends the NIP-42 AUTH challenge on every connection
   now, unconditionally -- not only when `nip11.limitation.auth_required`
   is on. That flag was the only thing that ever triggered a challenge,
@@ -633,8 +634,10 @@ data race between connections opening at the same time.
   canceled context used to send none; they now reply `error: relay
   unavailable`, and an event still queued after
   `SessionConfig.StoreReplyTimeout` (default 10s) gets `error: relay busy`.
+  ([#78](https://github.com/ohstr/nmilat/pull/78))
 - One failing task no longer rejects its whole store batch: the batch is
   retried task by task, so only the failing event is rejected.
+  ([#78](https://github.com/ohstr/nmilat/pull/78))
 - NIP-26 delegation tokens signed and verified `delegation:<pubkey>:<conds>`
   instead of the spec's `nostr:delegation:<pubkey>:<conds>`, so no other
   implementation accepted them (and theirs failed here). Tokens minted
