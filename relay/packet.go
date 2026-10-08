@@ -576,15 +576,28 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 	}
 
 	task := NewEventInsertTask([]*nip01.Event{ep.Event})
+
+	// Every EVENT gets exactly one OK: a queued event that outlives
+	// StoreReplyTimeout is answered "relay busy" rather than left hanging,
+	// and the store's eventual outcome is then dropped.
+	var replyOnce sync.Once
+	ok := func(accepted bool, msg string) {
+		replyOnce.Do(func() {
+			s.reply(&wire.OkSubscriptionResponse{EventID: ep.Event.ID, Accepted: accepted, Message: msg})
+		})
+	}
+	stopTimer := func() bool { return false }
+	if d := s.config.StoreReplyTimeout; d > 0 {
+		stopTimer = time.AfterFunc(d, func() { ok(false, "error: relay busy, try again later") }).Stop
+	}
+
 	go func() {
+		defer stopTimer()
 		select {
 
 		case <-task.done:
 
-			s.reply(&wire.OkSubscriptionResponse{
-				EventID:  ep.Event.ID,
-				Accepted: true,
-			})
+			ok(true, "")
 
 			// Belt-and-suspenders resync: an operator who manually
 			// publishes a raw kind:13534 event directly (bypassing
@@ -605,26 +618,14 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 
 			switch {
 
-			case errors.Is(err, ErrStoreClosed):
-				return
-
 			case errors.Is(err, ErrEventDuplicated):
-
-				s.reply(&wire.OkSubscriptionResponse{
-					EventID:  ep.Event.ID,
-					Accepted: true,
-					Message:  fmt.Sprintf("duplicate: %s", err.Error()),
-				})
-
-			case errors.Is(err, context.Canceled):
-				return
+				ok(true, fmt.Sprintf("duplicate: %s", err.Error()))
 
 			case errors.Is(err, ErrRateLimited):
-				s.reply(&wire.OkSubscriptionResponse{
-					EventID:  ep.Event.ID,
-					Accepted: false,
-					Message:  err.Error(),
-				})
+				ok(false, err.Error())
+
+			case errors.Is(err, ErrStoreClosed), errors.Is(err, ErrSessionClosed), errors.Is(err, context.Canceled):
+				ok(false, "error: relay unavailable")
 
 			default:
 
@@ -632,13 +633,8 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 				// unrecognized errors here come from the storage layer, not from
 				// anything the client did wrong, and may contain internal details
 				// (bucket/key layout, etc.) that shouldn't leak over the wire.
-				s.config.Logger.Error().Err(err).Msgf("event rejected ID=%s", ep.Event.ID)
-
-				s.reply(&wire.OkSubscriptionResponse{
-					EventID:  ep.Event.ID,
-					Accepted: false,
-					Message:  "error: could not store event",
-				})
+				s.config.Logger.Error().Err(err).Int("kind", ep.Event.Kind).Msgf("event rejected ID=%s", ep.Event.ID)
+				ok(false, "error: could not store event")
 			}
 		}
 
