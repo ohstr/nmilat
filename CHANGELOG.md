@@ -645,8 +645,9 @@ no longer rejects its whole batch, and concurrent query scans are capped.
   hundred feeds held every scan slot and new REQs never reached EOSE. The
   live tail now reads only events that arrived since the last tick (by
   evsid), still including backdated ones, and an idle tick takes no scan
-  slot. On a cold 9 GB store with ~280 connections, feed EOSE p99 went from
-  52s to 12ms and CPU from 307% to 45%.
+  slot. On a cold 9 GB store with ~290 connections, feed EOSE p99 went from
+  52s to 12ms and CPU from 304% to 26%; see
+  [docs/benchmarks.md](docs/benchmarks.md).
 - NIP-77 and NIP-05 lookups ignored a failed store fetch and answered from
   partial results; they now return the error (NIP-05: 503 when busy).
 - Every EVENT now gets exactly one OK. A closed store, closed session or
