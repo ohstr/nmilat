@@ -3,6 +3,7 @@ package relay
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"sync"
@@ -35,6 +36,11 @@ func NewNIP05Handler(store *EventStore, cfg *nip11.Metadata) http.Handler {
 func (h *nip05Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	response, err := h.findIdentities(r.Context(), strings.TrimSpace(r.URL.Query().Get("name")))
+	if errors.Is(err, ErrScanBusy) {
+		w.Header().Set("Retry-After", "5")
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -100,9 +106,12 @@ func (h *nip05Handler) findIdentities(ctx context.Context, name string) (*nip05.
 		}
 	}()
 
-	_ = query.Fetch(ctx, potEvent, &wg, false)
+	fetchErr := query.Fetch(ctx, potEvent, &wg, false)
 	wg.Wait()
 	close(potEvent)
+	if fetchErr != nil {
+		return nil, fetchErr
+	}
 
 	return nip05.BuildIdentityResponse(dnsEvents), nil
 }

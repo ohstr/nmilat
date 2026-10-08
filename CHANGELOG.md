@@ -52,6 +52,10 @@ no longer rejects its whole batch, and concurrent query scans are capped.
 
 ### Added
 
+- `WithEventStoreScanSlotWait` bounds how long a query waits for a scan
+  slot (default 10s). A REQ that can't get one is answered `CLOSED`
+  `error: relay busy, try again later` instead of never; a live tick that
+  can't get one is skipped and caught up on the next.
 - `WithEventStoreMaxConcurrentScans` caps query scan passes reading the
   store at once (default 2 × NumCPU), so read load can't starve the
   writer of disk I/O. Batches slower than 1s are logged with the queue
@@ -632,6 +636,15 @@ no longer rejects its whole batch, and concurrent query scans are capped.
 
 ### Fixed
 
+- Reads starved under many open subscriptions: every live tick of a REQ
+  without `since` walked its whole index back to the start, so a few
+  hundred feeds held every scan slot and new REQs never reached EOSE. The
+  live tail now reads only events that arrived since the last tick (by
+  evsid), still including backdated ones, and an idle tick takes no scan
+  slot. On a cold 9 GB store with ~280 connections, feed EOSE p99 went from
+  52s to 12ms and CPU from 307% to 45%.
+- NIP-77 and NIP-05 lookups ignored a failed store fetch and answered from
+  partial results; they now return the error (NIP-05: 503 when busy).
 - Every EVENT now gets exactly one OK. A closed store, closed session or
   canceled context used to send none; they now reply `error: relay
   unavailable`, and an event still queued after

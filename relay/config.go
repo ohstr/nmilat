@@ -22,6 +22,7 @@ const (
 	defaultMaxConcurrentStoreTasks = 2048
 	defaultCloseGracePeriod        = 2 * time.Second
 	defaultStoreReplyTimeout       = 10 * time.Second
+	defaultScanSlotWait            = 10 * time.Second
 
 	// defaultMembershipInviteTTL is used whenever MembershipInviteTTL is
 	// unset (<= 0).
@@ -276,6 +277,11 @@ type EventStoreConfig struct {
 	// no cap.
 	MaxConcurrentScans int
 
+	// ScanSlotWait bounds how long a scan waits for one of those slots
+	// before giving up with ErrScanBusy, so an overloaded relay answers a
+	// REQ with CLOSED instead of never. <= 0 means wait indefinitely.
+	ScanSlotWait time.Duration
+
 	// Logger receives store/migration logging. Defaults to zerolog.Nop()
 	// (silent) so an EventStore never writes to the process-global logger
 	// unless the caller opts in.
@@ -314,6 +320,13 @@ func WithEventStoreMaxConcurrentScans(n int) EventStoreOption {
 	}
 }
 
+// WithEventStoreScanSlotWait sets EventStoreConfig.ScanSlotWait.
+func WithEventStoreScanSlotWait(d time.Duration) EventStoreOption {
+	return func(cfg *EventStoreConfig) {
+		cfg.ScanSlotWait = d
+	}
+}
+
 // WithEventStoreLogger configures the logger used for store and migration
 // logging. Defaults to zerolog.Nop() (silent).
 func WithEventStoreLogger(logger zerolog.Logger) EventStoreOption {
@@ -337,6 +350,7 @@ func defaultEventStoreConfig() EventStoreConfig {
 		// concurrent load fills a batch before the timer would fire anyway.
 		BatchInterval:      10 * time.Millisecond,
 		MaxConcurrentScans: 2 * workers,
+		ScanSlotWait:       defaultScanSlotWait,
 		Logger:             zerolog.Nop(),
 	}
 }
