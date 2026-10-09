@@ -237,7 +237,8 @@ func (s *Server) takeSecret(given string) bool {
 // connect response carrying the URI's secret on every relay the URI names
 // and keeps listening there. The app then knows the signer. Accepting is
 // the operator's decision, so the policy is not asked; record the app as
-// paired before calling if the policy needs to know. Run must be running.
+// paired before calling if the policy needs to know. Relays the URI names
+// are served for Run's span, or ctx's if Run hasn't started.
 func (s *Server) AcceptNostrconnect(ctx context.Context, uri string) (*nip46.NostrconnectSchema, error) {
 	schema, err := nip46.ParseNostrconnect(uri)
 	if err != nil {
@@ -252,7 +253,8 @@ func (s *Server) AcceptNostrconnectSchema(ctx context.Context, schema *nip46.Nos
 	life := s.life
 	s.mu.Unlock()
 	if life == nil {
-		return errors.New("bunker: server is not running")
+		// Not running yet: listen on the app's relays for ctx's span.
+		life = ctx
 	}
 	// The secret doubles as the response id: there is no request to answer.
 	ev, err := nip46.NewResponseEvent(s.transportKey, schema.ClientPublickey, schema.Secret, schema.Secret, nip46.EncryptionNIP44V2)
