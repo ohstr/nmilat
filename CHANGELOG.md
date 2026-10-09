@@ -55,13 +55,9 @@ answered `relay busy` instead of never.
 
 ### Added
 
-- `nipLS`: NIP-46 signing over a unix socket (`bunker+unix:///path.sock`),
-  moved here from ncli so any app can use it. `Dial` gives a client;
-  `NewServer` serves a key behind a `Policy` you supply, with a built-in
-  key guard and optional uid/gid allow-list. Both the client and
-  `LocalKey` implement `Signer`, so signing code needn't know where the
-  key lives.
-  ([#83](https://github.com/ohstr/nmilat/pull/83))
+- Adds `nipLS` for signing through a local signer over a unix socket
+  (`bunker+unix:///path.sock`): `Dial` for clients, `NewServer` to serve a
+  key behind your own policy. ([#83](https://github.com/ohstr/nmilat/pull/83))
 - `WithEventStoreScanSlotWait` bounds how long a query waits for a scan
   slot (default 10s). A REQ that can't get one is answered `CLOSED`
   `error: relay busy, try again later` instead of never; a live tick that
