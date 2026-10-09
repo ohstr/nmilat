@@ -39,6 +39,7 @@ import (
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip19"
 	"github.com/ohstr/nmilat/nip46"
+	relayclient "github.com/ohstr/nmilat/relay/client"
 )
 
 const (
@@ -211,6 +212,9 @@ type Decision struct {
 
 // Allowed reports whether the request was carried out.
 func (d Decision) Allowed() bool { return d.Err == nil }
+
+// RelayStatus is whether one relay currently has a live connection.
+type RelayStatus = relayclient.RelayStatus
 
 // ErrNoRelay means none of the relays could be reached.
 var ErrNoRelay = errors.New("bunker: no relay could be reached")

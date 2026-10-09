@@ -7,6 +7,13 @@ import (
 	"time"
 
 	"github.com/ohstr/nmilat/nip46"
+	relayclient "github.com/ohstr/nmilat/relay/client"
+)
+
+// Every NIP-46 signer can answer a relay's NIP-42 challenge.
+var (
+	_ relayclient.Signer = (*Client)(nil)
+	_ relayclient.Signer = (*nip46.LocalKey)(nil)
 )
 
 // Handle answers a request with no relay at all.
