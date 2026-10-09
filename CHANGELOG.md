@@ -73,6 +73,8 @@ privacy and performance fixes.
 
 ### Changed
 
+- Requires Go 1.26.9, which fixes nine standard-library vulnerabilities.
+  ([#89](https://github.com/ohstr/nmilat/pull/89))
 - Sends the NIP-42 AUTH challenge on every connection, not only when
   `auth_required` is on. ([#65](https://github.com/ohstr/nmilat/pull/65))
 - Returns whether the relay refused the read from
