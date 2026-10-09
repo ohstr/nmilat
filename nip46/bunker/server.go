@@ -191,10 +191,21 @@ func (s *Server) NewBunkerURI(ttl time.Duration) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	s.mu.Lock()
-	s.secret, s.secretExp = secret, s.cfg.Now().Add(ttl)
-	s.mu.Unlock()
+	s.ArmSecret(secret, ttl)
 	return (&URI{SignerPubKey: s.transportPub, Relays: s.relays, Secret: secret}).String(), nil
+}
+
+// ArmSecret makes secret the one a connect must present, for ttl, single
+// use. It replaces any previous secret; "" disarms. NewBunkerURI arms a
+// random one; use this when the secret comes from elsewhere.
+func (s *Server) ArmSecret(secret string, ttl time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if secret == "" {
+		s.secret, s.secretExp = "", time.Time{}
+		return
+	}
+	s.secret, s.secretExp = secret, s.cfg.Now().Add(ttl)
 }
 
 // CancelPairing disarms the current bunker:// secret, if any.
@@ -232,19 +243,24 @@ func (s *Server) AcceptNostrconnect(ctx context.Context, uri string) (*nip46.Nos
 	if err != nil {
 		return nil, fmt.Errorf("bunker: %w", err)
 	}
+	return schema, s.AcceptNostrconnectSchema(ctx, schema)
+}
+
+// AcceptNostrconnectSchema is AcceptNostrconnect for an already-parsed URI.
+func (s *Server) AcceptNostrconnectSchema(ctx context.Context, schema *nip46.NostrconnectSchema) error {
 	s.mu.Lock()
 	life := s.life
 	s.mu.Unlock()
 	if life == nil {
-		return nil, errors.New("bunker: server is not running")
+		return errors.New("bunker: server is not running")
 	}
 	// The secret doubles as the response id: there is no request to answer.
 	ev, err := nip46.NewResponseEvent(s.transportKey, schema.ClientPublickey, schema.Secret, schema.Secret, nip46.EncryptionNIP44V2)
 	if err != nil {
-		return nil, fmt.Errorf("bunker: %w", err)
+		return fmt.Errorf("bunker: %w", err)
 	}
 	if err := ev.Sign(s.transportKey); err != nil {
-		return nil, fmt.Errorf("bunker: %w", err)
+		return fmt.Errorf("bunker: %w", err)
 	}
 	relays := make([]string, 0, len(schema.Relays))
 	for _, r := range schema.Relays {
@@ -252,9 +268,9 @@ func (s *Server) AcceptNostrconnect(ctx context.Context, uri string) (*nip46.Nos
 	}
 	sent, tried := s.pool.sendTo(ctx, life, relays, ev)
 	if sent == 0 {
-		return schema, fmt.Errorf("%w (tried %s)", ErrNoRelay, strings.Join(tried, ", "))
+		return fmt.Errorf("%w (tried %s)", ErrNoRelay, strings.Join(tried, ", "))
 	}
-	return schema, nil
+	return nil
 }
 
 // handleEvent verifies, decrypts and answers one request event.
@@ -277,10 +293,25 @@ func (s *Server) handleEvent(conn *relayclient.Connection, ev *nip01.Event) {
 		return
 	}
 
-	call := &Call{ID: req.RequestID, Method: req.Method, Params: req.Params, Client: strings.ToLower(ev.PubKey), Encryption: encryption}
-	ctx := s.lifeCtx()
+	resp, err := s.Handle(s.lifeCtx(), req, encryption)
+	if err != nil {
+		s.cfg.Logf("could not build a response to %s", req.RequestID)
+		return
+	}
+	if !conn.Send(resp) {
+		s.cfg.Logf("relay %s: closed before the response to %s went out", conn.Relay(), req.RequestID)
+	}
+}
+
+// Handle answers one already-decrypted request without any relay: it runs
+// the method (and the policy), reports the decision, and returns the
+// signed response event, encrypted with encryption. The error is only for
+// a response that could not be built. Useful for tests and for carrying
+// requests over another transport.
+func (s *Server) Handle(ctx context.Context, req *nip46.RequestEvent, encryption string) (*nip01.Event, error) {
+	call := &Call{ID: req.RequestID, Method: req.Method, Params: req.Params, Client: strings.ToLower(req.PubKey), Encryption: encryption}
 	result, err := s.dispatch(ctx, call)
-	s.decide(call, err)
+	s.decide(call, result, err)
 
 	var resp *nip01.Event
 	if err != nil {
@@ -288,16 +319,13 @@ func (s *Server) handleEvent(conn *relayclient.Connection, ev *nip01.Event) {
 	} else {
 		resp, err = nip46.NewResponseEvent(s.transportKey, call.Client, call.ID, result, encryption)
 	}
-	if err == nil {
-		err = resp.Sign(s.transportKey)
-	}
 	if err != nil {
-		s.cfg.Logf("could not build a response to %s", call.ID)
-		return
+		return nil, err
 	}
-	if !conn.Send(resp) {
-		s.cfg.Logf("relay %s: closed before the response to %s went out", conn.Relay(), call.ID)
+	if err := resp.Sign(s.transportKey); err != nil {
+		return nil, err
 	}
+	return resp, nil
 }
 
 func (s *Server) lifeCtx() context.Context {
@@ -424,13 +452,17 @@ func (s *Server) crypto(ctx context.Context, call *Call) (string, error) {
 	})
 }
 
-func (s *Server) decide(call *Call, err error) {
+func (s *Server) decide(call *Call, result string, err error) {
 	if s.cfg.OnDecision == nil {
 		return
 	}
+	d := Decision{Time: s.cfg.Now(), Call: call, Err: err}
+	if err == nil {
+		d.Result = result
+	}
 	s.decisionMu.Lock()
 	defer s.decisionMu.Unlock()
-	s.cfg.OnDecision(Decision{Time: s.cfg.Now(), Call: call, Err: err})
+	s.cfg.OnDecision(d)
 }
 
 // relaysJSON is get_relays' result: each relay read/write.

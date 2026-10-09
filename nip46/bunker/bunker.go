@@ -204,6 +204,9 @@ type Decision struct {
 	Call *Call
 	// Err is nil when the request was allowed and carried out.
 	Err error
+	// Result is the response result when allowed, e.g. the signed event
+	// JSON. For a decrypt it is plaintext: handle it as such.
+	Result string
 }
 
 // Allowed reports whether the request was carried out.
