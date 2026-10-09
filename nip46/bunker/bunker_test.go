@@ -173,7 +173,6 @@ func TestNewServerValidates(t *testing.T) {
 	cases := map[string]ServerConfig{
 		"no key":      {Policy: allow, Relays: []string{"wss://r"}},
 		"no policy":   {Key: k, Relays: []string{"wss://r"}},
-		"no relays":   {Key: k, Policy: allow},
 		"bad relay":   {Key: k, Policy: allow, Relays: []string{"http://r"}},
 		"shadow":      {Key: k, Policy: allow, Relays: []string{"wss://r"}, Methods: map[string]Handler{nip46.MethodPing: nil}},
 		"remote key":  {Key: remoteKey{k}, Policy: allow, Relays: []string{"wss://r"}},

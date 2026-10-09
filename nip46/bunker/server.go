@@ -25,7 +25,7 @@ type ServerConfig struct {
 	// to. Empty means Key's own, which requires Key to be a
 	// *nip46.LocalKey.
 	TransportKey string
-	// Relays the server listens on. Required.
+	// Relays the server listens on. Required by Run; Handle needs none.
 	Relays []string
 	// Policy decides every request. Required.
 	Policy Policy
@@ -131,9 +131,6 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		}
 		relays = append(relays, n)
 	}
-	if len(relays) == 0 {
-		return nil, errors.New("bunker: ServerConfig.Relays is required")
-	}
 
 	s := &Server{
 		cfg:          cfg,
@@ -165,6 +162,9 @@ func (s *Server) RelayStatuses() []RelayStatus { return s.pool.statuses() }
 
 // Run connects to the relays and serves requests until ctx is done.
 func (s *Server) Run(ctx context.Context) error {
+	if len(s.relays) == 0 {
+		return errors.New("bunker: no relays configured")
+	}
 	s.mu.Lock()
 	if s.life != nil {
 		s.mu.Unlock()
@@ -479,8 +479,11 @@ func (s *Server) relaysJSON() string {
 }
 
 // switchRelaysJSON is switch_relays' result: the relays the app should
-// use, as an array.
+// use, as an array, or null (no change) when there are none.
 func (s *Server) switchRelaysJSON() string {
+	if len(s.relays) == 0 {
+		return "null"
+	}
 	b, err := json.Marshal(s.relays)
 	if err != nil {
 		return "null"

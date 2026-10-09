@@ -59,3 +59,18 @@ func TestHandleWithoutRelay(t *testing.T) {
 		t.Error("disarmed secret accepted")
 	}
 }
+
+// Without relays a server still answers through Handle, but can't Run.
+func TestServerWithoutRelays(t *testing.T) {
+	k, _ := nip46.NewLocalKey(userPriv)
+	srv, err := NewServer(ServerConfig{Key: k, Policy: PolicyFunc(func(context.Context, *Call) error { return nil })})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := srv.switchRelaysJSON(); got != "null" {
+		t.Errorf("switch_relays = %s, want null", got)
+	}
+	if err := srv.Run(context.Background()); err == nil {
+		t.Error("Run without relays succeeded")
+	}
+}
