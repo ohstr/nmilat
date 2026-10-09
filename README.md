@@ -63,12 +63,13 @@ go get github.com/ohstr/nmilat
 - **[`nip90`](https://github.com/nostr-protocol/nips/blob/master/90.md)** — Data Vending Machines
 - **[`nipA0`](https://github.com/nostr-protocol/nips/blob/master/A0.md)** — Voice messages
 - **[`nipAA`](https://github.com/block/buzz/blob/main/docs/nips/NIP-AA.md)** — Agent Auth
-- **[`nipAZ`](https://github.com/ohstr/zapf-nips/blob/main/NIP-AZ.md)** — AltZap: zaps for energy-backed coins
+- **[`nipAZ`](https://github.com/ohstr/nips/blob/main/NIP-AZ.md)** — AltZap: zaps for energy-backed coins
 - **[`nipB0`](https://github.com/nostr-protocol/nips/blob/master/B0.md)** — Web bookmarks
 - **[`nipB7`](https://github.com/nostr-protocol/nips/blob/master/B7.md)** — Blossom media
-- **[`nipcash`](https://github.com/flokiorg/lokihub/blob/main/docs/nips/NIP-CASH.md)** — Cash Hub: ecash system
-- **[`nipcw`](https://github.com/flokiorg/lokihub/blob/main/docs/nips/NIP-CW.md)** — Circle Wallet: shared self-service wallets
-- **[`nipIC`](https://github.com/ohstr/zapf-nips/blob/main/NIP-IC.md)** — Identity Connection: binds Web Identity accounts to Nostr pubkeys
+- **[`nipcash`](https://github.com/ohstr/nips/blob/main/NIP-CASH.md)** — Cash Hub: ecash system
+- **[`nipcw`](https://github.com/ohstr/nips/blob/main/NIP-CW.md)** — Circle Wallet: shared self-service wallets
+- **[`nipIC`](https://github.com/ohstr/nips/blob/main/NIP-IC.md)** — Identity Connection: binds Web Identity accounts to Nostr pubkeys
+- **[`nipLS`](https://github.com/ohstr/nips/blob/main/NIP-LS.md)** — Local Signer: NIP-46 over a unix socket (`bunker+unix://`), client and policy-gated server
 - **[`nipOA`](https://github.com/block/buzz/blob/main/docs/nips/NIP-OA.md)** — Owner Attestation
 
 ### Relay engine and infrastructure
@@ -643,7 +644,7 @@ func main() {
 
 A verifier re-checks cross-IA re-attestation evidence with
 `challenge.Verify(userPubkeyHex, preAuthCode)` before trusting it — see
-[NIP-IC's Cross-IA Challenge Binding](https://github.com/ohstr/zapf-nips/blob/main/references/identity-connection.md#e--cross-ia-challenge-binding)
+[NIP-IC's `npv1` Challenge Token](https://github.com/ohstr/nips/blob/main/NIP-IC.md#the-npv1-challenge-token)
 for the full security model.
 
 ### Pay an invoice over Nostr Wallet Connect (NIP-47)

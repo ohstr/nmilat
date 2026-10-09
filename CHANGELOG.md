@@ -8,6 +8,9 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `nipLS` for signing through a local signer over a unix socket
+  (`bunker+unix:///path.sock`): `Dial` for clients, `NewServer` to serve a
+  key behind your own policy. ([#83](https://github.com/ohstr/nmilat/pull/83))
 - Adds `WithEventStoreScanSlotWait` (default 10s): a REQ that can't get a scan
   slot is answered `CLOSED` `error: relay busy, try again later` instead of
   never. ([#81](https://github.com/ohstr/nmilat/pull/81))

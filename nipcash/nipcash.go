@@ -11,7 +11,7 @@
 // raw NIP-47. It makes no network calls and has no opinion on how a caller
 // dials out — see nipcash/client for the NWC transport built on top of it.
 //
-// See https://github.com/flokiorg/lokihub/blob/main/docs/nips/NIP-CASH.md
+// See https://github.com/ohstr/nips/blob/main/NIP-CASH.md
 // for the full spec this package implements.
 package nipcash
 
