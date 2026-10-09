@@ -75,6 +75,10 @@ answered `relay busy` instead of never.
 - `relay/client`: NIP-42 AUTH through a `Signer` (`ConnectionConfig.Signer`,
   `ReadEventsFromRelayWithSigner`), so a key behind a remote signer can
   authenticate. `KeySigner` wraps a raw key.
+- `nip01.LatestVersion`/`LatestVersions`: pick the winning version of a
+  replaceable or addressable event (highest `created_at`, then lowest id,
+  the relay store's rule), ignoring versions dated past now plus a skew.
+  `Supersedes` and `ReplaceableAddress` are the building blocks.
 - `WithEventStoreScanSlotWait` bounds how long a query waits for a scan
   slot (default 10s). A REQ that can't get one is answered `CLOSED`
   `error: relay busy, try again later` instead of never; a live tick that
