@@ -55,22 +55,14 @@ answered `relay busy` instead of never.
 
 ### Added
 
-- `nipLS`: NIP-46 signing over a unix socket (`bunker+unix:///path.sock`),
-  moved here from ncli so any app can use it. `Dial` gives a client;
-  `NewServer` serves a key behind a `Policy` you supply, with a built-in
-  key guard and optional uid/gid allow-list. Both the client and
-  `LocalKey` implement `Signer`, so signing code needn't know where the
-  key lives.
-  ([#83](https://github.com/ohstr/nmilat/pull/83))
-- `nip46/bunker`: NIP-46 remote signing over relays, moved here from
-  ncli. `Dial` pairs from a `bunker://` URI, `NewPairing` shows a
-  `nostrconnect://` one, `Resume` reconnects from a saved `Session`.
-  `NewServer` is the signer side: single-use `bunker://` secrets,
-  `AcceptNostrconnect`, and a `Policy` that decides every request.
-  ([#85](https://github.com/ohstr/nmilat/pull/85))
-- `nip46` now holds the transport-neutral `Signer`, `Key`, `LocalKey`,
-  `KeyGuard` and refusal errors (`Deny`, `ErrDenied`, ...), shared by
-  `nipLS` and `nip46/bunker`.
+- Adds `nipLS` for signing through a local signer over a unix socket
+  (`bunker+unix:///path.sock`): `Dial` for clients, `NewServer` to serve a
+  key behind your own policy. ([#83](https://github.com/ohstr/nmilat/pull/83))
+- Adds `nip46/bunker` for NIP-46 signing over relays: `Dial`
+  (`bunker://`), `NewPairing` (`nostrconnect://`) and `Resume` for clients,
+  and `NewServer`, with a policy per request, for signers. ([#85](https://github.com/ohstr/nmilat/pull/85))
+- Adds `nip46.Signer` and `nip46.LocalKey`, one signing interface that a
+  local key, a socket client and a bunker client all implement.
   ([#85](https://github.com/ohstr/nmilat/pull/85))
 - `WithEventStoreScanSlotWait` bounds how long a query waits for a scan
   slot (default 10s). A REQ that can't get one is answered `CLOSED`
