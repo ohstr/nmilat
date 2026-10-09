@@ -4,12 +4,22 @@ import (
 	"strings"
 
 	"github.com/ohstr/nmilat/nip01"
+	"github.com/ohstr/nmilat/nip19"
 )
 
 // guard refuses output that contains the signer's own key. It runs before
 // the policy and can't be turned off.
 type guard struct {
 	needles []string
+}
+
+// keySecrets are the encodings of a private key the guard refuses to emit.
+func keySecrets(privHex string) []string {
+	out := []string{privHex}
+	if nsec, err := nip19.EncodePrivateKey(privHex); err == nil {
+		out = append(out, nsec)
+	}
+	return out
 }
 
 func newGuard(secrets ...string) *guard {

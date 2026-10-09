@@ -17,6 +17,8 @@ import (
 	"github.com/ohstr/nmilat/nip46"
 )
 
+var _ Key = (*Client)(nil)
+
 // ErrConnClosed means the signer hung up without answering.
 var ErrConnClosed = errors.New("nipLS: signer closed the connection")
 
@@ -137,7 +139,7 @@ func (c *Client) call(ctx context.Context, method string, params []string) (stri
 		return "", fmt.Errorf("nipLS: signer answered request %q, want %q", resp.RequestID, id)
 	}
 	if resp.Error != "" {
-		return "", parseWireError(resp.Error)
+		return "", nip46.ParseError(resp.Error)
 	}
 	return resp.Result, nil
 }
@@ -196,7 +198,7 @@ func (c *Client) SignWithAttestations(ctx context.Context, ev *nip01.Event, atte
 // Encrypt asks the signer to encrypt plaintext to peerPubKey. scheme is
 // nip46.EncryptionNIP04 or nip46.EncryptionNIP44V2.
 func (c *Client) Encrypt(ctx context.Context, scheme, peerPubKey, plaintext string) (string, error) {
-	method, err := cryptoMethod(scheme, true)
+	method, err := nip46.MethodFor(scheme, true)
 	if err != nil {
 		return "", err
 	}
@@ -205,23 +207,9 @@ func (c *Client) Encrypt(ctx context.Context, scheme, peerPubKey, plaintext stri
 
 // Decrypt asks the signer to decrypt ciphertext from peerPubKey.
 func (c *Client) Decrypt(ctx context.Context, scheme, peerPubKey, ciphertext string) (string, error) {
-	method, err := cryptoMethod(scheme, false)
+	method, err := nip46.MethodFor(scheme, false)
 	if err != nil {
 		return "", err
 	}
 	return c.Call(ctx, method, peerPubKey, ciphertext)
-}
-
-func cryptoMethod(scheme string, encrypt bool) (string, error) {
-	switch {
-	case scheme == nip46.EncryptionNIP04 && encrypt:
-		return nip46.MethodNIP04Encrypt, nil
-	case scheme == nip46.EncryptionNIP04:
-		return nip46.MethodNIP04Decrypt, nil
-	case scheme == nip46.EncryptionNIP44V2 && encrypt:
-		return nip46.MethodNIP44Encrypt, nil
-	case scheme == nip46.EncryptionNIP44V2:
-		return nip46.MethodNIP44Decrypt, nil
-	}
-	return "", fmt.Errorf("%w: %q", nip46.ErrUnsupportedEncryption, scheme)
 }

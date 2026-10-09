@@ -3,7 +3,6 @@ package nipLS
 import (
 	"bufio"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -101,7 +100,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 
 	secrets := append([]string(nil), cfg.Guard...)
 	if lk, ok := cfg.Key.(*LocalKey); ok {
-		secrets = append(secrets, lk.secrets()...)
+		secrets = append(secrets, keySecrets(lk.PrivKeyHex())...)
 	}
 	return &Server{
 		cfg:      cfg,
@@ -200,7 +199,7 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) {
 			resp.RequestID = wreq.RequestID
 			result, err := s.handle(ctx, req)
 			if err != nil {
-				resp.Error = wireError(err)
+				resp.Error = nip46.WireError(err)
 			} else {
 				resp.Result = result
 			}
@@ -209,14 +208,6 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 	}
-}
-
-func wireError(err error) string {
-	var e *Error
-	if errors.As(err, &e) {
-		return e.wire()
-	}
-	return err.Error()
 }
 
 func (s *Server) peerAllowed(p Peer) bool {
@@ -285,7 +276,7 @@ func (s *Server) handleSign(ctx context.Context, req *Request) (string, error) {
 	s.signMu.Lock()
 	defer s.signMu.Unlock()
 	if err := s.cfg.Policy.Authorize(ctx, req); err != nil {
-		return "", s.decide(req, asRefusal(err))
+		return "", s.decide(req, nip46.AsRefusal(err))
 	}
 	want := ev.ID
 	if err := s.cfg.Key.Sign(ctx, &ev); err != nil {
@@ -326,7 +317,7 @@ func (s *Server) handleCrypto(ctx context.Context, req *Request) (string, error)
 		req.Ciphertext = req.Params[1]
 	}
 	if err := s.cfg.Policy.Authorize(ctx, req); err != nil {
-		return "", s.decide(req, asRefusal(err))
+		return "", s.decide(req, nip46.AsRefusal(err))
 	}
 	var result string
 	if encrypting {
@@ -339,15 +330,6 @@ func (s *Server) handleCrypto(ctx context.Context, req *Request) (string, error)
 	}
 	_ = s.decide(req, nil)
 	return result, nil
-}
-
-// asRefusal makes a policy error a denial unless it already is an *Error.
-func asRefusal(err error) error {
-	var e *Error
-	if errors.As(err, &e) {
-		return e
-	}
-	return Deny(err.Error())
 }
 
 // decide reports the outcome to OnDecision and returns err.
@@ -363,16 +345,7 @@ func (s *Server) decide(req *Request, err error) error {
 // PrepareTarget sets ev's pubkey to signerPub, clears any signature, and
 // computes the id the signature (and any attestation) binds to.
 func PrepareTarget(ev *nip01.Event, signerPub string) error {
-	ev.PubKey, ev.ID, ev.Sig = strings.ToLower(signerPub), "", ""
-	if ev.Tags == nil {
-		ev.Tags = [][]string{}
-	}
-	id, err := ev.HashID()
-	if err != nil {
-		return fmt.Errorf("cannot hash event: %w", err)
-	}
-	ev.ID = hex.EncodeToString(id)
-	return nil
+	return nip46.PrepareTarget(ev, signerPub)
 }
 
 // ErrAlreadyListening means another server holds the socket.
