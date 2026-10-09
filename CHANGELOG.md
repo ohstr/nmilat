@@ -67,9 +67,11 @@ answered `relay busy` instead of never.
   `nostrconnect://` one, `Resume` reconnects from a saved `Session`.
   `NewServer` is the signer side: single-use `bunker://` secrets,
   `AcceptNostrconnect`, and a `Policy` that decides every request.
+  ([#85](https://github.com/ohstr/nmilat/pull/85))
 - `nip46` now holds the transport-neutral `Signer`, `Key`, `LocalKey`,
   `KeyGuard` and refusal errors (`Deny`, `ErrDenied`, ...), shared by
   `nipLS` and `nip46/bunker`.
+  ([#85](https://github.com/ohstr/nmilat/pull/85))
 - `WithEventStoreScanSlotWait` bounds how long a query waits for a scan
   slot (default 10s). A REQ that can't get one is answered `CLOSED`
   `error: relay busy, try again later` instead of never; a live tick that
