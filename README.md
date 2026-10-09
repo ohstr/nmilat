@@ -49,7 +49,7 @@ go get github.com/ohstr/nmilat
 - **[`nip40`](https://github.com/nostr-protocol/nips/blob/master/40.md)** — Event expiration
 - **[`nip42`](https://github.com/nostr-protocol/nips/blob/master/42.md), [`nip98`](https://github.com/nostr-protocol/nips/blob/master/98.md)** — Relay/HTTP authentication
 - **[`nip43`](https://github.com/nostr-protocol/nips/blob/master/43.md)** — Relay access metadata and requests
-- **[`nip46`](https://github.com/nostr-protocol/nips/blob/master/46.md)** — Nostr Connect (remote signing)
+- **[`nip46`](https://github.com/nostr-protocol/nips/blob/master/46.md)** — Nostr Connect (remote signing); `nip46/bunker` is the relay client and signer (`bunker://`, `nostrconnect://`)
 - **[`nip47`](https://github.com/nostr-protocol/nips/blob/master/47.md)** — Wallet Connect (NWC): info/request/response/notification events, encryption negotiation, pairing URI
 - **[`nip48`](https://github.com/nostr-protocol/nips/blob/master/48.md)** — Proxy tags
 - **[`nip53`](https://github.com/nostr-protocol/nips/blob/master/53.md)** — Live streaming and spaces: live streams, meeting spaces and their rooms, listener presence, live chat

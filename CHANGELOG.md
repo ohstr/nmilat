@@ -62,6 +62,14 @@ answered `relay busy` instead of never.
   `LocalKey` implement `Signer`, so signing code needn't know where the
   key lives.
   ([#83](https://github.com/ohstr/nmilat/pull/83))
+- `nip46/bunker`: NIP-46 remote signing over relays, moved here from
+  ncli. `Dial` pairs from a `bunker://` URI, `NewPairing` shows a
+  `nostrconnect://` one, `Resume` reconnects from a saved `Session`.
+  `NewServer` is the signer side: single-use `bunker://` secrets,
+  `AcceptNostrconnect`, and a `Policy` that decides every request.
+- `nip46` now holds the transport-neutral `Signer`, `Key`, `LocalKey`,
+  `KeyGuard` and refusal errors (`Deny`, `ErrDenied`, ...), shared by
+  `nipLS` and `nip46/bunker`.
 - `WithEventStoreScanSlotWait` bounds how long a query waits for a scan
   slot (default 10s). A REQ that can't get one is answered `CLOSED`
   `error: relay busy, try again later` instead of never; a live tick that
