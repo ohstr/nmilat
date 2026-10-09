@@ -56,7 +56,7 @@ type ServerConfig struct {
 type Server struct {
 	cfg      ServerConfig
 	pub      string
-	guard    *guard
+	guard    *nip46.KeyGuard
 	allowUID map[int]bool
 	allowGID map[int]bool
 	connSeq  atomic.Uint64
@@ -98,14 +98,14 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("nipLS: key has an invalid pubkey: %w", err)
 	}
 
-	secrets := append([]string(nil), cfg.Guard...)
+	var privs []string
 	if lk, ok := cfg.Key.(*LocalKey); ok {
-		secrets = append(secrets, keySecrets(lk.PrivKeyHex())...)
+		privs = append(privs, lk.PrivKeyHex())
 	}
 	return &Server{
 		cfg:      cfg,
 		pub:      pub,
-		guard:    newGuard(secrets...),
+		guard:    nip46.NewKeyGuard(privs, cfg.Guard...),
 		allowUID: intSet(cfg.AllowUIDs),
 		allowGID: intSet(cfg.AllowGIDs),
 	}, nil
@@ -268,7 +268,7 @@ func (s *Server) handleSign(ctx context.Context, req *Request) (string, error) {
 	if err := PrepareTarget(&ev, s.pub); err != nil {
 		return "", s.decide(req, Invalid(err.Error()))
 	}
-	if s.guard.containsEvent(&ev) {
+	if s.guard.ContainsEvent(&ev) {
 		return "", s.decide(req, Deny("event contains the signer's key"))
 	}
 	req.Event = ev.Copy()
@@ -310,7 +310,7 @@ func (s *Server) handleCrypto(ctx context.Context, req *Request) (string, error)
 	encrypting := req.Method == nip46.MethodNIP04Encrypt || req.Method == nip46.MethodNIP44Encrypt
 	if encrypting {
 		req.Plaintext = req.Params[1]
-		if s.guard.contains(req.Plaintext) {
+		if s.guard.Contains(req.Plaintext) {
 			return "", s.decide(req, Deny("plaintext contains the signer's key"))
 		}
 	} else {
