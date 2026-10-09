@@ -163,12 +163,23 @@ const authRequiredClosePrefix = "auth-required:"
 // may have silently excluded content the caller's identity actually has
 // access to.
 func ReadEventsFromRelayWithAuth(parent context.Context, relayURL *url.URL, filters *nip01.SubscriptionFilterGroup, signingKeyHex string) (events []*nip01.Event, restricted bool, err error) {
+	var signer Signer
+	if signingKeyHex != "" {
+		signer = KeySigner(signingKeyHex)
+	}
+	return ReadEventsFromRelayWithSigner(parent, relayURL, filters, signer)
+}
+
+// ReadEventsFromRelayWithSigner is ReadEventsFromRelayWithAuth with AUTH
+// answered by signer, which may be a remote signer. A nil signer reads
+// anonymously.
+func ReadEventsFromRelayWithSigner(parent context.Context, relayURL *url.URL, filters *nip01.SubscriptionFilterGroup, signer Signer) (events []*nip01.Event, restricted bool, err error) {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 
 	// Anonymous: nothing to authenticate with, so no retry -- but still
 	// report a gated CLOSED, so the caller can tell "refused" from "empty".
-	if signingKeyHex == "" {
+	if signer == nil {
 		conn, err := Connect(ctx, relayURL)
 		if err != nil {
 			return nil, false, err
@@ -178,7 +189,7 @@ func ReadEventsFromRelayWithAuth(parent context.Context, relayURL *url.URL, filt
 		return events, restricted, err
 	}
 
-	conn, err := NewConnection(ctx, relayURL, &ConnectionConfig{SigningKeyHex: signingKeyHex})
+	conn, err := NewConnection(ctx, relayURL, &ConnectionConfig{Signer: signer})
 	if err != nil {
 		return nil, false, err
 	}
@@ -201,13 +212,13 @@ func ReadEventsFromRelayWithAuth(parent context.Context, relayURL *url.URL, filt
 	case <-conn.AuthSettled():
 	case <-time.After(authRetryWindow):
 	case <-conn.Errors():
-		conn, err = redialAndWaitForAuth(ctx, relayURL, signingKeyHex)
+		conn, err = redialAndWaitForAuth(ctx, relayURL, signer)
 		if err != nil {
 			return nil, false, err
 		}
 		defer conn.Close()
 	case <-conn.Closed():
-		conn, err = redialAndWaitForAuth(ctx, relayURL, signingKeyHex)
+		conn, err = redialAndWaitForAuth(ctx, relayURL, signer)
 		if err != nil {
 			return nil, false, err
 		}
@@ -227,8 +238,8 @@ func ReadEventsFromRelayWithAuth(parent context.Context, relayURL *url.URL, filt
 // needs regardless of why it died; the caller is responsible for closing
 // the connection this returns (on success, it's a live connection the
 // caller still needs for its own retry).
-func redialAndWaitForAuth(ctx context.Context, relayURL *url.URL, signingKeyHex string) (*Connection, error) {
-	conn, err := NewConnection(ctx, relayURL, &ConnectionConfig{SigningKeyHex: signingKeyHex})
+func redialAndWaitForAuth(ctx context.Context, relayURL *url.URL, signer Signer) (*Connection, error) {
+	conn, err := NewConnection(ctx, relayURL, &ConnectionConfig{Signer: signer})
 	if err != nil {
 		return nil, err
 	}

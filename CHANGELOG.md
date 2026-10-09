@@ -72,6 +72,9 @@ answered `relay busy` instead of never.
   `KeyGuard` and refusal errors (`Deny`, `ErrDenied`, ...), shared by
   `nipLS` and `nip46/bunker`.
   ([#85](https://github.com/ohstr/nmilat/pull/85))
+- `relay/client`: NIP-42 AUTH through a `Signer` (`ConnectionConfig.Signer`,
+  `ReadEventsFromRelayWithSigner`), so a key behind a remote signer can
+  authenticate. `KeySigner` wraps a raw key.
 - `WithEventStoreScanSlotWait` bounds how long a query waits for a scan
   slot (default 10s). A REQ that can't get one is answered `CLOSED`
   `error: relay busy, try again later` instead of never; a live tick that
