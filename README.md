@@ -66,8 +66,8 @@ go get github.com/ohstr/nmilat
 - **[`nipAZ`](https://github.com/ohstr/nips/blob/main/NIP-AZ.md)** — AltZap: zaps for energy-backed coins
 - **[`nipB0`](https://github.com/nostr-protocol/nips/blob/master/B0.md)** — Web bookmarks
 - **[`nipB7`](https://github.com/nostr-protocol/nips/blob/master/B7.md)** — Blossom media
-- **[`nipcash`](https://github.com/flokiorg/lokihub/blob/main/docs/nips/NIP-CASH.md)** — Cash Hub: ecash system
-- **[`nipcw`](https://github.com/flokiorg/lokihub/blob/main/docs/nips/NIP-CW.md)** — Circle Wallet: shared self-service wallets
+- **[`nipcash`](https://github.com/ohstr/nips/blob/main/NIP-CASH.md)** — Cash Hub: ecash system
+- **[`nipcw`](https://github.com/ohstr/nips/blob/main/NIP-CW.md)** — Circle Wallet: shared self-service wallets
 - **[`nipIC`](https://github.com/ohstr/nips/blob/main/NIP-IC.md)** — Identity Connection: binds Web Identity accounts to Nostr pubkeys
 - **[`nipLS`](https://github.com/ohstr/nips/blob/main/NIP-LS.md)** — Local Signer: NIP-46 over a unix socket (`bunker+unix://`), client and policy-gated server
 - **[`nipOA`](https://github.com/block/buzz/blob/main/docs/nips/NIP-OA.md)** — Owner Attestation

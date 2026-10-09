@@ -8,7 +8,7 @@
 // no network calls and has no opinion on how a caller dials out — see
 // nipcw/client for the NWC transport built on top of it.
 //
-// See https://github.com/flokiorg/lokihub/blob/main/docs/nips/NIP-CW.md for
+// See https://github.com/ohstr/nips/blob/main/NIP-CW.md for
 // the full spec this package implements.
 package nipcw
 
