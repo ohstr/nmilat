@@ -55,40 +55,25 @@ answered `relay busy` instead of never.
 
 ### Added
 
-- `nipLS`: NIP-46 signing over a unix socket (`bunker+unix:///path.sock`),
-  moved here from ncli so any app can use it. `Dial` gives a client;
-  `NewServer` serves a key behind a `Policy` you supply, with a built-in
-  key guard and optional uid/gid allow-list. Both the client and
-  `LocalKey` implement `Signer`, so signing code needn't know where the
-  key lives.
-  ([#83](https://github.com/ohstr/nmilat/pull/83))
-- `nip46/bunker`: NIP-46 remote signing over relays, moved here from
-  ncli. `Dial` pairs from a `bunker://` URI, `NewPairing` shows a
-  `nostrconnect://` one, `Resume` reconnects from a saved `Session`.
-  `NewServer` is the signer side: single-use `bunker://` secrets,
-  `AcceptNostrconnect`, and a `Policy` that decides every request.
+- Adds `nipLS` for signing through a local signer over a unix socket
+  (`bunker+unix:///path.sock`): `Dial` for clients, `NewServer` to serve a
+  key behind your own policy. ([#83](https://github.com/ohstr/nmilat/pull/83))
+- Adds `nip46/bunker` for NIP-46 signing over relays: `Dial`
+  (`bunker://`), `NewPairing` (`nostrconnect://`) and `Resume` for clients,
+  and `NewServer`, with a policy per request, for signers. ([#85](https://github.com/ohstr/nmilat/pull/85))
+- Adds `nip46.Signer` and `nip46.LocalKey`, one signing interface that a
+  local key, a socket client and a bunker client all implement.
   ([#85](https://github.com/ohstr/nmilat/pull/85))
-- `nip46` now holds the transport-neutral `Signer`, `Key`, `LocalKey`,
-  `KeyGuard` and refusal errors (`Deny`, `ErrDenied`, ...), shared by
-  `nipLS` and `nip46/bunker`.
-  ([#85](https://github.com/ohstr/nmilat/pull/85))
-- `relay/client`: NIP-42 AUTH through a `Signer` (`ConnectionConfig.Signer`,
-  `ReadEventsFromRelayWithSigner`), so a key behind a remote signer can
-  authenticate. `KeySigner` wraps a raw key.
-  ([#87](https://github.com/ohstr/nmilat/pull/87))
-- `relay/client.Pool`: one long-lived subscription per relay, reconnecting
-  with backoff and re-subscribing after each reconnect, with an optional
-  resync interval, de-duplication by event id, NIP-42 through a `Signer`,
-  and `Broadcast`/`SendTo`/`Statuses`. `ReadAllEventsFromRelay` pages a
-  query back through `until`, without skipping same-second events on
-  nmilat relays. `nip46/bunker` now runs on the pool and answers NIP-42
-  with its own key.
-  ([#87](https://github.com/ohstr/nmilat/pull/87))
-- `nip01.LatestVersion`/`LatestVersions`: pick the winning version of a
-  replaceable or addressable event (highest `created_at`, then lowest id,
-  the relay store's rule), ignoring versions dated past now plus a skew.
-  `Supersedes` and `ReplaceableAddress` are the building blocks.
-  ([#87](https://github.com/ohstr/nmilat/pull/87))
+- Adds NIP-42 authentication through a signer (`ConnectionConfig.Signer`,
+  `ReadEventsFromRelayWithSigner`), so a key behind a bunker or socket
+  signer can authenticate. ([#87](https://github.com/ohstr/nmilat/pull/87))
+- Adds `relay/client.Pool`, a subscription per relay that survives
+  reconnects, with optional resync and de-duplication. ([#87](https://github.com/ohstr/nmilat/pull/87))
+- Adds `ReadAllEventsFromRelay`, which pages a query to its end without
+  skipping events that share a second. ([#87](https://github.com/ohstr/nmilat/pull/87))
+- Adds `nip01.LatestVersion`, which picks the winning version of a
+  replaceable or addressable event the way the relay store does, ignoring
+  future-dated ones. ([#87](https://github.com/ohstr/nmilat/pull/87))
 - `WithEventStoreScanSlotWait` bounds how long a query waits for a scan
   slot (default 10s). A REQ that can't get one is answered `CLOSED`
   `error: relay busy, try again later` instead of never; a live tick that
