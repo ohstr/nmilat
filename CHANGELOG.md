@@ -75,6 +75,7 @@ answered `relay busy` instead of never.
 - `relay/client`: NIP-42 AUTH through a `Signer` (`ConnectionConfig.Signer`,
   `ReadEventsFromRelayWithSigner`), so a key behind a remote signer can
   authenticate. `KeySigner` wraps a raw key.
+  ([#87](https://github.com/ohstr/nmilat/pull/87))
 - `relay/client.Pool`: one long-lived subscription per relay, reconnecting
   with backoff and re-subscribing after each reconnect, with an optional
   resync interval, de-duplication by event id, NIP-42 through a `Signer`,
@@ -82,10 +83,12 @@ answered `relay busy` instead of never.
   query back through `until`, without skipping same-second events on
   nmilat relays. `nip46/bunker` now runs on the pool and answers NIP-42
   with its own key.
+  ([#87](https://github.com/ohstr/nmilat/pull/87))
 - `nip01.LatestVersion`/`LatestVersions`: pick the winning version of a
   replaceable or addressable event (highest `created_at`, then lowest id,
   the relay store's rule), ignoring versions dated past now plus a skew.
   `Supersedes` and `ReplaceableAddress` are the building blocks.
+  ([#87](https://github.com/ohstr/nmilat/pull/87))
 - `WithEventStoreScanSlotWait` bounds how long a query waits for a scan
   slot (default 10s). A REQ that can't get one is answered `CLOSED`
   `error: relay busy, try again later` instead of never; a live tick that
