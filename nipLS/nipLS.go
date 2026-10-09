@@ -36,8 +36,7 @@ import (
 	"time"
 
 	"github.com/ohstr/nmilat/nip01"
-	"github.com/ohstr/nmilat/nip19"
-	"github.com/ohstr/nmilat/utils"
+	"github.com/ohstr/nmilat/nip46"
 )
 
 const (
@@ -49,63 +48,36 @@ const (
 	// MaxMessageSize bounds one request or response line, newline excluded.
 	MaxMessageSize = 1 << 20
 
-	// Wire error prefixes. A response error starting with one of these
-	// maps to ErrDenied or ErrInvalid on the client.
-	ErrPrefixDenied  = "denied: "
-	ErrPrefixInvalid = "invalid: "
+	// Wire error prefixes, shared with every NIP-46 transport.
+	ErrPrefixDenied  = nip46.ErrPrefixDenied
+	ErrPrefixInvalid = nip46.ErrPrefixInvalid
 )
 
-// ErrDenied and ErrInvalid classify a refused request; test with
-// errors.Is. ErrDenied means the policy (or the built-in key guard)
-// refused it; ErrInvalid means the request was malformed.
+// The signing abstractions and refusal errors are transport-neutral and
+// live in nip46; they are re-exported here so nipLS code reads on its own.
+type (
+	Signer   = nip46.Signer
+	Key      = nip46.Key
+	LocalKey = nip46.LocalKey
+	Error    = nip46.Error
+)
+
 var (
-	ErrDenied  = errors.New("denied")
-	ErrInvalid = errors.New("invalid")
+	ErrDenied  = nip46.ErrDenied
+	ErrInvalid = nip46.ErrInvalid
 )
 
-// Error is a refusal with a reason. Policies return one through Deny or
-// Invalid; a Client returns one for every error response.
-type Error struct {
-	// Code is ErrDenied, ErrInvalid, or nil for any other failure.
-	Code   error
-	Reason string
-}
+// NewLocalKey wraps a private key given as hex or nsec.
+func NewLocalKey(privKey string) (*LocalKey, error) { return nip46.NewLocalKey(privKey) }
 
 // Deny refuses a request. Return it from Policy.Authorize.
-func Deny(reason string) error { return &Error{Code: ErrDenied, Reason: reason} }
+func Deny(reason string) error { return nip46.Deny(reason) }
 
 // Denyf is Deny with formatting.
-func Denyf(format string, args ...any) error { return Deny(fmt.Sprintf(format, args...)) }
+func Denyf(format string, args ...any) error { return nip46.Denyf(format, args...) }
 
 // Invalid rejects a request as malformed.
-func Invalid(reason string) error { return &Error{Code: ErrInvalid, Reason: reason} }
-
-func (e *Error) Error() string { return "nipLS: " + e.wire() }
-
-// Unwrap lets errors.Is(err, ErrDenied) and errors.Is(err, ErrInvalid) work.
-func (e *Error) Unwrap() error { return e.Code }
-
-// wire is the response "error" string for e.
-func (e *Error) wire() string {
-	switch e.Code {
-	case ErrDenied:
-		return ErrPrefixDenied + e.Reason
-	case ErrInvalid:
-		return ErrPrefixInvalid + e.Reason
-	}
-	return e.Reason
-}
-
-// parseWireError turns a response "error" string into an *Error.
-func parseWireError(msg string) *Error {
-	if r, ok := strings.CutPrefix(msg, ErrPrefixDenied); ok {
-		return &Error{Code: ErrDenied, Reason: r}
-	}
-	if r, ok := strings.CutPrefix(msg, ErrPrefixInvalid); ok {
-		return &Error{Code: ErrInvalid, Reason: r}
-	}
-	return &Error{Reason: msg}
-}
+func Invalid(reason string) error { return nip46.Invalid(reason) }
 
 // IsURI reports whether s is written as a signer URI (bunker+unix:// or
 // unix://), valid or not.
@@ -138,39 +110,7 @@ func ParseURI(s string) (string, error) {
 func FormatURI(path string) string { return URIScheme + "://" + filepath.Clean(path) }
 
 // ParsePubKey accepts an npub or 64-char hex pubkey and returns lowercase hex.
-func ParsePubKey(s string) (string, error) {
-	s = strings.TrimSpace(s)
-	if strings.HasPrefix(s, "npub1") {
-		h, err := nip19.DecodePublicKey(s)
-		if err != nil {
-			return "", fmt.Errorf("invalid npub %q", s)
-		}
-		return strings.ToLower(h), nil
-	}
-	if err := utils.Validate32Key(s); err != nil {
-		return "", fmt.Errorf("invalid pubkey %q (want npub or 64-char hex)", s)
-	}
-	return strings.ToLower(s), nil
-}
-
-// Signer signs events as one pubkey. *Client and *LocalKey implement it.
-type Signer interface {
-	// PubKey is the signing pubkey, lowercase hex.
-	PubKey() string
-	// Sign sets ev's PubKey, ID and Sig.
-	Sign(ctx context.Context, ev *nip01.Event) error
-}
-
-// Key is what a Server signs and encrypts with. *LocalKey implements it
-// for a key held in memory; *Client implements it too, so a Server can
-// front another signer.
-//
-// scheme is nip46.EncryptionNIP04 or nip46.EncryptionNIP44V2.
-type Key interface {
-	Signer
-	Encrypt(ctx context.Context, scheme, peerPubKey, plaintext string) (string, error)
-	Decrypt(ctx context.Context, scheme, peerPubKey, ciphertext string) (string, error)
-}
+func ParsePubKey(s string) (string, error) { return nip46.ParsePubKey(s) }
 
 // Policy decides whether a sign_event, nip04_* or nip44_* request may
 // proceed. Return nil to allow, Deny(reason) to refuse, or Invalid(reason)

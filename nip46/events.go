@@ -133,13 +133,32 @@ func NewRequestEvent(senderPrivKey, recipientPubkey, method string, params []str
 // encryption scheme is determined by the presence/absence of the
 // request's "encryption" tag, per spec.
 func ParseRequestEvent(event *nip01.Event, recipientPrivKey string) (*RequestEvent, error) {
+	return ParseRequestEventAs(event, recipientPrivKey, TaggedEncryption(event))
+}
+
+// TaggedEncryption is the scheme event's "encryption" tag names, or
+// EncryptionNIP04 when it has none, per spec.
+func TaggedEncryption(event *nip01.Event) string {
+	if enc, err := utils.FindUniqueEventTagValue(event.Tags, "encryption"); err == nil && enc != "" {
+		return enc
+	}
+	return EncryptionNIP04
+}
+
+// OtherEncryption is the scheme to retry with after encryption failed:
+// some clients send NIP-44 content untagged, or tag it "nip44".
+func OtherEncryption(encryption string) string {
+	if encryption == EncryptionNIP44V2 {
+		return EncryptionNIP04
+	}
+	return EncryptionNIP44V2
+}
+
+// ParseRequestEventAs is ParseRequestEvent with the scheme given instead
+// of read from the tag.
+func ParseRequestEventAs(event *nip01.Event, recipientPrivKey, encryption string) (*RequestEvent, error) {
 	if event.Kind != KindRequest {
 		return nil, fmt.Errorf("%w: got %d, want %d", ErrWrongKind, event.Kind, KindRequest)
-	}
-
-	encryption := EncryptionNIP04
-	if enc, err := utils.FindUniqueEventTagValue(event.Tags, "encryption"); err == nil && enc != "" {
-		encryption = enc
 	}
 
 	plaintext, err := decryptContent(event.Content, encryption, recipientPrivKey, event.PubKey)
@@ -207,13 +226,14 @@ func NewErrorResponseEvent(senderPrivKey, recipientPubkey, requestID, errMsg, en
 // encryption scheme is determined by the presence/absence of the
 // response's "encryption" tag.
 func ParseResponseEvent(event *nip01.Event, recipientPrivKey string) (*ResponseEvent, error) {
+	return ParseResponseEventAs(event, recipientPrivKey, TaggedEncryption(event))
+}
+
+// ParseResponseEventAs is ParseResponseEvent with the scheme given instead
+// of read from the tag.
+func ParseResponseEventAs(event *nip01.Event, recipientPrivKey, encryption string) (*ResponseEvent, error) {
 	if event.Kind != KindRequest {
 		return nil, fmt.Errorf("%w: got %d, want %d", ErrWrongKind, event.Kind, KindRequest)
-	}
-
-	encryption := EncryptionNIP04
-	if enc, err := utils.FindUniqueEventTagValue(event.Tags, "encryption"); err == nil && enc != "" {
-		encryption = enc
 	}
 
 	plaintext, err := decryptContent(event.Content, encryption, recipientPrivKey, event.PubKey)
