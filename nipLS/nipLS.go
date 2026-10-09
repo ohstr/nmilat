@@ -24,7 +24,7 @@
 // Both *Client and *LocalKey implement Signer, so code that signs can take
 // either without caring where the key lives.
 //
-// Spec: https://github.com/ohstr/zapf-nips/blob/main/NIP-LS.md
+// Spec: https://github.com/ohstr/nmilat/blob/main/docs/nips/NIP-LS.md
 package nipLS
 
 import (
