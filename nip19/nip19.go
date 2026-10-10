@@ -392,6 +392,8 @@ func EncodeNote(eventIDHex string) (string, error) {
 
 // NormalizeToHex attempt to decode a string as bech32 (nsec/npub/note/nprofile/nevent)
 // or returns it as is if it's already hex.
+// It never fails and also decodes an nsec; to read a public key from user
+// input, use ParsePublicKey.
 func NormalizeToHex(input string) string {
 	input = strings.TrimSpace(input)
 	switch {

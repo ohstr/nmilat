@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/ohstr/nmilat/nip01"
 )
 
@@ -16,6 +15,8 @@ const (
 	poolMaxBackoff = 30 * time.Second
 	// poolAdhocTimeout bounds waiting for a relay SendTo had to add.
 	poolAdhocTimeout = 5 * time.Second
+	// defaultAuthWait bounds waiting for NIP-42 AUTH before subscribing.
+	defaultAuthWait = 5 * time.Second
 	// defaultDedupeSize is how many recent event ids Dedupe remembers.
 	defaultDedupeSize = 50_000
 )
@@ -28,12 +29,18 @@ type PoolConfig struct {
 	// connection it arrived on (to reply on the same relay).
 	OnEvent func(conn *Connection, ev *nip01.Event)
 
-	// Signer answers NIP-42 AUTH on every connection.
-	Signer Signer
-	// ResyncInterval, when positive, re-sends the subscription that often,
-	// so stored events missed while a relay was slow or a connection
+	// Signer answers NIP-42 AUTH on every connection. With a Signer, the
+	// pool waits up to AuthWait (default 5s) for the handshake to settle
+	// before it subscribes.
+	Signer   Signer
+	AuthWait time.Duration
+	// ResyncInterval, when positive, re-reads every filter's stored events
+	// that often, so events missed while a relay was slow or a connection
 	// half-dead come back. Without Dedupe, OnEvent sees them again.
 	ResyncInterval time.Duration
+	// PageSize is how many stored events each REQ asks for while syncing;
+	// 0 means 500. Each filter is paged to its end, or to its own Limit.
+	PageSize int
 	// Dedupe drops events whose id OnEvent has recently seen, from any
 	// relay or resync. DedupeSize bounds the memory; 0 means 50,000 ids.
 	Dedupe     bool
@@ -43,12 +50,26 @@ type PoolConfig struct {
 	Logf func(format string, args ...any)
 }
 
-// RelayStatus is whether one relay currently has a live connection.
+// RelayStatus is whether one relay currently has a live connection, and
+// how fresh its data is.
 type RelayStatus struct {
 	URL       string `json:"url"`
 	Connected bool   `json:"connected"`
 	// Connecting is true until the relay's first dial attempt resolves.
 	Connecting bool `json:"connecting,omitempty"`
+	// LastEOSE is when the relay last finished a complete sync: every
+	// filter paged to its end. It survives reconnects and is never set by
+	// a sync the relay closed.
+	LastEOSE time.Time `json:"last_eose,omitzero"`
+	// Closed is the relay's message when it last closed the pool's
+	// subscription, until a later sync completes.
+	Closed string `json:"closed,omitempty"`
+}
+
+// relayState is what the pool remembers about a relay across reconnects.
+type relayState struct {
+	lastEOSE time.Time
+	closed   string
 }
 
 // Pool keeps one subscribed connection per relay, reconnecting with
@@ -63,6 +84,7 @@ type Pool struct {
 	running   map[string]bool
 	conns     map[string]*Connection
 	attempted map[string]bool
+	state     map[string]*relayState
 	changed   chan struct{} // closed and replaced on every connect or failed dial
 	wg        sync.WaitGroup
 }
@@ -78,11 +100,15 @@ func NewPool(cfg PoolConfig) (*Pool, error) {
 	if cfg.Logf == nil {
 		cfg.Logf = func(string, ...any) {}
 	}
+	if cfg.AuthWait <= 0 {
+		cfg.AuthWait = defaultAuthWait
+	}
 	p := &Pool{
 		cfg:       cfg,
 		running:   map[string]bool{},
 		conns:     map[string]*Connection{},
 		attempted: map[string]bool{},
+		state:     map[string]*relayState{},
 		changed:   make(chan struct{}),
 	}
 	if cfg.Dedupe {
@@ -108,6 +134,9 @@ func (p *Pool) Add(ctx context.Context, relay string) error {
 		return nil
 	}
 	p.running[key] = true
+	if p.state[key] == nil {
+		p.state[key] = &relayState{}
+	}
 	p.order = append(p.order, key)
 	p.mu.Unlock()
 
@@ -118,6 +147,7 @@ func (p *Pool) Add(ctx context.Context, relay string) error {
 		p.mu.Lock()
 		delete(p.running, key)
 		delete(p.attempted, key)
+		delete(p.state, key)
 		for i, k := range p.order {
 			if k == key {
 				p.order = append(p.order[:i], p.order[i+1:]...)
@@ -160,69 +190,6 @@ func (p *Pool) run(ctx context.Context, u *url.URL) {
 		}
 		backoff = time.Second
 		p.serve(ctx, key, conn)
-	}
-}
-
-// serve subscribes with SubscribeWithID, whose stream outlives EOSE, and
-// dispatches until the connection drops or ctx ends. Every subscription
-// on the connection is the pool's, so one Events("") reader serves them
-// across resyncs.
-func (p *Pool) serve(ctx context.Context, key string, conn *Connection) {
-	defer conn.Close()
-	subID := uuid.NewString()
-	if !conn.SubscribeWithID(subID, p.cfg.Filter) {
-		return
-	}
-	events := conn.Events("")
-
-	p.mu.Lock()
-	p.attempted[key] = true
-	p.conns[key] = conn
-	p.signal()
-	p.mu.Unlock()
-	p.cfg.Logf("relay %s: connected", key)
-	defer func() {
-		p.mu.Lock()
-		delete(p.conns, key)
-		p.mu.Unlock()
-	}()
-
-	var resync <-chan time.Time
-	if p.cfg.ResyncInterval > 0 {
-		t := time.NewTicker(p.cfg.ResyncInterval)
-		defer t.Stop()
-		resync = t.C
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-conn.Closed():
-			return
-		case err, ok := <-conn.Errors():
-			if !ok {
-				return
-			}
-			p.cfg.Logf("relay %s: %v", key, err)
-			if errors.Is(err, ErrConnectionClosed) {
-				return
-			}
-		case <-resync:
-			conn.CloseSubscription(subID)
-			subID = uuid.NewString()
-			if !conn.SubscribeWithID(subID, p.cfg.Filter) {
-				return
-			}
-		case ev, ok := <-events:
-			if !ok {
-				return
-			}
-			if p.seen != nil && !p.seen.add(ev.Event.ID) {
-				continue
-			}
-			go p.cfg.OnEvent(conn, ev.Event)
-		}
 	}
 }
 
@@ -347,7 +314,11 @@ func (p *Pool) Statuses() []RelayStatus {
 	out := make([]RelayStatus, 0, len(p.order))
 	for _, key := range p.order {
 		_, connected := p.conns[key]
-		out = append(out, RelayStatus{URL: key, Connected: connected, Connecting: !connected && !p.attempted[key]})
+		st := RelayStatus{URL: key, Connected: connected, Connecting: !connected && !p.attempted[key]}
+		if rs := p.state[key]; rs != nil {
+			st.LastEOSE, st.Closed = rs.lastEOSE, rs.closed
+		}
+		out = append(out, st)
 	}
 	return out
 }
