@@ -40,7 +40,7 @@ func (p *Pool) serve(ctx context.Context, key string, conn *Connection) {
 		return
 	}
 	if s.idle() {
-		p.synced(key)
+		p.synced(key, conn)
 	}
 
 	var resync <-chan time.Time
@@ -51,7 +51,12 @@ func (p *Pool) serve(ctx context.Context, key string, conn *Connection) {
 	}
 	backoff := time.Second
 	var retry <-chan time.Time
+	// authed fires when a handshake still pending settles; a success then
+	// restarts the round, since the relay may have answered it anonymously.
 	var authed <-chan struct{}
+	if p.cfg.Signer != nil && conn.AuthState() == AuthStateNone {
+		authed = conn.AuthSettled()
+	}
 
 	for {
 		select {
@@ -73,18 +78,30 @@ func (p *Pool) serve(ctx context.Context, key string, conn *Connection) {
 					return
 				}
 				if s.idle() {
-					p.synced(key)
+					p.synced(key, conn)
 				}
 			}
 		case <-retry:
-			retry, authed = nil, nil
+			retry = nil
 			if !s.start(true) {
 				return
 			}
+			if s.idle() {
+				p.synced(key, conn)
+			}
 		case <-authed:
-			retry, authed = nil, nil
+			authed = nil
+			// After a failure, only sync again if nothing else will: a
+			// round that ended while AUTH was pending didn't count.
+			if conn.AuthState() != AuthStateSucceeded && (retry != nil || !s.idle()) {
+				continue
+			}
+			retry = nil
 			if !s.start(true) {
 				return
+			}
+			if s.idle() {
+				p.synced(key, conn)
 			}
 		case msg, ok := <-conn.Read():
 			if !ok {
@@ -99,7 +116,7 @@ func (p *Pool) serve(ctx context.Context, key string, conn *Connection) {
 					return
 				}
 				if complete {
-					p.synced(key)
+					p.synced(key, conn)
 					backoff = time.Second
 				}
 			case *wire.ClosedSubscriptionResponse:
@@ -118,9 +135,27 @@ func (p *Pool) serve(ctx context.Context, key string, conn *Connection) {
 	}
 }
 
-// waitAuth waits up to AuthWait for conn's NIP-42 handshake. It reports
-// false if the connection or ctx ended first.
+// authChallengeGrace is how long a new connection waits for the relay to
+// send AUTH before subscribing anyway.
+const authChallengeGrace = 250 * time.Millisecond
+
+// waitAuth gives the relay a moment to challenge and, if it does, waits up
+// to AuthWait for the handshake to settle. It reports false if the
+// connection or ctx ended first.
 func (p *Pool) waitAuth(ctx context.Context, key string, conn *Connection) bool {
+	grace := time.NewTimer(authChallengeGrace)
+	defer grace.Stop()
+	select {
+	case <-conn.challenged:
+	case <-conn.AuthSettled():
+	case <-grace.C:
+		return true
+	case <-ctx.Done():
+		return false
+	case <-conn.Closed():
+		return false
+	}
+
 	t := time.NewTimer(p.cfg.AuthWait)
 	defer t.Stop()
 	select {
@@ -145,8 +180,17 @@ func (p *Pool) deliver(conn *Connection, ev *nip01.Event) {
 	go p.cfg.OnEvent(conn, ev)
 }
 
-// synced records a complete sync of relay key.
-func (p *Pool) synced(key string) {
+// synced records a complete sync of relay key, unless conn's relay has
+// challenged and AUTH is still pending: that round may have been answered
+// anonymously, and the pool syncs again once AUTH settles.
+func (p *Pool) synced(key string, conn *Connection) {
+	select {
+	case <-conn.challenged:
+		if conn.AuthState() == AuthStateNone {
+			return
+		}
+	default:
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if rs := p.state[key]; rs != nil {
@@ -174,15 +218,35 @@ type poolSync struct {
 	p      *Pool
 	conn   *Connection
 	liveID string
-	pagers []*pager
-	pageID string
-	buf    []*nip01.Event
+	// liveReady is set at the live subscription's EOSE; the stored events
+	// before it are the pages' to deliver.
+	liveReady bool
+	pagers    []*pager
+	pageID    string
+	buf       []*nip01.Event
+	// round holds the ids delivered during the current round, so an event
+	// that arrives live and in a page is delivered once.
+	round map[string]bool
+}
+
+// deliver hands ev on once per round.
+func (s *poolSync) deliver(ev *nip01.Event) {
+	if s.round != nil {
+		if s.round[ev.ID] {
+			return
+		}
+		s.round[ev.ID] = true
+	}
+	s.p.deliver(s.conn, ev)
 }
 
 // start begins a sync round, reopening the live subscription when withLive
 // is set or none is open. It reports false once the connection is gone.
 func (s *poolSync) start(withLive bool) bool {
 	filters := s.p.cfg.Filter.GetAll()
+	if s.pageID != "" {
+		s.conn.CloseSubscription(s.pageID)
+	}
 	if withLive || s.liveID == "" {
 		if s.liveID != "" {
 			s.conn.CloseSubscription(s.liveID)
@@ -196,14 +260,14 @@ func (s *poolSync) start(withLive bool) bool {
 			c.Limit, c.BeforeID = 1, ""
 			live.Add(&c)
 		}
-		s.liveID = uuid.NewString()
+		s.liveID, s.liveReady = uuid.NewString(), false
 		if !s.conn.SubscribeWithID(s.liveID, live) {
 			return false
 		}
 	}
 
 	now := uint64(time.Now().Unix())
-	s.pagers = s.pagers[:0]
+	s.pagers, s.round = s.pagers[:0], map[string]bool{}
 	for _, f := range filters {
 		c := *f
 		if c.Until == 0 || c.Until > now {
@@ -211,7 +275,13 @@ func (s *poolSync) start(withLive bool) bool {
 		}
 		s.pagers = append(s.pagers, newPager(&c, s.p.cfg.PageSize))
 	}
-	return s.nextPage()
+	if !s.nextPage() {
+		return false
+	}
+	if s.idle() {
+		s.round = nil
+	}
+	return true
 }
 
 // nextPage requests the next page, moving through the filters in order.
@@ -237,13 +307,19 @@ func (s *poolSync) event(m *wire.EventSubscriptionResponse) {
 	case s.pageID:
 		s.buf = append(s.buf, m.Event)
 	case s.liveID:
-		s.p.deliver(s.conn, m.Event)
+		if s.liveReady {
+			s.deliver(m.Event)
+		}
 	}
 }
 
 // eose finishes the current page and requests the next. complete reports
 // that this EOSE ended the round; ok is false once the connection is gone.
 func (s *poolSync) eose(id string) (complete, ok bool) {
+	if id != "" && id == s.liveID {
+		s.liveReady = true
+		return false, true
+	}
 	if id == "" || id != s.pageID {
 		return false, true
 	}
@@ -251,10 +327,13 @@ func (s *poolSync) eose(id string) (complete, ok bool) {
 	// subscription already covers those.
 	s.conn.CloseSubscription(id)
 	for _, ev := range s.pagers[0].feed(s.buf) {
-		s.p.deliver(s.conn, ev)
+		s.deliver(ev)
 	}
 	if !s.nextPage() {
 		return false, false
+	}
+	if s.idle() {
+		s.round = nil
 	}
 	return s.idle(), true
 }
@@ -271,6 +350,6 @@ func (s *poolSync) closed(id string) bool {
 	if s.liveID != "" && s.liveID != id {
 		s.conn.CloseSubscription(s.liveID)
 	}
-	s.pageID, s.liveID, s.pagers = "", "", nil
+	s.pageID, s.liveID, s.pagers, s.round, s.liveReady = "", "", nil, nil, false
 	return true
 }

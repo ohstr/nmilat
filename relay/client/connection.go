@@ -139,6 +139,10 @@ type Connection struct {
 	authMessage   string
 	authSettled   chan struct{}
 	authSettledOk sync.Once
+	// challenged closes when the relay first sends AUTH and a signer is
+	// set to answer it.
+	challenged   chan struct{}
+	challengedOk sync.Once
 }
 
 // Connect dials relayURL with default timeouts and intervals. This is the
@@ -176,6 +180,7 @@ func NewConnection(ctx context.Context, relayURL *url.URL, cfg *ConnectionConfig
 		signer:      configSigner(cfg),
 		subs:        make(map[string]*subDispatch),
 		authSettled: make(chan struct{}),
+		challenged:  make(chan struct{}),
 	}
 
 	d := websocket.Dialer{
@@ -386,6 +391,7 @@ func (c *Connection) handleAuthChallenge(m *wire.AuthChallengeResponse) {
 	if c.signer == nil {
 		return
 	}
+	c.challengedOk.Do(func() { close(c.challenged) })
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), authSignTimeout)
 		defer cancel()

@@ -137,6 +137,11 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes `Pool` with a Signer waiting 5s before subscribing on relays that never
+  send AUTH; it now waits only when challenged, and syncs again after a late AUTH.
+  ([#93](https://github.com/ohstr/nmilat/pull/93))
+- Fixes `Pool` handing an event on twice in one sync when it arrived both live
+  and in a page. ([#93](https://github.com/ohstr/nmilat/pull/93))
 - Fixes `Pool` subscribing before NIP-42 AUTH settled and never retrying after
   a `restricted:` or `auth-required:` CLOSED, which left its subscription
   silently dead on relays that require AUTH. ([#91](https://github.com/ohstr/nmilat/pull/91))
