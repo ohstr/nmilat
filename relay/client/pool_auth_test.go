@@ -29,6 +29,11 @@ type authRelay struct {
 	challengeOnConnect bool
 	authDelay          time.Duration
 	reject             bool
+	// open serves without AUTH and never challenges.
+	open bool
+	// eoseBeforeAuth answers a REQ before AUTH with an empty EOSE instead
+	// of a CLOSED.
+	eoseBeforeAuth bool
 
 	mu            sync.Mutex
 	events        []*nip01.Event // newest first
@@ -113,7 +118,7 @@ func newAuthRelay(t *testing.T, r *authRelay, events ...*nip01.Event) *url.URL {
 				}()
 			case *wire.RequestPacket:
 				authMu.Lock()
-				ok := authed
+				ok := authed || r.open
 				authMu.Unlock()
 				if !ok {
 					r.mu.Lock()
@@ -123,7 +128,11 @@ func newAuthRelay(t *testing.T, r *authRelay, events ...*nip01.Event) *url.URL {
 						challenged = true
 						c.send(&wire.AuthChallengeResponse{Challenge: challenge})
 					}
-					c.send(&wire.ClosedSubscriptionResponse{SubscriptionID: p.SubscriptionID, Message: "auth-required: sign in first"})
+					if r.eoseBeforeAuth {
+						c.send(&wire.EOSESubscriptionResponse{SubscriptionID: p.SubscriptionID})
+					} else {
+						c.send(&wire.ClosedSubscriptionResponse{SubscriptionID: p.SubscriptionID, Message: "auth-required: sign in first"})
+					}
 					continue
 				}
 				for _, ev := range r.query(p.Filters) {
@@ -270,6 +279,52 @@ func TestPoolResubscribesAfterAuthRequiredClose(t *testing.T) {
 	r := &authRelay{maxLimit: 10, authDelay: 100 * time.Millisecond}
 	if before := checkAuthedSync(t, r, 50*time.Millisecond); before == 0 {
 		t.Error("no REQ was closed before AUTH; the test didn't exercise the re-subscribe")
+	}
+}
+
+// The relay answers a REQ before AUTH with an empty EOSE and challenges
+// late: the pool must sync again once AUTH succeeds.
+func TestPoolResyncsAfterLateAuth(t *testing.T) {
+	r := &authRelay{maxLimit: 10, eoseBeforeAuth: true, authDelay: 100 * time.Millisecond}
+	if before := checkAuthedSync(t, r, 5*time.Second); before == 0 {
+		t.Error("no REQ was answered before AUTH; the test didn't exercise the late AUTH")
+	}
+}
+
+// A relay that never challenges: a Signer must not hold the subscription
+// back.
+func TestPoolWithSignerDoesNotWaitOnRelaysWithoutAuth(t *testing.T) {
+	r := &authRelay{maxLimit: 10, open: true}
+	u := newAuthRelay(t, r, storedNotes(t, 3)...)
+	p, _ := NewPool(PoolConfig{Filter: kindFilter(1), Signer: &remoteSigner{key: testPrivKey}})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	start := time.Now()
+	_ = p.Add(ctx, u.String())
+	waitUntil(t, "a complete sync", func() bool { return !p.Statuses()[0].LastEOSE.IsZero() })
+	if took := time.Since(start); took > 2*time.Second {
+		t.Errorf("first sync took %v; the pool waited for an AUTH that never came", took)
+	}
+}
+
+// Without Dedupe, one sync still hands each stored event on once, though
+// the live subscription and the pages both see the newest ones.
+func TestPoolDeliversEachStoredEventOncePerSync(t *testing.T) {
+	r := &authRelay{maxLimit: 10, open: true}
+	stored := storedNotes(t, 5)
+	u := newAuthRelay(t, r, stored...)
+	var log eventLog
+	p, _ := NewPool(PoolConfig{Filter: kindFilter(1), OnEvent: log.add})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_ = p.Add(ctx, u.String())
+	waitUntil(t, "a complete sync", func() bool { return !p.Statuses()[0].LastEOSE.IsZero() })
+	waitUntil(t, "every stored event", func() bool { return log.hasAll(stored) })
+	time.Sleep(200 * time.Millisecond)
+	for _, ev := range stored {
+		if n := log.count(ev.ID); n != 1 {
+			t.Errorf("%s delivered %d times, want 1", ev.Content, n)
+		}
 	}
 }
 

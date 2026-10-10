@@ -29,9 +29,10 @@ type PoolConfig struct {
 	// connection it arrived on (to reply on the same relay).
 	OnEvent func(conn *Connection, ev *nip01.Event)
 
-	// Signer answers NIP-42 AUTH on every connection. With a Signer, the
-	// pool waits up to AuthWait (default 5s) for the handshake to settle
-	// before it subscribes.
+	// Signer answers NIP-42 AUTH on every connection. When a relay
+	// challenges as it connects, the pool waits up to AuthWait (default
+	// 5s) for the handshake before it subscribes; when AUTH succeeds later,
+	// it syncs again.
 	Signer   Signer
 	AuthWait time.Duration
 	// ResyncInterval, when positive, re-reads every filter's stored events
