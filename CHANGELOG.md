@@ -8,6 +8,8 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `RelayStatus.LastEOSE`, when a relay last finished a complete sync, and
+  `RelayStatus.Closed`, the relay's reason when it closed the pool's subscription.
 - Adds `nip19.ParsePublicKey`, which reads an npub, nprofile or hex public key
   and rejects an nsec, a wrong length or a point off the curve.
 - Adds `nip46/bunker` for NIP-46 signing over relays: `Dial`
@@ -94,6 +96,8 @@ privacy and performance fixes.
 
 ### Changed
 
+- Pages each filter of a `Pool` subscription to its end on connect and on
+  resync, so a relay's result cap no longer cuts it short (`PoolConfig.PageSize`).
 - Moves `ReadEventsFromStore` from `relay/client` to `relay`, so `relay/client`
   and `nip46/bunker` no longer pull in bbolt and yaml.
 - Requires Go 1.26.9, which fixes nine standard-library vulnerabilities.
@@ -130,6 +134,9 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes `Pool` subscribing before NIP-42 AUTH settled and never retrying after
+  a `restricted:` or `auth-required:` CLOSED, which left its subscription
+  silently dead on relays that require AUTH.
 - Fixes reads starving under many open subscriptions; live subscriptions now
   read only new events. ([#81](https://github.com/ohstr/nmilat/pull/81))
 - Returns NIP-77 and NIP-05 fetch errors (NIP-05: 503) instead of answering
