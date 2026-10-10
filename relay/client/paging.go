@@ -8,6 +8,9 @@ import (
 	"github.com/ohstr/nmilat/nip01"
 )
 
+// defaultPageSize is the page size when a caller passes none.
+const defaultPageSize = 500
+
 // ReadAllEventsFromRelay reads every event matching filter, newest first,
 // in pages of pageSize, walking back with until. Each page resumes after
 // the last event of the one before: nmilat relays honor BeforeID, so
@@ -22,56 +25,85 @@ func ReadAllEventsFromRelay(ctx context.Context, relayURL *url.URL, filter *nip0
 	if filter == nil {
 		return nil, false, errors.New("paging: filter is required")
 	}
-	if pageSize <= 0 {
-		pageSize = 500
-	}
-	total := filter.Limit
-	seen := map[string]bool{}
-	page := *filter
-	page.BeforeID = ""
-	stepped := false
-
-	for {
-		if total > 0 {
-			remaining := total - len(events)
-			if remaining <= 0 {
-				return events, false, nil
-			}
-			page.Limit = min(pageSize, remaining)
-		} else {
-			page.Limit = pageSize
-		}
-		f := page
-		got, restricted, err := ReadEventsFromRelayWithSigner(ctx, relayURL, nip01.NewSubscriptionFilterGroup(&f), signer)
+	pg := newPager(filter, pageSize)
+	for f := pg.next(); f != nil; f = pg.next() {
+		got, restricted, err := ReadEventsFromRelayWithSigner(ctx, relayURL, nip01.NewSubscriptionFilterGroup(f), signer)
 		if err != nil || restricted {
 			return events, restricted, err
 		}
-		if len(got) == 0 {
-			return events, false, nil
-		}
+		events = append(events, pg.feed(got)...)
+	}
+	return events, false, nil
+}
 
-		fresh := 0
-		for _, ev := range got {
-			if seen[ev.ID] {
-				continue
-			}
-			seen[ev.ID] = true
-			events = append(events, ev)
-			fresh++
-		}
+// pager walks one filter back page by page; see ReadAllEventsFromRelay
+// for the cursor rules.
+type pager struct {
+	page     nip01.SubscriptionFilter
+	total    int
+	pageSize int
+	seen     map[string]bool
+	count    int
+	stepped  bool
+	done     bool
+}
 
-		// Relays send newest first, so the last event is the cursor.
-		last := got[len(got)-1]
-		if fresh == 0 {
-			// The relay ignored BeforeID and served the same tie again.
-			if stepped || last.CreatedAt == 0 {
-				return events, false, nil
-			}
-			page.Until, page.BeforeID = last.CreatedAt-1, ""
-			stepped = true
+func newPager(filter *nip01.SubscriptionFilter, pageSize int) *pager {
+	if pageSize <= 0 {
+		pageSize = defaultPageSize
+	}
+	page := *filter
+	page.BeforeID = ""
+	return &pager{page: page, total: filter.Limit, pageSize: pageSize, seen: map[string]bool{}}
+}
+
+// next returns the filter for the next page, or nil once the walk is done.
+func (p *pager) next() *nip01.SubscriptionFilter {
+	if p.done {
+		return nil
+	}
+	f := p.page
+	f.Limit = p.pageSize
+	if p.total > 0 {
+		remaining := p.total - p.count
+		if remaining <= 0 {
+			p.done = true
+			return nil
+		}
+		f.Limit = min(p.pageSize, remaining)
+	}
+	return &f
+}
+
+// feed takes one page as the relay sent it, newest first, moves the
+// cursor, and returns the events not seen before.
+func (p *pager) feed(got []*nip01.Event) []*nip01.Event {
+	if len(got) == 0 {
+		p.done = true
+		return nil
+	}
+	var fresh []*nip01.Event
+	for _, ev := range got {
+		if p.seen[ev.ID] {
 			continue
 		}
-		stepped = false
-		page.Until, page.BeforeID = last.CreatedAt, last.ID
+		p.seen[ev.ID] = true
+		fresh = append(fresh, ev)
 	}
+	p.count += len(fresh)
+
+	last := got[len(got)-1]
+	if len(fresh) == 0 {
+		// The relay ignored BeforeID and served the same tie again.
+		if p.stepped || last.CreatedAt == 0 {
+			p.done = true
+			return nil
+		}
+		p.page.Until, p.page.BeforeID = last.CreatedAt-1, ""
+		p.stepped = true
+		return nil
+	}
+	p.stepped = false
+	p.page.Until, p.page.BeforeID = last.CreatedAt, last.ID
+	return fresh
 }
