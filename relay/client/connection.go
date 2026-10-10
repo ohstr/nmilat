@@ -72,6 +72,11 @@ type ConnectionConfig struct {
 	// empty (the default), the connection never responds to AUTH and stays
 	// anonymous/public-only, exactly as before this field existed.
 	SigningKeyHex string
+
+	// Signer, if set, answers AUTH instead of SigningKeyHex -- for a key held
+	// elsewhere, such as behind a NIP-46 remote signer. Signing gets
+	// authSignTimeout.
+	Signer Signer
 }
 
 // AuthState reports the outcome of this connection's NIP-42 handshake, as
@@ -123,7 +128,7 @@ type Connection struct {
 
 	config *ConnectionConfig
 
-	signingKeyHex string
+	signer Signer
 
 	subsMu sync.Mutex
 	subs   map[string]*subDispatch
@@ -162,15 +167,15 @@ func NewConnection(ctx context.Context, relayURL *url.URL, cfg *ConnectionConfig
 	}
 
 	c := &Connection{
-		relay:         relayURL,
-		outgoing:      make(chan interface{}),
-		incoming:      make(chan wire.SubscriptionResponse, incomingEventBufferSize),
-		errors:        make(chan error),
-		closeCh:       make(chan interface{}),
-		config:        cfg,
-		signingKeyHex: cfg.SigningKeyHex,
-		subs:          make(map[string]*subDispatch),
-		authSettled:   make(chan struct{}),
+		relay:       relayURL,
+		outgoing:    make(chan interface{}),
+		incoming:    make(chan wire.SubscriptionResponse, incomingEventBufferSize),
+		errors:      make(chan error),
+		closeCh:     make(chan interface{}),
+		config:      cfg,
+		signer:      configSigner(cfg),
+		subs:        make(map[string]*subDispatch),
+		authSettled: make(chan struct{}),
 	}
 
 	d := websocket.Dialer{
@@ -368,7 +373,7 @@ func (c *Connection) dispatch(res wire.SubscriptionResponse) {
 }
 
 // handleAuthChallenge answers a relay's NIP-42 AUTH challenge if this
-// Connection was constructed with a signing key (ConnectionConfig's
+// Connection was constructed with a signer (ConnectionConfig's Signer or
 // SigningKeyHex), mirroring the handshake huddleclient.go already does over
 // its own protocol: build the kind:22242 event, sign it, send it back as an
 // AUTH packet. Signing and sending happen in their own goroutine so a slow
@@ -378,12 +383,21 @@ func (c *Connection) dispatch(res wire.SubscriptionResponse) {
 // the relay's OK for it, and settles AuthState to Failed if signing itself
 // errors, since no AUTH packet will ever go out to get an OK at all.
 func (c *Connection) handleAuthChallenge(m *wire.AuthChallengeResponse) {
-	if c.signingKeyHex == "" {
+	if c.signer == nil {
 		return
 	}
 	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), authSignTimeout)
+		defer cancel()
+		go func() {
+			select {
+			case <-c.closeCh:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
 		event := nip42.NewAuthEvent(m.Challenge, c.relay.String())
-		if err := event.Sign(c.signingKeyHex); err != nil {
+		if err := c.signer.Sign(ctx, event); err != nil {
 			c.authMu.Lock()
 			c.authState = AuthStateFailed
 			c.authMessage = fmt.Sprintf("signing auth event: %v", err)

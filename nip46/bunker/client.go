@@ -58,7 +58,7 @@ type Client struct {
 	clientPriv string
 	clientPub  string
 	relays     []string
-	pool       *pool
+	pool       *relayclient.Pool
 	stop       context.CancelFunc
 	done       chan struct{}
 
@@ -116,7 +116,7 @@ func newClient(signerPub string, relays []string, opts ClientOptions) (*Client, 
 		Kinds: []int{nip46.KindRequest},
 		Tags:  map[string][]string{"p": {c.clientPub}},
 	})
-	c.pool = newPool(filter, c.onEvent, opts.Logf)
+	c.pool, _ = relayclient.NewPool(relayclient.PoolConfig{Filter: filter, OnEvent: c.onEvent, Signer: relayclient.KeySigner(c.clientPriv), Logf: opts.Logf})
 	return c, nil
 }
 
@@ -125,10 +125,10 @@ func (c *Client) start() {
 	life, stop := context.WithCancel(context.Background())
 	c.stop = stop
 	for _, r := range c.relays {
-		_ = c.pool.add(life, r)
+		_ = c.pool.Add(life, r)
 	}
 	go func() {
-		c.pool.wait()
+		c.pool.Wait()
 		close(c.done)
 	}()
 }
@@ -146,7 +146,7 @@ func Dial(ctx context.Context, uri string, opts ClientOptions) (*Client, error) 
 		return nil, err
 	}
 	c.start()
-	if err := c.pool.waitAny(ctx); err != nil {
+	if err := c.pool.WaitAny(ctx); err != nil {
 		_ = c.Close()
 		return nil, fmt.Errorf("%w: %v", ErrNoRelay, err)
 	}
@@ -189,7 +189,7 @@ func Resume(ctx context.Context, s Session, opts ClientOptions) (*Client, error)
 		return nil, err
 	}
 	c.start()
-	if err := c.pool.waitAny(ctx); err != nil {
+	if err := c.pool.WaitAny(ctx); err != nil {
 		_ = c.Close()
 		return nil, fmt.Errorf("%w: %v", ErrNoRelay, err)
 	}
@@ -360,11 +360,11 @@ func (c *Client) Call(ctx context.Context, method string, params ...string) (str
 		c.mu.Unlock()
 	}()
 
-	if c.pool.broadcast(ev) == 0 {
-		if err := c.pool.waitAny(ctx); err != nil {
+	if c.pool.Broadcast(ev) == 0 {
+		if err := c.pool.WaitAny(ctx); err != nil {
 			return "", fmt.Errorf("%w: %v", ErrNoRelay, err)
 		}
-		if c.pool.broadcast(ev) == 0 {
+		if c.pool.Broadcast(ev) == 0 {
 			return "", ErrNoRelay
 		}
 	}
@@ -404,7 +404,7 @@ func (c *Client) Session() Session {
 }
 
 // RelayStatuses reports each relay's connection state.
-func (c *Client) RelayStatuses() []RelayStatus { return c.pool.statuses() }
+func (c *Client) RelayStatuses() []RelayStatus { return c.pool.Statuses() }
 
 // Ping checks the signer answers.
 func (c *Client) Ping(ctx context.Context) error {

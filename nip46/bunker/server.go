@@ -58,7 +58,7 @@ type Server struct {
 	transportPub string
 	relays       []string
 	guard        *nip46.KeyGuard
-	pool         *pool
+	pool         *relayclient.Pool
 
 	mu        sync.Mutex
 	secret    string
@@ -144,7 +144,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		Kinds: []int{nip46.KindRequest},
 		Tags:  map[string][]string{"p": {transportPub}},
 	})
-	s.pool = newPool(filter, s.handleEvent, cfg.Logf)
+	s.pool, _ = relayclient.NewPool(relayclient.PoolConfig{Filter: filter, OnEvent: s.handleEvent, Signer: relayclient.KeySigner(transport), Logf: cfg.Logf})
 	return s, nil
 }
 
@@ -158,7 +158,7 @@ func (s *Server) TransportPubKey() string { return s.transportPub }
 func (s *Server) Relays() []string { return append([]string(nil), s.relays...) }
 
 // RelayStatuses reports each relay's connection state.
-func (s *Server) RelayStatuses() []RelayStatus { return s.pool.statuses() }
+func (s *Server) RelayStatuses() []RelayStatus { return s.pool.Statuses() }
 
 // Run connects to the relays and serves requests until ctx is done.
 func (s *Server) Run(ctx context.Context) error {
@@ -174,12 +174,12 @@ func (s *Server) Run(ctx context.Context) error {
 	s.mu.Unlock()
 
 	for _, r := range s.relays {
-		if err := s.pool.add(ctx, r); err != nil {
+		if err := s.pool.Add(ctx, r); err != nil {
 			s.cfg.Logf("skipping relay %s: %v", r, err)
 		}
 	}
 	<-ctx.Done()
-	s.pool.wait()
+	s.pool.Wait()
 	return nil
 }
 
@@ -268,7 +268,7 @@ func (s *Server) AcceptNostrconnectSchema(ctx context.Context, schema *nip46.Nos
 	for _, r := range schema.Relays {
 		relays = append(relays, r.String())
 	}
-	sent, tried := s.pool.sendTo(ctx, life, relays, ev)
+	sent, tried := s.pool.SendTo(ctx, life, relays, ev)
 	if sent == 0 {
 		return fmt.Errorf("%w (tried %s)", ErrNoRelay, strings.Join(tried, ", "))
 	}

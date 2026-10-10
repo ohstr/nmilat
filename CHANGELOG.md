@@ -17,6 +17,16 @@ privacy and performance fixes.
 - Adds `nip46.Signer` and `nip46.LocalKey`, one signing interface that a
   local key, a socket client and a bunker client all implement.
   ([#85](https://github.com/ohstr/nmilat/pull/85))
+- Adds NIP-42 authentication through a signer (`ConnectionConfig.Signer`,
+  `ReadEventsFromRelayWithSigner`), so a key behind a bunker or socket
+  signer can authenticate. ([#87](https://github.com/ohstr/nmilat/pull/87))
+- Adds `relay/client.Pool`, a subscription per relay that survives
+  reconnects, with optional resync and de-duplication. ([#87](https://github.com/ohstr/nmilat/pull/87))
+- Adds `ReadAllEventsFromRelay`, which pages a query to its end without
+  skipping events that share a second. ([#87](https://github.com/ohstr/nmilat/pull/87))
+- Adds `nip01.LatestVersion`, which picks the winning version of a
+  replaceable or addressable event the way the relay store does, ignoring
+  future-dated ones. ([#87](https://github.com/ohstr/nmilat/pull/87))
 - Adds `WithEventStoreScanSlotWait` (default 10s): a REQ that can't get a scan
   slot is answered `CLOSED` `error: relay busy, try again later` instead of
   never. ([#81](https://github.com/ohstr/nmilat/pull/81))
