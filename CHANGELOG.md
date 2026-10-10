@@ -8,6 +8,8 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `nip19.ParsePublicKey`, which reads an npub, nprofile or hex public key
+  and rejects an nsec, a wrong length or a point off the curve.
 - Adds `nip46/bunker` for NIP-46 signing over relays: `Dial`
   (`bunker://`), `NewPairing` (`nostrconnect://`) and `Resume` for clients,
   and `NewServer`, with a policy per request, for signers. ([#85](https://github.com/ohstr/nmilat/pull/85))
