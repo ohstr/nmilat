@@ -166,6 +166,16 @@ func (g *GroupsService) handleDeleteGroup(ctx context.Context, s *Session, ev *n
 	var children []string
 	if deleted != nil {
 		children = deleted.Metadata.Children
+		// A deleted subgroup must also leave its parent's child list, or
+		// the parent keeps advertising an id every read of it now refuses.
+		if parentID := deleted.Metadata.Parent; parentID != "" {
+			if parent, err := g.removeChild(parentID, groupID); err != nil {
+				s.config.Logger.Error().Err(err).Str("group", parentID).Str("child", groupID).
+					Msg("failed to detach deleted subgroup from its parent")
+			} else if parent != nil {
+				publishGroupMetadataMirror(ctx, s, parent)
+			}
+		}
 	}
 	for _, childID := range children {
 		child, err := g.SetParent(childID, "")
@@ -366,8 +376,14 @@ func (g *GroupsService) handleEditMetadata(ctx context.Context, s *Session, ev *
 	// parent unilaterally annex a group that never named it as parent
 	// (bypassing the child-initiated model above), and omitting one is the
 	// same silent-detach risk the completeness rule exists to prevent.
+	//
+	// Ids that no longer name a group are ignored on both sides and
+	// dropped from the stored list, so a stale entry left by an older
+	// relay's subgroup delete can be cleared by any edit.
+	fields := groupMetadataFieldsFromAction(action.Metadata)
+	fields.Children = g.liveGroups(action.Metadata.Children)
 	if current != nil {
-		if !isPermutation(current.Metadata.Children, action.Metadata.Children) {
+		if !isPermutation(g.liveGroups(current.Metadata.Children), fields.Children) {
 			s.reply(&wire.OkSubscriptionResponse{
 				EventID:  ev.ID,
 				Accepted: false,
@@ -377,7 +393,7 @@ func (g *GroupsService) handleEditMetadata(ctx context.Context, s *Session, ev *
 		}
 	}
 
-	rec, err := g.SetMetadata(action.GroupID, groupMetadataFieldsFromAction(action.Metadata))
+	rec, err := g.SetMetadata(action.GroupID, fields)
 	if err != nil {
 		s.config.Logger.Error().Err(err).Str("group", action.GroupID).Msg("failed to update group metadata")
 		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not update group metadata"})
@@ -420,6 +436,18 @@ func (g *GroupsService) linkedAcrossPrivacy(parent string, children []string, pr
 		}
 	}
 	return false
+}
+
+// liveGroups returns the ids in ids that still name a hosted group, in
+// order.
+func (g *GroupsService) liveGroups(ids []string) []string {
+	live := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if g.Exists(id) {
+			live = append(live, id)
+		}
+	}
+	return live
 }
 
 // isPermutation reports whether b contains exactly the same elements as

@@ -1073,6 +1073,51 @@ func TestHandleEvent_DeleteGroup_CascadesChildrenToRoot(t *testing.T) {
 	}
 }
 
+func TestHandleEvent_DeleteGroup_Subgroup_LeavesParentChildList(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	for _, id := range []string{groupA, groupB, groupC} {
+		sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, id))
+	}
+	sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupB, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupA, Private: true, Closed: true}))
+	sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupC, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupA, Private: true, Closed: true}))
+
+	if resp := sendEventAndAwaitOKForSession(t, sess, deleteGroupEvent(t, groupB, authTestPrivKey)); !resp.Accepted {
+		t.Fatalf("delete groupB: %s", resp.Message)
+	}
+
+	if parent := groupMetadata(t, sess, groupA); len(parent.Children) != 1 || parent.Children[0] != groupC {
+		t.Fatalf("groupA's Children after deleting groupB = %v, want [%s]", parent.Children, groupC)
+	}
+	// With groupB gone from the list, a later rename re-listing what the
+	// mirror shows is accepted.
+	resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupA, authTestPrivKey, nip29.GroupMetadataParams{Name: "renamed", Children: []string{groupC}, Private: true, Closed: true}))
+	if !resp.Accepted {
+		t.Fatalf("rename re-listing the remaining child: %s", resp.Message)
+	}
+}
+
+func TestHandleEvent_EditMetadata_ChildrenList_StaleIdDropped(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	for _, id := range []string{groupA, groupB} {
+		sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, id))
+	}
+	sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupB, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupA, Private: true, Closed: true}))
+	// A stale id, as left behind by a subgroup delete on an older relay.
+	if _, err := sess.groups.SetChildren(groupA, []string{"gone", groupB}); err != nil {
+		t.Fatalf("SetChildren: %v", err)
+	}
+
+	for _, children := range [][]string{{"gone", groupB}, {groupB}} {
+		resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupA, authTestPrivKey, nip29.GroupMetadataParams{Children: children, Private: true, Closed: true}))
+		if !resp.Accepted {
+			t.Fatalf("edit listing %v: %s", children, resp.Message)
+		}
+		if parent := groupMetadata(t, sess, groupA); len(parent.Children) != 1 || parent.Children[0] != groupB {
+			t.Fatalf("groupA's Children after edit listing %v = %v, want [%s]", children, parent.Children, groupB)
+		}
+	}
+}
+
 func TestHandleEvent_EditMetadata_EmptyParent_MeansDetachToRoot(t *testing.T) {
 	sess := newGroupsEnabledTestSession(t)
 	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
