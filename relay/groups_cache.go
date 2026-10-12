@@ -1,6 +1,9 @@
 package relay
 
 import (
+	"context"
+	"github.com/ohstr/nmilat/nip01"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -132,6 +135,27 @@ type GroupsService struct {
 	// the same reasoning groupsCache's own snap field documents.
 	policy atomic.Pointer[nip29.ModerationPolicy]
 
+	// relayAdmins hold every moderation permission in every hosted group,
+	// whatever its roster says: NIP-29 expects moderation events "sent by
+	// the relay master key or by group admins". Set by SetRelayAdmins.
+	relayAdmins atomic.Pointer[map[string]bool]
+
+	// moderationLog, when set, stores accepted moderation events so
+	// clients can read a group's log; see SetModerationLog.
+	moderationLog atomic.Bool
+
+	// pendingJoins, when set, keeps a closed group's codeless join
+	// requests for its admins; see SetPendingJoins.
+	pendingJoins atomic.Bool
+
+	// roleDescriptions describe the policy's roles in kind:39003; see
+	// SetRoleDescriptions.
+	roleDescriptions atomic.Pointer[map[string]string]
+
+	// signer is the relay identity GroupsService signs kind:39003 with
+	// outside a session (a policy change, startup); see setSigner.
+	signer atomic.Pointer[groupsSigner]
+
 	// linkMu serializes NIP-29 "Subgroups" cross-group mutation: a
 	// reparent touches up to three records (the group itself, its old
 	// parent, its new parent), and a delete cascades over every one of
@@ -157,13 +181,95 @@ func NewGroupsService(store *EventStore) *GroupsService {
 	return g
 }
 
-// SetModerationPolicy replaces the policy CanPerform consults. A no-op on
-// a nil *GroupsService.
+// SetModerationPolicy replaces the policy CanPerform consults, and
+// republishes every hosted group's kind:39003 to match. A no-op on a nil
+// *GroupsService.
 func (g *GroupsService) SetModerationPolicy(policy nip29.ModerationPolicy) {
 	if g == nil {
 		return
 	}
 	g.policy.Store(&policy)
+	g.publishAllRoles(context.Background())
+}
+
+// SetModerationLog turns the moderation log on or off. On, every accepted
+// moderation event except a group's deletion (kinds 9000-9020) is stored,
+// readable by the group's members; an invite (9009) only by its admins.
+// Off, the default, they are commands and nothing is kept. A deleted
+// group's log goes with its other events.
+func (g *GroupsService) SetModerationLog(on bool) {
+	if g == nil {
+		return
+	}
+	g.moderationLog.Store(on)
+}
+
+// SetPendingJoins turns pending join requests on or off. On, a closed
+// group's join request without an invite code is stored instead of
+// refused, readable by the group's admins and the requester, until an
+// admin answers it with kind:9000 (accept) or kind:9001 (decline), the
+// requester joins another way or leaves, or an admin deletes it (9005).
+// Off, the default, such a request is refused.
+func (g *GroupsService) SetPendingJoins(on bool) {
+	if g == nil {
+		return
+	}
+	g.pendingJoins.Store(on)
+}
+
+// SetRoleDescriptions sets the description each role gets in kind:39003
+// (role name -> text) and republishes every hosted group's. A role with
+// no description is described by the actions the policy lets it take.
+func (g *GroupsService) SetRoleDescriptions(descriptions map[string]string) {
+	if g == nil {
+		return
+	}
+	d := make(map[string]string, len(descriptions))
+	for k, v := range descriptions {
+		d[k] = v
+	}
+	g.roleDescriptions.Store(&d)
+	g.publishAllRoles(context.Background())
+}
+
+// Roles returns the roles this relay advertises in kind:39003: the
+// moderation policy's role names, sorted, with their descriptions.
+func (g *GroupsService) Roles() []nip29.GroupRole {
+	if g == nil {
+		return nil
+	}
+	policy := g.policy.Load()
+	if policy == nil {
+		return nil
+	}
+	var desc map[string]string
+	if d := g.roleDescriptions.Load(); d != nil {
+		desc = *d
+	}
+	return policy.Roles(desc)
+}
+
+// SetRelayAdmins replaces the keys that act as admin of every hosted
+// group: the relay's own key (NewSessionHandler passes NIP-11 "self"), plus
+// any operator keys an embedder adds. They can moderate any group, e.g.
+// recover one whose admins are gone, without holding a roster entry.
+func (g *GroupsService) SetRelayAdmins(pubkeys ...string) {
+	if g == nil {
+		return
+	}
+	set := make(map[string]bool, len(pubkeys))
+	for _, pk := range pubkeys {
+		if pk != "" {
+			set[strings.ToLower(pk)] = true
+		}
+	}
+	g.relayAdmins.Store(&set)
+}
+
+// isRelayAdmin reports whether pubkey is one of SetRelayAdmins' keys.
+func (g *GroupsService) isRelayAdmin(pubkey string) bool {
+	set := g.relayAdmins.Load()
+	return set != nil && (*set)[strings.ToLower(pubkey)]
 }
 
 // LoadFromStore populates the in-memory cache from the authoritative
@@ -189,13 +295,14 @@ func (g *GroupsService) Exists(id string) bool {
 	return g.cache.Get(id) != nil
 }
 
-// IsAdmin reports whether pubkey holds at least one role in group id.
+// IsAdmin reports whether pubkey holds at least one role in group id, or
+// is a relay admin (SetRelayAdmins) and id is hosted here.
 func (g *GroupsService) IsAdmin(id, pubkey string) bool {
 	if g == nil {
 		return false
 	}
 	rec := g.cache.Get(id)
-	return rec != nil && rec.IsAdmin(pubkey)
+	return rec != nil && (rec.IsAdmin(pubkey) || g.isRelayAdmin(pubkey))
 }
 
 // IsMember reports whether pubkey holds a roster entry in group id.
@@ -210,7 +317,8 @@ func (g *GroupsService) IsMember(id, pubkey string) bool {
 // CanPerform reports whether pubkey's own roles in group id let it perform
 // a moderation action of kind, per GroupsService's ModerationPolicy. A
 // pubkey with no roster entry, or holding no roles, can never perform any
-// moderation action -- AllowsAny(nil, kind) is always false.
+// moderation action -- AllowsAny(nil, kind) is always false. A relay admin
+// (SetRelayAdmins) may perform any action in any hosted group.
 func (g *GroupsService) CanPerform(id, pubkey string, kind int) bool {
 	if g == nil {
 		return false
@@ -218,6 +326,9 @@ func (g *GroupsService) CanPerform(id, pubkey string, kind int) bool {
 	rec := g.cache.Get(id)
 	if rec == nil {
 		return false
+	}
+	if g.isRelayAdmin(pubkey) {
+		return true
 	}
 	policy := g.policy.Load()
 	if policy == nil {
@@ -249,6 +360,27 @@ func (g *GroupsService) IsClosed(id string) bool {
 	}
 	rec := g.cache.Get(id)
 	return rec != nil && rec.Metadata.Closed
+}
+
+// IsRestricted reports whether id names a currently-hosted group whose
+// metadata marks it restricted: only members may post in it.
+func (g *GroupsService) IsRestricted(id string) bool {
+	if g == nil {
+		return false
+	}
+	rec := g.cache.Get(id)
+	return rec != nil && rec.Metadata.Restricted
+}
+
+// IsHidden reports whether id names a currently-hosted group whose metadata
+// marks it hidden: its metadata events (kind 39000-39005) are for members
+// only, while its content stays as readable as "private" allows.
+func (g *GroupsService) IsHidden(id string) bool {
+	if g == nil {
+		return false
+	}
+	rec := g.cache.Get(id)
+	return rec != nil && rec.Metadata.Hidden
 }
 
 // Create persists a freshly created group and updates the in-memory cache.
@@ -498,4 +630,81 @@ func newGroupRecord(id, creator string) *GroupRecord {
 		Members:   []GroupMember{{Pubkey: creator, Roles: []string{"admin"}}},
 		CreatedAt: time.Now().Unix(),
 	}
+}
+
+// groupsSigner is the relay identity relay-authored group events are
+// signed with.
+type groupsSigner struct {
+	pubkey, privkey string
+}
+
+// setSigner gives GroupsService the relay's own key, so it can publish
+// kind:39003 without a session. NewSessionHandler calls it; without it
+// roles are published only from a session (on group creation).
+func (g *GroupsService) setSigner(pubkey, privkey string) {
+	if g == nil || pubkey == "" || privkey == "" {
+		return
+	}
+	g.signer.Store(&groupsSigner{pubkey: pubkey, privkey: privkey})
+}
+
+// groupRolesEvent builds group id's unsigned kind:39003 from the current
+// policy.
+func (g *GroupsService) groupRolesEvent(selfPubkey, id string) *nip01.Event {
+	return nip29.NewGroupRoles(nip29.GroupRolesParams{SelfPubkey: selfPubkey, ID: id, Roles: g.Roles()})
+}
+
+// publishRoles signs and stores group id's kind:39003, unless the stored
+// one already lists the same roles. Its created_at is strictly newer than
+// the stored one's, so a same-second republish can't lose the tie.
+func (g *GroupsService) publishRoles(ctx context.Context, pubkey, privkey, id string) {
+	ev := g.groupRolesEvent(pubkey, id)
+	prev, err := g.store.QueryEvents(ctx, &nip01.SubscriptionFilter{
+		Kinds: []int{nip29.KindGroupRoles}, Authors: []string{pubkey}, Tags: map[string][]string{"d": {id}}, Limit: 1,
+	})
+	if err == nil && len(prev) == 1 {
+		if tagsEqual(prev[0].Tags, ev.Tags) {
+			return
+		}
+		if ev.CreatedAt <= prev[0].CreatedAt {
+			ev.CreatedAt = prev[0].CreatedAt + 1
+		}
+	}
+	if err := ev.Sign(privkey); err != nil {
+		return
+	}
+	_ = g.store.InsertEvents(ctx, []*nip01.Event{ev})
+}
+
+// publishAllRoles republishes every hosted group's kind:39003 with the
+// signer from setSigner; a no-op until one is set.
+func (g *GroupsService) publishAllRoles(ctx context.Context) {
+	sg := g.signer.Load()
+	if sg == nil {
+		return
+	}
+	snap := g.cache.snap.Load()
+	if snap == nil {
+		return
+	}
+	for id := range snap.groups {
+		g.publishRoles(ctx, sg.pubkey, sg.privkey, id)
+	}
+}
+
+func tagsEqual(a, b [][]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if len(a[i]) != len(b[i]) {
+			return false
+		}
+		for j := range a[i] {
+			if a[i][j] != b[i][j] {
+				return false
+			}
+		}
+	}
+	return true
 }

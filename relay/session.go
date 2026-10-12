@@ -701,9 +701,18 @@ func NewSessionHandler(store *EventStore, relayMetadata *nip11.Metadata, searchS
 	}
 
 	groups := NewGroupsService(store)
+	if relayMetadata != nil {
+		groups.SetRelayAdmins(relayMetadata.Self)
+	}
 	if err := groups.LoadFromStore(); err != nil {
 		// Non-fatal, for the same reason as the membership cache above.
 		cfg.Logger.Error().Err(err).Msg("failed to load NIP-29 groups cache at startup")
+	}
+	if relayMetadata != nil {
+		// Groups created before roles were published, or under another
+		// policy, get a current kind:39003; unchanged ones are skipped.
+		groups.setSigner(relayMetadata.Self, cfg.PrivKey)
+		groups.publishAllRoles(context.Background())
 	}
 
 	// Not fatal: a relay that only ever hosts public groups works fine

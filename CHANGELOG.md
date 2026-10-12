@@ -8,6 +8,24 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `nip11.Metadata.Icon`, NIP-11's `icon` URL, settable as `nip11.icon`.
+  ([#106](https://github.com/ohstr/nmilat/pull/106))
+- Adds `SessionConfig.EventPolicy` and `WithEventsPolicy`, a hook that can refuse
+  any event after validation, over the WebSocket and `POST /events`, so an
+  embedder can enforce its own bans and kind rules.
+  ([#106](https://github.com/ohstr/nmilat/pull/106))
+- Adds optional pending NIP-29 join requests: with `GroupsService.SetPendingJoins(true)`
+  a closed group keeps a join request without an invite code for its admins,
+  who accept with kind 9000 or decline with 9001.
+  ([#105](https://github.com/ohstr/nmilat/pull/105))
+- Adds an optional NIP-29 moderation log: with `GroupsService.SetModerationLog(true)`
+  accepted moderation events are stored and readable by the group's members
+  (invites by its admins), so clients can show who did what.
+  ([#104](https://github.com/ohstr/nmilat/pull/104))
+- Adds kind 39003 group roles: the relay publishes one per NIP-29 group from its
+  moderation policy, and republishes them when the policy changes, so clients
+  know which roles exist. `GroupsService.SetRoleDescriptions` describes them.
+  ([#103](https://github.com/ohstr/nmilat/pull/103))
 - Adds `RelayStatus.LastEOSE`, when a relay last finished a complete sync, and
   `RelayStatus.Closed`, the relay's reason when it closed the pool's subscription.
   ([#91](https://github.com/ohstr/nmilat/pull/91))
@@ -137,6 +155,18 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes NIP-29 edits that flip `private` on a linked group: one whose parent
+  or a subgroup would end up with the other setting is now refused, as linking
+  such groups already was.
+  ([#102](https://github.com/ohstr/nmilat/pull/102))
+- Fixes NIP-29 moderation from the relay's own key: NIP-11 `self` now acts
+  as admin of every hosted group, so an operator can recover a group whose
+  admins are gone. `GroupsService.SetRelayAdmins` adds other operator keys.
+  ([#101](https://github.com/ohstr/nmilat/pull/101))
+- Fixes NIP-29 `restricted` and `hidden` group flags having no effect: a
+  restricted group now refuses posts from non-members, and a hidden group's
+  metadata (kinds 39000-39005) is no longer served to non-members.
+  ([#100](https://github.com/ohstr/nmilat/pull/100))
 - Fixes `Pool` with a Signer waiting 5s before subscribing on relays that never
   send AUTH; it now waits only when challenged, and syncs again after a late AUTH.
   ([#93](https://github.com/ohstr/nmilat/pull/93))

@@ -44,7 +44,7 @@ func (g *GroupsService) HandleEvent(ctx context.Context, s *Session, ev *nip01.E
 	case nip29.KindDeleteEvent:
 		g.handleDeleteEvent(ctx, s, ev)
 	case nip29.KindCreateInvite:
-		g.handleCreateInvite(s, ev)
+		g.handleCreateInvite(ctx, s, ev)
 	case nip29.KindUpdatePinList:
 		g.handleUpdatePinList(ctx, s, ev)
 	case nip29.KindJoinRequest:
@@ -105,6 +105,10 @@ func (g *GroupsService) handleCreate(ctx context.Context, s *Session, ev *nip01.
 
 	publishGroupMetadataMirror(ctx, s, rec)
 	publishGroupRosterMirrors(ctx, s, rec)
+	if s.config.PrivKey != "" {
+		g.publishRoles(ctx, s.selfPubkey, s.config.PrivKey, rec.ID)
+	}
+	g.recordModeration(ctx, s, ev)
 
 	s.reply(&wire.OkSubscriptionResponse{
 		EventID:  ev.ID,
@@ -235,6 +239,8 @@ func (g *GroupsService) handlePutUser(ctx context.Context, s *Session, ev *nip01
 	}
 
 	publishGroupRosterMirrors(ctx, s, rec)
+	g.clearPendingJoins(ctx, s, action.GroupID, action.Pubkey)
+	g.recordModeration(ctx, s, ev)
 	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: member added."})
 }
 
@@ -263,6 +269,8 @@ func (g *GroupsService) handleRemoveUser(ctx context.Context, s *Session, ev *ni
 	}
 
 	publishGroupRosterMirrors(ctx, s, rec)
+	g.clearPendingJoins(ctx, s, action.GroupID, action.Pubkey)
+	g.recordModeration(ctx, s, ev)
 	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: member removed."})
 }
 
@@ -326,7 +334,7 @@ func (g *GroupsService) handleEditMetadata(ctx context.Context, s *Session, ev *
 		case !g.IsAdmin(newParent, ev.PubKey):
 			s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: you must also be an admin of the new parent group."})
 			return
-		case g.IsPrivate(action.GroupID) != g.IsPrivate(newParent):
+		case action.Metadata.Private != g.IsPrivate(newParent):
 			// A kind:39000 mirror is self-signed once and cached, so its
 			// tags can't be redacted per viewer -- a public parent's
 			// child tag (or a private parent's public child) would
@@ -337,6 +345,15 @@ func (g *GroupsService) handleEditMetadata(ctx context.Context, s *Session, ev *
 			s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: cannot link groups with different privacy settings."})
 			return
 		}
+	}
+
+	// A privacy flip on a linked group would create the same mismatched
+	// pair the link check above refuses: the group's parent or a current
+	// subgroup left with the other setting. Refuse it; the admin detaches
+	// first, flips, then relinks.
+	if current != nil && action.Metadata.Private != current.Metadata.Private && g.linkedAcrossPrivacy(newParent, current.Metadata.Children, action.Metadata.Private) {
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: cannot change the privacy of a linked group; its parent and subgroups must share the same setting, so detach it first."})
+		return
 	}
 
 	// Children-list completeness + no-unilateral-annexation. Unconditional
@@ -387,7 +404,22 @@ func (g *GroupsService) handleEditMetadata(ctx context.Context, s *Session, ev *
 		}
 	}
 
+	g.recordModeration(ctx, s, ev)
 	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: group metadata updated."})
+}
+
+// linkedAcrossPrivacy reports whether parent (if any) or any of children
+// has a Private setting other than private.
+func (g *GroupsService) linkedAcrossPrivacy(parent string, children []string, private bool) bool {
+	if parent != "" && g.IsPrivate(parent) != private {
+		return true
+	}
+	for _, c := range children {
+		if g.Exists(c) && g.IsPrivate(c) != private {
+			return true
+		}
+	}
+	return false
 }
 
 // isPermutation reports whether b contains exactly the same elements as
@@ -489,6 +521,7 @@ func (g *GroupsService) handleDeleteEvent(ctx context.Context, s *Session, ev *n
 		return
 	}
 
+	g.recordModeration(ctx, s, ev)
 	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: event deleted."})
 }
 
@@ -499,7 +532,7 @@ func (g *GroupsService) handleDeleteEvent(ctx context.Context, s *Session, ev *n
 // handleCreateInvite implements kind:9009: an admin (per ModerationPolicy)
 // creates a group-scoped invite code, stored separately from NIP-43's own
 // invite claims (relay/store_groups.go's indexGroupInvites).
-func (g *GroupsService) handleCreateInvite(s *Session, ev *nip01.Event) {
+func (g *GroupsService) handleCreateInvite(ctx context.Context, s *Session, ev *nip01.Event) {
 	action, err := nip29.ParseModerationAction(ev)
 	if err != nil {
 		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: " + err.Error()})
@@ -520,6 +553,7 @@ func (g *GroupsService) handleCreateInvite(s *Session, ev *nip01.Event) {
 		return
 	}
 
+	g.recordModeration(ctx, s, ev)
 	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: invite created."})
 }
 
@@ -527,9 +561,9 @@ func (g *GroupsService) handleCreateInvite(s *Session, ev *nip01.Event) {
 // request, distinct from NIP-43's relay-wide kind:28934. An open group
 // (Metadata.Closed == false) admits any request outright; a closed one
 // requires a valid, unused invite code (kind:9009) in the request's "code"
-// tag -- there is no pending-approval queue in this build, so without a
-// code a closed group's join is simply refused, with the admin's own
-// kind:9000 put-user as the only other path in.
+// tag. Without a code, a closed group refuses the join -- or, with
+// SetPendingJoins on, stores it for the group's admins to answer with a
+// kind:9000 (accept) or kind:9001 (decline).
 func (g *GroupsService) handleJoinRequest(ctx context.Context, s *Session, ev *nip01.Event) {
 	jr, err := nip29.ParseJoinRequest(ev)
 	if err != nil {
@@ -551,6 +585,10 @@ func (g *GroupsService) handleJoinRequest(ctx context.Context, s *Session, ev *n
 
 	if g.IsClosed(jr.GroupID) {
 		if jr.Code == "" {
+			if g.pendingJoins.Load() {
+				g.storePendingJoin(ctx, s, jr.GroupID, ev)
+				return
+			}
 			s.reply(&wire.OkSubscriptionResponse{
 				EventID:  ev.ID,
 				Accepted: false,
@@ -577,6 +615,7 @@ func (g *GroupsService) handleJoinRequest(ctx context.Context, s *Session, ev *n
 	}
 
 	publishGroupRosterMirrors(ctx, s, rec)
+	g.clearPendingJoins(ctx, s, jr.GroupID, ev.PubKey)
 	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: welcome to the group!"})
 }
 
@@ -593,6 +632,8 @@ func (g *GroupsService) handleLeaveRequest(ctx context.Context, s *Session, ev *
 		return
 	}
 	if !g.IsMember(lr.GroupID, ev.PubKey) {
+		// Leaving withdraws a pending join request, if any.
+		g.clearPendingJoins(ctx, s, lr.GroupID, ev.PubKey)
 		s.reply(&wire.OkSubscriptionResponse{
 			EventID:  ev.ID,
 			Accepted: true,
@@ -610,6 +651,37 @@ func (g *GroupsService) handleLeaveRequest(ctx context.Context, s *Session, ev *
 
 	publishGroupRosterMirrors(ctx, s, rec)
 	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: you have left the group."})
+}
+
+// storePendingJoin keeps a closed group's codeless join request for its
+// admins, replacing any earlier one from the same pubkey.
+func (g *GroupsService) storePendingJoin(ctx context.Context, s *Session, groupID string, ev *nip01.Event) {
+	g.clearPendingJoins(ctx, s, groupID, ev.PubKey)
+	if err := s.store.InsertEvents(ctx, []*nip01.Event{ev}); err != nil {
+		s.config.Logger.Error().Err(err).Str("group", groupID).Msg("failed to store pending join request")
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not store join request"})
+		return
+	}
+	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: your join request is pending admin approval."})
+}
+
+// clearPendingJoins drops pubkey's stored join requests to groupID: it was
+// answered (put-user or remove-user), joined another way, or left.
+func (g *GroupsService) clearPendingJoins(ctx context.Context, s *Session, groupID, pubkey string) {
+	if pubkey == "" {
+		return
+	}
+	pes, err := s.store.FindEvents(ctx, &nip01.SubscriptionFilter{
+		Kinds:   []int{nip29.KindJoinRequest},
+		Authors: []string{pubkey},
+		Tags:    map[string][]string{"h": {groupID}},
+	})
+	if err == nil && len(pes) > 0 {
+		err = s.store.DeleteAll(pes)
+	}
+	if err != nil {
+		s.config.Logger.Error().Err(err).Str("group", groupID).Msg("failed to clear pending join requests")
+	}
 }
 
 // isKnownGroupInviteError reports whether err is one of the two "normal,
@@ -650,6 +722,7 @@ func (g *GroupsService) handleUpdatePinList(ctx context.Context, s *Session, ev 
 	}
 
 	publishGroupPinsMirror(ctx, s, rec)
+	g.recordModeration(ctx, s, ev)
 	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: pinned list updated."})
 }
 
@@ -807,6 +880,58 @@ func (g *GroupsService) anyIdentityIsMember(s groupReader, groupID string) bool 
 	return false
 }
 
+// anyIdentityIsAdmin is anyIdentityIsMember for admins (relay admins
+// included).
+func (g *GroupsService) anyIdentityIsAdmin(s groupReader, groupID string) bool {
+	for _, pk := range s.readerPubkeys() {
+		if g.IsAdmin(groupID, pk) {
+			return true
+		}
+	}
+	return false
+}
+
+// recordModeration stores an accepted moderation event when the
+// moderation log is on (SetModerationLog), so clients can read a group's
+// log back with {"kinds":[9000,...],"#h":[id]}.
+func (g *GroupsService) recordModeration(ctx context.Context, s *Session, ev *nip01.Event) {
+	if !g.moderationLog.Load() {
+		return
+	}
+	if err := s.store.InsertEvents(ctx, []*nip01.Event{ev}); err != nil {
+		s.config.Logger.Error().Err(err).Int("kind", ev.Kind).Msg("failed to store NIP-29 moderation event")
+	}
+}
+
+// deniedModerationEvent reports whether a stored moderation event (the
+// moderation log) is withheld from s: it is for the group's members, and
+// an invite, which carries its code, for its admins.
+func (g *GroupsService) deniedModerationEvent(s groupReader, ev *nip01.Event) bool {
+	id, err := nip29.GroupIDFromTags(ev.Tags)
+	if err != nil || !g.Exists(id) {
+		return true
+	}
+	if ev.Kind == nip29.KindCreateInvite {
+		return !g.anyIdentityIsAdmin(s, id)
+	}
+	return !g.anyIdentityIsMember(s, id)
+}
+
+// deniedPendingJoin reports whether a stored join request is withheld from
+// s: only the group's admins and the requester see it.
+func (g *GroupsService) deniedPendingJoin(s groupReader, ev *nip01.Event) bool {
+	id, err := nip29.GroupIDFromTags(ev.Tags)
+	if err != nil || !g.Exists(id) {
+		return true
+	}
+	for _, pk := range s.readerPubkeys() {
+		if pk == ev.PubKey {
+			return false
+		}
+	}
+	return !g.anyIdentityIsAdmin(s, id)
+}
+
 // groupReader is whoever a group-visibility check is for: a WebSocket
 // session (every identity it authenticated) or an HTTP caller (its NIP-98
 // signer) -- so REQ and the /query bridge run the very same checks.
@@ -862,8 +987,8 @@ func dNamesGroup(filter *nip01.SubscriptionFilter) bool {
 /////////////////////////////////////////////////////////////////////
 
 // deniedGroupWrite returns why ev may not be posted into a group it names
-// with "h", or "" if it may: a private or closed group takes posts from
-// its members only; a public, open one from anyone.
+// with "h", or "" if it may: a private, closed or restricted group takes
+// posts from its members only; any other group from anyone.
 func (g *GroupsService) deniedGroupWrite(ev *nip01.Event) string {
 	if g == nil || ev == nil {
 		return ""
@@ -873,7 +998,7 @@ func (g *GroupsService) deniedGroupWrite(ev *nip01.Event) string {
 			continue
 		}
 		id := tag[1]
-		if (g.IsPrivate(id) || g.IsClosed(id)) && !g.IsMember(id, ev.PubKey) {
+		if (g.IsPrivate(id) || g.IsClosed(id) || g.IsRestricted(id)) && !g.IsMember(id, ev.PubKey) {
 			return "restricted: only members may post in group " + id
 		}
 	}
@@ -884,7 +1009,26 @@ func (g *GroupsService) deniedGroupWrite(ev *nip01.Event) string {
 // deniedPrivateGroupPotentialEvent: whenever a private group exists, since
 // its content can match any filter, not just a group-metadata one.
 func (g *GroupsService) needsPrivacyCheck(filters *nip01.SubscriptionFilterGroup) bool {
-	return g.anyPrivate() || mayDeliverGroupMetadataKind(filters)
+	return g.anyPrivate() || mayDeliverGroupMetadataKind(filters) || mayDeliverModerationKind(filters)
+}
+
+// mayDeliverModerationKind is mayDeliverGroupMetadataKind for the stored
+// moderation log (kinds 9000-9020) and pending join requests (9021).
+func mayDeliverModerationKind(filters *nip01.SubscriptionFilterGroup) bool {
+	if filters == nil {
+		return false
+	}
+	for _, f := range filters.GetAll() {
+		if len(f.Kinds) == 0 {
+			return true
+		}
+		for _, k := range f.Kinds {
+			if nip29.IsModerationKind(k) || k == nip29.KindJoinRequest {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // anyPrivate reports whether any hosted group is private.
@@ -928,8 +1072,10 @@ func mayDeliverGroupMetadataKind(filters *nip01.SubscriptionFilterGroup) bool {
 
 // deniedPrivateGroupEvent reports whether ev -- a candidate event about to
 // be delivered to s -- is a relay-authored group-metadata event
-// (kind 39000-39005) belonging to a private group that none of s's
-// authenticated identities is a member of.
+// (kind 39000-39005) belonging to a private or hidden group that none of
+// s's authenticated identities is a member of, or content tagged into a
+// private one. A hidden group hides only its metadata; its content is
+// gated by "private" alone.
 //
 // This is deniedPrivateGroupFilter's companion, applied to the event
 // actually being delivered rather than the request's own "d"/"h" tags.
@@ -943,9 +1089,15 @@ func (g *GroupsService) deniedPrivateGroupEvent(s groupReader, ev *nip01.Event) 
 	if g == nil || ev == nil {
 		return false
 	}
+	if nip29.IsModerationKind(ev.Kind) {
+		return g.deniedModerationEvent(s, ev)
+	}
+	if ev.Kind == nip29.KindJoinRequest {
+		return g.deniedPendingJoin(s, ev)
+	}
 	if nip29.IsGroupMetadataKind(ev.Kind) {
 		groupID, err := nip29.GroupIDFromDTag(ev.Tags)
-		if err == nil && g.IsPrivate(groupID) && !g.anyIdentityIsMember(s, groupID) {
+		if err == nil && (g.IsPrivate(groupID) || g.IsHidden(groupID)) && !g.anyIdentityIsMember(s, groupID) {
 			return true
 		}
 		// A mirror whose group is gone (deleted before its events were

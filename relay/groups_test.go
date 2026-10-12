@@ -9,6 +9,7 @@ import (
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip11"
 	"github.com/ohstr/nmilat/nip29"
+	"github.com/ohstr/nmilat/testlogger"
 	"github.com/ohstr/nmilat/wire"
 )
 
@@ -857,7 +858,7 @@ func TestHandleEvent_EditMetadata_SetParent_Success(t *testing.T) {
 	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
 	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupB))
 
-	resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupB, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupA}))
+	resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupB, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupA, Private: true, Closed: true}))
 	if !resp.Accepted {
 		t.Fatalf("Accepted = false, want true (message: %s)", resp.Message)
 	}
@@ -875,7 +876,7 @@ func TestHandleEvent_EditMetadata_SetParent_SelfReference_Rejected(t *testing.T)
 	sess := newGroupsEnabledTestSession(t)
 	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
 
-	resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupA, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupA}))
+	resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupA, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupA, Private: true, Closed: true}))
 	if resp.Accepted {
 		t.Fatal("Accepted = true for a group naming itself as its own parent, want false")
 	}
@@ -888,7 +889,7 @@ func TestHandleEvent_EditMetadata_SetParent_NonexistentParent_Rejected(t *testin
 	sess := newGroupsEnabledTestSession(t)
 	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
 
-	resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupA, authTestPrivKey, nip29.GroupMetadataParams{Parent: "no-such-group"}))
+	resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupA, authTestPrivKey, nip29.GroupMetadataParams{Parent: "no-such-group", Private: true, Closed: true}))
 	if resp.Accepted {
 		t.Fatal("Accepted = true for a parent that doesn't exist, want false")
 	}
@@ -903,12 +904,12 @@ func TestHandleEvent_EditMetadata_SetParent_Cycle_Rejected(t *testing.T) {
 	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupB))
 
 	// groupB's parent is groupA.
-	if resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupB, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupA})); !resp.Accepted {
+	if resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupB, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupA, Private: true, Closed: true})); !resp.Accepted {
 		t.Fatalf("set groupB's parent to groupA: %s", resp.Message)
 	}
 
 	// groupA's parent -> groupB would close the loop A -> B -> A.
-	resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupA, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupB}))
+	resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupA, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupB, Private: true, Closed: true}))
 	if resp.Accepted {
 		t.Fatal("Accepted = true for a parent assignment that creates a cycle, want false")
 	}
@@ -922,7 +923,7 @@ func TestHandleEvent_EditMetadata_SetParent_NotAdminOfNewParent_Rejected(t *test
 	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))                           // admin: authTestPubKey
 	sendEventAndAwaitOKForSession(t, sess, createGroupEventSignedBy(t, groupC, thirdTestPrivKey)) // admin: thirdTestPubKey
 
-	resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupA, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupC}))
+	resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupA, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupC, Private: true, Closed: true}))
 	if resp.Accepted {
 		t.Fatal("Accepted = true when the submitter isn't an admin of the new parent, want false")
 	}
@@ -992,13 +993,13 @@ func TestHandleEvent_EditMetadata_ChildrenList_OmittedOnUnrelatedEdit_Rejected(t
 	sess := newGroupsEnabledTestSession(t)
 	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
 	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupB))
-	if resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupB, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupA})); !resp.Accepted {
+	if resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupB, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupA, Private: true, Closed: true})); !resp.Accepted {
 		t.Fatalf("set groupB's parent to groupA: %s", resp.Message)
 	}
 
 	// A plain rename of groupA, with no Children field at all -- must not
 	// silently detach groupB.
-	resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupA, authTestPrivKey, nip29.GroupMetadataParams{Name: "renamed"}))
+	resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupA, authTestPrivKey, nip29.GroupMetadataParams{Name: "renamed", Private: true, Closed: true}))
 	if resp.Accepted {
 		t.Fatal("Accepted = true for an edit that silently omits an existing child, want false")
 	}
@@ -1032,16 +1033,16 @@ func TestHandleEvent_EditMetadata_ChildrenList_ValidReorder_Success(t *testing.T
 	for _, id := range []string{groupA, groupB, groupC} {
 		sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, id))
 	}
-	if resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupB, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupA})); !resp.Accepted {
+	if resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupB, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupA, Private: true, Closed: true})); !resp.Accepted {
 		t.Fatalf("set groupB's parent: %s", resp.Message)
 	}
-	if resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupC, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupA})); !resp.Accepted {
+	if resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupC, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupA, Private: true, Closed: true})); !resp.Accepted {
 		t.Fatalf("set groupC's parent: %s", resp.Message)
 	}
 
 	// groupA's admin reorders its own children, listing every one of
 	// them (just in a different order) -- allowed.
-	resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupA, authTestPrivKey, nip29.GroupMetadataParams{Children: []string{groupC, groupB}}))
+	resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupA, authTestPrivKey, nip29.GroupMetadataParams{Children: []string{groupC, groupB}, Private: true, Closed: true}))
 	if !resp.Accepted {
 		t.Fatalf("Accepted = false for a valid reorder, want true (message: %s)", resp.Message)
 	}
@@ -1056,8 +1057,8 @@ func TestHandleEvent_DeleteGroup_CascadesChildrenToRoot(t *testing.T) {
 	for _, id := range []string{groupA, groupB, groupC} {
 		sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, id))
 	}
-	sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupB, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupA}))
-	sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupC, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupA}))
+	sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupB, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupA, Private: true, Closed: true}))
+	sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupC, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupA, Private: true, Closed: true}))
 
 	resp := sendEventAndAwaitOKForSession(t, sess, deleteGroupEvent(t, groupA, authTestPrivKey))
 	if !resp.Accepted {
@@ -1528,5 +1529,148 @@ func TestDeniedGroupWrite(t *testing.T) {
 	sess.groups.cache.put(&open)
 	if msg := sess.groups.deniedGroupWrite(post(outsider, groupA)); msg != "" {
 		t.Errorf("outsider refused by a public, open group: %s", msg)
+	}
+
+	// restricted: a public, open group that only members may post in.
+	restricted := *sess.groups.cache.Get(groupA)
+	restricted.Metadata.Restricted = true
+	sess.groups.cache.put(&restricted)
+	if msg := sess.groups.deniedGroupWrite(post(outsider, groupA)); msg == "" {
+		t.Error("outsider allowed into a restricted group")
+	}
+	if msg := sess.groups.deniedGroupWrite(post(authTestPrivKey, groupA)); msg != "" {
+		t.Errorf("member refused by a restricted group: %s", msg)
+	}
+}
+
+// A restricted group refuses a non-member's post end to end, with the same
+// OK message a private or closed group gives.
+func TestProcessEvent_RestrictedGroupRefusesNonMember(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
+	if resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupA, authTestPrivKey, nip29.GroupMetadataParams{Restricted: true})); !resp.Accepted {
+		t.Fatalf("make groupA public, open, restricted: %s", resp.Message)
+	}
+
+	post := nip01.NewEvent(9, "hi", []string{"h", groupA})
+	if err := post.Sign(secondTestPrivKey); err != nil {
+		t.Fatal(err)
+	}
+	resp := sendEventAndAwaitOKForSession(t, sess, post)
+	if resp.Accepted || resp.Message != "restricted: only members may post in group "+groupA {
+		t.Fatalf("non-member post: accepted=%v %q", resp.Accepted, resp.Message)
+	}
+}
+
+// A hidden group's metadata is for members only, but its content stays as
+// readable as a public group's.
+func TestDeniedPrivateGroupEvent_HiddenGroup(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	rec := newGroupRecord(groupA, authTestPubKey)
+	rec.Metadata.Private, rec.Metadata.Hidden = false, true
+	if err := sess.groups.Create(rec); err != nil {
+		t.Fatal(err)
+	}
+
+	meta := nip29.NewGroupMetadata(nip29.GroupMetadataParams{SelfPubkey: authTestPubKey, ID: groupA, Hidden: true})
+	if err := meta.Sign(authTestPrivKey); err != nil {
+		t.Fatal(err)
+	}
+	post := nip01.NewEvent(9, "hi", []string{"h", groupA})
+	if err := post.Sign(secondTestPrivKey); err != nil {
+		t.Fatal(err)
+	}
+
+	if !sess.groups.deniedPrivateGroupEvent(sess, meta) {
+		t.Error("a hidden group's metadata was delivered to a non-member")
+	}
+	if sess.groups.deniedPrivateGroupEvent(sess, post) {
+		t.Error("a hidden, non-private group's content was withheld")
+	}
+
+	sess.addIdentity(AuthedIdentity{Pubkey: authTestPubKey, Membership: MembershipNone})
+	if sess.groups.deniedPrivateGroupEvent(sess, meta) {
+		t.Error("a hidden group's metadata was withheld from a member")
+	}
+}
+
+// An untagged metadata query skips hidden groups for a non-member, the way
+// it skips private ones.
+func TestProcessCount_UntaggedGroupMetadataQuery_ExcludesHiddenGroups(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	for _, id := range []string{groupA, groupB} {
+		if resp := sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, id)); !resp.Accepted {
+			t.Fatalf("create %s: %s", id, resp.Message)
+		}
+	}
+	if resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupA, authTestPrivKey, nip29.GroupMetadataParams{Hidden: true})); !resp.Accepted {
+		t.Fatalf("make groupA public and hidden: %s", resp.Message)
+	}
+	if resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupB, authTestPrivKey, nip29.GroupMetadataParams{})); !resp.Accepted {
+		t.Fatalf("make groupB public: %s", resp.Message)
+	}
+
+	count := func() int64 {
+		t.Helper()
+		cp := &wire.CountPacket{
+			SubscriptionID: "sub-1",
+			Filters:        nip01.NewSubscriptionFilterGroup(&nip01.SubscriptionFilter{Kinds: []int{nip29.KindGroupMetadata}}),
+		}
+		if err := sess.processCount(context.Background(), cp); err != nil {
+			t.Fatalf("processCount: %v", err)
+		}
+		resp, ok := (<-sess.incoming).(*wire.CountSubscriptionResponse)
+		if !ok {
+			t.Fatal("reply was not a *wire.CountSubscriptionResponse")
+		}
+		return int64(resp.Count)
+	}
+
+	if n := count(); n != 1 {
+		t.Fatalf("anonymous Count = %d, want 1 (only groupB; groupA is hidden)", n)
+	}
+	sess.addIdentity(AuthedIdentity{Pubkey: authTestPubKey, Membership: MembershipNone})
+	if n := count(); n != 2 {
+		t.Fatalf("member Count = %d, want 2", n)
+	}
+}
+
+// The relay's own key moderates any hosted group, even one it holds no
+// roster entry in (NIP-29: "sent by the relay master key or by group
+// admins"); before SetRelayAdmins it is an outsider like any other key.
+func TestRelayAdmin_ModeratesAnyGroup(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	if resp := sendEventAndAwaitOKForSession(t, sess, createGroupEventSignedBy(t, groupA, secondTestPrivKey)); !resp.Accepted {
+		t.Fatalf("create by second key: %s", resp.Message)
+	}
+	newcomer := "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+
+	if resp := sendEventAndAwaitOKForSession(t, sess, putUserEvent(t, groupA, newcomer, authTestPrivKey)); resp.Accepted {
+		t.Fatal("relay key moderated a group before SetRelayAdmins")
+	}
+
+	sess.groups.SetRelayAdmins(authTestPubKey)
+	if !sess.groups.IsAdmin(groupA, authTestPubKey) {
+		t.Error("IsAdmin(relay key) = false")
+	}
+	if sess.groups.IsAdmin("no-such-group", authTestPubKey) {
+		t.Error("IsAdmin(relay key) = true for a group that isn't hosted")
+	}
+	if resp := sendEventAndAwaitOKForSession(t, sess, putUserEvent(t, groupA, newcomer, authTestPrivKey)); !resp.Accepted {
+		t.Fatalf("relay key put-user refused: %s", resp.Message)
+	}
+	if resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupA, authTestPrivKey, nip29.GroupMetadataParams{Name: "recovered", Private: true, Closed: true})); !resp.Accepted {
+		t.Fatalf("relay key edit-metadata refused: %s", resp.Message)
+	}
+}
+
+// NewSessionHandler makes the relay's NIP-11 "self" key a relay admin.
+func TestNewSessionHandler_RelayKeyIsGroupAdmin(t *testing.T) {
+	sh := NewSessionHandler(newStore(t), &nip11.Metadata{Self: authTestPubKey}, nil, WithLogger(testlogger.New(t)))
+	if !sh.groups.isRelayAdmin(authTestPubKey) {
+		t.Fatal("the relay's self key is not a relay admin")
+	}
+	if sh.groups.isRelayAdmin(secondTestPrivKey) {
+		t.Fatal("an unrelated key is a relay admin")
 	}
 }
