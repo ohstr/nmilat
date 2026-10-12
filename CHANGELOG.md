@@ -11,6 +11,7 @@ privacy and performance fixes.
 - Adds an optional NIP-29 moderation log: with `GroupsService.SetModerationLog(true)`
   accepted moderation events are stored and readable by the group's members
   (invites by its admins), so clients can show who did what.
+  ([#104](https://github.com/ohstr/nmilat/pull/104))
 - Adds kind 39003 group roles: the relay publishes one per NIP-29 group from its
   moderation policy, and republishes them when the policy changes, so clients
   know which roles exist. `GroupsService.SetRoleDescriptions` describes them.
