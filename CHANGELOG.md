@@ -11,6 +11,7 @@ privacy and performance fixes.
 - Adds kind 39003 group roles: the relay publishes one per NIP-29 group from its
   moderation policy, and republishes them when the policy changes, so clients
   know which roles exist. `GroupsService.SetRoleDescriptions` describes them.
+  ([#103](https://github.com/ohstr/nmilat/pull/103))
 - Adds `RelayStatus.LastEOSE`, when a relay last finished a complete sync, and
   `RelayStatus.Closed`, the relay's reason when it closed the pool's subscription.
   ([#91](https://github.com/ohstr/nmilat/pull/91))
