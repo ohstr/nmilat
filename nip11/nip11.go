@@ -124,6 +124,8 @@ type Metadata struct {
 	PubKey      string `mapstructure:"pubkey" json:"pubkey"`
 	Contact     string `mapstructure:"contact" json:"contact"`
 	Description string `mapstructure:"description" json:"description"`
+	// Icon is a URL to the relay's icon, per NIP-11's "icon".
+	Icon string `mapstructure:"icon" json:"icon,omitempty"`
 	// SupportedNips is intentionally not settable via config: it is only
 	// ever populated by NewHandler from a derived NIPSet.
 	SupportedNips []NIPID    `mapstructure:"-" json:"supported_nips"`

@@ -8,6 +8,8 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `nip11.Metadata.Icon`, NIP-11's `icon` URL, settable as `nip11.icon`.
+  ([#106](https://github.com/ohstr/nmilat/pull/106))
 - Adds `SessionConfig.EventPolicy` and `WithEventsPolicy`, a hook that can refuse
   any event after validation, over the WebSocket and `POST /events`, so an
   embedder can enforce its own bans and kind rules.
