@@ -50,8 +50,22 @@ const MaxEventsBodyBytes = 1 << 20
 //     MembershipService.HandleEvent is wired to a live *Session for its
 //     reply/broadcast side effects, which an HTTP POST has none of. Use the
 //     relay's membership management API (ncli relay members) instead.
-func NewEventsHandler(store *EventStore, limitation *nip11.Limitation, membership *MembershipService, selfPubkey string) http.Handler {
-	return &eventsHandler{store: store, limitation: limitation, membership: membership, selfPubkey: selfPubkey}
+func NewEventsHandler(store *EventStore, limitation *nip11.Limitation, membership *MembershipService, selfPubkey string, opts ...EventsHandlerOption) http.Handler {
+	h := &eventsHandler{store: store, limitation: limitation, membership: membership, selfPubkey: selfPubkey}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
+}
+
+// EventsHandlerOption configures NewEventsHandler.
+type EventsHandlerOption func(*eventsHandler)
+
+// WithEventsPolicy applies policy to every event POSTed to /events, the same
+// as SessionConfig.EventPolicy does over the WebSocket. A refusal is a 403
+// carrying the policy's message.
+func WithEventsPolicy(policy EventPolicy) EventsHandlerOption {
+	return func(h *eventsHandler) { h.policy = policy }
 }
 
 type eventsHandler struct {
@@ -59,6 +73,7 @@ type eventsHandler struct {
 	limitation *nip11.Limitation
 	membership *MembershipService
 	selfPubkey string
+	policy     EventPolicy
 }
 
 func (h *eventsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -132,6 +147,13 @@ func (h *eventsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err := runEventValidators(r.Context(), &ev); err != nil {
 		http.Error(w, "invalid: "+err.Error(), http.StatusBadRequest)
 		return
+	}
+
+	if h.policy != nil {
+		if msg := h.policy(&ev); msg != "" {
+			http.Error(w, msg, http.StatusForbidden)
+			return
+		}
 	}
 
 	if h.limitation != nil && h.limitation.MembershipRequired && !nip43.IsRelayAuthoredKind(ev.Kind) {

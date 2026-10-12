@@ -326,6 +326,11 @@ func (s *Session) processCount(parent context.Context, cp *wire.CountPacket) err
 
 type EventValidator func(context.Context, *nip01.Event) error
 
+// EventPolicy decides whether a relay takes an event, after validation: ""
+// accepts it; anything else refuses it, with that text as the OK message.
+// See SessionConfig.EventPolicy.
+type EventPolicy func(*nip01.Event) string
+
 var (
 	eventValidatorsMu sync.RWMutex
 	eventValidators   = make(map[int][]EventValidator)
@@ -488,6 +493,13 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 		})
 
 		return nil
+	}
+
+	if policy := s.config.EventPolicy; policy != nil {
+		if msg := policy(ep.Event); msg != "" {
+			s.reply(&wire.OkSubscriptionResponse{EventID: ep.Event.ID, Accepted: false, Message: msg})
+			return nil
+		}
 	}
 
 	// NIP-70: a protected event may only be published by its own author, and

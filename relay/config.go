@@ -89,6 +89,14 @@ type SessionConfig struct {
 	// unless a relay opts into this.
 	AgentKindEnforcement bool
 
+	// EventPolicy, when set, is asked about every EVENT that passed
+	// validation, before any NIP-specific handling: a non-empty answer
+	// refuses it with that message as the OK reason (use a NIP-01 prefix,
+	// e.g. "blocked: pubkey is banned"). It lets an embedder enforce its
+	// own bans and kind rules (NIP-86) without a fork. It must be safe for
+	// concurrent use.
+	EventPolicy EventPolicy
+
 	// NIP-26 Delegation
 	PrivKey    string
 	Delegation *DelegationConfig
