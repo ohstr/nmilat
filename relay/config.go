@@ -97,6 +97,14 @@ type SessionConfig struct {
 	// concurrent use.
 	EventPolicy EventPolicy
 
+	// RequestHandlers run, in order, ahead of the built-in REQ handlers
+	// (NIP-50 search, cache, NIP-43, NIP-01), after the auth and NIP-29
+	// gates. A handler that returns true ends the chain; one that returns
+	// false may have rewritten the request for the next. Handle runs on
+	// the connection's read loop, so slow work belongs in a goroutine that
+	// answers with Session.SendEvents and SendEOSE.
+	RequestHandlers []RequestHandler
+
 	// NIP-26 Delegation
 	PrivKey    string
 	Delegation *DelegationConfig
@@ -126,6 +134,14 @@ type SessionOption func(*SessionConfig)
 func WithSessionConfig(cfg SessionConfig) SessionOption {
 	return func(target *SessionConfig) {
 		*target = cfg
+	}
+}
+
+// WithRequestHandler appends handlers to SessionConfig.RequestHandlers,
+// ahead of the built-in REQ handlers.
+func WithRequestHandler(handlers ...RequestHandler) SessionOption {
+	return func(cfg *SessionConfig) {
+		cfg.RequestHandlers = append(cfg.RequestHandlers, handlers...)
 	}
 }
 
