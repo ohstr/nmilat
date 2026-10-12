@@ -11,6 +11,7 @@ privacy and performance fixes.
 - Adds `SessionConfig.EventPolicy` and `WithEventsPolicy`, a hook that can refuse
   any event after validation, over the WebSocket and `POST /events`, so an
   embedder can enforce its own bans and kind rules.
+  ([#106](https://github.com/ohstr/nmilat/pull/106))
 - Adds optional pending NIP-29 join requests: with `GroupsService.SetPendingJoins(true)`
   a closed group keeps a join request without an invite code for its admins,
   who accept with kind 9000 or decline with 9001.
