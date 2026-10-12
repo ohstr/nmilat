@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -132,6 +133,11 @@ type GroupsService struct {
 	// the same reasoning groupsCache's own snap field documents.
 	policy atomic.Pointer[nip29.ModerationPolicy]
 
+	// relayAdmins hold every moderation permission in every hosted group,
+	// whatever its roster says: NIP-29 expects moderation events "sent by
+	// the relay master key or by group admins". Set by SetRelayAdmins.
+	relayAdmins atomic.Pointer[map[string]bool]
+
 	// linkMu serializes NIP-29 "Subgroups" cross-group mutation: a
 	// reparent touches up to three records (the group itself, its old
 	// parent, its new parent), and a delete cascades over every one of
@@ -166,6 +172,29 @@ func (g *GroupsService) SetModerationPolicy(policy nip29.ModerationPolicy) {
 	g.policy.Store(&policy)
 }
 
+// SetRelayAdmins replaces the keys that act as admin of every hosted
+// group: the relay's own key (NewSessionHandler passes NIP-11 "self"), plus
+// any operator keys an embedder adds. They can moderate any group, e.g.
+// recover one whose admins are gone, without holding a roster entry.
+func (g *GroupsService) SetRelayAdmins(pubkeys ...string) {
+	if g == nil {
+		return
+	}
+	set := make(map[string]bool, len(pubkeys))
+	for _, pk := range pubkeys {
+		if pk != "" {
+			set[strings.ToLower(pk)] = true
+		}
+	}
+	g.relayAdmins.Store(&set)
+}
+
+// isRelayAdmin reports whether pubkey is one of SetRelayAdmins' keys.
+func (g *GroupsService) isRelayAdmin(pubkey string) bool {
+	set := g.relayAdmins.Load()
+	return set != nil && (*set)[strings.ToLower(pubkey)]
+}
+
 // LoadFromStore populates the in-memory cache from the authoritative
 // store -- called once at relay construction (cold start), not on any
 // request path.
@@ -189,13 +218,14 @@ func (g *GroupsService) Exists(id string) bool {
 	return g.cache.Get(id) != nil
 }
 
-// IsAdmin reports whether pubkey holds at least one role in group id.
+// IsAdmin reports whether pubkey holds at least one role in group id, or
+// is a relay admin (SetRelayAdmins) and id is hosted here.
 func (g *GroupsService) IsAdmin(id, pubkey string) bool {
 	if g == nil {
 		return false
 	}
 	rec := g.cache.Get(id)
-	return rec != nil && rec.IsAdmin(pubkey)
+	return rec != nil && (rec.IsAdmin(pubkey) || g.isRelayAdmin(pubkey))
 }
 
 // IsMember reports whether pubkey holds a roster entry in group id.
@@ -210,7 +240,8 @@ func (g *GroupsService) IsMember(id, pubkey string) bool {
 // CanPerform reports whether pubkey's own roles in group id let it perform
 // a moderation action of kind, per GroupsService's ModerationPolicy. A
 // pubkey with no roster entry, or holding no roles, can never perform any
-// moderation action -- AllowsAny(nil, kind) is always false.
+// moderation action -- AllowsAny(nil, kind) is always false. A relay admin
+// (SetRelayAdmins) may perform any action in any hosted group.
 func (g *GroupsService) CanPerform(id, pubkey string, kind int) bool {
 	if g == nil {
 		return false
@@ -218,6 +249,9 @@ func (g *GroupsService) CanPerform(id, pubkey string, kind int) bool {
 	rec := g.cache.Get(id)
 	if rec == nil {
 		return false
+	}
+	if g.isRelayAdmin(pubkey) {
+		return true
 	}
 	policy := g.policy.Load()
 	if policy == nil {

@@ -137,6 +137,9 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes NIP-29 moderation from the relay's own key: NIP-11 `self` now acts
+  as admin of every hosted group, so an operator can recover a group whose
+  admins are gone. `GroupsService.SetRelayAdmins` adds other operator keys.
 - Fixes NIP-29 `restricted` and `hidden` group flags having no effect: a
   restricted group now refuses posts from non-members, and a hidden group's
   metadata (kinds 39000-39005) is no longer served to non-members.

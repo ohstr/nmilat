@@ -9,6 +9,7 @@ import (
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip11"
 	"github.com/ohstr/nmilat/nip29"
+	"github.com/ohstr/nmilat/testlogger"
 	"github.com/ohstr/nmilat/wire"
 )
 
@@ -1631,5 +1632,45 @@ func TestProcessCount_UntaggedGroupMetadataQuery_ExcludesHiddenGroups(t *testing
 	sess.addIdentity(AuthedIdentity{Pubkey: authTestPubKey, Membership: MembershipNone})
 	if n := count(); n != 2 {
 		t.Fatalf("member Count = %d, want 2", n)
+	}
+}
+
+// The relay's own key moderates any hosted group, even one it holds no
+// roster entry in (NIP-29: "sent by the relay master key or by group
+// admins"); before SetRelayAdmins it is an outsider like any other key.
+func TestRelayAdmin_ModeratesAnyGroup(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	if resp := sendEventAndAwaitOKForSession(t, sess, createGroupEventSignedBy(t, groupA, secondTestPrivKey)); !resp.Accepted {
+		t.Fatalf("create by second key: %s", resp.Message)
+	}
+	newcomer := "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+
+	if resp := sendEventAndAwaitOKForSession(t, sess, putUserEvent(t, groupA, newcomer, authTestPrivKey)); resp.Accepted {
+		t.Fatal("relay key moderated a group before SetRelayAdmins")
+	}
+
+	sess.groups.SetRelayAdmins(authTestPubKey)
+	if !sess.groups.IsAdmin(groupA, authTestPubKey) {
+		t.Error("IsAdmin(relay key) = false")
+	}
+	if sess.groups.IsAdmin("no-such-group", authTestPubKey) {
+		t.Error("IsAdmin(relay key) = true for a group that isn't hosted")
+	}
+	if resp := sendEventAndAwaitOKForSession(t, sess, putUserEvent(t, groupA, newcomer, authTestPrivKey)); !resp.Accepted {
+		t.Fatalf("relay key put-user refused: %s", resp.Message)
+	}
+	if resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupA, authTestPrivKey, nip29.GroupMetadataParams{Name: "recovered", Private: true, Closed: true})); !resp.Accepted {
+		t.Fatalf("relay key edit-metadata refused: %s", resp.Message)
+	}
+}
+
+// NewSessionHandler makes the relay's NIP-11 "self" key a relay admin.
+func TestNewSessionHandler_RelayKeyIsGroupAdmin(t *testing.T) {
+	sh := NewSessionHandler(newStore(t), &nip11.Metadata{Self: authTestPubKey}, nil, WithLogger(testlogger.New(t)))
+	if !sh.groups.isRelayAdmin(authTestPubKey) {
+		t.Fatal("the relay's self key is not a relay admin")
+	}
+	if sh.groups.isRelayAdmin(secondTestPrivKey) {
+		t.Fatal("an unrelated key is a relay admin")
 	}
 }

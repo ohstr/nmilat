@@ -701,6 +701,9 @@ func NewSessionHandler(store *EventStore, relayMetadata *nip11.Metadata, searchS
 	}
 
 	groups := NewGroupsService(store)
+	if relayMetadata != nil {
+		groups.SetRelayAdmins(relayMetadata.Self)
+	}
 	if err := groups.LoadFromStore(); err != nil {
 		// Non-fatal, for the same reason as the membership cache above.
 		cfg.Logger.Error().Err(err).Msg("failed to load NIP-29 groups cache at startup")
