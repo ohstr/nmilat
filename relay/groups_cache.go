@@ -140,6 +140,10 @@ type GroupsService struct {
 	// the relay master key or by group admins". Set by SetRelayAdmins.
 	relayAdmins atomic.Pointer[map[string]bool]
 
+	// moderationLog, when set, stores accepted moderation events so
+	// clients can read a group's log; see SetModerationLog.
+	moderationLog atomic.Bool
+
 	// roleDescriptions describe the policy's roles in kind:39003; see
 	// SetRoleDescriptions.
 	roleDescriptions atomic.Pointer[map[string]string]
@@ -182,6 +186,18 @@ func (g *GroupsService) SetModerationPolicy(policy nip29.ModerationPolicy) {
 	}
 	g.policy.Store(&policy)
 	g.publishAllRoles(context.Background())
+}
+
+// SetModerationLog turns the moderation log on or off. On, every accepted
+// moderation event except a group's deletion (kinds 9000-9020) is stored,
+// readable by the group's members; an invite (9009) only by its admins.
+// Off, the default, they are commands and nothing is kept. A deleted
+// group's log goes with its other events.
+func (g *GroupsService) SetModerationLog(on bool) {
+	if g == nil {
+		return
+	}
+	g.moderationLog.Store(on)
 }
 
 // SetRoleDescriptions sets the description each role gets in kind:39003

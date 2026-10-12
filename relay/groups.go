@@ -44,7 +44,7 @@ func (g *GroupsService) HandleEvent(ctx context.Context, s *Session, ev *nip01.E
 	case nip29.KindDeleteEvent:
 		g.handleDeleteEvent(ctx, s, ev)
 	case nip29.KindCreateInvite:
-		g.handleCreateInvite(s, ev)
+		g.handleCreateInvite(ctx, s, ev)
 	case nip29.KindUpdatePinList:
 		g.handleUpdatePinList(ctx, s, ev)
 	case nip29.KindJoinRequest:
@@ -108,6 +108,7 @@ func (g *GroupsService) handleCreate(ctx context.Context, s *Session, ev *nip01.
 	if s.config.PrivKey != "" {
 		g.publishRoles(ctx, s.selfPubkey, s.config.PrivKey, rec.ID)
 	}
+	g.recordModeration(ctx, s, ev)
 
 	s.reply(&wire.OkSubscriptionResponse{
 		EventID:  ev.ID,
@@ -238,6 +239,7 @@ func (g *GroupsService) handlePutUser(ctx context.Context, s *Session, ev *nip01
 	}
 
 	publishGroupRosterMirrors(ctx, s, rec)
+	g.recordModeration(ctx, s, ev)
 	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: member added."})
 }
 
@@ -266,6 +268,7 @@ func (g *GroupsService) handleRemoveUser(ctx context.Context, s *Session, ev *ni
 	}
 
 	publishGroupRosterMirrors(ctx, s, rec)
+	g.recordModeration(ctx, s, ev)
 	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: member removed."})
 }
 
@@ -399,6 +402,7 @@ func (g *GroupsService) handleEditMetadata(ctx context.Context, s *Session, ev *
 		}
 	}
 
+	g.recordModeration(ctx, s, ev)
 	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: group metadata updated."})
 }
 
@@ -515,6 +519,7 @@ func (g *GroupsService) handleDeleteEvent(ctx context.Context, s *Session, ev *n
 		return
 	}
 
+	g.recordModeration(ctx, s, ev)
 	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: event deleted."})
 }
 
@@ -525,7 +530,7 @@ func (g *GroupsService) handleDeleteEvent(ctx context.Context, s *Session, ev *n
 // handleCreateInvite implements kind:9009: an admin (per ModerationPolicy)
 // creates a group-scoped invite code, stored separately from NIP-43's own
 // invite claims (relay/store_groups.go's indexGroupInvites).
-func (g *GroupsService) handleCreateInvite(s *Session, ev *nip01.Event) {
+func (g *GroupsService) handleCreateInvite(ctx context.Context, s *Session, ev *nip01.Event) {
 	action, err := nip29.ParseModerationAction(ev)
 	if err != nil {
 		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: " + err.Error()})
@@ -546,6 +551,7 @@ func (g *GroupsService) handleCreateInvite(s *Session, ev *nip01.Event) {
 		return
 	}
 
+	g.recordModeration(ctx, s, ev)
 	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: invite created."})
 }
 
@@ -676,6 +682,7 @@ func (g *GroupsService) handleUpdatePinList(ctx context.Context, s *Session, ev 
 	}
 
 	publishGroupPinsMirror(ctx, s, rec)
+	g.recordModeration(ctx, s, ev)
 	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: pinned list updated."})
 }
 
@@ -833,6 +840,43 @@ func (g *GroupsService) anyIdentityIsMember(s groupReader, groupID string) bool 
 	return false
 }
 
+// anyIdentityIsAdmin is anyIdentityIsMember for admins (relay admins
+// included).
+func (g *GroupsService) anyIdentityIsAdmin(s groupReader, groupID string) bool {
+	for _, pk := range s.readerPubkeys() {
+		if g.IsAdmin(groupID, pk) {
+			return true
+		}
+	}
+	return false
+}
+
+// recordModeration stores an accepted moderation event when the
+// moderation log is on (SetModerationLog), so clients can read a group's
+// log back with {"kinds":[9000,...],"#h":[id]}.
+func (g *GroupsService) recordModeration(ctx context.Context, s *Session, ev *nip01.Event) {
+	if !g.moderationLog.Load() {
+		return
+	}
+	if err := s.store.InsertEvents(ctx, []*nip01.Event{ev}); err != nil {
+		s.config.Logger.Error().Err(err).Int("kind", ev.Kind).Msg("failed to store NIP-29 moderation event")
+	}
+}
+
+// deniedModerationEvent reports whether a stored moderation event (the
+// moderation log) is withheld from s: it is for the group's members, and
+// an invite, which carries its code, for its admins.
+func (g *GroupsService) deniedModerationEvent(s groupReader, ev *nip01.Event) bool {
+	id, err := nip29.GroupIDFromTags(ev.Tags)
+	if err != nil || !g.Exists(id) {
+		return true
+	}
+	if ev.Kind == nip29.KindCreateInvite {
+		return !g.anyIdentityIsAdmin(s, id)
+	}
+	return !g.anyIdentityIsMember(s, id)
+}
+
 // groupReader is whoever a group-visibility check is for: a WebSocket
 // session (every identity it authenticated) or an HTTP caller (its NIP-98
 // signer) -- so REQ and the /query bridge run the very same checks.
@@ -910,7 +954,26 @@ func (g *GroupsService) deniedGroupWrite(ev *nip01.Event) string {
 // deniedPrivateGroupPotentialEvent: whenever a private group exists, since
 // its content can match any filter, not just a group-metadata one.
 func (g *GroupsService) needsPrivacyCheck(filters *nip01.SubscriptionFilterGroup) bool {
-	return g.anyPrivate() || mayDeliverGroupMetadataKind(filters)
+	return g.anyPrivate() || mayDeliverGroupMetadataKind(filters) || mayDeliverModerationKind(filters)
+}
+
+// mayDeliverModerationKind is mayDeliverGroupMetadataKind for the stored
+// moderation log (kinds 9000-9020).
+func mayDeliverModerationKind(filters *nip01.SubscriptionFilterGroup) bool {
+	if filters == nil {
+		return false
+	}
+	for _, f := range filters.GetAll() {
+		if len(f.Kinds) == 0 {
+			return true
+		}
+		for _, k := range f.Kinds {
+			if nip29.IsModerationKind(k) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // anyPrivate reports whether any hosted group is private.
@@ -970,6 +1033,9 @@ func mayDeliverGroupMetadataKind(filters *nip01.SubscriptionFilterGroup) bool {
 func (g *GroupsService) deniedPrivateGroupEvent(s groupReader, ev *nip01.Event) bool {
 	if g == nil || ev == nil {
 		return false
+	}
+	if nip29.IsModerationKind(ev.Kind) {
+		return g.deniedModerationEvent(s, ev)
 	}
 	if nip29.IsGroupMetadataKind(ev.Kind) {
 		groupID, err := nip29.GroupIDFromDTag(ev.Tags)
