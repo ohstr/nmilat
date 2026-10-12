@@ -140,6 +140,7 @@ privacy and performance fixes.
 - Fixes NIP-29 `restricted` and `hidden` group flags having no effect: a
   restricted group now refuses posts from non-members, and a hidden group's
   metadata (kinds 39000-39005) is no longer served to non-members.
+  ([#100](https://github.com/ohstr/nmilat/pull/100))
 - Fixes `Pool` with a Signer waiting 5s before subscribing on relays that never
   send AUTH; it now waits only when challenged, and syncs again after a late AUTH.
   ([#93](https://github.com/ohstr/nmilat/pull/93))
