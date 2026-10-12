@@ -158,6 +158,7 @@ privacy and performance fixes.
 - Fixes deleting a NIP-29 subgroup: it now leaves its parent's `child` list,
   and an edit to the parent drops ids that no longer exist, so a stale child no
   longer breaks reads of the parent's subgroups.
+  ([#109](https://github.com/ohstr/nmilat/pull/109))
 - Fixes NIP-29 edits that flip `private` on a linked group: one whose parent
   or a subgroup would end up with the other setting is now refused, as linking
   such groups already was.
