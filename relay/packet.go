@@ -106,12 +106,17 @@ func (s *Session) processRequest(ctx context.Context, rp *wire.RequestPacket) er
 		return nil
 	}
 
-	// Handlers Chain
-	// Handlers Chain
-	// We instantiate them here. For further optimization, these could be singletons or initialized once in Session or Server.
-	// Since they are stateless, specific instances are cheap, but the slice allocation is repetitive.
-	handlers := getRequestHandlers()
+	// The embedder's handlers go first, then the built-in chain.
+	if s.runRequestHandlers(ctx, rp, s.config.RequestHandlers) {
+		return nil
+	}
+	s.runRequestHandlers(ctx, rp, getRequestHandlers())
+	return nil
+}
 
+// runRequestHandlers offers rp to each handler in turn and reports whether
+// one of them ended the chain, by answering or by failing.
+func (s *Session) runRequestHandlers(ctx context.Context, rp *wire.RequestPacket, handlers []RequestHandler) bool {
 	for _, h := range handlers {
 		if h.CanHandle(rp) {
 			done, err := h.Handle(ctx, s, rp)
@@ -122,15 +127,14 @@ func (s *Session) processRequest(ctx context.Context, rp *wire.RequestPacket) er
 					SubscriptionID: rp.SubscriptionID,
 					Message:        fmt.Sprintf("error: %v", err),
 				})
-				return nil
+				return true
 			}
 			if done {
-				return nil
+				return true
 			}
 		}
 	}
-
-	return nil
+	return false
 }
 
 /////////////////////////////////////////////////////////////////////

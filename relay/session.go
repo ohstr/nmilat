@@ -414,6 +414,28 @@ func (s *Session) Info() *ClientInfo {
 	return s.info
 }
 
+// SendEvents answers subID with events in the given order, for a
+// RequestHandler that ranks its own results (NIP-50: best match first).
+// It closes any open subscription with that id, since this REQ replaces
+// it, and withholds events from private NIP-29 groups the session can't
+// read, as a store query would. Follow it with SendEOSE. Safe to call
+// from another goroutine.
+func (s *Session) SendEvents(subID string, events []*nip01.Event) {
+	s.subscriptions.Close(subID)
+	for _, ev := range events {
+		if s.groups.deniedPrivateGroupEvent(s, ev) {
+			continue
+		}
+		s.reply(&wire.EventSubscriptionResponse{SubscriptionID: subID, Event: ev})
+	}
+}
+
+// SendEOSE ends the stored events sent under subID. A handler answering
+// with SendEvents opens no live tail, so nothing follows it.
+func (s *Session) SendEOSE(subID string) {
+	s.reply(&wire.EOSESubscriptionResponse{SubscriptionID: subID})
+}
+
 func (s *Session) Recv(ctx context.Context) error {
 
 	var payload wire.RelayPayload

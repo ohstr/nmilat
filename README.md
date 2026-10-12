@@ -160,6 +160,12 @@ To refuse events by your own rules (NIP-86 bans, kind lists), set
 answer such as `"blocked: pubkey is banned"` refuses the event with that
 message.
 
+To answer REQs yourself, for example NIP-50 search from your own index,
+pass `relay.WithRequestHandler(h)`: `h` runs ahead of the built-in handlers
+and can rewrite the filters or answer with `Session.SendEvents` (in your
+order, such as best match first) and `Session.SendEOSE`. Call
+`relay.RegisterNIP(50)` too so `supported_nips` advertises search.
+
 **Performance characteristics an embedder can rely on:** every logger is
 `zerolog.Nop()` unless passed in via `WithLogger`/`WithEventStoreLogger` —
 nothing is written anywhere by default; there is no reflection-based
