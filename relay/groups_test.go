@@ -1529,4 +1529,107 @@ func TestDeniedGroupWrite(t *testing.T) {
 	if msg := sess.groups.deniedGroupWrite(post(outsider, groupA)); msg != "" {
 		t.Errorf("outsider refused by a public, open group: %s", msg)
 	}
+
+	// restricted: a public, open group that only members may post in.
+	restricted := *sess.groups.cache.Get(groupA)
+	restricted.Metadata.Restricted = true
+	sess.groups.cache.put(&restricted)
+	if msg := sess.groups.deniedGroupWrite(post(outsider, groupA)); msg == "" {
+		t.Error("outsider allowed into a restricted group")
+	}
+	if msg := sess.groups.deniedGroupWrite(post(authTestPrivKey, groupA)); msg != "" {
+		t.Errorf("member refused by a restricted group: %s", msg)
+	}
+}
+
+// A restricted group refuses a non-member's post end to end, with the same
+// OK message a private or closed group gives.
+func TestProcessEvent_RestrictedGroupRefusesNonMember(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
+	if resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupA, authTestPrivKey, nip29.GroupMetadataParams{Restricted: true})); !resp.Accepted {
+		t.Fatalf("make groupA public, open, restricted: %s", resp.Message)
+	}
+
+	post := nip01.NewEvent(9, "hi", []string{"h", groupA})
+	if err := post.Sign(secondTestPrivKey); err != nil {
+		t.Fatal(err)
+	}
+	resp := sendEventAndAwaitOKForSession(t, sess, post)
+	if resp.Accepted || resp.Message != "restricted: only members may post in group "+groupA {
+		t.Fatalf("non-member post: accepted=%v %q", resp.Accepted, resp.Message)
+	}
+}
+
+// A hidden group's metadata is for members only, but its content stays as
+// readable as a public group's.
+func TestDeniedPrivateGroupEvent_HiddenGroup(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	rec := newGroupRecord(groupA, authTestPubKey)
+	rec.Metadata.Private, rec.Metadata.Hidden = false, true
+	if err := sess.groups.Create(rec); err != nil {
+		t.Fatal(err)
+	}
+
+	meta := nip29.NewGroupMetadata(nip29.GroupMetadataParams{SelfPubkey: authTestPubKey, ID: groupA, Hidden: true})
+	if err := meta.Sign(authTestPrivKey); err != nil {
+		t.Fatal(err)
+	}
+	post := nip01.NewEvent(9, "hi", []string{"h", groupA})
+	if err := post.Sign(secondTestPrivKey); err != nil {
+		t.Fatal(err)
+	}
+
+	if !sess.groups.deniedPrivateGroupEvent(sess, meta) {
+		t.Error("a hidden group's metadata was delivered to a non-member")
+	}
+	if sess.groups.deniedPrivateGroupEvent(sess, post) {
+		t.Error("a hidden, non-private group's content was withheld")
+	}
+
+	sess.addIdentity(AuthedIdentity{Pubkey: authTestPubKey, Membership: MembershipNone})
+	if sess.groups.deniedPrivateGroupEvent(sess, meta) {
+		t.Error("a hidden group's metadata was withheld from a member")
+	}
+}
+
+// An untagged metadata query skips hidden groups for a non-member, the way
+// it skips private ones.
+func TestProcessCount_UntaggedGroupMetadataQuery_ExcludesHiddenGroups(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	for _, id := range []string{groupA, groupB} {
+		if resp := sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, id)); !resp.Accepted {
+			t.Fatalf("create %s: %s", id, resp.Message)
+		}
+	}
+	if resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupA, authTestPrivKey, nip29.GroupMetadataParams{Hidden: true})); !resp.Accepted {
+		t.Fatalf("make groupA public and hidden: %s", resp.Message)
+	}
+	if resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupB, authTestPrivKey, nip29.GroupMetadataParams{})); !resp.Accepted {
+		t.Fatalf("make groupB public: %s", resp.Message)
+	}
+
+	count := func() int64 {
+		t.Helper()
+		cp := &wire.CountPacket{
+			SubscriptionID: "sub-1",
+			Filters:        nip01.NewSubscriptionFilterGroup(&nip01.SubscriptionFilter{Kinds: []int{nip29.KindGroupMetadata}}),
+		}
+		if err := sess.processCount(context.Background(), cp); err != nil {
+			t.Fatalf("processCount: %v", err)
+		}
+		resp, ok := (<-sess.incoming).(*wire.CountSubscriptionResponse)
+		if !ok {
+			t.Fatal("reply was not a *wire.CountSubscriptionResponse")
+		}
+		return int64(resp.Count)
+	}
+
+	if n := count(); n != 1 {
+		t.Fatalf("anonymous Count = %d, want 1 (only groupB; groupA is hidden)", n)
+	}
+	sess.addIdentity(AuthedIdentity{Pubkey: authTestPubKey, Membership: MembershipNone})
+	if n := count(); n != 2 {
+		t.Fatalf("member Count = %d, want 2", n)
+	}
 }

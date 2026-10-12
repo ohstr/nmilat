@@ -862,8 +862,8 @@ func dNamesGroup(filter *nip01.SubscriptionFilter) bool {
 /////////////////////////////////////////////////////////////////////
 
 // deniedGroupWrite returns why ev may not be posted into a group it names
-// with "h", or "" if it may: a private or closed group takes posts from
-// its members only; a public, open one from anyone.
+// with "h", or "" if it may: a private, closed or restricted group takes
+// posts from its members only; any other group from anyone.
 func (g *GroupsService) deniedGroupWrite(ev *nip01.Event) string {
 	if g == nil || ev == nil {
 		return ""
@@ -873,7 +873,7 @@ func (g *GroupsService) deniedGroupWrite(ev *nip01.Event) string {
 			continue
 		}
 		id := tag[1]
-		if (g.IsPrivate(id) || g.IsClosed(id)) && !g.IsMember(id, ev.PubKey) {
+		if (g.IsPrivate(id) || g.IsClosed(id) || g.IsRestricted(id)) && !g.IsMember(id, ev.PubKey) {
 			return "restricted: only members may post in group " + id
 		}
 	}
@@ -928,8 +928,10 @@ func mayDeliverGroupMetadataKind(filters *nip01.SubscriptionFilterGroup) bool {
 
 // deniedPrivateGroupEvent reports whether ev -- a candidate event about to
 // be delivered to s -- is a relay-authored group-metadata event
-// (kind 39000-39005) belonging to a private group that none of s's
-// authenticated identities is a member of.
+// (kind 39000-39005) belonging to a private or hidden group that none of
+// s's authenticated identities is a member of, or content tagged into a
+// private one. A hidden group hides only its metadata; its content is
+// gated by "private" alone.
 //
 // This is deniedPrivateGroupFilter's companion, applied to the event
 // actually being delivered rather than the request's own "d"/"h" tags.
@@ -945,7 +947,7 @@ func (g *GroupsService) deniedPrivateGroupEvent(s groupReader, ev *nip01.Event) 
 	}
 	if nip29.IsGroupMetadataKind(ev.Kind) {
 		groupID, err := nip29.GroupIDFromDTag(ev.Tags)
-		if err == nil && g.IsPrivate(groupID) && !g.anyIdentityIsMember(s, groupID) {
+		if err == nil && (g.IsPrivate(groupID) || g.IsHidden(groupID)) && !g.anyIdentityIsMember(s, groupID) {
 			return true
 		}
 		// A mirror whose group is gone (deleted before its events were

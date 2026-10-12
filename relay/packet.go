@@ -544,7 +544,8 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 		return nil
 	}
 
-	// NIP-29 content: only members post into a private or closed group.
+	// NIP-29 content: only members post into a private, closed or
+	// restricted group.
 	if msg := s.groups.deniedGroupWrite(ep.Event); msg != "" {
 		s.reply(&wire.OkSubscriptionResponse{EventID: ep.Event.ID, Accepted: false, Message: msg})
 		return nil

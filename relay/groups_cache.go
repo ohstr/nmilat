@@ -251,6 +251,27 @@ func (g *GroupsService) IsClosed(id string) bool {
 	return rec != nil && rec.Metadata.Closed
 }
 
+// IsRestricted reports whether id names a currently-hosted group whose
+// metadata marks it restricted: only members may post in it.
+func (g *GroupsService) IsRestricted(id string) bool {
+	if g == nil {
+		return false
+	}
+	rec := g.cache.Get(id)
+	return rec != nil && rec.Metadata.Restricted
+}
+
+// IsHidden reports whether id names a currently-hosted group whose metadata
+// marks it hidden: its metadata events (kind 39000-39005) are for members
+// only, while its content stays as readable as "private" allows.
+func (g *GroupsService) IsHidden(id string) bool {
+	if g == nil {
+		return false
+	}
+	rec := g.cache.Get(id)
+	return rec != nil && rec.Metadata.Hidden
+}
+
 // Create persists a freshly created group and updates the in-memory cache.
 // Callers (GroupsService.HandleEvent's kind:9007 path) are responsible for
 // checking Exists first; Create itself does not guard against overwriting
