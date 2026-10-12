@@ -140,6 +140,7 @@ privacy and performance fixes.
 - Fixes NIP-29 edits that flip `private` on a linked group: one whose parent
   or a subgroup would end up with the other setting is now refused, as linking
   such groups already was.
+  ([#102](https://github.com/ohstr/nmilat/pull/102))
 - Fixes NIP-29 moderation from the relay's own key: NIP-11 `self` now acts
   as admin of every hosted group, so an operator can recover a group whose
   admins are gone. `GroupsService.SetRelayAdmins` adds other operator keys.
