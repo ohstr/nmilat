@@ -129,6 +129,37 @@ what [`ncli`](https://github.com/ohstr/ncli) does internally. Optional
 NIPs opt in by `relayreg` blank-import (above), not by the relay package
 importing them.
 
+### Hosting NIP-29 groups
+
+With `nip29/relayreg` blank-imported, `SessionHandler.Groups()` hosts
+groups. It enforces all four access flags: `private` hides a group's
+content and metadata from non-members, `closed` takes joins only with an
+invite code, `restricted` takes posts only from members, and `hidden` hides
+the metadata (kinds 39000-39005) from non-members. The relay's own key
+(NIP-11 `self`) is admin of every hosted group. Everything else is opt-in:
+
+```go
+groups := handler.Groups()
+
+// Which roles may send which moderation kinds (default: only "admin",
+// which a group's creator holds). Each group's kind 39003 lists these.
+groups.SetModerationPolicy(nip29.ModerationPolicy{
+	"admin":     {nip29.KindPutUser, nip29.KindRemoveUser, nip29.KindEditMetadata, nip29.KindDeleteEvent, nip29.KindDeleteGroup, nip29.KindCreateInvite, nip29.KindUpdatePinList},
+	"moderator": {nip29.KindDeleteEvent, nip29.KindUpdatePinList},
+})
+groups.SetRoleDescriptions(map[string]string{"moderator": "keeps the peace"})
+
+groups.SetRelayAdmins(operatorPubkeyHex) // more keys that moderate every group
+groups.SetModerationLog(true)            // keep 9000-9020 so members can read who did what
+groups.SetPendingJoins(true)             // a closed group keeps codeless 9021s for its admins
+```
+
+To refuse events by your own rules (NIP-86 bans, kind lists), set
+`SessionConfig.EventPolicy` and pass the same function to
+`relay.NewEventsHandler(..., relay.WithEventsPolicy(policy))`: a non-empty
+answer such as `"blocked: pubkey is banned"` refuses the event with that
+message.
+
 **Performance characteristics an embedder can rely on:** every logger is
 `zerolog.Nop()` unless passed in via `WithLogger`/`WithEventStoreLogger` —
 nothing is written anywhere by default; there is no reflection-based
