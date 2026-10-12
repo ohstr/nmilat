@@ -11,6 +11,7 @@ privacy and performance fixes.
 - Adds `WithRequestHandler`, REQ handlers run ahead of the built-in ones, and
   `Session.SendEvents`/`SendEOSE` to answer a REQ in the handler's own order, so
   an embedder can serve NIP-50 search from its own index, best match first.
+  ([#111](https://github.com/ohstr/nmilat/pull/111))
 - Adds `nip11.Metadata.Icon`, NIP-11's `icon` URL, settable as `nip11.icon`.
   ([#106](https://github.com/ohstr/nmilat/pull/106))
 - Adds `SessionConfig.EventPolicy` and `WithEventsPolicy`, a hook that can refuse
