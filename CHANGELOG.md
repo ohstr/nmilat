@@ -8,6 +8,9 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds optional pending NIP-29 join requests: with `GroupsService.SetPendingJoins(true)`
+  a closed group keeps a join request without an invite code for its admins,
+  who accept with kind 9000 or decline with 9001.
 - Adds an optional NIP-29 moderation log: with `GroupsService.SetModerationLog(true)`
   accepted moderation events are stored and readable by the group's members
   (invites by its admins), so clients can show who did what.

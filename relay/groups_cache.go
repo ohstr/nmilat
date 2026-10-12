@@ -144,6 +144,10 @@ type GroupsService struct {
 	// clients can read a group's log; see SetModerationLog.
 	moderationLog atomic.Bool
 
+	// pendingJoins, when set, keeps a closed group's codeless join
+	// requests for its admins; see SetPendingJoins.
+	pendingJoins atomic.Bool
+
 	// roleDescriptions describe the policy's roles in kind:39003; see
 	// SetRoleDescriptions.
 	roleDescriptions atomic.Pointer[map[string]string]
@@ -198,6 +202,19 @@ func (g *GroupsService) SetModerationLog(on bool) {
 		return
 	}
 	g.moderationLog.Store(on)
+}
+
+// SetPendingJoins turns pending join requests on or off. On, a closed
+// group's join request without an invite code is stored instead of
+// refused, readable by the group's admins and the requester, until an
+// admin answers it with kind:9000 (accept) or kind:9001 (decline), the
+// requester joins another way or leaves, or an admin deletes it (9005).
+// Off, the default, such a request is refused.
+func (g *GroupsService) SetPendingJoins(on bool) {
+	if g == nil {
+		return
+	}
+	g.pendingJoins.Store(on)
 }
 
 // SetRoleDescriptions sets the description each role gets in kind:39003

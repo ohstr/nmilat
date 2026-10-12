@@ -239,6 +239,7 @@ func (g *GroupsService) handlePutUser(ctx context.Context, s *Session, ev *nip01
 	}
 
 	publishGroupRosterMirrors(ctx, s, rec)
+	g.clearPendingJoins(ctx, s, action.GroupID, action.Pubkey)
 	g.recordModeration(ctx, s, ev)
 	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: member added."})
 }
@@ -268,6 +269,7 @@ func (g *GroupsService) handleRemoveUser(ctx context.Context, s *Session, ev *ni
 	}
 
 	publishGroupRosterMirrors(ctx, s, rec)
+	g.clearPendingJoins(ctx, s, action.GroupID, action.Pubkey)
 	g.recordModeration(ctx, s, ev)
 	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: member removed."})
 }
@@ -559,9 +561,9 @@ func (g *GroupsService) handleCreateInvite(ctx context.Context, s *Session, ev *
 // request, distinct from NIP-43's relay-wide kind:28934. An open group
 // (Metadata.Closed == false) admits any request outright; a closed one
 // requires a valid, unused invite code (kind:9009) in the request's "code"
-// tag -- there is no pending-approval queue in this build, so without a
-// code a closed group's join is simply refused, with the admin's own
-// kind:9000 put-user as the only other path in.
+// tag. Without a code, a closed group refuses the join -- or, with
+// SetPendingJoins on, stores it for the group's admins to answer with a
+// kind:9000 (accept) or kind:9001 (decline).
 func (g *GroupsService) handleJoinRequest(ctx context.Context, s *Session, ev *nip01.Event) {
 	jr, err := nip29.ParseJoinRequest(ev)
 	if err != nil {
@@ -583,6 +585,10 @@ func (g *GroupsService) handleJoinRequest(ctx context.Context, s *Session, ev *n
 
 	if g.IsClosed(jr.GroupID) {
 		if jr.Code == "" {
+			if g.pendingJoins.Load() {
+				g.storePendingJoin(ctx, s, jr.GroupID, ev)
+				return
+			}
 			s.reply(&wire.OkSubscriptionResponse{
 				EventID:  ev.ID,
 				Accepted: false,
@@ -609,6 +615,7 @@ func (g *GroupsService) handleJoinRequest(ctx context.Context, s *Session, ev *n
 	}
 
 	publishGroupRosterMirrors(ctx, s, rec)
+	g.clearPendingJoins(ctx, s, jr.GroupID, ev.PubKey)
 	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: welcome to the group!"})
 }
 
@@ -625,6 +632,8 @@ func (g *GroupsService) handleLeaveRequest(ctx context.Context, s *Session, ev *
 		return
 	}
 	if !g.IsMember(lr.GroupID, ev.PubKey) {
+		// Leaving withdraws a pending join request, if any.
+		g.clearPendingJoins(ctx, s, lr.GroupID, ev.PubKey)
 		s.reply(&wire.OkSubscriptionResponse{
 			EventID:  ev.ID,
 			Accepted: true,
@@ -642,6 +651,37 @@ func (g *GroupsService) handleLeaveRequest(ctx context.Context, s *Session, ev *
 
 	publishGroupRosterMirrors(ctx, s, rec)
 	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: you have left the group."})
+}
+
+// storePendingJoin keeps a closed group's codeless join request for its
+// admins, replacing any earlier one from the same pubkey.
+func (g *GroupsService) storePendingJoin(ctx context.Context, s *Session, groupID string, ev *nip01.Event) {
+	g.clearPendingJoins(ctx, s, groupID, ev.PubKey)
+	if err := s.store.InsertEvents(ctx, []*nip01.Event{ev}); err != nil {
+		s.config.Logger.Error().Err(err).Str("group", groupID).Msg("failed to store pending join request")
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not store join request"})
+		return
+	}
+	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: your join request is pending admin approval."})
+}
+
+// clearPendingJoins drops pubkey's stored join requests to groupID: it was
+// answered (put-user or remove-user), joined another way, or left.
+func (g *GroupsService) clearPendingJoins(ctx context.Context, s *Session, groupID, pubkey string) {
+	if pubkey == "" {
+		return
+	}
+	pes, err := s.store.FindEvents(ctx, &nip01.SubscriptionFilter{
+		Kinds:   []int{nip29.KindJoinRequest},
+		Authors: []string{pubkey},
+		Tags:    map[string][]string{"h": {groupID}},
+	})
+	if err == nil && len(pes) > 0 {
+		err = s.store.DeleteAll(pes)
+	}
+	if err != nil {
+		s.config.Logger.Error().Err(err).Str("group", groupID).Msg("failed to clear pending join requests")
+	}
 }
 
 // isKnownGroupInviteError reports whether err is one of the two "normal,
@@ -877,6 +917,21 @@ func (g *GroupsService) deniedModerationEvent(s groupReader, ev *nip01.Event) bo
 	return !g.anyIdentityIsMember(s, id)
 }
 
+// deniedPendingJoin reports whether a stored join request is withheld from
+// s: only the group's admins and the requester see it.
+func (g *GroupsService) deniedPendingJoin(s groupReader, ev *nip01.Event) bool {
+	id, err := nip29.GroupIDFromTags(ev.Tags)
+	if err != nil || !g.Exists(id) {
+		return true
+	}
+	for _, pk := range s.readerPubkeys() {
+		if pk == ev.PubKey {
+			return false
+		}
+	}
+	return !g.anyIdentityIsAdmin(s, id)
+}
+
 // groupReader is whoever a group-visibility check is for: a WebSocket
 // session (every identity it authenticated) or an HTTP caller (its NIP-98
 // signer) -- so REQ and the /query bridge run the very same checks.
@@ -958,7 +1013,7 @@ func (g *GroupsService) needsPrivacyCheck(filters *nip01.SubscriptionFilterGroup
 }
 
 // mayDeliverModerationKind is mayDeliverGroupMetadataKind for the stored
-// moderation log (kinds 9000-9020).
+// moderation log (kinds 9000-9020) and pending join requests (9021).
 func mayDeliverModerationKind(filters *nip01.SubscriptionFilterGroup) bool {
 	if filters == nil {
 		return false
@@ -968,7 +1023,7 @@ func mayDeliverModerationKind(filters *nip01.SubscriptionFilterGroup) bool {
 			return true
 		}
 		for _, k := range f.Kinds {
-			if nip29.IsModerationKind(k) {
+			if nip29.IsModerationKind(k) || k == nip29.KindJoinRequest {
 				return true
 			}
 		}
@@ -1036,6 +1091,9 @@ func (g *GroupsService) deniedPrivateGroupEvent(s groupReader, ev *nip01.Event) 
 	}
 	if nip29.IsModerationKind(ev.Kind) {
 		return g.deniedModerationEvent(s, ev)
+	}
+	if ev.Kind == nip29.KindJoinRequest {
+		return g.deniedPendingJoin(s, ev)
 	}
 	if nip29.IsGroupMetadataKind(ev.Kind) {
 		groupID, err := nip29.GroupIDFromDTag(ev.Tags)
