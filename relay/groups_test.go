@@ -858,7 +858,7 @@ func TestHandleEvent_EditMetadata_SetParent_Success(t *testing.T) {
 	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
 	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupB))
 
-	resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupB, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupA}))
+	resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupB, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupA, Private: true, Closed: true}))
 	if !resp.Accepted {
 		t.Fatalf("Accepted = false, want true (message: %s)", resp.Message)
 	}
@@ -876,7 +876,7 @@ func TestHandleEvent_EditMetadata_SetParent_SelfReference_Rejected(t *testing.T)
 	sess := newGroupsEnabledTestSession(t)
 	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
 
-	resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupA, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupA}))
+	resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupA, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupA, Private: true, Closed: true}))
 	if resp.Accepted {
 		t.Fatal("Accepted = true for a group naming itself as its own parent, want false")
 	}
@@ -889,7 +889,7 @@ func TestHandleEvent_EditMetadata_SetParent_NonexistentParent_Rejected(t *testin
 	sess := newGroupsEnabledTestSession(t)
 	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
 
-	resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupA, authTestPrivKey, nip29.GroupMetadataParams{Parent: "no-such-group"}))
+	resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupA, authTestPrivKey, nip29.GroupMetadataParams{Parent: "no-such-group", Private: true, Closed: true}))
 	if resp.Accepted {
 		t.Fatal("Accepted = true for a parent that doesn't exist, want false")
 	}
@@ -904,12 +904,12 @@ func TestHandleEvent_EditMetadata_SetParent_Cycle_Rejected(t *testing.T) {
 	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupB))
 
 	// groupB's parent is groupA.
-	if resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupB, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupA})); !resp.Accepted {
+	if resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupB, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupA, Private: true, Closed: true})); !resp.Accepted {
 		t.Fatalf("set groupB's parent to groupA: %s", resp.Message)
 	}
 
 	// groupA's parent -> groupB would close the loop A -> B -> A.
-	resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupA, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupB}))
+	resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupA, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupB, Private: true, Closed: true}))
 	if resp.Accepted {
 		t.Fatal("Accepted = true for a parent assignment that creates a cycle, want false")
 	}
@@ -923,7 +923,7 @@ func TestHandleEvent_EditMetadata_SetParent_NotAdminOfNewParent_Rejected(t *test
 	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))                           // admin: authTestPubKey
 	sendEventAndAwaitOKForSession(t, sess, createGroupEventSignedBy(t, groupC, thirdTestPrivKey)) // admin: thirdTestPubKey
 
-	resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupA, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupC}))
+	resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupA, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupC, Private: true, Closed: true}))
 	if resp.Accepted {
 		t.Fatal("Accepted = true when the submitter isn't an admin of the new parent, want false")
 	}
@@ -993,13 +993,13 @@ func TestHandleEvent_EditMetadata_ChildrenList_OmittedOnUnrelatedEdit_Rejected(t
 	sess := newGroupsEnabledTestSession(t)
 	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
 	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupB))
-	if resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupB, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupA})); !resp.Accepted {
+	if resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupB, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupA, Private: true, Closed: true})); !resp.Accepted {
 		t.Fatalf("set groupB's parent to groupA: %s", resp.Message)
 	}
 
 	// A plain rename of groupA, with no Children field at all -- must not
 	// silently detach groupB.
-	resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupA, authTestPrivKey, nip29.GroupMetadataParams{Name: "renamed"}))
+	resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupA, authTestPrivKey, nip29.GroupMetadataParams{Name: "renamed", Private: true, Closed: true}))
 	if resp.Accepted {
 		t.Fatal("Accepted = true for an edit that silently omits an existing child, want false")
 	}
@@ -1033,16 +1033,16 @@ func TestHandleEvent_EditMetadata_ChildrenList_ValidReorder_Success(t *testing.T
 	for _, id := range []string{groupA, groupB, groupC} {
 		sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, id))
 	}
-	if resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupB, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupA})); !resp.Accepted {
+	if resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupB, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupA, Private: true, Closed: true})); !resp.Accepted {
 		t.Fatalf("set groupB's parent: %s", resp.Message)
 	}
-	if resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupC, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupA})); !resp.Accepted {
+	if resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupC, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupA, Private: true, Closed: true})); !resp.Accepted {
 		t.Fatalf("set groupC's parent: %s", resp.Message)
 	}
 
 	// groupA's admin reorders its own children, listing every one of
 	// them (just in a different order) -- allowed.
-	resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupA, authTestPrivKey, nip29.GroupMetadataParams{Children: []string{groupC, groupB}}))
+	resp := sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupA, authTestPrivKey, nip29.GroupMetadataParams{Children: []string{groupC, groupB}, Private: true, Closed: true}))
 	if !resp.Accepted {
 		t.Fatalf("Accepted = false for a valid reorder, want true (message: %s)", resp.Message)
 	}
@@ -1057,8 +1057,8 @@ func TestHandleEvent_DeleteGroup_CascadesChildrenToRoot(t *testing.T) {
 	for _, id := range []string{groupA, groupB, groupC} {
 		sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, id))
 	}
-	sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupB, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupA}))
-	sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupC, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupA}))
+	sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupB, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupA, Private: true, Closed: true}))
+	sendEventAndAwaitOKForSession(t, sess, editMetadataEvent(t, groupC, authTestPrivKey, nip29.GroupMetadataParams{Parent: groupA, Private: true, Closed: true}))
 
 	resp := sendEventAndAwaitOKForSession(t, sess, deleteGroupEvent(t, groupA, authTestPrivKey))
 	if !resp.Accepted {

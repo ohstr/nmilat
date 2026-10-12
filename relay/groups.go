@@ -326,7 +326,7 @@ func (g *GroupsService) handleEditMetadata(ctx context.Context, s *Session, ev *
 		case !g.IsAdmin(newParent, ev.PubKey):
 			s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: you must also be an admin of the new parent group."})
 			return
-		case g.IsPrivate(action.GroupID) != g.IsPrivate(newParent):
+		case action.Metadata.Private != g.IsPrivate(newParent):
 			// A kind:39000 mirror is self-signed once and cached, so its
 			// tags can't be redacted per viewer -- a public parent's
 			// child tag (or a private parent's public child) would
@@ -337,6 +337,15 @@ func (g *GroupsService) handleEditMetadata(ctx context.Context, s *Session, ev *
 			s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: cannot link groups with different privacy settings."})
 			return
 		}
+	}
+
+	// A privacy flip on a linked group would create the same mismatched
+	// pair the link check above refuses: the group's parent or a current
+	// subgroup left with the other setting. Refuse it; the admin detaches
+	// first, flips, then relinks.
+	if current != nil && action.Metadata.Private != current.Metadata.Private && g.linkedAcrossPrivacy(newParent, current.Metadata.Children, action.Metadata.Private) {
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: cannot change the privacy of a linked group; its parent and subgroups must share the same setting, so detach it first."})
+		return
 	}
 
 	// Children-list completeness + no-unilateral-annexation. Unconditional
@@ -388,6 +397,20 @@ func (g *GroupsService) handleEditMetadata(ctx context.Context, s *Session, ev *
 	}
 
 	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: group metadata updated."})
+}
+
+// linkedAcrossPrivacy reports whether parent (if any) or any of children
+// has a Private setting other than private.
+func (g *GroupsService) linkedAcrossPrivacy(parent string, children []string, private bool) bool {
+	if parent != "" && g.IsPrivate(parent) != private {
+		return true
+	}
+	for _, c := range children {
+		if g.Exists(c) && g.IsPrivate(c) != private {
+			return true
+		}
+	}
+	return false
 }
 
 // isPermutation reports whether b contains exactly the same elements as
