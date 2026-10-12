@@ -105,6 +105,9 @@ func (g *GroupsService) handleCreate(ctx context.Context, s *Session, ev *nip01.
 
 	publishGroupMetadataMirror(ctx, s, rec)
 	publishGroupRosterMirrors(ctx, s, rec)
+	if s.config.PrivKey != "" {
+		g.publishRoles(ctx, s.selfPubkey, s.config.PrivKey, rec.ID)
+	}
 
 	s.reply(&wire.OkSubscriptionResponse{
 		EventID:  ev.ID,

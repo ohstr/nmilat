@@ -13,7 +13,9 @@ package nip29
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/utils"
@@ -260,6 +262,49 @@ func (p ModerationPolicy) RoleNames() []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+// moderationKindNames are the short names Roles uses to describe what a
+// role may do.
+var moderationKindNames = map[int]string{
+	KindPutUser:       "put-user",
+	KindRemoveUser:    "remove-user",
+	KindEditMetadata:  "edit-metadata",
+	KindDeleteEvent:   "delete-event",
+	KindCreateGroup:   "create-group",
+	KindDeleteGroup:   "delete-group",
+	KindCreateInvite:  "create-invite",
+	KindUpdatePinList: "update-pins",
+}
+
+// ModerationKindName names a moderation kind ("put-user", "delete-event",
+// ...), or "kind <n>" for one without a name.
+func ModerationKindName(kind int) string {
+	if name, ok := moderationKindNames[kind]; ok {
+		return name
+	}
+	return fmt.Sprintf("kind %d", kind)
+}
+
+// Roles lists the policy's roles for a kind:39003 event, sorted by name.
+// descriptions supplies each role's description; a role without one is
+// described by the actions it allows, e.g. "may put-user, delete-event".
+func (p ModerationPolicy) Roles(descriptions map[string]string) []GroupRole {
+	names := p.RoleNames()
+	sort.Strings(names)
+	roles := make([]GroupRole, 0, len(names))
+	for _, name := range names {
+		desc := descriptions[name]
+		if desc == "" && len(p[name]) > 0 {
+			actions := make([]string, 0, len(p[name]))
+			for _, k := range p[name] {
+				actions = append(actions, ModerationKindName(k))
+			}
+			desc = "may " + strings.Join(actions, ", ")
+		}
+		roles = append(roles, GroupRole{Name: name, Description: desc})
+	}
+	return roles
 }
 
 /////////////////////////////////////////////////////////////////////

@@ -1,6 +1,8 @@
 package relay
 
 import (
+	"context"
+	"github.com/ohstr/nmilat/nip01"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -138,6 +140,14 @@ type GroupsService struct {
 	// the relay master key or by group admins". Set by SetRelayAdmins.
 	relayAdmins atomic.Pointer[map[string]bool]
 
+	// roleDescriptions describe the policy's roles in kind:39003; see
+	// SetRoleDescriptions.
+	roleDescriptions atomic.Pointer[map[string]string]
+
+	// signer is the relay identity GroupsService signs kind:39003 with
+	// outside a session (a policy change, startup); see setSigner.
+	signer atomic.Pointer[groupsSigner]
+
 	// linkMu serializes NIP-29 "Subgroups" cross-group mutation: a
 	// reparent touches up to three records (the group itself, its old
 	// parent, its new parent), and a delete cascades over every one of
@@ -163,13 +173,47 @@ func NewGroupsService(store *EventStore) *GroupsService {
 	return g
 }
 
-// SetModerationPolicy replaces the policy CanPerform consults. A no-op on
-// a nil *GroupsService.
+// SetModerationPolicy replaces the policy CanPerform consults, and
+// republishes every hosted group's kind:39003 to match. A no-op on a nil
+// *GroupsService.
 func (g *GroupsService) SetModerationPolicy(policy nip29.ModerationPolicy) {
 	if g == nil {
 		return
 	}
 	g.policy.Store(&policy)
+	g.publishAllRoles(context.Background())
+}
+
+// SetRoleDescriptions sets the description each role gets in kind:39003
+// (role name -> text) and republishes every hosted group's. A role with
+// no description is described by the actions the policy lets it take.
+func (g *GroupsService) SetRoleDescriptions(descriptions map[string]string) {
+	if g == nil {
+		return
+	}
+	d := make(map[string]string, len(descriptions))
+	for k, v := range descriptions {
+		d[k] = v
+	}
+	g.roleDescriptions.Store(&d)
+	g.publishAllRoles(context.Background())
+}
+
+// Roles returns the roles this relay advertises in kind:39003: the
+// moderation policy's role names, sorted, with their descriptions.
+func (g *GroupsService) Roles() []nip29.GroupRole {
+	if g == nil {
+		return nil
+	}
+	policy := g.policy.Load()
+	if policy == nil {
+		return nil
+	}
+	var desc map[string]string
+	if d := g.roleDescriptions.Load(); d != nil {
+		desc = *d
+	}
+	return policy.Roles(desc)
 }
 
 // SetRelayAdmins replaces the keys that act as admin of every hosted
@@ -553,4 +597,81 @@ func newGroupRecord(id, creator string) *GroupRecord {
 		Members:   []GroupMember{{Pubkey: creator, Roles: []string{"admin"}}},
 		CreatedAt: time.Now().Unix(),
 	}
+}
+
+// groupsSigner is the relay identity relay-authored group events are
+// signed with.
+type groupsSigner struct {
+	pubkey, privkey string
+}
+
+// setSigner gives GroupsService the relay's own key, so it can publish
+// kind:39003 without a session. NewSessionHandler calls it; without it
+// roles are published only from a session (on group creation).
+func (g *GroupsService) setSigner(pubkey, privkey string) {
+	if g == nil || pubkey == "" || privkey == "" {
+		return
+	}
+	g.signer.Store(&groupsSigner{pubkey: pubkey, privkey: privkey})
+}
+
+// groupRolesEvent builds group id's unsigned kind:39003 from the current
+// policy.
+func (g *GroupsService) groupRolesEvent(selfPubkey, id string) *nip01.Event {
+	return nip29.NewGroupRoles(nip29.GroupRolesParams{SelfPubkey: selfPubkey, ID: id, Roles: g.Roles()})
+}
+
+// publishRoles signs and stores group id's kind:39003, unless the stored
+// one already lists the same roles. Its created_at is strictly newer than
+// the stored one's, so a same-second republish can't lose the tie.
+func (g *GroupsService) publishRoles(ctx context.Context, pubkey, privkey, id string) {
+	ev := g.groupRolesEvent(pubkey, id)
+	prev, err := g.store.QueryEvents(ctx, &nip01.SubscriptionFilter{
+		Kinds: []int{nip29.KindGroupRoles}, Authors: []string{pubkey}, Tags: map[string][]string{"d": {id}}, Limit: 1,
+	})
+	if err == nil && len(prev) == 1 {
+		if tagsEqual(prev[0].Tags, ev.Tags) {
+			return
+		}
+		if ev.CreatedAt <= prev[0].CreatedAt {
+			ev.CreatedAt = prev[0].CreatedAt + 1
+		}
+	}
+	if err := ev.Sign(privkey); err != nil {
+		return
+	}
+	_ = g.store.InsertEvents(ctx, []*nip01.Event{ev})
+}
+
+// publishAllRoles republishes every hosted group's kind:39003 with the
+// signer from setSigner; a no-op until one is set.
+func (g *GroupsService) publishAllRoles(ctx context.Context) {
+	sg := g.signer.Load()
+	if sg == nil {
+		return
+	}
+	snap := g.cache.snap.Load()
+	if snap == nil {
+		return
+	}
+	for id := range snap.groups {
+		g.publishRoles(ctx, sg.pubkey, sg.privkey, id)
+	}
+}
+
+func tagsEqual(a, b [][]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if len(a[i]) != len(b[i]) {
+			return false
+		}
+		for j := range a[i] {
+			if a[i][j] != b[i][j] {
+				return false
+			}
+		}
+	}
+	return true
 }
