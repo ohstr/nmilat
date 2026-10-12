@@ -137,12 +137,10 @@ embedder that wants real multi-role policies calls
 admin-gate (Phase 1) was migrated onto this same `CanPerform` path instead
 of staying its own one-off "is any kind of admin" check.
 
-`kind:9021` group-scoped join has no pending-approval queue: an open group
-(`Metadata.Closed == false`) admits any request outright; a closed one
-needs a valid, single-use `kind:9009` invite code (see Phase 3) in the
-request's `code` tag, or it's refused with "ask an admin" — the admin's own
-`kind:9000` put-user is the only other path in. The spec doesn't define a
-request/approval-queue event shape, so this build doesn't invent one.
+`kind:9021` group-scoped join: an open group (`Metadata.Closed == false`)
+admits any request outright; a closed one needs a valid, single-use
+`kind:9009` invite code (see Phase 3) in the request's `code` tag. Without
+one it's refused, unless pending joins are on (Phase 4).
 
 ## Phase 3 — implemented
 
@@ -174,6 +172,25 @@ stuck on stale content even though `GroupsService`'s authoritative bbolt
 record updated correctly. `mirrorCreatedAt` in `relay/groups.go` bumps a
 republish's `created_at` past whatever is already stored for that
 kind+group before signing, sidestepping the tie entirely.
+
+## Phase 4 — implemented (2026-10-12, nmilat#94-#99)
+
+- `restricted` and `hidden` are enforced: `deniedGroupWrite` refuses a
+  non-member's post to a restricted group; `deniedPrivateGroupEvent`
+  withholds a hidden group's 39000-39005 from non-members (content stays as
+  readable as `private` allows).
+- The relay's own key is admin of every hosted group
+  (`GroupsService.SetRelayAdmins`, set from NIP-11 `self` by
+  `NewSessionHandler`), so an operator can recover an orphaned group.
+- A 9002 that flips `private` on a group with a parent or subgroups is
+  refused, like linking groups of different privacy.
+- Each group gets a relay-signed kind 39003 built from the moderation
+  policy (`ModerationPolicy.Roles`, `SetRoleDescriptions`), on create, at
+  startup when missing or stale, and when the policy changes.
+- `SetModerationLog(true)` stores accepted 9000-9020 (except 9008) for the
+  group's members, 9009 for its admins only.
+- `SetPendingJoins(true)` stores a closed group's codeless 9021 for its
+  admins and the requester, cleared by 9000/9001, joining or leaving.
 
 ## Explicitly out of scope, all phases
 
