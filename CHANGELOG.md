@@ -120,6 +120,12 @@ privacy and performance fixes.
 
 ### Changed
 
+- Moves `nipAZ` to NIP-AZ's new kinds: 9520 requests, 9521 receipts, 9523
+  on-behalf requests. Events of the old kinds 5520, 5521 and 5523 are no longer
+  parsed, validated or indexed. ([#114](https://github.com/ohstr/nmilat/pull/114))
+- Removes `nipAZ`'s kind 5522 direct payment (`NewAltZapDirectPaymentRequest`,
+  `KindAltZapDirectPayment`), which NIP-AZ does not define.
+  ([#114](https://github.com/ohstr/nmilat/pull/114))
 - Pages each filter of a `Pool` subscription to its end on connect and on
   resync, so a relay's result cap no longer cuts it short (`PoolConfig.PageSize`).
   ([#91](https://github.com/ohstr/nmilat/pull/91))

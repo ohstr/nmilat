@@ -57,13 +57,13 @@ func TestReindexZaps(t *testing.T) {
 		ev1Bytes, _ := json.Marshal(ev1)
 		_ = b.Put(itob(1), ev1Bytes)
 
-		// Event 2: Zap (Kind 5521)
+		// Event 2: Zap (Kind 9521)
 		ev2 := zapEvent
-		ev2.Kind = 5521
+		ev2.Kind = 9521
 		ev2.CreatedAt = 200
 		ev2.Tags = [][]string{
 			{"p", "0000000000000000000000000000000000000000000000000000000000000001"},
-			{"description", `{"kind":5520,"tags":[["amount","1000000"]]}`},
+			{"description", `{"kind":9520,"tags":[["amount","1000000"]]}`},
 		}
 		ev2Bytes, _ := json.Marshal(ev2)
 		_ = b.Put(itob(2), ev2Bytes)

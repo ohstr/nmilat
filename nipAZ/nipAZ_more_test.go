@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -61,54 +60,6 @@ func TestValidateAltZapRequest_InvalidSignature(t *testing.T) {
 
 	if err := ValidateAltZapRequest(ev, 0); err == nil {
 		t.Fatal("expected error for invalid signature")
-	}
-}
-
-func TestValidateAltZapRequest_DirectPaymentHashLock(t *testing.T) {
-	pubkeyPlaceholder := "0000000000000000000000000000000000000000000000000000000000000001"
-	ev := &nip01.Event{
-		Kind: KindAltZapDirectPayment,
-		Tags: [][]string{
-			{"amount", "1000"},
-			{"bolt11", "lnfc-direct-payment"},
-			{"chain", "flokicoin"},
-			{"relays", "wss://relay.example.com"},
-			{"P", pubkeyPlaceholder},
-		},
-	}
-	if err := ev.Sign(zapsTestPrivKey); err != nil {
-		t.Fatalf("failed to sign event: %v", err)
-	}
-
-	eventJSON, err := json.Marshal(ev)
-	if err != nil {
-		t.Fatalf("failed to marshal event: %v", err)
-	}
-	descHash := sha256.Sum256(eventJSON)
-	descHashHex := hex.EncodeToString(descHash[:])
-
-	originalDecode := nip57.DecodeBolt11
-	defer func() { nip57.DecodeBolt11 = originalDecode }()
-	nip57.DecodeBolt11 = func(bolt11 string) (*nip57.Invoice, error) {
-		return &nip57.Invoice{AmountMloki: 1000, DescriptionHash: descHashHex}, nil
-	}
-
-	if err := ValidateAltZapRequest(ev, 0); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	nip57.DecodeBolt11 = func(bolt11 string) (*nip57.Invoice, error) {
-		return &nip57.Invoice{AmountMloki: 1000, DescriptionHash: "wrong-hash"}, nil
-	}
-	if err := ValidateAltZapRequest(ev, 0); err == nil {
-		t.Fatal("expected hash-lock failure error")
-	}
-
-	nip57.DecodeBolt11 = func(bolt11 string) (*nip57.Invoice, error) {
-		return nil, fmt.Errorf("decode failed")
-	}
-	if err := ValidateAltZapRequest(ev, 0); err == nil {
-		t.Fatal("expected error when bolt11 decoding fails")
 	}
 }
 
@@ -218,7 +169,7 @@ func TestNewAltZapOnBehalfRequest(t *testing.T) {
 	}
 }
 
-// Kind 5523 must always carry a sender — sender being a required positional
+// Kind 9523 must always carry a sender — sender being a required positional
 // argument (not an optional params field) makes this a compile-time
 // guarantee rather than a runtime check, but confirm the resulting event
 // really does parse with a non-zero sender regardless of what's in Params.
@@ -247,48 +198,10 @@ func TestNewAltZapOnBehalfRequest_SenderParamIsIgnoredInFavorOfPositionalArg(t *
 	}
 }
 
-func TestNewAltZapDirectPaymentRequest(t *testing.T) {
-	relays := []string{"wss://relay.example.com"}
-	ev, err := NewAltZapDirectPaymentRequest(AltZapDirectPaymentParams{
-		PrivateKey:  zapsTestPrivKey,
-		Chain:       "flokicoin",
-		Bolt11:      "lnfc-invoice",
-		AmountMloki: 5000,
-		Relays:      relays,
-		Sender:      Pubkey("sender1"),
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if ev.Kind != KindAltZapDirectPayment {
-		t.Errorf("expected kind %d, got %d", KindAltZapDirectPayment, ev.Kind)
-	}
-	if err := ev.Verify(); err != nil {
-		t.Errorf("expected a validly signed event, got: %v", err)
-	}
-
-	var hasBolt11, hasSender bool
-	for _, tag := range ev.Tags {
-		if len(tag) >= 2 && tag[0] == "bolt11" && tag[1] == "lnfc-invoice" {
-			hasBolt11 = true
-		}
-		if len(tag) >= 2 && tag[0] == "P" && tag[1] == "sender1" {
-			hasSender = true
-		}
-	}
-	if !hasBolt11 {
-		t.Error("expected bolt11 tag to be present")
-	}
-	if !hasSender {
-		t.Error("expected P (sender) tag to be present")
-	}
-}
-
 // Replaces TestNewAltZapReceipt_ExtractsTagsFromDescription: the old
 // fallback silently copied p/P tags (handle included) back out of the
 // embedded request's description JSON, which could reintroduce a value the
-// ZSP never verified — see NIPAZ-NIPIC-API-EXAMPLES.md scenario 6. Confirm
+// LNURL server never verified — see NIPAZ-NIPIC-API-EXAMPLES.md scenario 6. Confirm
 // that no longer happens: Recipient/Sender always come from the caller's
 // explicit params, never from Description, even when Description embeds a
 // conflicting identity.
@@ -300,7 +213,7 @@ func TestNewAltZapReceipt_RecipientNeverOverriddenByDescription(t *testing.T) {
 	}
 
 	// The embedded request's own p tag names a *different* recipient than
-	// what the ZSP has authoritatively resolved server-side.
+	// what the LNURL server has authoritatively resolved server-side.
 	reqEvent := &nip01.Event{
 		Kind: KindAltZapRequest,
 		Tags: [][]string{
@@ -376,7 +289,7 @@ func TestNewAltZapReceipt_HandleRoundTrips(t *testing.T) {
 }
 
 // Ported from zapf's internal/nostr/events_test.go:TestBuildZapReceipt's
-// "Proxy Request (Intent 5523) with Resolved Sender" case — a proxy sender
+// "Proxy Request (Intent 9523) with Resolved Sender" case — a proxy sender
 // (ConnectionKey scoped to a platform, no handle) combined with a resolved
 // native pubkey on the R tag.
 func TestNewAltZapReceipt_ProxySenderWithResolvedSender(t *testing.T) {
@@ -437,7 +350,7 @@ func TestNewAltZapRequest_NeverEmitsHandleOnRequests(t *testing.T) {
 	}
 }
 
-func TestValidateAltZapReceipt_DirectPayment(t *testing.T) {
+func TestValidateAltZapReceipt_WithoutRequest(t *testing.T) {
 	ev := &nip01.Event{
 		Kind: KindAltZapReceipt,
 		Tags: [][]string{
@@ -464,7 +377,7 @@ func TestValidateAltZapReceipt_DirectPayment(t *testing.T) {
 		return &nip57.Invoice{AmountMloki: 0}, nil
 	}
 	if err := ValidateAltZapReceipt(ev); err == nil {
-		t.Fatal("expected error for zero/invalid invoice amount on a direct payment receipt")
+		t.Fatal("expected error for zero/invalid invoice amount on a receipt without a request")
 	}
 }
 
@@ -585,7 +498,7 @@ func TestIdentity_ResolvedConnectionSupportsHandle(t *testing.T) {
 // zapf's pkg/nostr/altzap.go and internal/nostr/events.go.
 
 func TestDescriptionHash_MatchesRawSHA256(t *testing.T) {
-	input := `{"kind":5520,"tags":[]}`
+	input := `{"kind":9520,"tags":[]}`
 	want := sha256.Sum256([]byte(input))
 	wantHex := hex.EncodeToString(want[:])
 

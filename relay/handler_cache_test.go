@@ -73,7 +73,7 @@ func TestCacheHandler(t *testing.T) {
 	err = store.db.Update(func(tx *bolt.Tx) error {
 		// Event 1 (User A: 1000)
 		ev1 := &nip01.Event{
-			Kind:      5521,
+			Kind:      9521,
 			CreatedAt: uint64(time.Now().Unix()),
 			Tags:      [][]string{{"p", UserA}, {"amount", "1000"}},
 		}
@@ -83,9 +83,9 @@ func TestCacheHandler(t *testing.T) {
 
 		// Event 2 (User B: 5000)
 		ev2 := &nip01.Event{
-			Kind:      5521,
+			Kind:      9521,
 			CreatedAt: uint64(time.Now().Unix()),
-			Tags:      [][]string{{"p", UserB}, {"description", `{"kind":5520,"tags":[["amount","5000"]]}`}},
+			Tags:      [][]string{{"p", UserB}, {"description", `{"kind":9520,"tags":[["amount","5000"]]}`}},
 		}
 		if err := store.IndexZap(tx, ev2, 2); err != nil {
 			return err

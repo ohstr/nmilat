@@ -582,7 +582,7 @@ func main() {
 ### Send an AltZap request to a Web Identity recipient (NIP-AZ + NIP-IC)
 
 **AltZap** is the same flow for non-Bitcoin chains — a mandatory `chain` tag
-and its own kinds (5520-5523). Its most common use isn't zapping a native
+and its own kinds (9520, 9521, 9523). Its most common use isn't zapping a native
 Nostr pubkey (`nipAZ.Pubkey(hex)`) — it's zapping a recipient who only has an
 account on another platform and no Nostr keypair yet. `nipAZ.Connection`
 covers that case by deriving a **NIP-IC** `ConnectionKey` internally:

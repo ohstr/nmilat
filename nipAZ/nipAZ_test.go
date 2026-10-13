@@ -51,28 +51,7 @@ func TestParseAltZapRequest(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "Valid 5522 Direct Payment Request",
-			event: mockEvent(KindAltZapDirectPayment, [][]string{
-				{"relays", "wss://relay.com"},
-				{"amount", "1000"},
-				{"chain", "flokicoin"},
-				{"bolt11", "lnfc1..."},
-			}, ""),
-			wantErr: false,
-		},
-		{
-			name: "Invalid 5522 Direct Payment Request (has p tag)",
-			event: mockEvent(KindAltZapDirectPayment, [][]string{
-				{"relays", "wss://relay.com"},
-				{"amount", "1000"},
-				{"chain", "flokicoin"},
-				{"bolt11", "lnfc1..."},
-				{"p", validPubkey},
-			}, ""),
-			wantErr: true,
-		},
-		{
-			name: "Valid 5523 On-Behalf Request",
+			name: "Valid 9523 On-Behalf Request",
 			event: mockEvent(KindAltZapOnBehalfRequest, [][]string{
 				{"relays", "wss://relay.com"},
 				{"p", validPubkey},
@@ -84,7 +63,7 @@ func TestParseAltZapRequest(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "Invalid 5523 On-Behalf Request (missing P tag)",
+			name: "Invalid 9523 On-Behalf Request (missing P tag)",
 			event: mockEvent(KindAltZapOnBehalfRequest, [][]string{
 				{"relays", "wss://relay.com"},
 				{"p", validPubkey},
@@ -291,7 +270,7 @@ func TestParseAltZapReceipt(t *testing.T) {
 			},
 		},
 		{
-			name: "Kind 5522 Anonymous Direct Payment Receipt",
+			name: "Receipt Without Request (plain LNURL payment)",
 			event: mockEvent(KindAltZapReceipt, [][]string{
 				{"bolt11", "lnfc1..."},
 				{"chain", "flokicoin"},
