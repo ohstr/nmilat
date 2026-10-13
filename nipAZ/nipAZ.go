@@ -184,6 +184,25 @@ func identityFromReceiptTag(tag []string) Identity {
 	return id
 }
 
+// altZapPolicy selects which actor's subset of NIP-AZ's Verification
+// Algorithm a Parse*/Validate* call enforces. Rules marked MUST for a relay —
+// signatures, the p/P tag rules, a receipt's hash lock, chain and
+// description binding — hold under every policy.
+type altZapPolicy struct {
+	// relay tolerates the rules NIP-AZ marks SHOULD or MAY at relay ingest:
+	// the lnurl, relays, amount, chain and e tags of a request, the amount
+	// cross-checks of a receipt, and malformed zap-split tags.
+	relay bool
+}
+
+var (
+	// policyStrict is for LNURL servers settling a request and for callers
+	// building their own events.
+	policyStrict = altZapPolicy{}
+	// policyRelay is for relays ingesting events someone else signed.
+	policyRelay = altZapPolicy{relay: true}
+)
+
 // AltZapRequest is a parsed and validated AltZap request event (kind 9520
 // or 9523).
 type AltZapRequest struct {
@@ -202,6 +221,10 @@ type AltZapRequest struct {
 // ParseAltZapRequest parses and validates an AltZap request event (kind
 // 9520 or 9523).
 func ParseAltZapRequest(event *nip01.Event) (*AltZapRequest, error) {
+	return parseAltZapRequest(event, policyStrict)
+}
+
+func parseAltZapRequest(event *nip01.Event, policy altZapPolicy) (*AltZapRequest, error) {
 	if event.Kind != KindAltZapRequest && event.Kind != KindAltZapOnBehalfRequest {
 		return nil, fmt.Errorf("%w: got %d, want %d or %d", nip57.ErrWrongKind, event.Kind, KindAltZapRequest, KindAltZapOnBehalfRequest)
 	}
@@ -219,9 +242,15 @@ func ParseAltZapRequest(event *nip01.Event) (*AltZapRequest, error) {
 			for _, r := range tag[1:] {
 				u, err := url.ParseRequestURI(r)
 				if err != nil {
+					if policy.relay {
+						continue
+					}
 					return nil, fmt.Errorf("%w %q: %w", nip57.ErrInvalidRelayURL, r, err)
 				}
 				if u.Scheme != "wss" && u.Scheme != "ws" {
+					if policy.relay {
+						continue
+					}
 					return nil, fmt.Errorf("%w: %q", nip57.ErrInvalidRelayScheme, u.Scheme)
 				}
 				zr.Relays = append(zr.Relays, r)
@@ -231,19 +260,22 @@ func ParseAltZapRequest(event *nip01.Event) (*AltZapRequest, error) {
 			var a int64
 			n, err := fmt.Sscanf(tag[1], "%d", &a)
 			if err != nil || n != 1 {
+				if policy.relay {
+					continue
+				}
 				return nil, fmt.Errorf("%w: %q", nip57.ErrInvalidAmount, tag[1])
 			}
-			if a <= 0 {
+			if a <= 0 && !policy.relay {
 				return nil, fmt.Errorf("%w: %d", nip57.ErrInvalidAmountValue, a)
 			}
 			zr.Amount = a
 		case "lnurl":
-			if err := utils.ValidateLNURL(tag[1]); err != nil {
+			if err := utils.ValidateLNURL(tag[1]); err != nil && !policy.relay {
 				return nil, fmt.Errorf("%w %q: %w", nip57.ErrInvalidLNURL, tag[1], err)
 			}
 			zr.Lnurl = tag[1]
 		case "e":
-			if err := utils.Validate32Key(tag[1]); err != nil {
+			if err := utils.Validate32Key(tag[1]); err != nil && !policy.relay {
 				return nil, fmt.Errorf("%w %q: %w", nip57.ErrInvalidEventTag, tag[1], err)
 			}
 			zr.EventID = tag[1]
@@ -261,6 +293,9 @@ func ParseAltZapRequest(event *nip01.Event) (*AltZapRequest, error) {
 			zr.Sender = identityFromRequestTag(tag)
 			PTagCount++
 		case "zap":
+			if policy.relay {
+				continue
+			}
 			if len(tag) < 3 {
 				return nil, ErrInvalidZapTag
 			}
@@ -283,14 +318,14 @@ func ParseAltZapRequest(event *nip01.Event) (*AltZapRequest, error) {
 	}
 
 	// Protocol enforcements
-	if zr.Chain == "" {
+	if zr.Chain == "" && !policy.relay {
 		return nil, ErrMissingChainTag
 	}
 
 	if pTagCount != 1 {
 		return nil, fmt.Errorf("%w: kind %d", nip57.ErrRecipientTagCount, event.Kind)
 	}
-	if zr.Lnurl == "" {
+	if zr.Lnurl == "" && !policy.relay {
 		return nil, fmt.Errorf("%w: kind %d", ErrMissingLNURLTag, event.Kind)
 	}
 
@@ -304,12 +339,12 @@ func ParseAltZapRequest(event *nip01.Event) (*AltZapRequest, error) {
 	}
 
 	// e tag is optional (0 or 1)
-	if eTagCount > 1 {
+	if eTagCount > 1 && !policy.relay {
 		return nil, nip57.ErrTooManyEventTags
 	}
 
 	// Relays tag required
-	if len(zr.Relays) == 0 {
+	if len(zr.Relays) == 0 && !policy.relay {
 		return nil, nip57.ErrMissingRelaysTag
 	}
 
@@ -319,15 +354,29 @@ func ParseAltZapRequest(event *nip01.Event) (*AltZapRequest, error) {
 // ValidateAltZapRequest checks if the event is a valid AltZap request and
 // optionally enforces the amount.
 func ValidateAltZapRequest(event *nip01.Event, expectedAmountMloki int64) error {
+	return validateAltZapRequest(event, expectedAmountMloki, policyStrict)
+}
+
+// ValidateAltZapRequestForRelay is ValidateAltZapRequest for a relay
+// ingesting a request someone else signed: it enforces only the rules NIP-AZ
+// marks MUST for a relay (signature, exactly one p, the P rules).
+func ValidateAltZapRequestForRelay(event *nip01.Event) error {
+	return validateAltZapRequest(event, 0, policyRelay)
+}
+
+func validateAltZapRequest(event *nip01.Event, expectedAmountMloki int64, policy altZapPolicy) error {
 	// 1. Signature check
 	if err := event.Verify(); err != nil {
 		return fmt.Errorf("%w: %w", nip57.ErrInvalidSignature, err)
 	}
 
 	// 2. Parse and structure check
-	zr, err := ParseAltZapRequest(event)
+	zr, err := parseAltZapRequest(event, policy)
 	if err != nil {
 		return err
+	}
+	if policy.relay {
+		return nil
 	}
 
 	// 3. Amount check
@@ -358,6 +407,10 @@ type AltZapReceipt struct {
 
 // ParseAltZapReceipt parses and validates an AltZap receipt event (kind 9521).
 func ParseAltZapReceipt(event *nip01.Event) (*AltZapReceipt, error) {
+	return parseAltZapReceipt(event, policyStrict)
+}
+
+func parseAltZapReceipt(event *nip01.Event, policy altZapPolicy) (*AltZapReceipt, error) {
 	if event.Kind != KindAltZapReceipt {
 		return nil, fmt.Errorf("%w: got %d, want %d", nip57.ErrWrongKind, event.Kind, KindAltZapReceipt)
 	}
@@ -386,6 +439,9 @@ func ParseAltZapReceipt(event *nip01.Event) (*AltZapReceipt, error) {
 		case "description":
 			zr.Description = tag[1]
 		case "zap":
+			if policy.relay {
+				continue
+			}
 			if len(tag) < 3 {
 				return nil, ErrInvalidZapTag
 			}
@@ -434,7 +490,7 @@ func ParseAltZapReceipt(event *nip01.Event) (*AltZapReceipt, error) {
 			return nil, fmt.Errorf("%w: embedded request signature invalid: %w", nip57.ErrInvalidEmbeddedRequest, err)
 		}
 
-		req, err := ParseAltZapRequest(&reqEvent)
+		req, err := parseAltZapRequest(&reqEvent, policy)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %w", nip57.ErrInvalidEmbeddedRequest, err)
 		}
@@ -447,13 +503,25 @@ func ParseAltZapReceipt(event *nip01.Event) (*AltZapReceipt, error) {
 // ValidateAltZapReceipt checks if the receipt is valid against the request
 // and invoice.
 func ValidateAltZapReceipt(receipt *nip01.Event) error {
+	return validateAltZapReceipt(receipt, policyStrict)
+}
+
+// ValidateAltZapReceiptForRelay is ValidateAltZapReceipt for a relay
+// ingesting a receipt: it still rejects a forged receipt (signature, hash
+// lock, chain, description binding, recipient and chain cross-checks) but
+// keeps one whose amounts disagree, since the payment did happen.
+func ValidateAltZapReceiptForRelay(receipt *nip01.Event) error {
+	return validateAltZapReceipt(receipt, policyRelay)
+}
+
+func validateAltZapReceipt(receipt *nip01.Event, policy altZapPolicy) error {
 	// 1. Signature
 	if err := receipt.Verify(); err != nil {
 		return fmt.Errorf("%w: %w", nip57.ErrInvalidSignature, err)
 	}
 
 	// 2. Parse
-	zr, err := ParseAltZapReceipt(receipt)
+	zr, err := parseAltZapReceipt(receipt, policy)
 	if err != nil {
 		return err
 	}
@@ -494,7 +562,7 @@ func ValidateAltZapReceipt(receipt *nip01.Event) error {
 
 		// B. Verify amounts match
 		// Invoice amount mloki == Request amount mloki
-		if invoice.AmountMloki != zr.Request.Amount {
+		if !policy.relay && invoice.AmountMloki != zr.Request.Amount {
 			return fmt.Errorf("%w: invoice=%d request=%d", nip57.ErrAmountMismatch, invoice.AmountMloki, zr.Request.Amount)
 		}
 
@@ -509,7 +577,7 @@ func ValidateAltZapReceipt(receipt *nip01.Event) error {
 		}
 	} else {
 		// Direct Payment (no Zap Request description)
-		if invoice.AmountMloki <= 0 {
+		if !policy.relay && invoice.AmountMloki <= 0 {
 			return ErrInvalidInvoiceAmount
 		}
 	}

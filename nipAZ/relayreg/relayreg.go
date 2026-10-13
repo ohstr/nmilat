@@ -21,12 +21,12 @@ func init() {
 	relay.RegisterLetteredNIP("AZ")
 
 	relay.RegisterEventValidator(nipAZ.KindAltZapRequest, func(_ context.Context, event *nip01.Event) error {
-		return nipAZ.ValidateAltZapRequest(event, 0)
+		return nipAZ.ValidateAltZapRequestForRelay(event)
 	})
 	relay.RegisterEventValidator(nipAZ.KindAltZapOnBehalfRequest, func(_ context.Context, event *nip01.Event) error {
-		return nipAZ.ValidateAltZapRequest(event, 0)
+		return nipAZ.ValidateAltZapRequestForRelay(event)
 	})
 	relay.RegisterEventValidator(nipAZ.KindAltZapReceipt, func(_ context.Context, event *nip01.Event) error {
-		return nipAZ.ValidateAltZapReceipt(event)
+		return nipAZ.ValidateAltZapReceiptForRelay(event)
 	})
 }
