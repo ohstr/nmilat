@@ -11,6 +11,8 @@
 // An event carrying a valid auth tag remains authored solely by its own
 // pubkey; this package does not define impersonation, key derivation, or
 // author rewriting of any kind.
+//
+// Spec: https://github.com/block/buzz/blob/main/docs/nips/NIP-OA.md
 package nipOA
 
 import (
