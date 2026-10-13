@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -68,16 +69,24 @@ func TestNewAltZapRequest(t *testing.T) {
 	eventID := strings.Repeat("1", 63) + "a"
 
 	validLnurl := "lnurl1dp68gurn8ghj7um9wfmxjcm99e3k7mf0v9cxj0m385ekvcenxc6r2c35xvukxefcv5mkvv34x5ekzd3ev56nyd3hxqurzepexejxxepnxscrvwfnv9nxzcn9xq6xyefhvgcxxcmyxymnserxfq5fns"
-	ev, err := NewAltZapRequest(AltZapRequestParams{
+	params := AltZapRequestParams{
 		PrivateKey:  zapsTestPrivKey,
 		Chain:       "flokicoin",
 		Recipient:   Pubkey("recipient1"),
 		Lnurl:       validLnurl,
 		AmountMloki: 5000,
 		Relays:      relays,
-		Sender:      Connection("discord", "sender-external-id"),
 		EventID:     &eventID,
-	})
+	}
+
+	// The signer is a 9520's sender, so a separate sender is refused.
+	withSender := params
+	withSender.Sender = Connection("discord", "sender-external-id")
+	if _, err := NewAltZapRequest(withSender); !errors.Is(err, ErrSenderTagNotAllowed) {
+		t.Fatalf("Sender on a 9520: got %v, want ErrSenderTagNotAllowed", err)
+	}
+
+	ev, err := NewAltZapRequest(params)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -96,8 +105,8 @@ func TestNewAltZapRequest(t *testing.T) {
 	if req.Amount != 5000 || req.Lnurl != validLnurl || req.Chain != "flokicoin" {
 		t.Errorf("unexpected parsed request: %+v", req)
 	}
-	if req.Sender.WebIdentity() != "discord" || req.Sender.Value() != Connection("discord", "sender-external-id").Value() {
-		t.Errorf("expected sender identity to round-trip, got %+v", req.Sender)
+	if !req.Sender.IsZero() {
+		t.Errorf("expected no sender on a 9520, got %+v", req.Sender)
 	}
 	if req.EventID != eventID {
 		t.Errorf("expected event ID %q, got %q", eventID, req.EventID)
@@ -156,6 +165,9 @@ func TestNewAltZapOnBehalfRequest(t *testing.T) {
 	if ev.Kind != KindAltZapOnBehalfRequest {
 		t.Errorf("expected kind %d, got %d", KindAltZapOnBehalfRequest, ev.Kind)
 	}
+	if err := ValidateAltZapRequest(ev, 5000); err != nil {
+		t.Fatalf("on-behalf request does not validate (signature must cover kind 9523): %v", err)
+	}
 
 	req, err := ParseAltZapRequest(ev)
 	if err != nil {
@@ -209,7 +221,7 @@ func TestNewAltZapReceipt_RecipientNeverOverriddenByDescription(t *testing.T) {
 	originalDecode := nip57.DecodeBolt11
 	defer func() { nip57.DecodeBolt11 = originalDecode }()
 	nip57.DecodeBolt11 = func(bolt11 string) (*nip57.Invoice, error) {
-		return &nip57.Invoice{AmountMloki: 1000}, nil
+		return &nip57.Invoice{Currency: "fc", PaymentHash: testPaymentHash, AmountMloki: 1000}, nil
 	}
 
 	// The embedded request's own p tag names a *different* recipient than
@@ -264,7 +276,7 @@ func TestNewAltZapReceipt_HandleRoundTrips(t *testing.T) {
 	originalDecode := nip57.DecodeBolt11
 	defer func() { nip57.DecodeBolt11 = originalDecode }()
 	nip57.DecodeBolt11 = func(bolt11 string) (*nip57.Invoice, error) {
-		return &nip57.Invoice{AmountMloki: 1000}, nil
+		return &nip57.Invoice{Currency: "fc", PaymentHash: testPaymentHash, AmountMloki: 1000}, nil
 	}
 
 	preimage := "abc123"
@@ -296,7 +308,7 @@ func TestNewAltZapReceipt_ProxySenderWithResolvedSender(t *testing.T) {
 	originalDecode := nip57.DecodeBolt11
 	defer func() { nip57.DecodeBolt11 = originalDecode }()
 	nip57.DecodeBolt11 = func(bolt11 string) (*nip57.Invoice, error) {
-		return &nip57.Invoice{AmountMloki: 1000}, nil
+		return &nip57.Invoice{Currency: "fc", PaymentHash: testPaymentHash, AmountMloki: 1000}, nil
 	}
 
 	preimage := "preimage_hex"
@@ -356,7 +368,7 @@ func TestValidateAltZapReceipt_WithoutRequest(t *testing.T) {
 		Tags: [][]string{
 			{"bolt11", "lnfc-direct"},
 			{"chain", "flokicoin"},
-			{"preimage", "preimage1"},
+			{"preimage", testPreimage},
 		},
 	}
 	if err := ev.Sign(zapsTestPrivKey); err != nil {
@@ -366,7 +378,7 @@ func TestValidateAltZapReceipt_WithoutRequest(t *testing.T) {
 	originalDecode := nip57.DecodeBolt11
 	defer func() { nip57.DecodeBolt11 = originalDecode }()
 	nip57.DecodeBolt11 = func(bolt11 string) (*nip57.Invoice, error) {
-		return &nip57.Invoice{AmountMloki: 1000}, nil
+		return &nip57.Invoice{Currency: "fc", PaymentHash: testPaymentHash, AmountMloki: 1000}, nil
 	}
 
 	if err := ValidateAltZapReceipt(ev); err != nil {
@@ -374,7 +386,7 @@ func TestValidateAltZapReceipt_WithoutRequest(t *testing.T) {
 	}
 
 	nip57.DecodeBolt11 = func(bolt11 string) (*nip57.Invoice, error) {
-		return &nip57.Invoice{AmountMloki: 0}, nil
+		return &nip57.Invoice{Currency: "fc", PaymentHash: testPaymentHash, AmountMloki: 0}, nil
 	}
 	if err := ValidateAltZapReceipt(ev); err == nil {
 		t.Fatal("expected error for zero/invalid invoice amount on a receipt without a request")
@@ -397,7 +409,7 @@ func TestValidateAltZapReceipt_WithEmbeddedRequest(t *testing.T) {
 		Tags: [][]string{
 			{"bolt11", "lnfc-zap"},
 			{"chain", "flokicoin"},
-			{"preimage", "preimage1"},
+			{"preimage", testPreimage},
 			{"p", recipient},
 			{"description", string(descBytes)},
 		},
@@ -409,7 +421,7 @@ func TestValidateAltZapReceipt_WithEmbeddedRequest(t *testing.T) {
 	originalDecode := nip57.DecodeBolt11
 	defer func() { nip57.DecodeBolt11 = originalDecode }()
 	nip57.DecodeBolt11 = func(bolt11 string) (*nip57.Invoice, error) {
-		return &nip57.Invoice{AmountMloki: 1000, DescriptionHash: descHashHex}, nil
+		return &nip57.Invoice{Currency: "fc", PaymentHash: testPaymentHash, AmountMloki: 1000, DescriptionHash: descHashHex}, nil
 	}
 
 	if err := ValidateAltZapReceipt(receipt); err != nil {
@@ -418,7 +430,7 @@ func TestValidateAltZapReceipt_WithEmbeddedRequest(t *testing.T) {
 
 	// Amount mismatch between invoice and the embedded request.
 	nip57.DecodeBolt11 = func(bolt11 string) (*nip57.Invoice, error) {
-		return &nip57.Invoice{AmountMloki: 42, DescriptionHash: descHashHex}, nil
+		return &nip57.Invoice{Currency: "fc", PaymentHash: testPaymentHash, AmountMloki: 42, DescriptionHash: descHashHex}, nil
 	}
 	if err := ValidateAltZapReceipt(receipt); err == nil {
 		t.Fatal("expected amount mismatch error")
@@ -426,7 +438,7 @@ func TestValidateAltZapReceipt_WithEmbeddedRequest(t *testing.T) {
 
 	// Description hash mismatch.
 	nip57.DecodeBolt11 = func(bolt11 string) (*nip57.Invoice, error) {
-		return &nip57.Invoice{AmountMloki: 1000, DescriptionHash: "wrong"}, nil
+		return &nip57.Invoice{Currency: "fc", PaymentHash: testPaymentHash, AmountMloki: 1000, DescriptionHash: "wrong"}, nil
 	}
 	if err := ValidateAltZapReceipt(receipt); err == nil {
 		t.Fatal("expected description hash mismatch error")

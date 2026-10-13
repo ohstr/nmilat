@@ -12,14 +12,19 @@ import (
 
 // Invoice represents decoded bolt11 data
 type Invoice struct {
+	// Currency is the BOLT11 currency prefix from the human-readable part,
+	// e.g. "fc" (Flokicoin), "bc" (Bitcoin), "tb" (Bitcoin testnet).
+	Currency        string
 	AmountMloki     int64
+	Description     string // the "d" field (payment memo), if present
 	DescriptionHash string
 	PaymentHash     string
 }
 
-// DecodeBolt11 decodes a bolt11 invoice string into the amount, payment
-// hash, and description hash NIP-57 needs to cross-check a zap receipt
-// against the invoice it claims to have paid. The default implementation
+// DecodeBolt11 decodes a bolt11 invoice string into its currency prefix,
+// amount, memo, payment hash, and description hash — what NIP-57 needs to
+// cross-check a zap receipt against the invoice it claims to have paid,
+// plus what a caller needs to display it. The default implementation
 // is a minimal, dependency-free BOLT11 parser (see bolt11.go) — swap this
 // var for your own decoder (e.g. one backed by a full Lightning node
 // library) if you need routing hints, the payee node ID, or node-signature
@@ -34,6 +39,7 @@ var DecodeBolt11 = decodeBolt11
 // against the charset directly).
 const (
 	bolt11FieldPaymentHash     = 1
+	bolt11FieldDescription     = 13
 	bolt11FieldDescriptionHash = 23
 )
 
@@ -43,10 +49,10 @@ const (
 	bolt11HashFieldWords = 52  // 260 bits -> 32 bytes once converted, 4 bits padding
 )
 
-// decodeBolt11 extracts the amount, payment hash, and description hash from
-// a BOLT11 invoice string — the only fields nip57 needs to cross-check a
-// zap receipt against the invoice it claims to have paid (NIP-57 Appendix
-// F). It deliberately does not decode routing hints, the payee node ID, or
+// decodeBolt11 extracts the currency prefix, amount, memo, payment hash, and
+// description hash from a BOLT11 invoice string — what nip57 needs to
+// cross-check a zap receipt against the invoice it claims to have paid
+// (NIP-57 Appendix F), plus what a caller needs to display it. It deliberately does not decode routing hints, the payee node ID, or
 // any other tagged field, and does not verify the invoice's own node
 // signature: nip57's caller already verified the zap receipt's Nostr
 // signature, and the receipt/invoice cross-check here is a consistency
@@ -57,7 +63,7 @@ func decodeBolt11(bolt11 string) (*Invoice, error) {
 		return nil, fmt.Errorf("invalid bolt11 encoding: %w", err)
 	}
 
-	amountMloki, err := decodeBolt11Amount(hrp)
+	currency, amountMloki, err := decodeBolt11HRP(hrp)
 	if err != nil {
 		return nil, err
 	}
@@ -67,7 +73,7 @@ func decodeBolt11(bolt11 string) (*Invoice, error) {
 	}
 	fields := words[bolt11TimestampWords : len(words)-bolt11SignatureWords]
 
-	inv := &Invoice{AmountMloki: amountMloki}
+	inv := &Invoice{Currency: currency, AmountMloki: amountMloki}
 
 	for i := 0; i+3 <= len(fields); {
 		fieldType := int(fields[i])
@@ -83,6 +89,10 @@ func decodeBolt11(bolt11 string) (*Invoice, error) {
 		case bolt11FieldPaymentHash:
 			if h, err := bolt11HashHex(data); err == nil {
 				inv.PaymentHash = h
+			}
+		case bolt11FieldDescription:
+			if b, err := bech32.ConvertBits(data, 5, 8, false); err == nil {
+				inv.Description = string(b)
 			}
 		case bolt11FieldDescriptionHash:
 			if h, err := bolt11HashHex(data); err == nil {
@@ -115,13 +125,13 @@ func bolt11HashHex(words []byte) (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// decodeBolt11Amount parses the optional amount+multiplier suffix of a
-// BOLT11 human-readable part (e.g. "lnfc50n" -> digits "50", multiplier
-// nano -> 5000 mloki), per BOLT11's amount encoding. A hrp with no amount
-// digits (an "any amount" invoice) returns 0.
-func decodeBolt11Amount(hrp string) (int64, error) {
+// decodeBolt11HRP splits a BOLT11 human-readable part into its currency
+// prefix and amount: "lnfc50n" -> currency "fc", digits "50", multiplier
+// nano -> 5000 mloki, per BOLT11's amount encoding. A hrp with no amount
+// digits (an "any amount" invoice) returns amount 0.
+func decodeBolt11HRP(hrp string) (string, int64, error) {
 	if !strings.HasPrefix(hrp, "ln") {
-		return 0, fmt.Errorf("not a lightning invoice hrp: %q", hrp)
+		return "", 0, fmt.Errorf("not a lightning invoice hrp: %q", hrp)
 	}
 
 	rest := hrp[2:]
@@ -132,8 +142,15 @@ func decodeBolt11Amount(hrp string) (int64, error) {
 			break
 		}
 	}
+	currency := rest[:digitStart]
 
-	amountPart := rest[digitStart:]
+	amount, err := decodeBolt11Amount(rest[digitStart:])
+	return currency, amount, err
+}
+
+// decodeBolt11Amount parses BOLT11's amount+multiplier suffix (e.g. "50n"
+// -> 5000 mloki). An empty suffix (an "any amount" invoice) returns 0.
+func decodeBolt11Amount(amountPart string) (int64, error) {
 	if amountPart == "" {
 		return 0, nil
 	}

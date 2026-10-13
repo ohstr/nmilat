@@ -8,6 +8,16 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `NWCClient.Notifications`, which delivers a wallet's NIP-47 payment
+  notifications as they arrive, and `NWCClient.Done`, which tells a
+  long-lived holder when to reconnect. ([#116](https://github.com/ohstr/nmilat/pull/116))
+- Adds `utils.RequestPayInvoice` for any LNURL-pay callback (LUD-12 comments
+  included) and `Tag`, `CommentAllowed`, `Metadata` on `utils.PayResponse`.
+  ([#116](https://github.com/ohstr/nmilat/pull/116))
+- Adds `nip98.NewAuthHeader`, `utils.ResolveNip05`, and hex-key
+  `nip44.EncryptHex`/`DecryptHex`. ([#116](https://github.com/ohstr/nmilat/pull/116))
+- Adds the invoice memo and currency prefix to `nip57.Invoice`
+  (`Description`, `Currency`). ([#116](https://github.com/ohstr/nmilat/pull/116))
 - Adds `WithRequestHandler`, REQ handlers run ahead of the built-in ones, and
   `Session.SendEvents`/`SendEOSE` to answer a REQ in the handler's own order, so
   an embedder can serve NIP-50 search from its own index, best match first.
@@ -126,6 +136,9 @@ privacy and performance fixes.
 - Removes `nipAZ`'s kind 5522 direct payment (`NewAltZapDirectPaymentRequest`,
   `KindAltZapDirectPayment`), which NIP-AZ does not define.
   ([#114](https://github.com/ohstr/nmilat/pull/114))
+- Enforces NIP-AZ's sender and settlement rules: a 9520 request must not carry
+  `P`, a 9523 carries exactly one, and a receipt's chain and preimage must match
+  its request and invoice. ([#116](https://github.com/ohstr/nmilat/pull/116))
 - Pages each filter of a `Pool` subscription to its end on connect and on
   resync, so a relay's result cap no longer cuts it short (`PoolConfig.PageSize`).
   ([#91](https://github.com/ohstr/nmilat/pull/91))
@@ -165,6 +178,9 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes `nipAZ.NewAltZapOnBehalfRequest`, whose events never verified because
+  they were signed before their kind was set to 9523.
+  ([#116](https://github.com/ohstr/nmilat/pull/116))
 - Fixes deleting a NIP-29 subgroup: it now leaves its parent's `child` list,
   and an edit to the parent drops ids that no longer exist, so a stale child no
   longer breaks reads of the parent's subgroups.

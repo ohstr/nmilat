@@ -7,10 +7,12 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip47"
+	"github.com/ohstr/nmilat/utils"
 	"github.com/ohstr/nmilat/wire"
 )
 
@@ -42,6 +44,7 @@ type NWCClient struct {
 
 	mu       sync.Mutex
 	subs     map[string]*nwcSub
+	notifs   map[string]chan *nip47.Notification
 	closed   bool
 	closeErr error
 
@@ -165,6 +168,7 @@ func NewNWCClient(ctx context.Context, pairing *nip47.PairingInfo, encryption st
 		appPrivKey:   pairing.Secret,
 		encryption:   encryption,
 		subs:         make(map[string]*nwcSub),
+		notifs:       make(map[string]chan *nip47.Notification),
 		doneCh:       make(chan struct{}),
 	}
 	go c.dispatch()
@@ -180,6 +184,11 @@ func (c *NWCClient) Close() {
 	c.conn.Close()
 	<-c.doneCh
 }
+
+// Done is closed once the client's connection has ended — by Close, a relay
+// error, or the relay going away — after which every call fails. A holder
+// that keeps a client long-term watches it to know when to dial a new one.
+func (c *NWCClient) Done() <-chan struct{} { return c.doneCh }
 
 // dispatch is the sole reader of the underlying connection's incoming
 // messages for the client's whole life, fanning parsed responses (and
@@ -199,6 +208,9 @@ func (c *NWCClient) dispatch() {
 			}
 			switch m := msg.(type) {
 			case *wire.EventSubscriptionResponse:
+				if c.deliverNotification(m) {
+					continue
+				}
 				c.mu.Lock()
 				sub, found := c.subs[m.SubscriptionID]
 				c.mu.Unlock()
@@ -223,6 +235,10 @@ func (c *NWCClient) dispatch() {
 				}
 			case *wire.ClosedSubscriptionResponse:
 				c.mu.Lock()
+				if ch, ok := c.notifs[m.SubscriptionID]; ok {
+					delete(c.notifs, m.SubscriptionID)
+					close(ch)
+				}
 				sub, found := c.subs[m.SubscriptionID]
 				c.mu.Unlock()
 				if !found {
@@ -257,6 +273,103 @@ func (c *NWCClient) failAll(err error) {
 		close(sub.ch)
 		delete(c.subs, id)
 	}
+	for id, ch := range c.notifs {
+		close(ch)
+		delete(c.notifs, id)
+	}
+}
+
+// Notifications subscribes to the wallet service's NIP-47 notifications
+// (kind 23197, and legacy NIP-04 kind 23196) addressed to this client, from
+// now on. Each one is delivered on the returned channel, which is closed when
+// ctx is done, the client closes, or the relay closes the subscription.
+// Notifications arriving while the channel's buffer (bufSize, at least 1) is
+// full are dropped, so keep the receiver draining.
+func (c *NWCClient) Notifications(ctx context.Context, bufSize int) (<-chan *nip47.Notification, error) {
+	if bufSize < 1 {
+		bufSize = 1
+	}
+	appPubkey, err := utils.GetPublicKey(c.appPrivKey)
+	if err != nil {
+		return nil, fmt.Errorf("derive app pubkey: %w", err)
+	}
+
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil, c.closeErr
+	}
+	subID := uuid.NewString()
+	ch := make(chan *nip47.Notification, bufSize)
+	c.notifs[subID] = ch
+	c.mu.Unlock()
+
+	filters := nip01.NewSubscriptionFilterGroup(
+		nip01.NewFilter().
+			WithKinds(nip47.KindNWCNotification, nip47.KindNWCLegacyNotification).
+			WithAuthors(c.walletPubkey).
+			WithTag("p", appPubkey).
+			WithSince(uint64(time.Now().Unix())),
+	)
+	if !c.conn.SubscribeWithID(subID, filters) {
+		c.stopNotifications(subID)
+		return nil, ErrConnectionClosed
+	}
+
+	go func() {
+		select {
+		case <-ctx.Done():
+			c.stopNotifications(subID)
+		case <-c.doneCh:
+		}
+	}()
+	return ch, nil
+}
+
+// stopNotifications ends one Notifications subscription: it closes the
+// channel and tells the relay. A no-op if dispatch or failAll already did.
+func (c *NWCClient) stopNotifications(subID string) {
+	c.mu.Lock()
+	ch, ok := c.notifs[subID]
+	if ok {
+		delete(c.notifs, subID)
+		close(ch)
+	}
+	c.mu.Unlock()
+	if ok {
+		c.conn.CloseSubscription(subID)
+	}
+}
+
+// deliverNotification routes an event on a Notifications subscription to its
+// channel, reporting whether the subscription ID was one. Events not signed
+// by the wallet, or that fail to decrypt, are dropped.
+func (c *NWCClient) deliverNotification(m *wire.EventSubscriptionResponse) bool {
+	c.mu.Lock()
+	_, isNotif := c.notifs[m.SubscriptionID]
+	c.mu.Unlock()
+	if !isNotif {
+		return false
+	}
+	if m.Event == nil || m.Event.PubKey != c.walletPubkey || m.Event.Verify() != nil {
+		return true
+	}
+	notif, err := nip47.ParseNotificationEvent(m.Event, c.appPrivKey)
+	if err != nil {
+		return true
+	}
+
+	// Send under the lock so stopNotifications cannot close the channel
+	// mid-send; the send itself never blocks.
+	c.mu.Lock()
+	if ch, ok := c.notifs[m.SubscriptionID]; ok {
+		select {
+		case ch <- notif:
+		default:
+		}
+	}
+	c.mu.Unlock()
+	return true
 }
 
 func (c *NWCClient) err() error {
