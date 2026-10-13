@@ -17,10 +17,10 @@ production-like load on a store much larger than RAM.
 
 ## Reading and writing
 
-p50 / p99. `next` is rc.12 plus the live-tail fix
+p50 / p99. rc.13 shipped the live-tail fix
 ([CHANGELOG](../CHANGELOG.md)).
 
-| Flow | Request | rc.12 | next |
+| Flow | Request | rc.12 | rc.13 |
 |---|---|---|---|
 | Open a feed | `{"kinds":[1],"limit":100}` until EOSE | 18.5 s / 51.7 s | 6.5 ms / 12 ms |
 | Notifications | `{"kinds":[1,7],"#p":[<me>],"limit":50}` until EOSE | 24.6 s / 42.7 s | 19 ms / 47 ms |
@@ -35,7 +35,7 @@ No REQ timed out (60s) or was closed in either run.
 
 ## Cost
 
-| | rc.12 | next |
+| | rc.12 | rc.13 |
 |---|---|---|
 | CPU (of 4) | 304% | 26% |
 | Memory | 860 MiB (at limit) | 423 MiB |
