@@ -19,7 +19,9 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ohstr/nmilat/nip01"
@@ -33,6 +35,10 @@ import (
 // amount, description-hash, etc.) — see nip57.go.
 var (
 	ErrMissingSenderTag     = errors.New("nipAZ: missing P tag denoting the true sender")
+	ErrSenderTagCount       = errors.New("nipAZ: on-behalf request must have exactly one P tag")
+	ErrSenderTagNotAllowed  = errors.New("nipAZ: a 9520 request must not have a P tag; the signer is the sender")
+	ErrChainMismatch        = errors.New("nipAZ: receipt chain does not match the request or the invoice")
+	ErrHashLockMismatch     = errors.New("nipAZ: SHA256(preimage) does not match the invoice payment hash")
 	ErrInvalidZapTag        = errors.New("nipAZ: invalid zap tag")
 	ErrMissingChainTag      = errors.New("nipAZ: missing chain tag")
 	ErrMissingLNURLTag      = errors.New("nipAZ: missing lnurl tag")
@@ -66,6 +72,15 @@ func DescriptionHash(description string) string {
 // particular deployment does today. An application that wants named
 // constants for its own known chains defines them itself, on top of this type.
 type Chain string
+
+// InvoiceCurrencies maps a chain to the BOLT11 currency prefixes its invoices
+// carry (nip57.Invoice.Currency). ValidateAltZapReceipt rejects a receipt
+// whose invoice is not on its chain; chains missing from the map are not
+// checked. Add entries for other chains before validating their receipts.
+var InvoiceCurrencies = map[Chain][]string{
+	"flokicoin": {"fc"},
+	"bitcoin":   {"bc", "tb", "tbs", "bcrt"},
+}
 
 // WebIdentity and ConnectionKey are re-exported from nipIC — see the
 // package doc comment.
@@ -277,8 +292,13 @@ func ParseAltZapRequest(event *nip01.Event) (*AltZapRequest, error) {
 		return nil, fmt.Errorf("%w: kind %d", ErrMissingLNURLTag, event.Kind)
 	}
 
-	if event.Kind == KindAltZapOnBehalfRequest && PTagCount == 0 {
+	switch {
+	case event.Kind == KindAltZapOnBehalfRequest && PTagCount == 0:
 		return nil, ErrMissingSenderTag
+	case event.Kind == KindAltZapOnBehalfRequest && PTagCount > 1:
+		return nil, fmt.Errorf("%w: got %d", ErrSenderTagCount, PTagCount)
+	case event.Kind == KindAltZapRequest && PTagCount > 0:
+		return nil, ErrSenderTagNotAllowed
 	}
 
 	// e tag is optional (0 or 1)
@@ -442,6 +462,20 @@ func ValidateAltZapReceipt(receipt *nip01.Event) error {
 		return fmt.Errorf("%w: %w", nip57.ErrBolt11DecodeFailed, err)
 	}
 
+	// Hash lock: the preimage must be the one that paid this invoice.
+	preimage, err := hex.DecodeString(zr.Preimage)
+	if err != nil {
+		return fmt.Errorf("%w: preimage is not hex", ErrHashLockMismatch)
+	}
+	if sum := sha256.Sum256(preimage); !strings.EqualFold(hex.EncodeToString(sum[:]), invoice.PaymentHash) {
+		return ErrHashLockMismatch
+	}
+
+	// The invoice must be on the receipt's chain, when the chain is known.
+	if prefixes, known := InvoiceCurrencies[zr.Chain]; known && !slices.Contains(prefixes, invoice.Currency) {
+		return fmt.Errorf("%w: chain %q, invoice currency %q", ErrChainMismatch, zr.Chain, invoice.Currency)
+	}
+
 	// 4. Validate Logic (Strict for Zaps, relaxed for Direct Payments)
 	if zr.Description != "" {
 		if zr.Request == nil {
@@ -466,6 +500,11 @@ func ValidateAltZapReceipt(receipt *nip01.Event) error {
 		if zr.Recipient.Value() != zr.Request.Recipient.Value() {
 			return fmt.Errorf("%w: receipt=%s request_author=%s", nip57.ErrRecipientMismatch, zr.Recipient.Value(), zr.Request.Recipient.Value())
 		}
+
+		// D. The receipt settles on the chain the request asked for.
+		if zr.Chain != zr.Request.Chain {
+			return fmt.Errorf("%w: receipt %q, request %q", ErrChainMismatch, zr.Chain, zr.Request.Chain)
+		}
 	} else {
 		// Direct Payment (no Zap Request description)
 		if invoice.AmountMloki <= 0 {
@@ -488,14 +527,23 @@ type AltZapRequestParams struct {
 	Lnurl       string   // recipient's LNURL-pay endpoint
 	AmountMloki int64    // amount in mloki (milli-loki)
 	Relays      []string // relays the zap receipt should be published to
-	Sender      Identity // optional sender override ("P" tag) — required in effect for 9523, see NewAltZapOnBehalfRequest
+	Sender      Identity // "P" tag — only for 9523; NewAltZapOnBehalfRequest sets it, NewAltZapRequest rejects it
 	Content     string   // optional note content
 	EventID     *string  // optional zapped event ID ("e" tag)
 }
 
 // NewAltZapRequest creates, signs, and returns a new AltZap request event
-// (kind 9520).
+// (kind 9520). The signer is the sender, so p.Sender must be zero.
 func NewAltZapRequest(p AltZapRequestParams) (*nip01.Event, error) {
+	if !p.Sender.IsZero() {
+		return nil, ErrSenderTagNotAllowed
+	}
+	return newAltZapRequest(KindAltZapRequest, p)
+}
+
+// newAltZapRequest builds and signs a request of the given kind, so the
+// signature always covers the final kind.
+func newAltZapRequest(kind int, p AltZapRequestParams) (*nip01.Event, error) {
 	tags := [][]string{
 		p.Recipient.toSlice("p", false),
 		{"amount", fmt.Sprintf("%d", p.AmountMloki)},
@@ -519,7 +567,7 @@ func NewAltZapRequest(p AltZapRequestParams) (*nip01.Event, error) {
 
 	event := &nip01.Event{
 		CreatedAt: uint64(time.Now().Unix()),
-		Kind:      KindAltZapRequest,
+		Kind:      kind,
 		Tags:      tags,
 		Content:   p.Content,
 	}
@@ -535,13 +583,11 @@ func NewAltZapRequest(p AltZapRequestParams) (*nip01.Event, error) {
 // is required (not an optional params field) so it is impossible to build
 // an invalid 9523 at construction time — kind 9523 mandates a P tag.
 func NewAltZapOnBehalfRequest(sender Identity, p AltZapRequestParams) (*nip01.Event, error) {
-	p.Sender = sender
-	event, err := NewAltZapRequest(p)
-	if err != nil {
-		return nil, err
+	if sender.IsZero() {
+		return nil, ErrMissingSenderTag
 	}
-	event.Kind = KindAltZapOnBehalfRequest
-	return event, nil
+	p.Sender = sender
+	return newAltZapRequest(KindAltZapOnBehalfRequest, p)
 }
 
 // AltZapReceiptParams describes an AltZap receipt (kind 9521), issued by the

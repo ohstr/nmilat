@@ -22,6 +22,51 @@ import (
 
 const altZapLightningAddress = "alice@example.com"
 
+// testPreimage and testPaymentHash are a real hash-lock pair for receipt
+// fixtures: SHA256(hex-decoded testPreimage) == testPaymentHash.
+const testPreimage = "1111111111111111111111111111111111111111111111111111111111111111"
+
+var testPaymentHash = func() string {
+	b, _ := hex.DecodeString(testPreimage)
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}()
+
+func TestAltZapRequestSenderTagRules(t *testing.T) {
+	pTag := []string{"p", "0000000000000000000000000000000000000000000000000000000000000001"}
+	base := [][]string{pTag, {"amount", "1000"}, {"chain", "flokicoin"}, {"lnurl", validTestLnurl}, {"relays", "wss://relay.example.com"}}
+	sender := []string{"P", "0000000000000000000000000000000000000000000000000000000000000002"}
+
+	if _, err := ParseAltZapRequest(altZapRequestWithTags(t, KindAltZapRequest, append(base, sender))); !errors.Is(err, ErrSenderTagNotAllowed) {
+		t.Errorf("9520 with P: got %v, want ErrSenderTagNotAllowed", err)
+	}
+	if _, err := ParseAltZapRequest(altZapRequestWithTags(t, KindAltZapOnBehalfRequest, append(base, sender, sender))); !errors.Is(err, ErrSenderTagCount) {
+		t.Errorf("9523 with two P: got %v, want ErrSenderTagCount", err)
+	}
+	if _, err := ParseAltZapRequest(altZapRequestWithTags(t, KindAltZapOnBehalfRequest, append(base, sender))); err != nil {
+		t.Errorf("9523 with one P: unexpected error %v", err)
+	}
+}
+
+func TestAltZapReceiptHashLockAndChain(t *testing.T) {
+	receipt, descHash := signedAltZapReceipt(t)
+	good := nip57.Invoice{Currency: "fc", PaymentHash: testPaymentHash, AmountMloki: 1000, DescriptionHash: descHash}
+
+	wrongHash := good
+	wrongHash.PaymentHash = "00" + testPaymentHash[2:]
+	stubAltZapInvoice(t, &wrongHash)
+	if err := ValidateAltZapReceipt(receipt); !errors.Is(err, ErrHashLockMismatch) {
+		t.Errorf("wrong payment hash: got %v, want ErrHashLockMismatch", err)
+	}
+
+	bitcoinInvoice := good
+	bitcoinInvoice.Currency = "bc"
+	stubAltZapInvoice(t, &bitcoinInvoice)
+	if err := ValidateAltZapReceipt(receipt); !errors.Is(err, ErrChainMismatch) {
+		t.Errorf("bitcoin invoice on a flokicoin receipt: got %v, want ErrChainMismatch", err)
+	}
+}
+
 // altZapRequestWithTags signs a request of the given kind from a full tag
 // set, so a test can omit or corrupt any single tag.
 func altZapRequestWithTags(t *testing.T, kind int, tags [][]string) *nip01.Event {
@@ -108,7 +153,7 @@ func signedAltZapReceipt(t *testing.T) (*nip01.Event, string) {
 		Tags: [][]string{
 			{"bolt11", "lnfc-zap"},
 			{"chain", "flokicoin"},
-			{"preimage", "preimage1"},
+			{"preimage", testPreimage},
 			{"p", "0000000000000000000000000000000000000000000000000000000000000001"},
 			{"description", string(descBytes)},
 		},
@@ -128,7 +173,7 @@ func stubAltZapInvoice(t *testing.T, inv *nip57.Invoice) {
 
 func TestAltZapReceiptRejectsAbsentDescriptionHash(t *testing.T) {
 	receipt, _ := signedAltZapReceipt(t)
-	stubAltZapInvoice(t, &nip57.Invoice{AmountMloki: 1000})
+	stubAltZapInvoice(t, &nip57.Invoice{Currency: "fc", PaymentHash: testPaymentHash, AmountMloki: 1000})
 
 	err := ValidateAltZapReceipt(receipt)
 	if err == nil {
@@ -142,6 +187,8 @@ func TestAltZapReceiptRejectsAbsentDescriptionHash(t *testing.T) {
 func TestAltZapReceiptRejectsMismatchedDescriptionHash(t *testing.T) {
 	receipt, _ := signedAltZapReceipt(t)
 	stubAltZapInvoice(t, &nip57.Invoice{
+		Currency:        "fc",
+		PaymentHash:     testPaymentHash,
 		AmountMloki:     1000,
 		DescriptionHash: "0000000000000000000000000000000000000000000000000000000000000000",
 	})
@@ -157,7 +204,7 @@ func TestAltZapReceiptRejectsMismatchedDescriptionHash(t *testing.T) {
 
 func TestAltZapReceiptAcceptsMatchingDescriptionHash(t *testing.T) {
 	receipt, descHash := signedAltZapReceipt(t)
-	stubAltZapInvoice(t, &nip57.Invoice{AmountMloki: 1000, DescriptionHash: descHash})
+	stubAltZapInvoice(t, &nip57.Invoice{Currency: "fc", PaymentHash: testPaymentHash, AmountMloki: 1000, DescriptionHash: descHash})
 
 	if err := ValidateAltZapReceipt(receipt); err != nil {
 		t.Fatalf("AltZap rejected a conforming receipt: %v", err)
