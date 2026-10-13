@@ -14,10 +14,10 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-// IndexZap indexes a zap receipt — NIP-57 (Kind 9735) or AltZap (Kind 5521).
+// IndexZap indexes a zap receipt — NIP-57 (Kind 9735) or AltZap (Kind 9521).
 // It extracts the amount and the receiver pubkey and stores them in a dedicated bucket.
 func (s *EventStore) IndexZap(tx *bolt.Tx, event *nip01.Event, evsid uint64) error {
-	if event.Kind != 5521 && event.Kind != 9735 {
+	if event.Kind != 9521 && event.Kind != 9735 {
 		return nil
 	}
 
@@ -181,7 +181,7 @@ func parseZapEvent(event *nip01.Event) (uint64, string, error) {
 	}
 
 	// 2. Extract Amount
-	// Kind 5521: Check 'amount' tag assuming msats string.
+	// Kind 9521: Check 'amount' tag assuming msats string.
 	var amount uint64
 
 	for _, tag := range event.Tags {
@@ -195,7 +195,7 @@ func parseZapEvent(event *nip01.Event) (uint64, string, error) {
 				amount = val
 			}
 		} else if tag[0] == "description" && amount == 0 {
-			// For Kind 5521, the amount is often in the embedded zap request (description tag)
+			// For Kind 9521, the amount is often in the embedded zap request (description tag)
 			var inner struct {
 				Tags [][]string `json:"tags"`
 			}

@@ -26,9 +26,6 @@ func init() {
 	relay.RegisterEventValidator(nipAZ.KindAltZapOnBehalfRequest, func(_ context.Context, event *nip01.Event) error {
 		return nipAZ.ValidateAltZapRequest(event, 0)
 	})
-	relay.RegisterEventValidator(nipAZ.KindAltZapDirectPayment, func(_ context.Context, event *nip01.Event) error {
-		return nipAZ.ValidateAltZapRequest(event, 0)
-	})
 	relay.RegisterEventValidator(nipAZ.KindAltZapReceipt, func(_ context.Context, event *nip01.Event) error {
 		return nipAZ.ValidateAltZapReceipt(event)
 	})

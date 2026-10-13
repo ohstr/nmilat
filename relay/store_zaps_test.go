@@ -42,7 +42,7 @@ func TestZapCacheWebIdentityScenarios(t *testing.T) {
 	events := []*nip01.Event{
 		// 1. Web-identity-linked with p[2] set and r tag → indexed under ResolvedDiscord
 		{
-			Kind:      5521,
+			Kind:      9521,
 			CreatedAt: ts,
 			Tags: [][]string{
 				{"p", ConnKeyDiscord, "discord"},
@@ -52,7 +52,7 @@ func TestZapCacheWebIdentityScenarios(t *testing.T) {
 		},
 		// 2. Web-identity-linked without p[2] but r tag present → indexed under ResolvedTelegram
 		{
-			Kind:      5521,
+			Kind:      9521,
 			CreatedAt: ts,
 			Tags: [][]string{
 				{"p", ConnKeyTelegram},
@@ -62,7 +62,7 @@ func TestZapCacheWebIdentityScenarios(t *testing.T) {
 		},
 		// 3. Web-identity-unlinked: p[2] = "discord", no r tag → NOT indexed
 		{
-			Kind:      5521,
+			Kind:      9521,
 			CreatedAt: ts,
 			Tags: [][]string{
 				{"p", ConnKeyDiscord, "discord"},
@@ -71,7 +71,7 @@ func TestZapCacheWebIdentityScenarios(t *testing.T) {
 		},
 		// 4. Direct Nostr zap to the same pubkey as ResolvedDiscord → amounts should merge
 		{
-			Kind:      5521,
+			Kind:      9521,
 			CreatedAt: ts,
 			Tags: [][]string{
 				{"p", NostrUser, "nostr"},
@@ -92,7 +92,7 @@ func TestZapCacheWebIdentityScenarios(t *testing.T) {
 
 	count, err := store.ReindexZaps(context.Background(), nil)
 	require.NoError(t, err)
-	// ReindexZaps counts all Kind 5521 events processed (4), regardless of whether
+	// ReindexZaps counts all Kind 9521 events processed (4), regardless of whether
 	// they were stored — web-identity-unlinked zaps are silently skipped by IndexZap.
 	assert.Equal(t, 4, count)
 
@@ -139,39 +139,39 @@ func TestZapCacheScenarios(t *testing.T) {
 
 	// Test Events
 	events := []*nip01.Event{
-		// 1. User A: 1000 sats (Inside window) - Realistic Kind 5521
+		// 1. User A: 1000 sats (Inside window) - Realistic Kind 9521
 		{
-			Kind:      5521,
+			Kind:      9521,
 			CreatedAt: timestamp1HourAgo,
-			Tags:      [][]string{{"p", UserA}, {"description", `{"kind":5520,"tags":[["amount","1000"],["p","` + UserA + `"]]}`}},
+			Tags:      [][]string{{"p", UserA}, {"description", `{"kind":9520,"tags":[["amount","1000"],["p","` + UserA + `"]]}`}},
 			Content:   "Zap A 1",
 		},
-		// 2. User A: 500 sats (Inside window) - Realistic Kind 5521
+		// 2. User A: 500 sats (Inside window) - Realistic Kind 9521
 		{
-			Kind:      5521,
+			Kind:      9521,
 			CreatedAt: timestamp2HoursAgo,
-			Tags:      [][]string{{"p", UserA}, {"description", `{"kind":5520,"tags":[["amount","500"],["p","` + UserA + `"]]}`}},
+			Tags:      [][]string{{"p", UserA}, {"description", `{"kind":9520,"tags":[["amount","500"],["p","` + UserA + `"]]}`}},
 			Content:   "Zap A 2",
 		},
-		// 3. User B: 2000 sats (Inside window) - Realistic Kind 5521
+		// 3. User B: 2000 sats (Inside window) - Realistic Kind 9521
 		{
-			Kind:      5521,
+			Kind:      9521,
 			CreatedAt: timestamp1HourAgo,
-			Tags:      [][]string{{"p", UserB}, {"description", `{"kind":5520,"tags":[["amount","2000"],["p","` + UserB + `"]]}`}},
+			Tags:      [][]string{{"p", UserB}, {"description", `{"kind":9520,"tags":[["amount","2000"],["p","` + UserB + `"]]}`}},
 			Content:   "Zap B 1",
 		},
 		// 4. User A: 5000 sats (Outside window - Too old)
 		{
-			Kind:      5521,
+			Kind:      9521,
 			CreatedAt: timestamp25HoursAgo,
-			Tags:      [][]string{{"p", UserA}, {"description", `{"kind":5520,"tags":[["amount","5000"]]}`}},
+			Tags:      [][]string{{"p", UserA}, {"description", `{"kind":9520,"tags":[["amount","5000"]]}`}},
 			Content:   "Zap A Old",
 		},
 		// 5. User B: 5000 sats (Outside window - Future)
 		{
-			Kind:      5521,
+			Kind:      9521,
 			CreatedAt: timestampFuture,
-			Tags:      [][]string{{"p", UserB}, {"description", `{"kind":5520,"tags":[["amount","5000"]]}`}},
+			Tags:      [][]string{{"p", UserB}, {"description", `{"kind":9520,"tags":[["amount","5000"]]}`}},
 			Content:   "Zap B Future",
 		},
 		// 6. User C: Invalid kind (Not a zap)
