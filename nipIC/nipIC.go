@@ -9,6 +9,8 @@
 // This package defines no platform or chain names of its own — see the
 // WebIdentity doc comment. A caller (or an application built on this SDK)
 // supplies whatever platform string its own deployment uses.
+//
+// Spec: https://github.com/ohstr/nips/blob/main/NIP-IC.md
 package nipIC
 
 import (

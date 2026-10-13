@@ -7,6 +7,8 @@
 // (Steps 1-2, 5-6: NIP-42 checks, the direct-member fast path, the owner
 // membership check, and granting virtual membership) is session/store-aware
 // and lives in relay/, not here.
+//
+// Spec: https://github.com/block/buzz/blob/main/docs/nips/NIP-AA.md
 package nipAA
 
 import (

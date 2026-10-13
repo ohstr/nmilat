@@ -10,6 +10,8 @@
 // pubkey. WebIdentity and ConnectionKey are re-exported here under nipAZ's
 // own names so a caller who only touches AltZap doesn't have to import
 // nipIC directly for the common case.
+//
+// Spec: https://github.com/ohstr/nips/blob/main/NIP-AZ.md
 package nipAZ
 
 import (
