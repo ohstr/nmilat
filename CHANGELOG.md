@@ -9,7 +9,8 @@ privacy and performance fixes.
 ### Added
 
 - Adds `NWCClient.Notifications`, which delivers a wallet's NIP-47 payment
-  notifications as they arrive. ([#116](https://github.com/ohstr/nmilat/pull/116))
+  notifications as they arrive, and `NWCClient.Done`, which tells a
+  long-lived holder when to reconnect. ([#116](https://github.com/ohstr/nmilat/pull/116))
 - Adds `utils.RequestPayInvoice` for any LNURL-pay callback (LUD-12 comments
   included) and `Tag`, `CommentAllowed`, `Metadata` on `utils.PayResponse`.
   ([#116](https://github.com/ohstr/nmilat/pull/116))

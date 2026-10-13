@@ -143,7 +143,17 @@ func TestNWCClient_NotificationsClosedWithClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Notifications: %v", err)
 	}
+	select {
+	case <-client.Done():
+		t.Fatal("Done closed while the client is still open")
+	default:
+	}
 	client.Close()
+	select {
+	case <-client.Done():
+	default:
+		t.Fatal("Done not closed after Close")
+	}
 	select {
 	case _, ok := <-notifs:
 		if ok {

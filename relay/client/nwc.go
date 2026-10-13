@@ -185,6 +185,11 @@ func (c *NWCClient) Close() {
 	<-c.doneCh
 }
 
+// Done is closed once the client's connection has ended — by Close, a relay
+// error, or the relay going away — after which every call fails. A holder
+// that keeps a client long-term watches it to know when to dial a new one.
+func (c *NWCClient) Done() <-chan struct{} { return c.doneCh }
+
 // dispatch is the sole reader of the underlying connection's incoming
 // messages for the client's whole life, fanning parsed responses (and
 // subscription-closed notices) out to whichever call registered the
