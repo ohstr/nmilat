@@ -201,7 +201,7 @@ func TestNewAltZapOnBehalfRequest_SenderParamIsIgnoredInFavorOfPositionalArg(t *
 // Replaces TestNewAltZapReceipt_ExtractsTagsFromDescription: the old
 // fallback silently copied p/P tags (handle included) back out of the
 // embedded request's description JSON, which could reintroduce a value the
-// ZSP never verified — see NIPAZ-NIPIC-API-EXAMPLES.md scenario 6. Confirm
+// LNURL server never verified — see NIPAZ-NIPIC-API-EXAMPLES.md scenario 6. Confirm
 // that no longer happens: Recipient/Sender always come from the caller's
 // explicit params, never from Description, even when Description embeds a
 // conflicting identity.
@@ -213,7 +213,7 @@ func TestNewAltZapReceipt_RecipientNeverOverriddenByDescription(t *testing.T) {
 	}
 
 	// The embedded request's own p tag names a *different* recipient than
-	// what the ZSP has authoritatively resolved server-side.
+	// what the LNURL server has authoritatively resolved server-side.
 	reqEvent := &nip01.Event{
 		Kind: KindAltZapRequest,
 		Tags: [][]string{

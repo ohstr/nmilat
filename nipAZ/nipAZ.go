@@ -48,8 +48,8 @@ const (
 	KindAltZapOnBehalfRequest = 9523
 )
 
-// DescriptionHash computes SHA256(description), hex-encoded — the value a
-// ZSP must request as a BOLT11 invoice's LUD-11 description_hash so it
+// DescriptionHash computes SHA256(description), hex-encoded — the value an
+// LNURL server must put in a BOLT11 invoice's description_hash so it
 // cryptographically binds to a specific AltZap request (NIP-AZ.md's
 // "Description-hash binding" rule). description is hashed verbatim: for a
 // kind 9521 receipt's "description" tag this is the exact wire string being
@@ -545,7 +545,7 @@ func NewAltZapOnBehalfRequest(sender Identity, p AltZapRequestParams) (*nip01.Ev
 }
 
 // AltZapReceiptParams describes an AltZap receipt (kind 9521), issued by the
-// ZSP once the invoice is paid. PrivateKey and Bolt11 are required;
+// LNURL server once the invoice is paid. PrivateKey and Bolt11 are required;
 // Recipient is the zero Identity for a plain LNURL payment settled without
 // a signed request.
 //
@@ -559,7 +559,7 @@ func NewAltZapOnBehalfRequest(sender Identity, p AltZapRequestParams) (*nip01.Ev
 // even when Description embeds different-looking p/P tags. Description is
 // stored verbatim for auditability only.
 type AltZapReceiptParams struct {
-	PrivateKey              string // ZSP's nsec hex — required, derives the event pubkey and signs
+	PrivateKey              string // LNURL server's nsec hex — required, derives the event pubkey and signs
 	Chain                   Chain
 	Recipient               Identity
 	Sender                  Identity
