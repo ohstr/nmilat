@@ -1,58 +1,24 @@
 package nip47
 
 import (
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
-	btcec "github.com/flokiorg/go-flokicoin/crypto"
-	"github.com/flokiorg/go-flokicoin/crypto/schnorr"
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip04"
 	"github.com/ohstr/nmilat/nip44"
 	"github.com/ohstr/nmilat/utils"
 )
 
-// deriveKeys parses a hex private key and hex public key into the types
-// nip44's conversation-key derivation needs. Nostr public keys are 32-byte
-// x-only schnorr keys, the same shape nip04's shared-secret derivation
-// already parses via schnorr.ParsePubKey.
-func deriveKeys(privKeyHex, pubKeyHex string) (*btcec.PrivateKey, *btcec.PublicKey, error) {
-	privBytes, err := hex.DecodeString(privKeyHex)
-	if err != nil {
-		return nil, nil, fmt.Errorf("invalid private key: %w", err)
-	}
-	priv, _ := btcec.PrivKeyFromBytes(privBytes)
-
-	pubBytes, err := hex.DecodeString(pubKeyHex)
-	if err != nil {
-		return nil, nil, fmt.Errorf("invalid public key: %w", err)
-	}
-	pub, err := schnorr.ParsePubKey(pubBytes)
-	if err != nil {
-		return nil, nil, fmt.Errorf("invalid public key: %w", err)
-	}
-
-	return priv, pub, nil
-}
-
 // encryptContent encrypts plaintext from the holder of privKeyHex to
 // pubKeyHex using the named encryption scheme.
 func encryptContent(plaintext, encryption, privKeyHex, pubKeyHex string) (string, error) {
 	switch encryption {
 	case EncryptionNIP44V2:
-		priv, pub, err := deriveKeys(privKeyHex, pubKeyHex)
-		if err != nil {
-			return "", err
-		}
-		key, err := nip44.GenerateConversationKey(priv, pub)
-		if err != nil {
-			return "", fmt.Errorf("derive nip44 conversation key: %w", err)
-		}
-		return nip44.Encrypt(plaintext, key)
+		return nip44.EncryptHex(plaintext, privKeyHex, pubKeyHex)
 	case EncryptionNIP04:
 		return nip04.Encrypt(plaintext, privKeyHex, pubKeyHex)
 	default:
@@ -65,15 +31,7 @@ func encryptContent(plaintext, encryption, privKeyHex, pubKeyHex string) (string
 func decryptContent(ciphertext, encryption, privKeyHex, pubKeyHex string) (string, error) {
 	switch encryption {
 	case EncryptionNIP44V2:
-		priv, pub, err := deriveKeys(privKeyHex, pubKeyHex)
-		if err != nil {
-			return "", err
-		}
-		key, err := nip44.GenerateConversationKey(priv, pub)
-		if err != nil {
-			return "", fmt.Errorf("derive nip44 conversation key: %w", err)
-		}
-		return nip44.Decrypt(ciphertext, key)
+		return nip44.DecryptHex(ciphertext, privKeyHex, pubKeyHex)
 	case EncryptionNIP04:
 		return nip04.Decrypt(ciphertext, pubKeyHex, privKeyHex)
 	default:
