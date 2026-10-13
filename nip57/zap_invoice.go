@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 
 	"github.com/ohstr/nmilat/utils"
@@ -15,7 +14,7 @@ import (
 var (
 	ErrRecipientDoesNotAcceptZaps = errors.New("nip57: recipient's LNURL provider does not support zaps")
 	ErrAmountOutOfRange           = errors.New("nip57: amount outside the provider's min/maxSendable range")
-	ErrCallbackFailed             = errors.New("nip57: callback did not return an invoice")
+	ErrCallbackFailed             = utils.ErrPayCallbackFailed
 )
 
 // RequestZapInvoiceParams describes a zap payment: who to zap, how much, and
@@ -82,49 +81,14 @@ func RequestZapInvoice(ctx context.Context, client *http.Client, p RequestZapInv
 		return nil, fmt.Errorf("marshal zap request: %w", err)
 	}
 
-	bolt11, err := requestInvoice(ctx, client, payResp.Callback, p.AmountMsat, string(eventJSON), bech32LNURL)
+	// Per NIP-57 Appendix A / LUD-06: the zap request rides in "nostr".
+	bolt11, err := utils.RequestPayInvoice(ctx, client, payResp, utils.PayInvoiceParams{
+		AmountMsat: p.AmountMsat,
+		Nostr:      string(eventJSON),
+		Lnurl:      bech32LNURL,
+	})
 	if err != nil {
 		return nil, err
 	}
 	return &RequestZapInvoiceResult{Bolt11: bolt11, PayResponse: payResp}, nil
-}
-
-// requestInvoice calls an LNURL-pay callback with the zap request attached,
-// per NIP-57 Appendix A / LUD-06.
-func requestInvoice(ctx context.Context, client *http.Client, callback string, amountMsat int64, zapRequestJSON, lnurl string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, callback, nil)
-	if err != nil {
-		return "", err
-	}
-	q := req.URL.Query()
-	q.Set("amount", fmt.Sprintf("%d", amountMsat))
-	q.Set("nostr", zapRequestJSON)
-	q.Set("lnurl", lnurl)
-	req.URL.RawQuery = q.Encode()
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("%w: status %d", ErrCallbackFailed, resp.StatusCode)
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-
-	var wire struct {
-		PR     string `json:"pr"`
-		Status string `json:"status"`
-		Reason string `json:"reason"`
-	}
-	if err := json.Unmarshal(body, &wire); err != nil {
-		return "", fmt.Errorf("%w: parse response: %w", ErrCallbackFailed, err)
-	}
-	if wire.Status == "ERROR" || wire.PR == "" {
-		return "", fmt.Errorf("%w: %s", ErrCallbackFailed, wire.Reason)
-	}
-	return wire.PR, nil
 }
