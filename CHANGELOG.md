@@ -182,6 +182,9 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes `nipcash.VerifyProvenance` checking every token under flnd's
+  signing prefix: a `satscash1` token now verifies under lnd's, and an HRP
+  with no known prefix reports no provenance instead of a wrong minter.
 - Fixes `nipAZ.NewAltZapOnBehalfRequest`, whose events never verified because
   they were signed before their kind was set to 9523.
   ([#116](https://github.com/ohstr/nmilat/pull/116))

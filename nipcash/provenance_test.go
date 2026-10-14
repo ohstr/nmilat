@@ -1,6 +1,7 @@
 package nipcash
 
 import (
+	"bytes"
 	"encoding/hex"
 	"testing"
 
@@ -101,3 +102,41 @@ func TestVerifyProvenance_ForgeryTable(t *testing.T) {
 }
 
 func uint64Ptr(v uint64) *uint64 { return &v }
+
+// signUnder signs a mint payload under an explicit signed-message prefix, the way
+// a minter on that backend would.
+func signUnder(t *testing.T, priv *btcec.PrivateKey, prefix, hrp, walletPubkeyHex string, amountMillis uint64) []byte {
+	t.Helper()
+	return ecdsa.SignCompact(priv, doubleSHA256([]byte(prefix+MintPayload(hrp, walletPubkeyHex, amountMillis))), true)
+}
+
+// NIP-CASH §Mint Provenance: the prefix comes from the token's own HRP, so a
+// satscash1... token verifies under lnd's prefix and recovers its real minter.
+func TestVerifyProvenance_SatscashUsesLndPrefix(t *testing.T) {
+	priv, pub := btcec.PrivKeyFromBytes(bytes.Repeat([]byte{7}, 32))
+	serialized := btcec.ToSerialized(pub)
+	want := hex.EncodeToString(serialized[:])
+	wallet := randomKeyHex(t)
+	amount := uint64(5000)
+	tok := Token{HRP: "satscash", WalletPubkey: wallet, AttestedAmountMillis: &amount,
+		MintSignature: signUnder(t, priv, "Lightning Signed Message:", "satscash", wallet, amount)}
+	got, ok := VerifyProvenance(tok)
+	if !ok || got != want {
+		t.Fatalf("satscash token signed under lnd's prefix: got (%s, %v), want (%s, true)", got, ok, want)
+	}
+}
+
+// NIP-CASH §Mint Provenance: an HRP with no known prefix carries no valid
+// provenance, rather than a guess that names whatever key happens to recover.
+func TestVerifyProvenance_UnknownHRPHasNoProvenance(t *testing.T) {
+	priv, _ := btcec.PrivKeyFromBytes(bytes.Repeat([]byte{9}, 32))
+	wallet := randomKeyHex(t)
+	amount := uint64(5000)
+	for _, prefix := range []string{"Flokicoin Lightning Signed Message:", "Lightning Signed Message:"} {
+		tok := Token{HRP: "xyzcash", WalletPubkey: wallet, AttestedAmountMillis: &amount,
+			MintSignature: signUnder(t, priv, prefix, "xyzcash", wallet, amount)}
+		if got, ok := VerifyProvenance(tok); ok {
+			t.Fatalf("xyzcash token (signed under %q) verified with minter %s; want no provenance", prefix, got)
+		}
+	}
+}

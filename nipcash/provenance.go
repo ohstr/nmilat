@@ -14,24 +14,29 @@ import (
 // old signatures deliberately.
 const mintPayloadScheme = "lokicash-mint:v1"
 
-// LNSignedMessagePrefix is the context prefix a minting node's own
-// SignMessage call prepends to a payload before double-SHA256-hashing and
-// signing it. VerifyProvenance MUST reproduce this exact prefixing to
-// recover the signer.
-//
-// This is a real, documented limitation, not a universal guarantee: NIP-CASH
-// itself doesn't mandate a digest convention for how a minting node signs —
-// only that the signature is recoverable ECDSA over MintPayload's canonical
-// string. This constant matches the one real minter implementation this
-// package was built against (lokihub, backed by flnd — an LND-style node
-// whose SignMessage RPC prepends "Flokicoin Lightning Signed Message:"
-// before hashing). A minter on a different Lightning backend with a
-// different SignMessage convention would produce a signature
-// VerifyProvenance can't recover, even though the token itself is otherwise
-// perfectly valid and spendable — mint-signature verification is best-effort
-// provenance, never a spending credential, exactly as NIP-CASH §Mint
-// Provenance describes.
+// LNSignedMessagePrefix is flnd's signed-message prefix: what a Flokicoin
+// minting node's SignMessage prepends to a payload before double-SHA256-hashing
+// and signing it. It is the prefix for lokicash1... tokens.
 const LNSignedMessagePrefix = "Flokicoin Lightning Signed Message:"
+
+// LndSignedMessagePrefix is lnd's signed-message prefix, the unqualified
+// Bitcoin original. It is the prefix for satscash1... tokens.
+const LndSignedMessagePrefix = "Lightning Signed Message:"
+
+// signedMessagePrefixes maps a token HRP to its backend's signed-message prefix
+// (NIP-CASH §Mint Provenance). The prefix belongs to the minter's Lightning
+// implementation, not to NIP-CASH, so the asset the HRP names decides it.
+var signedMessagePrefixes = map[string]string{
+	"lokicash": LNSignedMessagePrefix,
+	"satscash": LndSignedMessagePrefix,
+}
+
+// SignedMessagePrefix returns the signed-message prefix a minter for hrp signs
+// under, and false for an HRP with no known prefix.
+func SignedMessagePrefix(hrp string) (string, bool) {
+	prefix, ok := signedMessagePrefixes[hrp]
+	return prefix, ok
+}
 
 // MintPayload returns the canonical ASCII string a mint signature commits to
 // (NIP-CASH §Mint Provenance):
@@ -72,8 +77,14 @@ func VerifyProvenance(t Token) (minterPubkeyHex string, ok bool) {
 	if len(t.MintSignature) != mintSigLen {
 		return "", false
 	}
+	// An HRP with no known prefix carries no valid provenance: a guessed prefix
+	// would still recover some pubkey and name it as the minter.
+	prefix, known := SignedMessagePrefix(t.HRP)
+	if !known {
+		return "", false
+	}
 	payload := MintPayload(t.HRP, t.WalletPubkey, *t.AttestedAmountMillis)
-	digest := doubleSHA256([]byte(LNSignedMessagePrefix + payload))
+	digest := doubleSHA256([]byte(prefix + payload))
 	pub, _, err := ecdsa.RecoverCompact(t.MintSignature, digest)
 	if err != nil {
 		return "", false
