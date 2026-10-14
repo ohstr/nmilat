@@ -136,9 +136,9 @@ func oneItemOutcome(state OutcomeState, resultErr *transport.ResultError, sendEr
 	//
 	// sendErr and a decided outcome co-occur by design: sendBatch returns outcomes AND
 	// an error together when a reply was incomplete, precisely so a caller can keep
-	// what did arrive. A hub controls `total`, and nothing bounds it from above, so it
-	// can declare total=2, send the complete genuine result in chunk 1, and never send
-	// chunk 2. collectReply then takes its partial branch and returns the correct
+	// what did arrive. A hub controls `total` (bounded only by the items requested),
+	// so it can declare total=2, send the complete genuine result in chunk 1, and never
+	// send chunk 2. collectReply then takes its partial branch and returns the correct
 	// outcome alongside ErrIncompleteReply — and this switch discarded the outcome.
 	//
 	// What was discarded is the unrecoverable part. After a carve the source bill is
@@ -149,13 +149,16 @@ func oneItemOutcome(state OutcomeState, resultErr *transport.ResultError, sendEr
 	//
 	// Round 1 filed this as latent-but-unreachable, reasoning that a 1-item reply
 	// returns via len(seen)==total first. That holds only for an HONEST total.
+	//
+	// A decided REFUSAL is as decided as a result: the hub's own reason (NOT_FOUND,
+	// say) outranks "the reply was incomplete", which would read as indeterminate.
 	switch {
 	case state == OutcomeResult:
 		return nil
-	case sendErr != nil:
-		return sendErr
 	case state == OutcomeError && resultErr != nil:
 		return &relayclient.WalletError{Method: method, Code: resultErr.Code, Message: resultErr.Message}
+	case sendErr != nil:
+		return sendErr
 	case state != OutcomeResult:
 		return &NotServedError{Method: method}
 	}

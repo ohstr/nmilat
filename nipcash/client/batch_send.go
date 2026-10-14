@@ -161,7 +161,8 @@ func (s *BatchSession) collectReply(
 	merged := &transport.ResponseEnvelope{Version: transport.EnvelopeVersion, ReqNonce: p.Envelope.Nonce}
 	seen := map[int]struct{}{}
 	answered := map[string]struct{}{}
-	total := 0
+	// declared is the hub's own total; total is that, bounded by the items asked.
+	declared, total := 0, 0
 
 	// Bound the wait by the envelope's OWN not_after, which was already computed and
 	// signed before it was sent.
@@ -214,16 +215,27 @@ func (s *BatchSession) collectReply(
 			}
 			chunk, err := transport.DecodeResponse([]byte(plaintext), p.Envelope.Nonce, p.ItemIDs, s.Limits())
 			if err != nil {
-				return nil, fmt.Errorf("decode reply for envelope %d: %w", index, err)
+				err = fmt.Errorf("decode reply for envelope %d: %w", index, err)
+				// A bad later chunk does not unsay the earlier ones: they are the hub's
+				// authenticated answers, and for a carve the only copy of a new bill's
+				// token (NIP-CASH §Chunked Replies). Keep them and report the error.
+				if len(seen) > 0 {
+					return joinOutcomes(p.ItemIDs, merged, index), err
+				}
+				return nil, err
 			}
 
-			if total == 0 {
-				total = chunk.Total
-			} else if chunk.Total != total {
+			if declared == 0 {
+				declared = chunk.Total
+				// NIP-CASH §Chunked Replies: a client MUST bound total by the number
+				// of items it requested. Unbounded, an inflated total makes a complete
+				// answer wait until not_after and then read as incomplete.
+				total = min(declared, len(p.ItemIDs))
+			} else if chunk.Total != declared {
 				// Chunks disagreeing about the total cannot be one reply, and picking
 				// either would mean guessing when to stop.
 				return nil, fmt.Errorf("%w: envelope %d: chunk claims %d chunks, an earlier one claimed %d",
-					transport.ErrResponseMalformed, index, chunk.Total, total)
+					transport.ErrResponseMalformed, index, chunk.Total, declared)
 			}
 			if _, dup := seen[chunk.Seq]; dup {
 				return nil, fmt.Errorf("%w: envelope %d: repeated chunk %d",

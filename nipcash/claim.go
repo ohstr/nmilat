@@ -14,6 +14,12 @@ const NoLocalIdentity = ""
 // unclaimed recipient on the Cash Hub it's checked against.
 var ErrClaimNotFound = errors.New("nipcash: no matching, unclaimed recipient on this Cash Hub")
 
+// ErrSpent is returned by CheckClaim when the Hub answers with a tombstone: the
+// bill existed, was spent, and is gone (NIP-CASH §Answering About a Destroyed
+// Bill). Distinct from ErrClaimNotFound, which says the token does not name the
+// caller. Only an explicit tombstone produces it, never a timeout or an omission.
+var ErrSpent = errors.New("nipcash: this bill has been spent")
+
 // CheckClaimResult is everything a caller needs to decide whether/how to
 // act on a cash bill, resolved by actually asking its Cash Hub — no
 // local storage concept; that's entirely the caller's own.

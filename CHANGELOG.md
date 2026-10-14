@@ -182,6 +182,28 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes `nipcash.VerifyProvenance` checking every token under flnd's
+  signing prefix: a `satscash1` token now verifies under lnd's, and an HRP
+  with no known prefix reports no provenance instead of a wrong minter.
+  ([#121](https://github.com/ohstr/nmilat/pull/121))
+- Fixes `CheckClaim` reporting a spent bill as `ErrClaimNotFound`: a Hub's
+  tombstone now returns the new `nipcash.ErrSpent`, so a caller can tell
+  "spent" from "this token does not name you".
+  ([#121](https://github.com/ohstr/nmilat/pull/121))
+- Fixes `CashConsolidate` returning the still-encrypted token as
+  `NewWalletToken` when the delivery could not be decrypted; it now returns an
+  error, as `CashTransfer` does. ([#121](https://github.com/ohstr/nmilat/pull/121))
+- Fixes `transport.Decode` rejecting a whole envelope over one malformed item:
+  it now drops that item into the new `Envelope.Rejected` and keeps its
+  co-items, since NIP-CASH authorizes each item on its own.
+  ([#121](https://github.com/ohstr/nmilat/pull/121))
+- Fixes chunked NIP-CASH replies read as incomplete or thrown away: the client
+  bounds a Hub's `total` by the items it asked for, keeps earlier chunks when a
+  later one is malformed, and returns a Hub's refusal ahead of "incomplete".
+  ([#121](https://github.com/ohstr/nmilat/pull/121))
+- Fixes the cash token, `cashhub1` and `circlehub1` encoders writing a blank
+  relay entry that sat beside a real one; blank entries are now skipped.
+  ([#121](https://github.com/ohstr/nmilat/pull/121))
 - Fixes `nipAZ.NewAltZapOnBehalfRequest`, whose events never verified because
   they were signed before their kind was set to 9523.
   ([#116](https://github.com/ohstr/nmilat/pull/116))

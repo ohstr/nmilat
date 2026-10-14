@@ -180,14 +180,14 @@ func TestCashConsolidateParams_ParseResult_ThirdPartyPubkeyTarget_Decrypts(t *te
 	}
 }
 
-func TestCashConsolidateParams_ParseResult_UndecryptableDelivery_FallsBackToRawValue(t *testing.T) {
+func TestCashConsolidateParams_ParseResult_UndecryptableDeliveryIsAnError(t *testing.T) {
 	callerPrivHex, _ := generateTestKeypair(t)
 	_, carolPubHex := generateTestKeypair(t)
 	newWalletPrivHex, newWalletPubHex := generateTestKeypair(t)
 
-	// Encrypted to a key the caller doesn't hold — e.g. a Hub still keying
-	// pubkey-target delivery some other way. Decryption fails; ParseResult
-	// must not error, just preserve the raw value instead of losing it.
+	// Encrypted to a key the caller doesn't hold. Returning the ciphertext as
+	// NewWalletToken would hand the caller a "token" that opens nothing, with no
+	// error to say so.
 	ciphertext := encryptForTest(t, newWalletPrivHex, carolPubHex, "lokicash1forcarol")
 
 	p := CashConsolidateParams{
@@ -203,11 +203,8 @@ func TestCashConsolidateParams_ParseResult_UndecryptableDelivery_FallsBackToRawV
 		t.Fatal(err)
 	}
 	result, err := p.ParseResult(raw)
-	if err != nil {
-		t.Fatalf("ParseResult must not error on an undecryptable delivery: %v", err)
-	}
-	if result.NewWalletToken != ciphertext {
-		t.Fatalf("NewWalletToken: got %q, want the raw ciphertext preserved as-is", result.NewWalletToken)
+	if err == nil {
+		t.Fatalf("ParseResult accepted an undecryptable delivery; NewWalletToken = %q", result.NewWalletToken)
 	}
 }
 

@@ -3,6 +3,7 @@ package nipcash
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"strings"
 	"testing"
 
 	"github.com/flokiorg/go-flokicoin/chainutil/bech32"
@@ -127,9 +128,11 @@ func TestEncodeDecode_MintProvenancePair(t *testing.T) {
 
 func TestEncode_MintProvenanceHalfPairRejected(t *testing.T) {
 	amount := uint64(1000)
-	_, err := Encode(Token{HRP: "lokicash", WalletPubkey: randomKeyHex(t), Secret: randomKeyHex(t), AttestedAmountMillis: &amount})
-	if err == nil {
-		t.Fatal("expected error for a lone attested amount with no signature")
+	// A relay is present so the half-pair rule, not the relay rule, is what refuses.
+	_, err := Encode(Token{HRP: "lokicash", WalletPubkey: randomKeyHex(t), Secret: randomKeyHex(t),
+		RelayURLs: []string{"wss://r.example"}, AttestedAmountMillis: &amount})
+	if err == nil || !strings.Contains(err.Error(), "set together") {
+		t.Fatalf("err = %v, want the half-pair refusal for a lone attested amount", err)
 	}
 }
 
@@ -137,9 +140,13 @@ func TestDecode_MissingRequiredFields(t *testing.T) {
 	// Encode a wallet pubkey only, no secret, by hand — Encode itself
 	// refuses to build this, so construct the bech32 string directly to
 	// exercise Decode's own missing-field check.
+	// A relay is present so the missing secret, not the relay rule, is what refuses.
 	pub, _ := hex.DecodeString(randomKeyHex(t))
+	relay := []byte("wss://r.example")
 	buf := []byte{tlvWalletPubkey, byte(len(pub))}
 	buf = append(buf, pub...)
+	buf = append(buf, tlvRelay, byte(len(relay)))
+	buf = append(buf, relay...)
 	bits5, err := bech32.ConvertBits(buf, 8, 5, true)
 	if err != nil {
 		t.Fatal(err)
@@ -148,8 +155,8 @@ func TestDecode_MissingRequiredFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Decode(token); err == nil {
-		t.Fatal("expected error for a token missing its secret")
+	if _, err := Decode(token); err == nil || !strings.Contains(err.Error(), "missing secret") {
+		t.Fatalf("err = %v, want the missing-secret refusal", err)
 	}
 }
 

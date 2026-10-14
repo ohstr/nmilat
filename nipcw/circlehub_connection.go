@@ -77,8 +77,11 @@ func EncodeCircleHubConnection(c CircleHubConnection) (string, error) {
 
 	buf := &bytes.Buffer{}
 	writeCircleHubTLV(buf, circleHubTLVWalletPubkey, pubkey)
+	// Blank entries are skipped: every relay entry on the wire MUST be non-empty.
 	for _, url := range c.RelayURLs {
-		writeCircleHubTLV(buf, circleHubTLVRelay, []byte(url))
+		if strings.TrimSpace(url) != "" {
+			writeCircleHubTLV(buf, circleHubTLVRelay, []byte(url))
+		}
 	}
 	writeCircleHubTLV(buf, circleHubTLVSecret, secret)
 	if c.Label != "" {

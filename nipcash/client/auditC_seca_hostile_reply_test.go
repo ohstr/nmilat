@@ -74,7 +74,8 @@ func TestAuditC_SecA_CrossChunkDuplicateIDs_ArrivalOrderDecides(t *testing.T) {
 	}
 	p := packedEnvelope{
 		Envelope: transport.Envelope{Version: transport.EnvelopeVersion, Nonce: nonce},
-		ItemIDs:  []string{"bill-1"},
+		// Two items so total: 2 is within bounds; bill-2 is never answered.
+		ItemIDs: []string{"bill-1", "bill-2"},
 	}
 	var replyKey [32]byte
 	copy(replyKey[:], strings.Repeat("k", 32))

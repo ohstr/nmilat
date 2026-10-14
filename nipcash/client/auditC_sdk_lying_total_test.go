@@ -16,7 +16,6 @@ package client
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -258,16 +257,17 @@ func TestAuditC_LyingTotal_SingleItemDiscardsARealResult(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	// CONTROL, same hub, same lie: the BATCH layer keeps the result and reports the
-	// incompleteness alongside it. So the loss below is the wrapper's, not the wire's.
+	// CONTROL, same hub, same lie: the BATCH layer keeps the result. For a one-item
+	// request the declared total of 2 is bounded to 1 (NIP-CASH §Chunked Replies), so
+	// the reply is complete. So the loss below, if any, is the wrapper's, not the wire's.
 	bill, err := BillFromParts(target, connSecretFor(target))
 	if err != nil {
 		t.Fatal(err)
 	}
 	batchOut, batchErr := c.session.TransferMany(ctx, []BatchTransfer{{ID: "1", Bill: bill,
 		Params: nipcash.CashTransferParams{To: nipcash.Pubkey(target), Credential: nipcash.BySecret(connSecretFor(target)), CurrentAmount: 7000}}})
-	if !errors.Is(batchErr, ErrIncompleteReply) {
-		t.Fatalf("control: TransferMany err = %v, want ErrIncompleteReply", batchErr)
+	if batchErr != nil {
+		t.Fatalf("control: TransferMany err = %v, want a complete reply (total bounded by 1 item)", batchErr)
 	}
 	if len(batchOut) != 1 || batchOut[0].State != OutcomeResult || batchOut[0].Result == nil {
 		t.Fatalf("control: batch layer lost the result: %+v", batchOut)

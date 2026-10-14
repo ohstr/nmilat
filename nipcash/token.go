@@ -180,9 +180,7 @@ func Encode(t Token) (string, error) {
 
 	buf := &bytes.Buffer{}
 	writeTLV(buf, tlvWalletPubkey, pubkey)
-	for _, url := range t.RelayURLs {
-		writeTLV(buf, tlvRelay, []byte(url))
-	}
+	writeRelayTLVs(buf, t.RelayURLs)
 	writeTLV(buf, tlvSecret, secret)
 	if t.IdentityRequired != nil {
 		var b byte
@@ -368,6 +366,17 @@ func readTLV(data []byte) (typ uint8, value []byte, ok bool) {
 // relay whose URL is "", and such a credential is exactly as unreachable as one
 // carrying no relay TLV at all — while passing any check that only counts
 // entries. Trimming catches the " " variant of the same mistake.
+// writeRelayTLVs writes one relay TLV per usable url, in order. A blank entry is
+// skipped: the wire format requires every relay entry to be non-empty, and one
+// beside a real relay would otherwise pass the count check and be written as-is.
+func writeRelayTLVs(buf *bytes.Buffer, urls []string) {
+	for _, url := range urls {
+		if strings.TrimSpace(url) != "" {
+			writeTLV(buf, tlvRelay, []byte(url))
+		}
+	}
+}
+
 func countUsableRelays(urls []string) int {
 	n := 0
 	for _, u := range urls {
