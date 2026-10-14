@@ -316,23 +316,25 @@ func (s *BatchSession) subscribeReplies(ctx context.Context, replyTo string) (<-
 		Tags:  map[string][]string{"p": {replyTo}},
 	})
 
-	var lastErr error
+	// Every relay's failure is kept, not just the last: with failover the useful
+	// question is why all of them failed (NIP-CASH §Multiple Relay Hints).
+	var failures []error
 	for _, raw := range relays {
 		relayURL, err := url.Parse(raw)
 		if err != nil {
-			lastErr = err
+			failures = append(failures, fmt.Errorf("relay %q: %w", raw, err))
 			continue
 		}
 		conn, err := relayclient.Connect(ctx, relayURL)
 		if err != nil {
-			lastErr = err
+			failures = append(failures, fmt.Errorf("relay %q: %w", raw, err))
 			continue
 		}
 
 		subID := uuid.NewString()
 		if !conn.SubscribeWithID(subID, filter) {
 			conn.Close()
-			lastErr = errors.New("connection closed before the subscription could be sent")
+			failures = append(failures, fmt.Errorf("relay %q: connection closed before the subscription could be sent", raw))
 			continue
 		}
 
@@ -376,7 +378,7 @@ func (s *BatchSession) subscribeReplies(ctx context.Context, replyTo string) (<-
 		}()
 		return out, func() { conn.Close() }, nil
 	}
-	return nil, nil, fmt.Errorf("nipcash/client: no relay reachable: %w", lastErr)
+	return nil, nil, fmt.Errorf("nipcash/client: no relay reachable: %w", errors.Join(failures...))
 }
 
 // publish sends the request to the first relay that accepts it.
@@ -386,23 +388,23 @@ func (s *BatchSession) subscribeReplies(ctx context.Context, replyTo string) (<-
 // bandwidth to manufacture rejections.
 func (s *BatchSession) publish(ctx context.Context, ev *nip01.Event) error {
 	relays := s.Relays()
-	var lastErr error
+	var failures []error
 	for _, raw := range relays {
 		relayURL, err := url.Parse(raw)
 		if err != nil {
-			lastErr = err
+			failures = append(failures, fmt.Errorf("relay %q: %w", raw, err))
 			continue
 		}
 		if _, err := relayclient.PublishEventToRelay(ctx, relayURL, ev); err != nil {
-			lastErr = err
+			failures = append(failures, fmt.Errorf("relay %q: %w", raw, err))
 			continue
 		}
 		return nil
 	}
-	if lastErr == nil {
-		lastErr = errors.New("no relays")
+	if len(failures) == 0 {
+		return errors.New("no relays")
 	}
-	return lastErr
+	return errors.Join(failures...)
 }
 
 // isStalePolicy reports whether a failure suggests the cached announcement is out of

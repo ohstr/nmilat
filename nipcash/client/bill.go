@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/ohstr/nmilat/nipcash"
+	"github.com/ohstr/nmilat/nipcash/transport"
 )
 
 // Bill identifies the bill one batch item acts on: which bill, and the secret that
@@ -23,12 +24,25 @@ import (
 type Bill struct {
 	target     string
 	connSecret string
+	// node is the x-only identity of the node whose mint signature the token
+	// carries, or "" when it carries none that verifies. A session sends to one
+	// node, so a bill minted by another is refused before sending (see check).
+	node string
 }
 
 // BillFor is the normal constructor: everything it needs is in the bill's own token,
 // so there is nothing for a caller to pair up wrongly.
 func BillFor(tok nipcash.Token) (Bill, error) {
-	return BillFromParts(tok.WalletPubkey, tok.Secret)
+	b, err := BillFromParts(tok.WalletPubkey, tok.Secret)
+	if err != nil {
+		return Bill{}, err
+	}
+	if minter, ok := nipcash.VerifyProvenance(tok); ok {
+		if node, err := transport.NormalizeNodeIdentity(minter); err == nil {
+			b.node = node
+		}
+	}
+	return b, nil
 }
 
 // BillFromParts is for a caller holding the bill's pairing data rather than an encoded
@@ -55,3 +69,20 @@ func (b Bill) Target() string { return b.target }
 // ok reports whether b was constructed rather than zero-valued. Checked once on the
 // send path so a zero Bill is a named error instead of an item the hub omits.
 func (b Bill) ok() bool { return b.target != "" && b.connSecret != "" }
+
+// check is what every batch builder runs on an item's bill: it must be constructed,
+// and must not be known to belong to a node other than the session's.
+//
+// NIP-CASH §Batching Across Bills: the Hub's only answer to a bill it does not hold
+// is silence, indistinguishable from any other omission, so a client SHOULD refuse
+// the mix locally. A bill with no verifiable provenance cannot be judged and passes.
+func (b Bill) check(id, sessionNode string) error {
+	if !b.ok() {
+		return fmt.Errorf("nipcash/client: item %q has no bill; build one with BillFor(token)", id)
+	}
+	if b.node != "" && b.node != sessionNode {
+		return fmt.Errorf("nipcash/client: item %q's bill %s was minted by node %s, not this session's hub %s",
+			id, b.target, b.node, sessionNode)
+	}
+	return nil
+}

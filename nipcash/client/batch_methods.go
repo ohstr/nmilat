@@ -74,8 +74,8 @@ func (s *BatchSession) StatusMany(ctx context.Context, items []BatchStatus) ([]S
 		builders = append(builders, itemBuilder{
 			ID: itemID(it.ID, i),
 			Build: func(id string, b nipcash.ItemBinding) (transport.Item, error) {
-				if !it.Bill.ok() {
-					return transport.Item{}, fmt.Errorf("nipcash/client: item %q has no bill; build one with BillFor(token)", id)
+				if err := it.Bill.check(id, s.HubIdentity()); err != nil {
+					return transport.Item{}, err
 				}
 				return nipcash.StatusItem(id, it.Bill.target, it.Bill.connSecret, nipcash.CashStatusParams{Scope: it.Scope}, it.Credential, b)
 			},
@@ -100,6 +100,7 @@ func (s *BatchSession) StatusMany(ctx context.Context, items []BatchStatus) ([]S
 				// the hub DID answer, and the answer was unusable.
 				so.State = OutcomeError
 				so.Error = decodeError(o.ID, err)
+				so.Undecodable = true
 			} else {
 				so.Result = &result
 			}
@@ -144,8 +145,8 @@ func (s *BatchSession) RedeemMany(ctx context.Context, items []BatchRedeem) ([]R
 		builders = append(builders, itemBuilder{
 			ID: itemID(it.ID, i),
 			Build: func(id string, b nipcash.ItemBinding) (transport.Item, error) {
-				if !it.Bill.ok() {
-					return transport.Item{}, fmt.Errorf("nipcash/client: item %q has no bill; build one with BillFor(token)", id)
+				if err := it.Bill.check(id, s.HubIdentity()); err != nil {
+					return transport.Item{}, err
 				}
 				return it.Params.Item(id, it.Bill.target, it.Bill.connSecret, b)
 			},
@@ -167,6 +168,7 @@ func (s *BatchSession) RedeemMany(ctx context.Context, items []BatchRedeem) ([]R
 			if err := json.Unmarshal(o.Result, &result); err != nil {
 				ro.State = OutcomeError
 				ro.Error = decodeError(o.ID, err)
+				ro.Undecodable = true
 			} else {
 				ro.Result = &result
 			}
@@ -204,8 +206,8 @@ func (s *BatchSession) TransferMany(ctx context.Context, items []BatchTransfer) 
 		builders = append(builders, itemBuilder{
 			ID: itemID(it.ID, i),
 			Build: func(id string, b nipcash.ItemBinding) (transport.Item, error) {
-				if !it.Bill.ok() {
-					return transport.Item{}, fmt.Errorf("nipcash/client: item %q has no bill; build one with BillFor(token)", id)
+				if err := it.Bill.check(id, s.HubIdentity()); err != nil {
+					return transport.Item{}, err
 				}
 				return it.Params.Item(id, it.Bill.target, it.Bill.connSecret, b)
 			},
@@ -231,6 +233,7 @@ func (s *BatchSession) TransferMany(ctx context.Context, items []BatchTransfer) 
 			if err != nil {
 				to.State = OutcomeError
 				to.Error = decodeError(o.ID, err)
+				to.Undecodable = true
 			} else {
 				to.Result = result
 			}
@@ -279,8 +282,8 @@ func (s *BatchSession) ConsolidateMany(ctx context.Context, items []BatchConsoli
 		builders = append(builders, itemBuilder{
 			ID: itemID(it.ID, i),
 			Build: func(id string, b nipcash.ItemBinding) (transport.Item, error) {
-				if !it.Bill.ok() {
-					return transport.Item{}, fmt.Errorf("nipcash/client: item %q has no bill; build one with BillFor(token)", id)
+				if err := it.Bill.check(id, s.HubIdentity()); err != nil {
+					return transport.Item{}, err
 				}
 				return it.Params.Item(id, it.Bill.target, it.Bill.connSecret, it.Credential, b)
 			},
@@ -304,6 +307,7 @@ func (s *BatchSession) ConsolidateMany(ctx context.Context, items []BatchConsoli
 			if err != nil {
 				co.State = OutcomeError
 				co.Error = decodeError(o.ID, err)
+				co.Undecodable = true
 			} else {
 				co.Result = result
 			}

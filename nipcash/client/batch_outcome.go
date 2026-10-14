@@ -64,6 +64,10 @@ type ItemOutcome struct {
 	Result json.RawMessage
 	// Error is the hub's own reason, set only when State is OutcomeError.
 	Error *transport.ResultError
+	// Undecodable is set when the hub answered this item with a success this client
+	// could not decode. State is then OutcomeError with an INTERNAL Error, but the
+	// item DID run, so it is not safe to resend.
+	Undecodable bool
 	// Envelope identifies which request envelope carried this item, counting from
 	// 0, for a batch the SDK split across several.
 	//
@@ -90,7 +94,9 @@ func (o ItemOutcome) Succeeded() bool { return o.State == OutcomeResult }
 // hub said nothing, which is indistinguishable from an item that executed and whose
 // response was lost. A caller who needs to know MUST ask: cash_status on the bill
 // will say whether it is still live.
-func (o ItemOutcome) SafeToResend() bool { return o.State == OutcomeError }
+//
+// Nor is a success this client could not decode (Undecodable): the hub ran it.
+func (o ItemOutcome) SafeToResend() bool { return o.State == OutcomeError && !o.Undecodable }
 
 // joinOutcomes pairs a decoded response with the ids that were sent, so every
 // requested item gets exactly one outcome.

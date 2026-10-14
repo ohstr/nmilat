@@ -263,7 +263,7 @@ func TestBatch_EndToEnd_ManyBillsInOneEvent(t *testing.T) {
 		items = append(items, BatchStatus{Bill: mustBill(t, target), Credential: nipcash.BySigning(priv)})
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := e2eContext(t)
 	defer cancel()
 
 	c := &Client{}
@@ -314,7 +314,7 @@ func TestBatch_EndToEnd_OmissionSurvivesTheRoundTrip(t *testing.T) {
 	omitted = "silent"
 	items := []BatchStatus{mk("ok"), mk("silent"), mk("refused")}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := e2eContext(t)
 	defer cancel()
 
 	c := &Client{}
@@ -366,7 +366,7 @@ func TestBatch_EndToEnd_SplitsAcrossEnvelopesWhenNeeded(t *testing.T) {
 		items = append(items, BatchStatus{Bill: mustBill(t, target), Credential: nipcash.BySigning(priv)})
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := e2eContext(t)
 	defer cancel()
 
 	c := &Client{}
@@ -433,7 +433,7 @@ func TestBatch_EndToEnd_ChunkedReplyReassembles(t *testing.T) {
 		items = append(items, BatchStatus{Bill: mustBill(t, target), Credential: nipcash.BySigning(priv)})
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := e2eContext(t)
 	defer cancel()
 
 	c := &Client{}

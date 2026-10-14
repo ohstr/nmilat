@@ -54,10 +54,23 @@ type MintCashRequest struct {
 // nipcash/client's use; a caller using nipcash/client's MintCash method
 // never calls this directly.
 func (p MintCashParams) Request() (MintCashRequest, error) {
+	if len(p.Recipients) == 0 {
+		return MintCashRequest{}, ErrNoRecipients
+	}
+	expiry, err := expirySeconds(p.Expiry)
+	if err != nil {
+		return MintCashRequest{}, err
+	}
 	hasCash := false
 	recipients := make([]RecipientParam, len(p.Recipients))
 	for i, a := range p.Recipients {
-		f := a.Recipient.(targetFields)
+		f, ok := a.Recipient.(targetFields)
+		if !ok {
+			return MintCashRequest{}, ErrNoRecipients
+		}
+		if err := checkIAPubkey(f); err != nil {
+			return MintCashRequest{}, err
+		}
 		if f.identityType() == identityTypeCash {
 			hasCash = true
 		}
@@ -73,9 +86,27 @@ func (p MintCashParams) Request() (MintCashRequest, error) {
 	}
 	return MintCashRequest{
 		Recipients:     recipients,
-		Expiry:         int(p.Expiry / time.Second),
+		Expiry:         expiry,
 		IdempotencyKey: p.IdempotencyKey,
 	}, nil
+}
+
+// expirySeconds converts a caller's Expiry to the wire's whole seconds. Zero
+// stays zero ("the Hub's own ceiling"); a negative or sub-second value is
+// refused rather than truncated to that meaning.
+func expirySeconds(d time.Duration) (int, error) {
+	if d < 0 || (d > 0 && d < time.Second) {
+		return 0, ErrInvalidExpiry
+	}
+	return int(d / time.Second), nil
+}
+
+// checkIAPubkey refuses a connection_key identity with no Identity Authority.
+func checkIAPubkey(f targetFields) error {
+	if f.identityType() == identityTypeConnectionKey && f.iaPubkey() == "" {
+		return ErrMissingIAPubkey
+	}
+	return nil
 }
 
 // RecipientResult is one entry of mint_cash's wire "recipients" response

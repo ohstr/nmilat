@@ -100,7 +100,7 @@ func TestAuditCQA_BillSessionWalksTheProvenanceChain(t *testing.T) {
 			"if this becomes 64 the normalization step is no longer being exercised", len(recovered))
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := e2eContext(t)
 	defer cancel()
 
 	c := &Client{walletPubkey: walletPubkey, connSecret: connSecret, token: &token}
@@ -142,7 +142,7 @@ func TestAuditCQA_ForeignProvenanceDoesNotReachTheHonestHub(t *testing.T) {
 	foreignPriv, _ := sessionKeypair(t)
 	token := auditCQABillToken(t, foreignPriv, walletPubkey, connSecret, relay)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := e2eContext(t)
 	defer cancel()
 
 	c := &Client{walletPubkey: walletPubkey, connSecret: connSecret, token: &token}
