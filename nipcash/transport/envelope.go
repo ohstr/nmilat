@@ -158,6 +158,19 @@ type Envelope struct {
 	// Pad is filler so ciphertext length lands on a bucket boundary and stops
 	// disclosing how much is inside. Never read.
 	Pad string `json:"pad,omitempty"`
+
+	// Rejected lists the items Decode dropped as structurally unservable. Never
+	// on the wire. Each item is authorized on its own (NIP-CASH §Batching Across
+	// Bills), so one bad item is omitted rather than failing its co-items.
+	Rejected []ItemRejection `json:"-"`
+}
+
+// ItemRejection is one item Decode dropped: its position in the received
+// envelope and why. The id is not kept, since an oversized id is itself a
+// reason for rejection.
+type ItemRejection struct {
+	Index int
+	Err   error
 }
 
 // NewNonce returns a random 32-byte hex value, for Nonce and ReplyTo.
@@ -344,6 +357,12 @@ func (e Envelope) Encode(limits Limits) ([]byte, error) {
 // Checks run cheapest-first and structurally only: size, version, item count,
 // tags, then the verification budget. No signature is verified and no database is
 // touched here, so rejecting a hostile envelope stays cheap.
+//
+// A structurally bad item is dropped into Rejected rather than failing the
+// envelope, so the hub still serves its co-items; an assembler batching for
+// others cannot silence them all with one malformed contribution. Decode fails
+// only on an envelope-level fault, or when no item survives (with that item's
+// own error). The verification budget counts the surviving items.
 func Decode(plaintext []byte, limits Limits) (*Envelope, error) {
 	if err := limits.Validate(); err != nil {
 		return nil, err
@@ -357,15 +376,36 @@ func Decode(plaintext []byte, limits Limits) (*Envelope, error) {
 	if err := json.Unmarshal(plaintext, &e); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrEnvelopeMalformed, err)
 	}
-	if err := e.check(limits); err != nil {
+	if err := e.checkHeader(limits); err != nil {
 		return nil, err
 	}
+	kept, rejected := e.checkItems(limits)
+	if len(kept) == 0 {
+		return nil, rejected[0].Err
+	}
+	if err := checkBudget(kept, limits); err != nil {
+		return nil, err
+	}
+	e.Items, e.Rejected = kept, rejected
 	return &e, nil
 }
 
 // check holds the rules Encode and Decode share, so a client cannot build
-// something the hub would refuse.
+// something the hub would refuse. Encode is strict: any bad item fails it.
 func (e Envelope) check(limits Limits) error {
+	if err := e.checkHeader(limits); err != nil {
+		return err
+	}
+	kept, rejected := e.checkItems(limits)
+	if len(rejected) > 0 {
+		return rejected[0].Err
+	}
+	return checkBudget(kept, limits)
+}
+
+// checkHeader holds the envelope-level rules: a failure here leaves no item that
+// could be answered.
+func (e Envelope) checkHeader(limits Limits) error {
 	if e.Version != EnvelopeVersion {
 		return fmt.Errorf("%w: %d", ErrEnvelopeVersion, e.Version)
 	}
@@ -381,82 +421,110 @@ func (e Envelope) check(limits Limits) error {
 	if len(e.Items) > limits.MaxItems {
 		return fmt.Errorf("%w: %d items, limit %d", ErrTooManyItems, len(e.Items), limits.MaxItems)
 	}
+	return nil
+}
 
-	seen := make(map[string]struct{}, len(e.Items))
+// checkItems splits e.Items into those that pass every per-item rule and those
+// that do not. Every item sharing an id is rejected, since a reply to that id
+// could not say which one it answers; a repeat of an identical item is rejected
+// and the first kept.
+func (e Envelope) checkItems(limits Limits) (kept []Item, rejected []ItemRejection) {
+	idCount := make(map[string]int, len(e.Items))
+	for _, item := range e.Items {
+		idCount[item.ID]++
+	}
 	seenItems := make(map[string]string, len(e.Items))
-	budget := 0
 	for i, item := range e.Items {
-		if item.ID == "" {
-			return fmt.Errorf("%w: item %d has no id", ErrEnvelopeMalformed, i)
+		paramsHash, err := checkItem(i, item, limits)
+		if err == nil && idCount[item.ID] > 1 {
+			err = fmt.Errorf("%w: %q", ErrDuplicateItemID, item.ID)
 		}
-		// Bounded because the REPLY echoes every id back alongside the result bodies,
-		// so an id that fits in the request need not fit in the answer — see
-		// MaxItemIDBytes. Deliberately not quoting the id in this error: an uncapped id
-		// is exactly the thing being refused, and echoing it would write the
-		// attacker's 48 KiB string into the log line that reports it.
-		if len(item.ID) > MaxItemIDBytes {
-			return fmt.Errorf("%w: item %d has a %d-byte id, over the %d limit",
-				ErrEnvelopeMalformed, i, len(item.ID), MaxItemIDBytes)
+		if err == nil {
+			// Same bill, same method, same params is the same request. Two of them in
+			// one envelope can only ever mean a replay of a signed item, since the
+			// second cannot succeed at anything the first did not already do.
+			//
+			// Keyed on the params HASH rather than the raw bytes so that a
+			// re-serialisation with different whitespace or key order is still caught
+			// — it is the same hash the proof itself binds, so this matches exactly
+			// the set of items one signature covers. Different params (two transfers
+			// of different amounts on one bill) hash differently and stay legal,
+			// which is the whole point of batching.
+			fingerprint := item.Target + "\x00" + item.Method + "\x00" + paramsHash
+			if prior, dup := seenItems[fingerprint]; dup {
+				err = fmt.Errorf("%w: items %q and %q", ErrDuplicateItem, prior, item.ID)
+			} else {
+				seenItems[fingerprint] = item.ID
+			}
 		}
-		if _, dup := seen[item.ID]; dup {
-			return fmt.Errorf("%w: %q", ErrDuplicateItemID, item.ID)
+		if err != nil {
+			rejected = append(rejected, ItemRejection{Index: i, Err: err})
+			continue
 		}
-		seen[item.ID] = struct{}{}
+		kept = append(kept, item)
+	}
+	return kept, rejected
+}
 
-		// Same bill, same method, same params is the same request. Two of them in one
-		// envelope can only ever mean a replay of a signed item, since the second
-		// cannot succeed at anything the first did not already do.
-		//
-		// Keyed on the params HASH rather than the raw bytes so that a
-		// re-serialisation with different whitespace or key order is still caught —
-		// it is the same hash the proof itself binds, so this matches exactly the set
-		// of items one signature covers. Different params (two transfers of different
-		// amounts on one bill) hash differently and stay legal, which is the whole
-		// point of batching.
-		paramsHash, hashErr := CanonicalParamsHash(item.Params)
-		if hashErr != nil {
-			return fmt.Errorf("%w: item %q params: %v", ErrEnvelopeMalformed, item.ID, hashErr)
-		}
-		fingerprint := item.Target + "\x00" + item.Method + "\x00" + paramsHash
-		if prior, dup := seenItems[fingerprint]; dup {
-			return fmt.Errorf("%w: items %q and %q", ErrDuplicateItem, prior, item.ID)
-		}
-		seenItems[fingerprint] = item.ID
+// checkItem holds the rules one item must pass on its own, and returns its
+// canonical params hash.
+func checkItem(i int, item Item, limits Limits) (string, error) {
+	if item.ID == "" {
+		return "", fmt.Errorf("%w: item %d has no id", ErrEnvelopeMalformed, i)
+	}
+	// Bounded because the REPLY echoes every id back alongside the result bodies,
+	// so an id that fits in the request need not fit in the answer — see
+	// MaxItemIDBytes. Deliberately not quoting the id in this error: an uncapped id
+	// is exactly the thing being refused, and echoing it would write the
+	// attacker's 48 KiB string into the log line that reports it.
+	if len(item.ID) > MaxItemIDBytes {
+		return "", fmt.Errorf("%w: item %d has a %d-byte id, over the %d limit",
+			ErrEnvelopeMalformed, i, len(item.ID), MaxItemIDBytes)
+	}
+	paramsHash, err := CanonicalParamsHash(item.Params)
+	if err != nil {
+		return "", fmt.Errorf("%w: item %q params: %v", ErrEnvelopeMalformed, item.ID, err)
+	}
+	if len(item.Target) != keyHexLen || !isLowerHex(item.Target) {
+		return "", fmt.Errorf("%w: item %q target must be %d lowercase hex characters",
+			ErrEnvelopeMalformed, item.ID, keyHexLen)
+	}
+	if item.Method == "" {
+		return "", fmt.Errorf("%w: item %q has no method", ErrEnvelopeMalformed, item.ID)
+	}
+	// A proof is required EXCEPT for a cash-mode item, which has no signing key
+	// to make one with — its secret, carried in params, is the whole
+	// authorization (NIP-CASH §Bearer Items). Note this check is a client-side
+	// coherence aid only: a hub decides what a bill actually is from its own
+	// records, never from what the item claims, so omitting a proof cannot be
+	// used to escape authorization on an identity-bound bill.
+	if !item.HasProof() && !item.IsBearer() {
+		return "", fmt.Errorf("%w: item %q has no proof and carries no cash secret",
+			ErrEnvelopeMalformed, item.ID)
+	}
+	// A BILL proof is required unconditionally — cash-mode included. The slice
+	// proof above says which slice; this says the sender holds the bill at all,
+	// and no identity mode exempts an item from it.
+	//
+	// Same caveat as above: client-side coherence only. The hub verifies this
+	// itself and omits anything that fails, because a client-side check cannot
+	// be an authorization boundary.
+	if !item.HasBillProof() {
+		return "", fmt.Errorf("%w: item %q has no bill proof", ErrEnvelopeMalformed, item.ID)
+	}
+	if sources := item.SourceCount(); sources > limits.MaxConsolidateSources {
+		return "", fmt.Errorf("%w: item %q declares %d sources, limit %d",
+			ErrTooManyItems, item.ID, sources, limits.MaxConsolidateSources)
+	}
+	return paramsHash, nil
+}
 
-		if len(item.Target) != keyHexLen || !isLowerHex(item.Target) {
-			return fmt.Errorf("%w: item %q target must be %d lowercase hex characters",
-				ErrEnvelopeMalformed, item.ID, keyHexLen)
-		}
-		if item.Method == "" {
-			return fmt.Errorf("%w: item %q has no method", ErrEnvelopeMalformed, item.ID)
-		}
-		// A proof is required EXCEPT for a cash-mode item, which has no signing key
-		// to make one with — its secret, carried in params, is the whole
-		// authorization (NIP-CASH §Bearer Items). Note this check is a client-side
-		// coherence aid only: a hub decides what a bill actually is from its own
-		// records, never from what the item claims, so omitting a proof cannot be
-		// used to escape authorization on an identity-bound bill.
-		if !item.HasProof() && !item.IsBearer() {
-			return fmt.Errorf("%w: item %q has no proof and carries no cash secret",
-				ErrEnvelopeMalformed, item.ID)
-		}
-		// A BILL proof is required unconditionally — cash-mode included. The slice
-		// proof above says which slice; this says the sender holds the bill at all,
-		// and no identity mode exempts an item from it.
-		//
-		// Same caveat as above: client-side coherence only. The hub verifies this
-		// itself and omits anything that fails, because a client-side check cannot
-		// be an authorization boundary.
-		if !item.HasBillProof() {
-			return fmt.Errorf("%w: item %q has no bill proof", ErrEnvelopeMalformed, item.ID)
-		}
-		if sources := item.SourceCount(); sources > limits.MaxConsolidateSources {
-			return fmt.Errorf("%w: item %q declares %d sources, limit %d",
-				ErrTooManyItems, item.ID, sources, limits.MaxConsolidateSources)
-		}
+// checkBudget bounds the signature verifications items would cost the hub.
+func checkBudget(items []Item, limits Limits) error {
+	budget := 0
+	for _, item := range items {
 		budget += item.VerificationCost()
 	}
-
 	if budget > limits.MaxVerifyBudget {
 		return fmt.Errorf("%w: %d verifications, limit %d",
 			ErrVerifyBudgetExceeded, budget, limits.MaxVerifyBudget)

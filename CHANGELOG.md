@@ -191,6 +191,9 @@ privacy and performance fixes.
 - Fixes `CashConsolidate` returning the still-encrypted token as
   `NewWalletToken` when the delivery could not be decrypted; it now returns an
   error, as `CashTransfer` does.
+- Fixes `transport.Decode` rejecting a whole envelope over one malformed item:
+  it now drops that item into the new `Envelope.Rejected` and keeps its
+  co-items, since NIP-CASH authorizes each item on its own.
 - Fixes `nipAZ.NewAltZapOnBehalfRequest`, whose events never verified because
   they were signed before their kind was set to 9523.
   ([#116](https://github.com/ohstr/nmilat/pull/116))
