@@ -1,7 +1,6 @@
 package client
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -223,7 +222,7 @@ func TestAuditDPrivacy_RelaySeesReplyToBeforeTheRequest(t *testing.T) {
 		items = append(items, BatchStatus{Bill: mustBill(t, target), Credential: nipcash.BySigning(priv)})
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := e2eContext(t)
 	defer cancel()
 
 	c := &Client{}
@@ -353,7 +352,7 @@ func TestAuditDPrivacy_RelayLinksTwoEnvelopesOfOneBatch(t *testing.T) {
 		items = append(items, BatchStatus{Bill: mustBill(t, target), Credential: nipcash.BySigning(priv)})
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := e2eContext(t)
 	defer cancel()
 
 	c := &Client{}
@@ -428,7 +427,7 @@ func TestAuditDPrivacy_ChunkedReplyIsGroupedByTheSharedReplyTo(t *testing.T) {
 			items = append(items, BatchStatus{Bill: mustBill(t, target), Credential: nipcash.BySigning(priv)})
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		ctx, cancel := e2eContext(t)
 		c := &Client{}
 		s, err := c.NewBatchSession(ctx, hub.hubXOnly, []string{relay})
 		if err != nil {
@@ -489,7 +488,7 @@ func TestAuditDPrivacy_TimingPairsRequestAndReply(t *testing.T) {
 		relay := startLoggingHub(t, hub, log)
 
 		priv, target := sessionKeypair(t)
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		ctx, cancel := e2eContext(t)
 		c := &Client{}
 		s, err := c.NewBatchSession(ctx, hub.hubXOnly, []string{relay})
 		if err != nil {
