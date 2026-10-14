@@ -14,7 +14,8 @@ import (
 // identity_required TLV (a stale-prone hint, not a live guarantee — see
 // MatchClaimAuto). asPubkeyHex is the caller's own local pubkey if it
 // has one; a cash-mode match is always attempted regardless. Returns
-// nipcash.ErrClaimNotFound, not one of its own, if nothing matches.
+// nipcash.ErrClaimNotFound, not one of its own, if nothing matches, and
+// nipcash.ErrSpent if the Hub answers with a tombstone.
 //
 // For a cash-mode token, a match only proves *some* unclaimed cash-mode
 // recipient exists — cash_status carries no identity_value for a
@@ -35,6 +36,12 @@ func (c *Client) CheckClaim(ctx context.Context, cred nipcash.Credential, tok ni
 	// default scope returns — asking for every co-recipient would be a larger reply
 	// carrying strictly more than is needed.
 	result, err := c.CashStatus(ctx, cred, nipcash.ScopeMine)
+	return claimFromStatus(result, err, tok, asPubkeyHex)
+}
+
+// claimFromStatus is CheckClaim's decision, separated from the round trip that
+// feeds it so it can be tested without a Hub (same split as classify).
+func claimFromStatus(result *nipcash.CashStatusResult, err error, tok nipcash.Token, asPubkeyHex string) (*nipcash.CheckClaimResult, error) {
 	if err != nil {
 		// A hub that holds the bill but has no slice for this caller answers
 		// NOT_FOUND. That is the same fact as an empty roster, so it becomes the same
@@ -54,6 +61,14 @@ func (c *Client) CheckClaim(ctx context.Context, cred nipcash.Credential, tok ni
 			return nil, nipcash.ErrClaimNotFound
 		}
 		return nil, err
+	}
+	if result == nil {
+		return nil, errors.New("nipcash/client: cash_status returned no result")
+	}
+	// A tombstone has no roster, so without this it read as "no matching
+	// recipient": a spent bill looked like one that merely does not name the caller.
+	if result.IsSpent() {
+		return nil, nipcash.ErrSpent
 	}
 
 	recipient, ok := nipcash.MatchClaimAuto(result.Recipients, asPubkeyHex)
