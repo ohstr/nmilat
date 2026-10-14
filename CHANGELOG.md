@@ -194,6 +194,9 @@ privacy and performance fixes.
 - Fixes `transport.Decode` rejecting a whole envelope over one malformed item:
   it now drops that item into the new `Envelope.Rejected` and keeps its
   co-items, since NIP-CASH authorizes each item on its own.
+- Fixes chunked NIP-CASH replies read as incomplete or thrown away: the client
+  bounds a Hub's `total` by the items it asked for, keeps earlier chunks when a
+  later one is malformed, and returns a Hub's refusal ahead of "incomplete".
 - Fixes `nipAZ.NewAltZapOnBehalfRequest`, whose events never verified because
   they were signed before their kind was set to 9523.
   ([#116](https://github.com/ohstr/nmilat/pull/116))
