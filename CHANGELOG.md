@@ -191,6 +191,8 @@ privacy and performance fixes.
   safe to resend.
 - Fixes `BatchSession`'s `*Many` methods sending a bill minted by another node,
   which the Hub can only answer with silence; such a bill is now refused locally.
+- Fixes the NIP-CASH private transport reporting only the last relay's failure
+  when none could be reached; the error now names every relay it tried.
 - Fixes `nipcash.VerifyProvenance` checking every token under flnd's
   signing prefix: a `satscash1` token now verifies under lnd's, and an HRP
   with no known prefix reports no provenance instead of a wrong minter.

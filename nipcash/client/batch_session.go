@@ -121,17 +121,17 @@ func (s *BatchSession) Refresh(ctx context.Context) error {
 	// hub to relays that have since gone away, the hints are the only way back.
 	candidates = appendMissing(candidates, s.fallbackRelays)
 
-	var lastErr error
+	var failures []error
 	var newest *transport.Announcement
 	for _, raw := range candidates {
 		relayURL, err := url.Parse(raw)
 		if err != nil {
-			lastErr = fmt.Errorf("relay %q: %w", raw, err)
+			failures = append(failures, fmt.Errorf("relay %q: %w", raw, err))
 			continue
 		}
 		events, err := relayclient.ReadEventsFromRelay(ctx, relayURL, filter)
 		if err != nil {
-			lastErr = fmt.Errorf("relay %q: %w", raw, err)
+			failures = append(failures, fmt.Errorf("relay %q: %w", raw, err))
 			continue
 		}
 		for _, ev := range events {
@@ -140,7 +140,7 @@ func (s *BatchSession) Refresh(ctx context.Context) error {
 			// trusting the relay is the point: a relay can serve any bytes it likes.
 			announcement, err := transport.ParseAnnouncement(ev, s.hubXOnly)
 			if err != nil {
-				lastErr = fmt.Errorf("relay %q: %w", raw, err)
+				failures = append(failures, fmt.Errorf("relay %q: %w", raw, err))
 				continue
 			}
 			// Keep the NEWEST candidate rather than adopting the first that parses,
@@ -177,8 +177,8 @@ func (s *BatchSession) Refresh(ctx context.Context) error {
 		return nil
 	}
 
-	if lastErr != nil {
-		return fmt.Errorf("%w: %v", ErrNoAnnouncement, lastErr)
+	if len(failures) > 0 {
+		return fmt.Errorf("%w: %v", ErrNoAnnouncement, errors.Join(failures...))
 	}
 	return ErrNoAnnouncement
 }
