@@ -82,21 +82,26 @@ type createCircleWalletResponseWire struct {
 // circleWalletDetailsWire is the plaintext inside EncryptedDetails — the
 // joining member's own wallet identity and terms, readable only by them.
 type circleWalletDetailsWire struct {
-	PairingURI    string `json:"pairing_uri"`
-	WalletPubkey  string `json:"wallet_pubkey"`
-	ExpiresAt     int64  `json:"expires_at"`
-	FeesPpm       int    `json:"fees_ppm"`
-	BudgetRenewal string `json:"budget_renewal"`
+	PairingURI    string  `json:"pairing_uri"`
+	WalletPubkey  string  `json:"wallet_pubkey"`
+	MaxAmount     *uint64 `json:"max_amount,omitempty"`
+	ExpiresAt     int64   `json:"expires_at"`
+	FeesPpm       int     `json:"fees_ppm"`
+	BudgetRenewal string  `json:"budget_renewal"`
 }
 
 // CreateCircleWalletResponse is create_circle_wallet's response, with
 // PairingURI already decrypted — connect straight from it.
 type CreateCircleWalletResponse struct {
-	PairingURI    string
-	WalletPubkey  string
-	ExpiresAt     int64
-	FeesPpm       int
-	BudgetRenewal string
+	PairingURI   string
+	WalletPubkey string
+	// MaxAmountMillis is the spend cap as the Hub resolved it, which may differ
+	// from the requested one (NIP-CW §Response). Nil when the Hub did not say,
+	// so a missing cap never reads as a cap of zero.
+	MaxAmountMillis *uint64
+	ExpiresAt       int64
+	FeesPpm         int
+	BudgetRenewal   string
 }
 
 // ParseResult parses create_circle_wallet's wire response, decrypting
@@ -133,11 +138,12 @@ func (p CreateCircleWalletParams) ParseResult(hubPubkey string, data []byte) (*C
 		return nil, fmt.Errorf("nipcw: parse wallet details: %w", err)
 	}
 	return &CreateCircleWalletResponse{
-		PairingURI:    details.PairingURI,
-		WalletPubkey:  details.WalletPubkey,
-		ExpiresAt:     details.ExpiresAt,
-		FeesPpm:       details.FeesPpm,
-		BudgetRenewal: details.BudgetRenewal,
+		PairingURI:      details.PairingURI,
+		WalletPubkey:    details.WalletPubkey,
+		MaxAmountMillis: details.MaxAmount,
+		ExpiresAt:       details.ExpiresAt,
+		FeesPpm:         details.FeesPpm,
+		BudgetRenewal:   details.BudgetRenewal,
 	}, nil
 }
 

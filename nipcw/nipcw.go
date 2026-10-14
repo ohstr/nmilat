@@ -12,6 +12,8 @@
 // the full spec this package implements.
 package nipcw
 
+import "github.com/ohstr/nmilat/nip47"
+
 // KindCircleIdentityProof is NIP-CW's own per-call identity proof kind —
 // deliberately its own number, not NIP-CASH's 23198 (a structurally
 // similar but distinct NIP's proof), and not NIP-IC's 35521 (a long-lived,
@@ -27,3 +29,17 @@ const KindCircleIdentityProof = 23199
 // MethodCreateCircleWallet is the "method" field of a create_circle_wallet
 // NIP-47 request.
 const MethodCreateCircleWallet = "create_circle_wallet"
+
+// NIP-47 error codes a Hub MUST use to refuse create_circle_wallet (NIP-CW
+// §Errors), exported so Hubs and clients share one spelling.
+const (
+	// ErrNotReady: the Hub cannot decide membership yet. Retry later.
+	ErrNotReady = "NOT_READY"
+	// ErrRestricted: the requester is not a member of this circle.
+	ErrRestricted = nip47.ErrRestricted
+	// ErrWalletExists: the requester already holds an active Circle Wallet
+	// under this Hub, until it is deleted.
+	ErrWalletExists = "WALLET_EXISTS"
+	// ErrRateLimited: the requester has asked too often. Retry later.
+	ErrRateLimited = nip47.ErrRateLimited
+)
