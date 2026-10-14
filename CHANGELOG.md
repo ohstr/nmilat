@@ -8,6 +8,9 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `MaxAmountMillis` to `nipcw.CreateCircleWalletResponse`, the spend cap
+  as the Hub resolved it, and the refusal codes `nipcw.ErrNotReady`,
+  `ErrRestricted`, `ErrWalletExists` and `ErrRateLimited`, as NIP-CW now specifies.
 - Adds `nipAZ.ValidateAltZapRequestForRelay`/`ValidateAltZapReceiptForRelay`,
   which `nipAZ/relayreg` now uses: relays keep receipts for real payments and
   reject only forged AltZap events, as NIP-AZ specifies.
