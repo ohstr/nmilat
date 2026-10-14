@@ -1,6 +1,8 @@
 package nipcash
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"testing"
 
 	"github.com/ohstr/nmilat/nipIC"
@@ -81,6 +83,23 @@ func TestNewCashTarget_SecretAndCommitmentDiffer(t *testing.T) {
 	other := NewCashTarget()
 	if bt.Secret() == other.Secret() {
 		t.Fatal("NewCashTarget must generate a fresh secret every call")
+	}
+}
+
+// NIP-CASH §Cash-Mode Slices: the wire identity_value is sha256 of the secret's
+// raw bytes. Any other commitment funds a slice no holder of the secret can spend,
+// and "differs from the secret" alone would not notice.
+func TestNewCashTarget_CommitmentIsSHA256OfSecret(t *testing.T) {
+	for range 8 {
+		bt := NewCashTarget()
+		raw, err := hex.DecodeString(bt.Secret())
+		if err != nil {
+			t.Fatalf("Secret is not hex: %v", err)
+		}
+		sum := sha256.Sum256(raw)
+		if got, want := Target(bt).(targetFields).identityValue(), hex.EncodeToString(sum[:]); got != want {
+			t.Fatalf("commitment = %s, want hex(sha256(secret)) = %s", got, want)
+		}
 	}
 }
 
