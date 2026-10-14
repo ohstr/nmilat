@@ -65,9 +65,7 @@ func EncodeCashHubConnection(c CashHubConnection) (string, error) {
 
 	buf := &bytes.Buffer{}
 	writeTLV(buf, tlvWalletPubkey, pubkey)
-	for _, url := range c.RelayURLs {
-		writeTLV(buf, tlvRelay, []byte(url))
-	}
+	writeRelayTLVs(buf, c.RelayURLs)
 	writeTLV(buf, tlvSecret, secret)
 	if c.Label != "" {
 		writeTLV(buf, cashHubTLVLabel, []byte(c.Label))

@@ -197,6 +197,8 @@ privacy and performance fixes.
 - Fixes chunked NIP-CASH replies read as incomplete or thrown away: the client
   bounds a Hub's `total` by the items it asked for, keeps earlier chunks when a
   later one is malformed, and returns a Hub's refusal ahead of "incomplete".
+- Fixes the cash token, `cashhub1` and `circlehub1` encoders writing a blank
+  relay entry that sat beside a real one; blank entries are now skipped.
 - Fixes `nipAZ.NewAltZapOnBehalfRequest`, whose events never verified because
   they were signed before their kind was set to 9523.
   ([#116](https://github.com/ohstr/nmilat/pull/116))
