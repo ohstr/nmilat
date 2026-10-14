@@ -114,6 +114,42 @@ func TestCreateCircleWalletParams_ParseResult_DecryptsDetails(t *testing.T) {
 	if resp.WalletPubkey != "walletpubkey" || resp.ExpiresAt != 1234 || resp.BudgetRenewal != "never" {
 		t.Fatalf("resp: %+v", resp)
 	}
+	if resp.MaxAmountMillis != nil {
+		t.Fatalf("MaxAmountMillis = %d for a Hub that did not send max_amount, want nil", *resp.MaxAmountMillis)
+	}
+}
+
+// NIP-CW §Response: max_amount is the cap as the Hub resolved it, which can differ
+// from the request. Built from the wire text, so a dropped or renamed field shows.
+func TestCreateCircleWalletParams_ParseResult_CarriesResolvedMaxAmount(t *testing.T) {
+	memberPrivHex, memberPubHex := generateTestKeypair(t)
+	hubPrivHex, hubPubHex := generateTestKeypair(t)
+	details := `{"pairing_uri":"` + testPairingURI + `","wallet_pubkey":"walletpubkey","max_amount":99000,` +
+		`"expires_at":1234,"fees_ppm":0,"budget_renewal":"monthly"}`
+	raw, err := json.Marshal(createCircleWalletResponseWire{EncryptedDetails: encryptForTest(t, hubPrivHex, memberPubHex, details)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := CreateCircleWalletParams{Credential: BySigning(memberPrivHex), MaxAmountMillis: 100000}
+	resp, err := p.ParseResult(hubPubHex, raw)
+	if err != nil {
+		t.Fatalf("ParseResult: %v", err)
+	}
+	if resp.MaxAmountMillis == nil || *resp.MaxAmountMillis != 99000 {
+		t.Fatalf("MaxAmountMillis = %v, want the Hub's resolved 99000", resp.MaxAmountMillis)
+	}
+}
+
+// NIP-CW §Errors: the four refusal codes, spelled as the spec spells them.
+func TestCreateCircleWalletRefusalCodes(t *testing.T) {
+	for got, want := range map[string]string{
+		ErrNotReady: "NOT_READY", ErrRestricted: "RESTRICTED",
+		ErrWalletExists: "WALLET_EXISTS", ErrRateLimited: "RATE_LIMITED",
+	} {
+		if got != want {
+			t.Errorf("code %q, want %q", got, want)
+		}
+	}
 }
 
 // TestCreateCircleWalletParams_ParseResult_NoDetailsIsAnError pins that a
