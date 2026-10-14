@@ -52,7 +52,13 @@ type CashTransferRequest struct {
 // walletPubkey. Exported for nipcash/client's use; a caller using
 // nipcash/client's CashTransfer method never calls this directly.
 func (p CashTransferParams) Request(walletPubkey string) (CashTransferRequest, error) {
-	f := p.To.(targetFields)
+	f, ok := p.To.(targetFields)
+	if !ok {
+		return CashTransferRequest{}, ErrTransferTargetInvalid
+	}
+	if err := checkIAPubkey(f); err != nil {
+		return CashTransferRequest{}, err
+	}
 	amountBound := p.CurrentAmount
 	if p.SplitAmount != nil {
 		amountBound = *p.SplitAmount

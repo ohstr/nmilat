@@ -49,7 +49,13 @@ func (p CashConsolidateParams) Request() (CashConsolidateRequest, error) {
 	if !ok {
 		return CashConsolidateRequest{}, ErrConsolidateTargetInvalid
 	}
+	if err := checkIAPubkey(targetFieldsVal); err != nil {
+		return CashConsolidateRequest{}, err
+	}
 
+	// A slice is a wallet plus an identity on it, so two sources from one wallet
+	// under different identities are distinct and stay legal.
+	seen := make(map[string]struct{}, len(p.Sources))
 	sources := make([]consolidateSourceParam, len(p.Sources))
 	for i, src := range p.Sources {
 		amount := src.Amount
@@ -65,6 +71,11 @@ func (p CashConsolidateParams) Request() (CashConsolidateRequest, error) {
 		if identityType == identityTypeCash || cashSecret != "" {
 			return CashConsolidateRequest{}, ErrCashSource
 		}
+		key := src.WalletPubkey + "\x00" + identityType + "\x00" + identityValue
+		if _, dup := seen[key]; dup {
+			return CashConsolidateRequest{}, ErrDuplicateSource
+		}
+		seen[key] = struct{}{}
 		sources[i] = consolidateSourceParam{
 			WalletPubkey:  src.WalletPubkey,
 			IdentityType:  identityType,

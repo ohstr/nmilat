@@ -182,6 +182,10 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes NIP-CASH request builders accepting what the spec forbids: an empty
+  `mint_cash`, a `connection_key` without `ia_pubkey`, a negative or sub-second
+  expiry, duplicate consolidate sources, and a nil transfer target (which
+  panicked) now return errors.
 - Fixes `nipcash.VerifyProvenance` checking every token under flnd's
   signing prefix: a `satscash1` token now verifies under lnd's, and an HRP
   with no known prefix reports no provenance instead of a wrong minter.

@@ -93,4 +93,25 @@ var (
 	// (the response travels back over a shared connection every
 	// co-recipient can decrypt) — see CashTarget's own doc comment.
 	ErrWrongCredentialForTarget = errors.New("nipcash: Anyone() cannot be used where a CashTarget is required")
+
+	// ErrNoRecipients is returned by MintCash when no recipient is given, or one
+	// is nil: recipients MUST contain at least one entry (NIP-CASH §Minting Cash).
+	ErrNoRecipients = errors.New("nipcash: mint_cash requires at least one recipient")
+
+	// ErrMissingIAPubkey is returned when a connection_key recipient or target
+	// carries no Identity Authority pubkey, which NIP-CASH requires beside it.
+	ErrMissingIAPubkey = errors.New("nipcash: a connection_key identity requires an ia_pubkey")
+
+	// ErrInvalidExpiry is returned for a negative or sub-second Expiry. The wire
+	// carries whole seconds, and a sub-second value would round to zero, which
+	// the Hub reads as "use my own ceiling" — possibly never.
+	ErrInvalidExpiry = errors.New("nipcash: expiry must be zero or at least one second")
+
+	// ErrTransferTargetInvalid is returned by CashTransfer when To is nil:
+	// new_identity is REQUIRED (NIP-CASH §Transferring and Splitting a Slice).
+	ErrTransferTargetInvalid = errors.New("nipcash: cash_transfer requires a new_identity target")
+
+	// ErrDuplicateSource is returned by CashConsolidate when the same slice (same
+	// wallet and identity) appears twice: sources MUST be distinct.
+	ErrDuplicateSource = errors.New("nipcash: cash_consolidate names the same source twice")
 )
