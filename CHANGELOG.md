@@ -188,6 +188,9 @@ privacy and performance fixes.
 - Fixes `CheckClaim` reporting a spent bill as `ErrClaimNotFound`: a Hub's
   tombstone now returns the new `nipcash.ErrSpent`, so a caller can tell
   "spent" from "this token does not name you".
+- Fixes `CashConsolidate` returning the still-encrypted token as
+  `NewWalletToken` when the delivery could not be decrypted; it now returns an
+  error, as `CashTransfer` does.
 - Fixes `nipAZ.NewAltZapOnBehalfRequest`, whose events never verified because
   they were signed before their kind was set to 9523.
   ([#116](https://github.com/ohstr/nmilat/pull/116))

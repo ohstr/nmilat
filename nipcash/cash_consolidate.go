@@ -1,6 +1,9 @@
 package nipcash
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // CashConsolidateParams is cash_consolidate's friendly request — combines
 // several same-hub slices this node custodies into one new cash token
@@ -109,10 +112,10 @@ type CashConsolidateResult struct {
 // a pubkey — the Hub encrypts it to the caller, same as cash_transfer's own
 // delivery. A cash/connection_key target has no real pubkey yet, so the
 // Hub sends the token in the clear instead; ParseResult passes it through
-// unchanged rather than attempting decryption. If decryption ever fails
-// (e.g. an older Hub still keying pubkey-target delivery some other way),
-// the raw value is preserved as-is instead of erroring — the merge itself
-// already succeeded.
+// unchanged rather than attempting decryption. A delivery that does not
+// decrypt is an error, as in cash_transfer's ParseResult: returning the
+// ciphertext would hand the caller something shaped like a token that opens
+// nothing.
 //
 // Exported for nipcash/client's use; a caller using nipcash/client's
 // CashConsolidate method never calls this directly.
@@ -130,8 +133,10 @@ func (p CashConsolidateParams) ParseResult(data []byte) (*CashConsolidateResult,
 	if wire.NewWalletToken == "" || len(p.Sources) == 0 || !IsPubkeyTarget(p.To) {
 		return result, nil
 	}
-	if token, err := p.Sources[0].Credential.decryptDelivery(wire.NewWalletPubkey, wire.NewWalletToken); err == nil {
-		result.NewWalletToken = token
+	token, err := p.Sources[0].Credential.decryptDelivery(wire.NewWalletPubkey, wire.NewWalletToken)
+	if err != nil {
+		return nil, fmt.Errorf("nipcash: decrypt the consolidated wallet's token for %s: %w", wire.NewWalletPubkey, err)
 	}
+	result.NewWalletToken = token
 	return result, nil
 }
