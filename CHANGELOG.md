@@ -134,6 +134,10 @@ privacy and performance fixes.
 
 ### Changed
 
+- Changes the NIP-CASH params hash (`transport.CanonicalParamsHash`) to write
+  strings as RFC 8785 does, so `<`, `>`, `&`, U+2028 and U+2029 are no longer
+  escaped. Params containing them hash differently from earlier releases, so
+  clients and Hubs must upgrade together.
 - Moves `nipAZ` to NIP-AZ's new kinds: 9520 requests, 9521 receipts, 9523
   on-behalf requests. Events of the old kinds 5520, 5521 and 5523 are no longer
   parsed, validated or indexed. ([#114](https://github.com/ohstr/nmilat/pull/114))

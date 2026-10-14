@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -184,7 +185,8 @@ func NewNonce() (string, error) {
 
 // CanonicalParamsHash returns the sha256, hex-encoded, of an item's params in a
 // canonical form: object keys sorted, insignificant whitespace removed, numbers
-// left exactly as written.
+// left exactly as written, strings serialized as RFC 8785 does (NIP-CASH §Item
+// Proofs).
 //
 // Canonicalising rather than hashing the received bytes is deliberate. The bytes
 // do travel verbatim inside the ciphertext today, so hashing them raw would work
@@ -217,12 +219,101 @@ func canonicalJSON(raw json.RawMessage) ([]byte, error) {
 	if dec.More() {
 		return nil, fmt.Errorf("%w: params carry trailing content", ErrEnvelopeMalformed)
 	}
-	// json.Marshal sorts map keys, which is what makes this canonical.
-	out, err := json.Marshal(value)
-	if err != nil {
+	var out bytes.Buffer
+	if err := writeCanonical(&out, value); err != nil {
 		return nil, fmt.Errorf("transport: canonicalise params: %w", err)
 	}
-	return out, nil
+	return out.Bytes(), nil
+}
+
+// writeCanonical writes v in NIP-CASH's canonical form: keys sorted, no
+// insignificant whitespace, numbers verbatim, strings as RFC 8785 writes them.
+// Not json.Marshal: it escapes <, >, &, U+2028 and U+2029, so its hash differs
+// from any implementation following the spec.
+func writeCanonical(buf *bytes.Buffer, v any) error {
+	switch v := v.(type) {
+	case nil:
+		buf.WriteString("null")
+	case bool:
+		if v {
+			buf.WriteString("true")
+		} else {
+			buf.WriteString("false")
+		}
+	case json.Number:
+		buf.WriteString(v.String())
+	case string:
+		writeCanonicalString(buf, v)
+	case []any:
+		buf.WriteByte('[')
+		for i, elem := range v {
+			if i > 0 {
+				buf.WriteByte(',')
+			}
+			if err := writeCanonical(buf, elem); err != nil {
+				return err
+			}
+		}
+		buf.WriteByte(']')
+	case map[string]any:
+		keys := make([]string, 0, len(v))
+		for k := range v {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		buf.WriteByte('{')
+		for i, k := range keys {
+			if i > 0 {
+				buf.WriteByte(',')
+			}
+			writeCanonicalString(buf, k)
+			buf.WriteByte(':')
+			if err := writeCanonical(buf, v[k]); err != nil {
+				return err
+			}
+		}
+		buf.WriteByte('}')
+	default:
+		return fmt.Errorf("unexpected JSON value of type %T", v)
+	}
+	return nil
+}
+
+// writeCanonicalString writes s as RFC 8785 does: only ", \ and control
+// characters below U+0020 are escaped, as \b \t \n \f \r or else lowercase
+// \u00XX; every other character is literal UTF-8. The decoder has already
+// replaced invalid UTF-8, so s is valid.
+func writeCanonicalString(buf *bytes.Buffer, s string) {
+	const hexDigits = "0123456789abcdef"
+	buf.WriteByte('"')
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch c {
+		case '"':
+			buf.WriteString(`\"`)
+		case '\\':
+			buf.WriteString(`\\`)
+		case '\b':
+			buf.WriteString(`\b`)
+		case '\t':
+			buf.WriteString(`\t`)
+		case '\n':
+			buf.WriteString(`\n`)
+		case '\f':
+			buf.WriteString(`\f`)
+		case '\r':
+			buf.WriteString(`\r`)
+		default:
+			if c < 0x20 {
+				buf.WriteString(`\u00`)
+				buf.WriteByte(hexDigits[c>>4])
+				buf.WriteByte(hexDigits[c&0xf])
+			} else {
+				buf.WriteByte(c)
+			}
+		}
+	}
+	buf.WriteByte('"')
 }
 
 // VerificationCost reports how many signature verifications this item will demand
