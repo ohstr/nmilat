@@ -186,6 +186,9 @@ privacy and performance fixes.
   `mint_cash`, a `connection_key` without `ia_pubkey`, a negative or sub-second
   expiry, duplicate consolidate sources, and a nil transfer target (which
   panicked) now return errors.
+- Fixes `ItemOutcome.SafeToResend` saying yes for a Hub success the client
+  could not decode; such an item ran, so it is now marked `Undecodable` and not
+  safe to resend.
 - Fixes `nipcash.VerifyProvenance` checking every token under flnd's
   signing prefix: a `satscash1` token now verifies under lnd's, and an HRP
   with no known prefix reports no provenance instead of a wrong minter.

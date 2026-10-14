@@ -100,6 +100,7 @@ func (s *BatchSession) StatusMany(ctx context.Context, items []BatchStatus) ([]S
 				// the hub DID answer, and the answer was unusable.
 				so.State = OutcomeError
 				so.Error = decodeError(o.ID, err)
+				so.Undecodable = true
 			} else {
 				so.Result = &result
 			}
@@ -167,6 +168,7 @@ func (s *BatchSession) RedeemMany(ctx context.Context, items []BatchRedeem) ([]R
 			if err := json.Unmarshal(o.Result, &result); err != nil {
 				ro.State = OutcomeError
 				ro.Error = decodeError(o.ID, err)
+				ro.Undecodable = true
 			} else {
 				ro.Result = &result
 			}
@@ -231,6 +233,7 @@ func (s *BatchSession) TransferMany(ctx context.Context, items []BatchTransfer) 
 			if err != nil {
 				to.State = OutcomeError
 				to.Error = decodeError(o.ID, err)
+				to.Undecodable = true
 			} else {
 				to.Result = result
 			}
@@ -304,6 +307,7 @@ func (s *BatchSession) ConsolidateMany(ctx context.Context, items []BatchConsoli
 			if err != nil {
 				co.State = OutcomeError
 				co.Error = decodeError(o.ID, err)
+				co.Undecodable = true
 			} else {
 				co.Result = result
 			}
