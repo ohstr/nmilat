@@ -138,6 +138,12 @@ privacy and performance fixes.
 
 ### Changed
 
+- Changes `create_circle_wallet` to the member-generated connection key NIP-CW
+  now specifies: the client sends only `connection_pubkey` (new
+  `nipcw.ConnectionKey`, bound by a `connection` tag in the identity proof) and
+  builds `PairingURI` itself from the Hub's `wallet_pubkey` and `relays`. The
+  Hub-generated secret is gone, so Hubs must implement the new join.
+  ([#127](https://github.com/ohstr/nmilat/pull/127))
 - Changes the NIP-CASH params hash (`transport.CanonicalParamsHash`) to write
   strings as RFC 8785 does, so `<`, `>`, `&`, U+2028 and U+2029 are no longer
   escaped. Params containing them hash differently from earlier releases, so

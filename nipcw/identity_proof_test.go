@@ -14,7 +14,7 @@ import (
 func TestCreateCircleWalletParams_Request_IdentityProof(t *testing.T) {
 	memberPriv, memberPub := generateTestKeypair(t)
 	_, hubPub := generateTestKeypair(t)
-	req, err := CreateCircleWalletParams{Credential: BySigning(memberPriv), MaxAmountMillis: 1000}.Request(hubPub)
+	req, err := CreateCircleWalletParams{Credential: BySigning(memberPriv), Connection: newTestConnectionKey(t), MaxAmountMillis: 1000}.Request(hubPub)
 	if err != nil {
 		t.Fatal(err)
 	}

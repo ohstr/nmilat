@@ -32,9 +32,12 @@ func (c Credential) pubkey() (string, error) {
 
 // buildProof signs a kind-23199 identity proof bound to hubPubkey (the
 // Circle Wallet Hub's own pubkey via the proof's d-tag — NIP-CW §Identity
-// Proof: "binds proof to THIS Hub; no invoice to bind it to").
-func (c Credential) buildProof(hubPubkey string) ([]byte, error) {
-	ev, err := nip01.NewSignedEvent(KindCircleIdentityProof, "", c.privKeyHex, []string{"d", hubPubkey})
+// Proof: "binds proof to THIS Hub; no invoice to bind it to") and to
+// connectionPubkey (the `connection` tag), so nobody who sees the request can
+// have the wallet issued to a key of their own instead.
+func (c Credential) buildProof(hubPubkey, connectionPubkey string) ([]byte, error) {
+	ev, err := nip01.NewSignedEvent(KindCircleIdentityProof, "", c.privKeyHex,
+		[]string{"d", hubPubkey}, []string{"connection", connectionPubkey})
 	if err != nil {
 		return nil, fmt.Errorf("nipcw: sign identity proof: %w", err)
 	}
