@@ -4,18 +4,27 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	btcec "github.com/flokiorg/go-flokicoin/crypto"
 	"github.com/flokiorg/go-flokicoin/crypto/schnorr"
 
 	"github.com/ohstr/nmilat/nip44"
+	"github.com/ohstr/nmilat/nip47"
+	"github.com/ohstr/nmilat/utils"
 )
 
 // CreateCircleWalletParams is create_circle_wallet's friendly request —
 // self-service request for the caller's own Circle Wallet.
 type CreateCircleWalletParams struct {
 	Credential Credential
+	// Connection is the member-generated keypair the wallet is issued to
+	// (NIP-CW §Pairing Connection). REQUIRED, and its pubkey MUST differ from
+	// the Credential's. Only the pubkey is sent; ParseResult builds the
+	// connection string from the same key's secret. nipcw/client fills it with
+	// a fresh key when left zero.
+	Connection ConnectionKey
 	// MaxAmountMillis is the requested spend cap, MUST NOT exceed the Hub's
 	// own per-wallet ceiling. NIP-CW's own wire field is the un-suffixed
 	// "max_amount" — it predates, and was deliberately left out of,
@@ -35,11 +44,12 @@ type CreateCircleWalletParams struct {
 
 // CreateCircleWalletRequest is create_circle_wallet's wire request shape.
 type CreateCircleWalletRequest struct {
-	Pubkey        string `json:"pubkey"`
-	MaxAmount     uint64 `json:"max_amount"`
-	Expiry        int    `json:"expiry"`
-	BudgetRenewal string `json:"budget_renewal,omitempty"`
-	IdentityEvent string `json:"identity_event"`
+	Pubkey           string `json:"pubkey"`
+	ConnectionPubkey string `json:"connection_pubkey"`
+	MaxAmount        uint64 `json:"max_amount"`
+	Expiry           int    `json:"expiry"`
+	BudgetRenewal    string `json:"budget_renewal,omitempty"`
+	IdentityEvent    string `json:"identity_event"`
 }
 
 // Request builds create_circle_wallet's wire request from p, bound to
@@ -51,16 +61,25 @@ func (p CreateCircleWalletParams) Request(hubPubkey string) (CreateCircleWalletR
 	if err != nil {
 		return CreateCircleWalletRequest{}, err
 	}
-	proof, err := p.Credential.buildProof(hubPubkey)
+	if p.Connection.IsZero() {
+		return CreateCircleWalletRequest{}, ErrNoConnectionKey
+	}
+	// NIP-CW §Request: connection_pubkey MUST differ from pubkey, or the
+	// member's identity key would double as the wallet's client key.
+	if p.Connection.Pubkey() == pubkey {
+		return CreateCircleWalletRequest{}, fmt.Errorf("nipcw: the connection key must differ from the requester's own key")
+	}
+	proof, err := p.Credential.buildProof(hubPubkey, p.Connection.Pubkey())
 	if err != nil {
 		return CreateCircleWalletRequest{}, err
 	}
 	return CreateCircleWalletRequest{
-		Pubkey:        pubkey,
-		MaxAmount:     p.MaxAmountMillis,
-		Expiry:        int(p.Expiry / time.Second),
-		BudgetRenewal: p.BudgetRenewal,
-		IdentityEvent: string(proof),
+		Pubkey:           pubkey,
+		ConnectionPubkey: p.Connection.Pubkey(),
+		MaxAmount:        p.MaxAmountMillis,
+		Expiry:           int(p.Expiry / time.Second),
+		BudgetRenewal:    p.BudgetRenewal,
+		IdentityEvent:    string(proof),
 	}, nil
 }
 
@@ -80,21 +99,25 @@ type createCircleWalletResponseWire struct {
 }
 
 // circleWalletDetailsWire is the plaintext inside EncryptedDetails — the
-// joining member's own wallet identity and terms, readable only by them.
+// joining member's own wallet identity and terms, readable only by them. It
+// carries no secret and no connection string (NIP-CW §Response).
 type circleWalletDetailsWire struct {
-	PairingURI    string  `json:"pairing_uri"`
-	WalletPubkey  string  `json:"wallet_pubkey"`
-	MaxAmount     *uint64 `json:"max_amount,omitempty"`
-	ExpiresAt     int64   `json:"expires_at"`
-	FeesPpm       int     `json:"fees_ppm"`
-	BudgetRenewal string  `json:"budget_renewal"`
+	WalletPubkey  string   `json:"wallet_pubkey"`
+	Relays        []string `json:"relays"`
+	MaxAmount     *uint64  `json:"max_amount,omitempty"`
+	ExpiresAt     int64    `json:"expires_at"`
+	FeesPpm       int      `json:"fees_ppm"`
+	BudgetRenewal string   `json:"budget_renewal"`
 }
 
-// CreateCircleWalletResponse is create_circle_wallet's response, with
-// PairingURI already decrypted — connect straight from it.
+// CreateCircleWalletResponse is create_circle_wallet's response. PairingURI is
+// built locally from the Hub's wallet_pubkey and relays and the member's own
+// connection secret — connect straight from it.
 type CreateCircleWalletResponse struct {
 	PairingURI   string
 	WalletPubkey string
+	// Relays are the wallet's relays from the Hub, in failover order.
+	Relays []string
 	// MaxAmountMillis is the spend cap as the Hub resolved it, which may differ
 	// from the requested one (NIP-CW §Response). Nil when the Hub did not say,
 	// so a missing cap never reads as a cap of zero.
@@ -109,11 +132,9 @@ type CreateCircleWalletResponse struct {
 // own pubkey — NIP-CW §Creating a Circle Wallet — so no other holder of the
 // shared Hub connection can read it).
 //
-// That guarantee now covers the whole result. It previously covered only the
-// pairing URI: wallet_pubkey, expires_at, fees_ppm and budget_renewal travelled
-// beside the ciphertext, where every other member of the circle could read them.
-// The returned CreateCircleWalletResponse is unchanged, so callers see nothing
-// of this.
+// The Hub returns no secret: the connection string is built here from the
+// wallet_pubkey and relays it sent and p.Connection's secret, which never left
+// this device (NIP-CW §Pairing Connection).
 //
 // Exported for nipcw/client's use; a caller using nipcw/client's
 // CreateCircleWallet method never calls this directly.
@@ -137,9 +158,27 @@ func (p CreateCircleWalletParams) ParseResult(hubPubkey string, data []byte) (*C
 	if err := json.Unmarshal([]byte(plaintext), &details); err != nil {
 		return nil, fmt.Errorf("nipcw: parse wallet details: %w", err)
 	}
+	if p.Connection.IsZero() {
+		return nil, ErrNoConnectionKey
+	}
+	if err := utils.Validate32Key(details.WalletPubkey); err != nil {
+		return nil, fmt.Errorf("nipcw: wallet details carry no valid wallet_pubkey: %w", err)
+	}
+	// NIP-CW §Response: at least one non-empty relay, in failover order; the
+	// wallet is reachable nowhere else. Blank entries are dropped.
+	var relays []string
+	for _, r := range details.Relays {
+		if strings.TrimSpace(r) != "" {
+			relays = append(relays, r)
+		}
+	}
+	if len(relays) == 0 {
+		return nil, fmt.Errorf("nipcw: wallet details carry no usable relay, so the wallet is unreachable")
+	}
 	return &CreateCircleWalletResponse{
-		PairingURI:      details.PairingURI,
+		PairingURI:      nip47.BuildPairingURI(details.WalletPubkey, relays, p.Connection.Secret(), nil),
 		WalletPubkey:    details.WalletPubkey,
+		Relays:          relays,
 		MaxAmountMillis: details.MaxAmount,
 		ExpiresAt:       details.ExpiresAt,
 		FeesPpm:         details.FeesPpm,

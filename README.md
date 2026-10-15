@@ -784,6 +784,9 @@ func main() {
 	}
 	defer circleHub.Close()
 
+	// The wallet's connection key is generated here, on the member's side; the
+	// Hub only ever sees its pubkey. Set Connection yourself to save the secret
+	// before sending.
 	wallet, err := circleHub.CreateCircleWallet(ctx, nipcw.CreateCircleWalletParams{
 		Credential:      nipcw.BySigning(memberPrivKeyHex),
 		MaxAmountMillis: 100_000_000,
