@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -119,18 +120,11 @@ func (s *BatchSession) sendOne(ctx context.Context, p packedEnvelope, index int)
 		return nil, fmt.Errorf("reply key for envelope %d: %w", index, err)
 	}
 
-	// Subscribe BEFORE publishing. A hub may answer immediately, and a subscription
-	// opened afterwards can miss an ephemeral event entirely — relays are not required
-	// to store kind 23191, and this transport specifically does not want them to.
-	replies, stop, err := s.subscribeReplies(ctx, p.Envelope.ReplyTo)
+	replies, stop, err := s.subscribeAndPublish(ctx, p.Envelope.ReplyTo, request)
 	if err != nil {
-		return nil, fmt.Errorf("subscribe for envelope %d: %w", index, err)
+		return nil, fmt.Errorf("send envelope %d: %w", index, err)
 	}
 	defer stop()
-
-	if err := s.publish(ctx, request); err != nil {
-		return nil, fmt.Errorf("publish envelope %d: %w", index, err)
-	}
 
 	return s.collectReply(ctx, replies, replyKey, p, index)
 }
@@ -160,6 +154,7 @@ func (s *BatchSession) collectReply(
 ) ([]ItemOutcome, error) {
 	merged := &transport.ResponseEnvelope{Version: transport.EnvelopeVersion, ReqNonce: p.Envelope.Nonce}
 	seen := map[int]struct{}{}
+	seenEvents := map[string]struct{}{}
 	answered := map[string]struct{}{}
 	// declared is the hub's own total; total is that, bounded by the items asked.
 	declared, total := 0, 0
@@ -203,6 +198,15 @@ func (s *BatchSession) collectReply(
 							ErrIncompleteReply, index, len(seen), total)
 				}
 				return nil, fmt.Errorf("reply channel closed for envelope %d", index)
+			}
+			// The same event from two relays is one chunk, not a repeat (NIP-CASH
+			// §Chunked Replies): a hub may publish its reply on several of its relays,
+			// and this client may be listening on more than one.
+			if ev.ID != "" {
+				if _, dup := seenEvents[ev.ID]; dup {
+					continue
+				}
+				seenEvents[ev.ID] = struct{}{}
 			}
 			plaintext, err := nip44.Decrypt(ev.Content, replyKey[:])
 			if err != nil {
@@ -289,7 +293,95 @@ func (s *BatchSession) collectReply(
 	}
 }
 
-// subscribeReplies opens a subscription for one envelope's response.
+// subscribeAndPublish sends one request and returns the stream its reply will arrive on.
+//
+// The reply is published on the relay the request arrived on (NIP-CASH §Addressing the
+// Response), so the request goes to the relay this client is listening on, never to
+// another. Relays are tried in order (§Multiple Relay Hints): subscribe there, then
+// publish there, and the first relay that accepts the request is the one it went to.
+//
+// Subscribe BEFORE publishing. A hub may answer immediately, and a subscription opened
+// afterwards can miss an ephemeral event entirely — relays are not required to store
+// kind 23191, and this transport specifically does not want them to.
+//
+// A relay whose publish failed keeps its subscription. A publish that timed out may
+// still have reached the hub, whose reply then lands there; a client that sent to
+// several relays listens on all of them. The returned stream merges every one and
+// closes once all of them have.
+func (s *BatchSession) subscribeAndPublish(ctx context.Context, replyTo string, request *nip01.Event) (<-chan *nip01.Event, func(), error) {
+	relays := s.Relays()
+	if len(relays) == 0 {
+		return nil, nil, errors.New("nipcash/client: session has no relays")
+	}
+
+	var (
+		streams  []<-chan *nip01.Event
+		stops    []func()
+		failures []error
+	)
+	stopAll := func() {
+		for _, stop := range stops {
+			stop()
+		}
+	}
+	for _, raw := range relays {
+		relayURL, err := url.Parse(raw)
+		if err != nil {
+			failures = append(failures, fmt.Errorf("relay %q: %w", raw, err))
+			continue
+		}
+		events, stop, err := subscribeReplies(ctx, relayURL, replyTo)
+		if err != nil {
+			failures = append(failures, fmt.Errorf("relay %q: %w", raw, err))
+			continue
+		}
+		streams, stops = append(streams, events), append(stops, stop)
+		ok, err := relayclient.PublishEventToRelay(ctx, relayURL, request)
+		if err == nil && !ok.Accepted {
+			// A refusal comes back as an OK, not an error: the request is not on this
+			// relay, and waiting here for a reply would only run out not_after.
+			err = fmt.Errorf("refused: %s", ok.Message)
+		}
+		if err != nil {
+			failures = append(failures, fmt.Errorf("relay %q: %w", raw, err))
+			continue
+		}
+		return mergeEvents(ctx, streams), stopAll, nil
+	}
+	stopAll()
+	// Every relay's failure is kept, not just the last: with failover the useful
+	// question is why all of them failed (NIP-CASH §Multiple Relay Hints).
+	return nil, nil, fmt.Errorf("nipcash/client: no relay took the request: %w", errors.Join(failures...))
+}
+
+// mergeEvents forwards every stream into one, closed once all of them are.
+func mergeEvents(ctx context.Context, streams []<-chan *nip01.Event) <-chan *nip01.Event {
+	if len(streams) == 1 {
+		return streams[0]
+	}
+	out := make(chan *nip01.Event, 8)
+	var wg sync.WaitGroup
+	for _, in := range streams {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for ev := range in {
+				select {
+				case out <- ev:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+	}
+	go func() {
+		wg.Wait()
+		close(out)
+	}()
+	return out
+}
+
+// subscribeReplies opens a subscription for one envelope's response on one relay.
 //
 // Filtered on the p-tag carrying reply_to (NIP-CASH §Addressing the Response). That value
 // appears nowhere else — not as an author, not in the request's tags — so nothing on the
@@ -305,106 +397,61 @@ func (s *BatchSession) collectReply(
 //
 // It survived every in-process test because those never cross a real relay, so nothing ever
 // sent an EOSE. The first live run failed on all items, immediately and silently.
-func (s *BatchSession) subscribeReplies(ctx context.Context, replyTo string) (<-chan *nip01.Event, func(), error) {
-	relays := s.Relays()
-	if len(relays) == 0 {
-		return nil, nil, errors.New("nipcash/client: session has no relays")
-	}
-
+func subscribeReplies(ctx context.Context, relayURL *url.URL, replyTo string) (<-chan *nip01.Event, func(), error) {
 	filter := nip01.NewSubscriptionFilterGroup(&nip01.SubscriptionFilter{
 		Kinds: []int{transport.KindPrivateResponse},
 		Tags:  map[string][]string{"p": {replyTo}},
 	})
 
-	// Every relay's failure is kept, not just the last: with failover the useful
-	// question is why all of them failed (NIP-CASH §Multiple Relay Hints).
-	var failures []error
-	for _, raw := range relays {
-		relayURL, err := url.Parse(raw)
-		if err != nil {
-			failures = append(failures, fmt.Errorf("relay %q: %w", raw, err))
-			continue
-		}
-		conn, err := relayclient.Connect(ctx, relayURL)
-		if err != nil {
-			failures = append(failures, fmt.Errorf("relay %q: %w", raw, err))
-			continue
-		}
+	conn, err := relayclient.Connect(ctx, relayURL)
+	if err != nil {
+		return nil, nil, err
+	}
+	subID := uuid.NewString()
+	if !conn.SubscribeWithID(subID, filter) {
+		conn.Close()
+		return nil, nil, errors.New("connection closed before the subscription could be sent")
+	}
 
-		subID := uuid.NewString()
-		if !conn.SubscribeWithID(subID, filter) {
-			conn.Close()
-			failures = append(failures, fmt.Errorf("relay %q: connection closed before the subscription could be sent", raw))
-			continue
-		}
-
-		// Buffered and forwarding EVERY event, not just the first: a hub may answer one
-		// request with several chunks (NIP-CASH §Chunked Replies), so stopping at the
-		// first would strand the rest and the caller would read them as omissions.
-		out := make(chan *nip01.Event, 8)
-		go func() {
-			defer close(out)
-			for {
-				select {
-				case msg, ok := <-conn.Read():
-					if !ok {
-						return
-					}
-					switch m := msg.(type) {
-					case *wire.EventSubscriptionResponse:
-						// Other subscriptions do not exist on this connection today,
-						// but filtering by id keeps that an implementation detail
-						// rather than an assumption.
-						if m.SubscriptionID != subID || m.Event == nil {
-							continue
-						}
-						select {
-						case out <- m.Event:
-						case <-ctx.Done():
-							return
-						}
-					case *wire.ClosedSubscriptionResponse:
-						// The relay ended it; nothing more will arrive. EOSE is
-						// deliberately NOT handled here — it only marks the end of
-						// stored events, and every reply comes after it.
-						if m.SubscriptionID == subID {
-							return
-						}
-					}
-				case <-ctx.Done():
+	// Buffered and forwarding EVERY event, not just the first: a hub may answer one
+	// request with several chunks (NIP-CASH §Chunked Replies), so stopping at the
+	// first would strand the rest and the caller would read them as omissions.
+	out := make(chan *nip01.Event, 8)
+	go func() {
+		defer close(out)
+		for {
+			select {
+			case msg, ok := <-conn.Read():
+				if !ok {
 					return
 				}
+				switch m := msg.(type) {
+				case *wire.EventSubscriptionResponse:
+					// Other subscriptions do not exist on this connection today,
+					// but filtering by id keeps that an implementation detail
+					// rather than an assumption.
+					if m.SubscriptionID != subID || m.Event == nil {
+						continue
+					}
+					select {
+					case out <- m.Event:
+					case <-ctx.Done():
+						return
+					}
+				case *wire.ClosedSubscriptionResponse:
+					// The relay ended it; nothing more will arrive. EOSE is
+					// deliberately NOT handled here — it only marks the end of
+					// stored events, and every reply comes after it.
+					if m.SubscriptionID == subID {
+						return
+					}
+				}
+			case <-ctx.Done():
+				return
 			}
-		}()
-		return out, func() { conn.Close() }, nil
-	}
-	return nil, nil, fmt.Errorf("nipcash/client: no relay reachable: %w", errors.Join(failures...))
-}
-
-// publish sends the request to the first relay that accepts it.
-//
-// First-wins rather than all-of-them: a hub reads one inbox and a duplicate arriving by
-// another path is refused as a replayed nonce, so publishing everywhere would spend
-// bandwidth to manufacture rejections.
-func (s *BatchSession) publish(ctx context.Context, ev *nip01.Event) error {
-	relays := s.Relays()
-	var failures []error
-	for _, raw := range relays {
-		relayURL, err := url.Parse(raw)
-		if err != nil {
-			failures = append(failures, fmt.Errorf("relay %q: %w", raw, err))
-			continue
 		}
-		if _, err := relayclient.PublishEventToRelay(ctx, relayURL, ev); err != nil {
-			failures = append(failures, fmt.Errorf("relay %q: %w", raw, err))
-			continue
-		}
-		return nil
-	}
-	if len(failures) == 0 {
-		return errors.New("no relays")
-	}
-	return errors.Join(failures...)
+	}()
+	return out, func() { conn.Close() }, nil
 }
 
 // isStalePolicy reports whether a failure suggests the cached announcement is out of

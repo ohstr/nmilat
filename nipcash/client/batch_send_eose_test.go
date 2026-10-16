@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -92,6 +93,15 @@ func wsURL(srv *httptest.Server) string {
 	return "ws" + strings.TrimPrefix(srv.URL, "http")
 }
 
+func mustParseURL(t *testing.T, raw string) *url.URL {
+	t.Helper()
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
+}
+
 func TestSubscribeReplies_DeliversEventsPublishedAfterEOSE(t *testing.T) {
 	reply := &nip01.Event{
 		ID:        strings.Repeat("a", 64),
@@ -102,12 +112,10 @@ func TestSubscribeReplies_DeliversEventsPublishedAfterEOSE(t *testing.T) {
 	}
 	srv, sawREQ := newEOSEThenEventRelay(t, reply)
 
-	s := &BatchSession{relays: []string{wsURL(srv)}}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	events, stop, err := s.subscribeReplies(ctx, strings.Repeat("b", 64))
+	events, stop, err := subscribeReplies(ctx, mustParseURL(t, wsURL(srv)), strings.Repeat("b", 64))
 	if err != nil {
 		t.Fatalf("subscribeReplies: %v", err)
 	}
@@ -168,12 +176,10 @@ func TestSubscribeReplies_ClosedEndsTheSubscription(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	s := &BatchSession{relays: []string{wsURL(srv)}}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	events, stop, err := s.subscribeReplies(ctx, strings.Repeat("b", 64))
+	events, stop, err := subscribeReplies(ctx, mustParseURL(t, wsURL(srv)), strings.Repeat("b", 64))
 	if err != nil {
 		t.Fatalf("subscribeReplies: %v", err)
 	}

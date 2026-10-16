@@ -197,6 +197,10 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes the NIP-CASH private transport listening for a reply on a different
+  relay than the one the request was sent to, and treating a relay's refusal
+  of the request as sent; a reply chunk delivered by two relays now counts
+  once instead of voiding the reply.
 - Fixes NIP-CASH request builders accepting what the spec forbids: an empty
   `mint_cash`, a `connection_key` without `ia_pubkey`, a negative or sub-second
   expiry, duplicate consolidate sources, and a nil transfer target (which

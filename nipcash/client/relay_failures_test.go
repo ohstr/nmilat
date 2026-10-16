@@ -19,16 +19,13 @@ func TestPrivateTransport_ReportsEveryRelayFailure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	_, _, subErr := s.subscribeReplies(ctx, strings.Repeat("c", 64))
-	pubErr := s.publish(ctx, nip01.NewEvent(1, "x"))
-	for name, err := range map[string]error{"subscribe": subErr, "publish": pubErr} {
-		if err == nil {
-			t.Fatalf("%s: no error with every relay unreachable", name)
-		}
-		for _, r := range relays {
-			if !strings.Contains(err.Error(), r) {
-				t.Errorf("%s error %q does not name relay %s", name, err, r)
-			}
+	_, _, err := s.subscribeAndPublish(ctx, strings.Repeat("c", 64), nip01.NewEvent(1, "x"))
+	if err == nil {
+		t.Fatal("no error with every relay unreachable")
+	}
+	for _, r := range relays {
+		if !strings.Contains(err.Error(), r) {
+			t.Errorf("error %q does not name relay %s", err, r)
 		}
 	}
 }
