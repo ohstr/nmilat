@@ -293,6 +293,10 @@ func (s *BatchSession) collectReply(
 	}
 }
 
+// subscriptionAckWait bounds how long a send waits for the relay to acknowledge
+// the reply subscription before publishing anyway.
+const subscriptionAckWait = 2 * time.Second
+
 // subscribeAndPublish sends one request and returns the stream its reply will arrive on.
 //
 // The reply is published on the relay the request arrived on (NIP-CASH §Addressing the
@@ -330,12 +334,23 @@ func (s *BatchSession) subscribeAndPublish(ctx context.Context, replyTo string, 
 			failures = append(failures, fmt.Errorf("relay %q: %w", raw, err))
 			continue
 		}
-		events, stop, err := subscribeReplies(ctx, relayURL, replyTo)
+		events, ready, stop, err := subscribeReplies(ctx, relayURL, replyTo)
 		if err != nil {
 			failures = append(failures, fmt.Errorf("relay %q: %w", raw, err))
 			continue
 		}
 		streams, stops = append(streams, events), append(stops, stop)
+		// The REQ and the request travel on separate connections, so nothing
+		// orders them at the relay: a request that overtook its subscription had
+		// its reply delivered to nobody, and the client waited out not_after for
+		// an answer the hub had sent. EOSE is the relay saying it has the
+		// subscription. Bounded, so a relay that never sends one still gets the
+		// request.
+		select {
+		case <-ready:
+		case <-time.After(subscriptionAckWait):
+		case <-ctx.Done():
+		}
 		ok, err := relayclient.PublishEventToRelay(ctx, relayURL, request)
 		if err == nil && !ok.Accepted {
 			// A refusal comes back as an OK, not an error: the request is not on this
@@ -397,7 +412,7 @@ func mergeEvents(ctx context.Context, streams []<-chan *nip01.Event) <-chan *nip
 //
 // It survived every in-process test because those never cross a real relay, so nothing ever
 // sent an EOSE. The first live run failed on all items, immediately and silently.
-func subscribeReplies(ctx context.Context, relayURL *url.URL, replyTo string) (<-chan *nip01.Event, func(), error) {
+func subscribeReplies(ctx context.Context, relayURL *url.URL, replyTo string) (<-chan *nip01.Event, <-chan struct{}, func(), error) {
 	filter := nip01.NewSubscriptionFilterGroup(&nip01.SubscriptionFilter{
 		Kinds: []int{transport.KindPrivateResponse},
 		Tags:  map[string][]string{"p": {replyTo}},
@@ -405,13 +420,19 @@ func subscribeReplies(ctx context.Context, relayURL *url.URL, replyTo string) (<
 
 	conn, err := relayclient.Connect(ctx, relayURL)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	subID := uuid.NewString()
 	if !conn.SubscribeWithID(subID, filter) {
 		conn.Close()
-		return nil, nil, errors.New("connection closed before the subscription could be sent")
+		return nil, nil, nil, errors.New("connection closed before the subscription could be sent")
 	}
+
+	// ready closes once the relay has acknowledged the subscription (EOSE, or a
+	// CLOSED), or the reader stops: see subscribeAndPublish for why it waits.
+	ready := make(chan struct{})
+	var readyOnce sync.Once
+	markReady := func() { readyOnce.Do(func() { close(ready) }) }
 
 	// Buffered and forwarding EVERY event, not just the first: a hub may answer one
 	// request with several chunks (NIP-CASH §Chunked Replies), so stopping at the
@@ -419,6 +440,7 @@ func subscribeReplies(ctx context.Context, relayURL *url.URL, replyTo string) (<
 	out := make(chan *nip01.Event, 8)
 	go func() {
 		defer close(out)
+		defer markReady()
 		for {
 			select {
 			case msg, ok := <-conn.Read():
@@ -438,10 +460,15 @@ func subscribeReplies(ctx context.Context, relayURL *url.URL, replyTo string) (<
 					case <-ctx.Done():
 						return
 					}
+				case *wire.EOSESubscriptionResponse:
+					// The end of STORED events, so never the end of this
+					// subscription — every reply comes after it. It does say the
+					// relay now has the subscription.
+					if m.SubscriptionID == subID {
+						markReady()
+					}
 				case *wire.ClosedSubscriptionResponse:
-					// The relay ended it; nothing more will arrive. EOSE is
-					// deliberately NOT handled here — it only marks the end of
-					// stored events, and every reply comes after it.
+					// The relay ended it; nothing more will arrive.
 					if m.SubscriptionID == subID {
 						return
 					}
@@ -451,7 +478,7 @@ func subscribeReplies(ctx context.Context, relayURL *url.URL, replyTo string) (<
 			}
 		}
 	}()
-	return out, func() { conn.Close() }, nil
+	return out, ready, func() { conn.Close() }, nil
 }
 
 // isStalePolicy reports whether a failure suggests the cached announcement is out of

@@ -200,3 +200,72 @@ func TestSubscribeAndPublish_ARefusedRequestIsNotSent(t *testing.T) {
 		t.Fatalf("err = %v, want the relay's refusal", err)
 	}
 }
+
+// A relay registers a subscription and handles an event on two connections in
+// no fixed order. This one takes its time over the REQ and answers the request
+// at once, which is when a client that published without waiting for the
+// subscription lost the reply. The client must wait for EOSE before publishing.
+func TestSubscribeAndPublish_WaitsForTheSubscriptionBeforePublishing(t *testing.T) {
+	replyTo := strings.Repeat("b", 64)
+	reply := testReply(replyTo)
+	upgrader := websocket.Upgrader{}
+	var mu sync.Mutex
+	subs := map[*websocket.Conn]string{}
+	var writeMu sync.Mutex
+	write := func(c *websocket.Conn, v json.Marshaler) {
+		b, _ := v.MarshalJSON()
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		_ = c.WriteMessage(websocket.TextMessage, b)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		for {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			var payload wire.RelayPayload
+			if json.Unmarshal(data, &payload) != nil {
+				continue
+			}
+			switch p := payload.Packet.(type) {
+			case *wire.RequestPacket:
+				time.Sleep(300 * time.Millisecond) // a slow REQ
+				mu.Lock()
+				subs[conn] = p.SubscriptionID
+				mu.Unlock()
+				write(conn, &wire.EOSESubscriptionResponse{SubscriptionID: p.SubscriptionID})
+			case *wire.EventPacket:
+				write(conn, &wire.OkSubscriptionResponse{EventID: p.Event.ID, Accepted: true})
+				mu.Lock()
+				for c, id := range subs { // the reply goes to whoever is subscribed NOW
+					write(c, &wire.EventSubscriptionResponse{SubscriptionID: id, Event: reply})
+				}
+				mu.Unlock()
+			}
+		}
+	}))
+	t.Cleanup(srv.Close)
+	s := &BatchSession{relays: []string{wsURL(srv)}}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	events, stop, err := s.subscribeAndPublish(ctx, replyTo, nip01.NewEvent(transport.KindPrivateRequest, "req"))
+	if err != nil {
+		t.Fatalf("subscribeAndPublish: %v", err)
+	}
+	defer stop()
+	select {
+	case got, ok := <-events:
+		if !ok || got == nil || got.ID != reply.ID {
+			t.Fatalf("got %+v (open %v), want the reply", got, ok)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("no reply: the request overtook its own subscription")
+	}
+}

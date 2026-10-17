@@ -202,6 +202,9 @@ privacy and performance fixes.
   of the request as sent; a reply chunk delivered by two relays now counts
   once instead of voiding the reply.
   ([#128](https://github.com/ohstr/nmilat/pull/128))
+- Fixes the NIP-CASH private transport sometimes losing a reply when the
+  request reached the relay before the reply subscription; it now waits for the
+  relay's EOSE before sending.
 - Fixes NIP-CASH request builders accepting what the spec forbids: an empty
   `mint_cash`, a `connection_key` without `ia_pubkey`, a negative or sub-second
   expiry, duplicate consolidate sources, and a nil transfer target (which

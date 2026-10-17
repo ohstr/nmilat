@@ -217,6 +217,8 @@ func startFakeHub(t *testing.T, h *fakeHub) string {
 				// A reply subscription: forward anything the hub publishes.
 				ch := make(chan *nip01.Event, 4)
 				h.register(ch)
+				// As a real relay does: the subscription is live, then EOSE.
+				_ = writeMsg(&wire.EOSESubscriptionResponse{SubscriptionID: subID})
 				go func() {
 					for ev := range ch {
 						b, err := json.Marshal(ev)

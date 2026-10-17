@@ -145,6 +145,8 @@ func startLoggingHub(t *testing.T, h *fakeHub, log *auditDRelayLog) string {
 				ch := make(chan *nip01.Event, 8)
 				h.register(ch)
 				subID := p.SubscriptionID
+				// As a real relay does: the subscription is live, then EOSE.
+				_ = writeMsg(&wire.EOSESubscriptionResponse{SubscriptionID: subID})
 				go func() {
 					for ev := range ch {
 						b, err := json.Marshal(ev)
