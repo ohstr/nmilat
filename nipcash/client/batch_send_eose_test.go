@@ -115,7 +115,7 @@ func TestSubscribeReplies_DeliversEventsPublishedAfterEOSE(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	events, stop, err := subscribeReplies(ctx, mustParseURL(t, wsURL(srv)), strings.Repeat("b", 64))
+	events, _, stop, err := subscribeReplies(ctx, mustParseURL(t, wsURL(srv)), strings.Repeat("b", 64))
 	if err != nil {
 		t.Fatalf("subscribeReplies: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestSubscribeReplies_ClosedEndsTheSubscription(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	events, stop, err := subscribeReplies(ctx, mustParseURL(t, wsURL(srv)), strings.Repeat("b", 64))
+	events, _, stop, err := subscribeReplies(ctx, mustParseURL(t, wsURL(srv)), strings.Repeat("b", 64))
 	if err != nil {
 		t.Fatalf("subscribeReplies: %v", err)
 	}
