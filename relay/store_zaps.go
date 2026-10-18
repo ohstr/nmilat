@@ -14,10 +14,13 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
+// isZapKind reports whether kind is a zap receipt the zap index holds.
+func isZapKind(kind int) bool { return kind == 9521 || kind == 9735 }
+
 // IndexZap indexes a zap receipt — NIP-57 (Kind 9735) or AltZap (Kind 9521).
 // It extracts the amount and the receiver pubkey and stores them in a dedicated bucket.
 func (s *EventStore) IndexZap(tx *bolt.Tx, event *nip01.Event, evsid uint64) error {
-	if event.Kind != 9521 && event.Kind != 9735 {
+	if !isZapKind(event.Kind) {
 		return nil
 	}
 

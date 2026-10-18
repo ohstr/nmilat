@@ -64,7 +64,7 @@ func (s *EventStore) ReindexZaps(ctx context.Context, progressCb func(count int)
 				// Unmarshal to check kind
 				var event nip01.Event
 				if err := json.Unmarshal(v, &event); err == nil {
-					if event.Kind == 9521 {
+					if isZapKind(event.Kind) {
 						zapsToIndex = append(zapsToIndex, &event)
 						zapEvsids = append(zapEvsids, binary.BigEndian.Uint64(k))
 					}

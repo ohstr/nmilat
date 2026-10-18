@@ -197,6 +197,8 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes `ReindexZaps` skipping NIP-57 zap receipts (kind 9735), so a rebuilt
+  zap index no longer drops them from top-zapped results.
 - Fixes the NIP-CASH private transport listening for a reply on a different
   relay than the one the request was sent to, and treating a relay's refusal
   of the request as sent; a reply chunk delivered by two relays now counts
