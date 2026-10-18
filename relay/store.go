@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ohstr/nmilat/nip01"
@@ -195,6 +196,8 @@ type EventStore struct {
 	// events, waking live tails instead of having them poll.
 	commitMu sync.Mutex
 	commitCh chan struct{}
+	// zapRebuilding guards RebuildZapIndex against running twice at once.
+	zapRebuilding atomic.Bool
 }
 
 func NewEventStore(path string, limitation *nip11.Limitation, opts ...EventStoreOption) (*EventStore, error) {

@@ -5,15 +5,50 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 
 	"github.com/ohstr/nmilat/nip01"
 	bolt "go.etcd.io/bbolt"
 	bolterrors "go.etcd.io/bbolt/errors"
 )
 
-// ClearZapIndex deletes and recreates the zap index bucket, discarding all
-// indexed zap-receipt data without touching the underlying stored events.
-// Pair with ReindexZaps to rebuild the index from scratch.
+// The zap index lives in a bucket named by zapMeta's "active" key, or
+// indexZaps when unset. RebuildZapIndex builds a new generation beside it
+// and swaps the pointer in one transaction, so readers never see it empty.
+var (
+	zapMeta        = []byte{9, 'm'}
+	zapActiveKey   = []byte("active")
+	zapBuildingKey = []byte("building")
+	zapGenKey      = []byte("gen")
+)
+
+// ErrZapRebuildInProgress is returned by RebuildZapIndex while another
+// rebuild is running.
+var ErrZapRebuildInProgress = errors.New("zap index rebuild already in progress")
+
+// activeZapBucket returns the name of the bucket readers use.
+func activeZapBucket(tx *bolt.Tx) []byte {
+	if m := tx.Bucket(zapMeta); m != nil {
+		if v := m.Get(zapActiveKey); v != nil {
+			return append([]byte(nil), v...)
+		}
+	}
+	return indexZaps
+}
+
+// buildingZapBucket returns the name of the bucket a rebuild is filling, or
+// nil when none is running.
+func buildingZapBucket(tx *bolt.Tx) []byte {
+	if m := tx.Bucket(zapMeta); m != nil {
+		if v := m.Get(zapBuildingKey); v != nil {
+			return append([]byte(nil), v...)
+		}
+	}
+	return nil
+}
+
+// ClearZapIndex empties the active zap index without touching the stored
+// events. RebuildZapIndex is the way to refresh it without an empty window.
 func (s *EventStore) ClearZapIndex(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
@@ -21,103 +56,173 @@ func (s *EventStore) ClearZapIndex(ctx context.Context) error {
 	default:
 	}
 	return s.db.Update(func(tx *bolt.Tx) error {
-		if err := tx.DeleteBucket(indexZaps); err != nil && err != bolterrors.ErrBucketNotFound {
+		name := activeZapBucket(tx)
+		if err := tx.DeleteBucket(name); err != nil && err != bolterrors.ErrBucketNotFound {
 			return err
 		}
-		_, err := tx.CreateBucketIfNotExists(indexZaps)
+		_, err := tx.CreateBucketIfNotExists(name)
 		return err
 	})
 }
 
-// ReindexZaps iterates over all events and populates the indexZaps bucket.
-// It returns the count of indexed zaps and any error encountered.
+// ReindexZaps scans every stored event into the active zap index in place.
+// It returns the number of zaps indexed.
 func (s *EventStore) ReindexZaps(ctx context.Context, progressCb func(count int)) (int, error) {
-	count := 0
-	batchSize := 1000 // Process 1000 events per read transaction
+	_, indexed, err := s.scanZapsInto(ctx, activeZapBucket, func(_, indexed int) {
+		if progressCb != nil {
+			progressCb(indexed)
+		}
+	})
+	return indexed, err
+}
+
+// RebuildZapIndex rebuilds the zap index into a new bucket and makes it the
+// active one atomically once complete, so top-zapped queries keep answering
+// from the old index throughout. Zaps stored meanwhile land in both.
+// progress, if set, is called after each batch with the number of events
+// scanned and zaps indexed so far. Cancelling ctx discards the new bucket.
+func (s *EventStore) RebuildZapIndex(ctx context.Context, progress func(scanned, indexed int)) (int, error) {
+	if !s.zapRebuilding.CompareAndSwap(false, true) {
+		return 0, ErrZapRebuildInProgress
+	}
+	defer s.zapRebuilding.Store(false)
+
+	var next []byte
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		m, err := tx.CreateBucketIfNotExists(zapMeta)
+		if err != nil {
+			return err
+		}
+		// A rebuild interrupted by a crash leaves its bucket behind.
+		if stale := m.Get(zapBuildingKey); stale != nil {
+			if err := tx.DeleteBucket(stale); err != nil && err != bolterrors.ErrBucketNotFound {
+				return err
+			}
+		}
+		var gen uint64
+		if v := m.Get(zapGenKey); len(v) == 8 {
+			gen = binary.BigEndian.Uint64(v)
+		}
+		gen++
+		next = append([]byte{9, 'g'}, itob(gen)...)
+		if _, err := tx.CreateBucket(next); err != nil {
+			return err
+		}
+		if err := m.Put(zapGenKey, itob(gen)); err != nil {
+			return err
+		}
+		return m.Put(zapBuildingKey, next)
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	_, indexed, err := s.scanZapsInto(ctx, func(*bolt.Tx) []byte { return next }, progress)
+	if err != nil {
+		if dropErr := s.db.Update(func(tx *bolt.Tx) error {
+			if err := tx.DeleteBucket(next); err != nil && err != bolterrors.ErrBucketNotFound {
+				return err
+			}
+			return tx.Bucket(zapMeta).Delete(zapBuildingKey)
+		}); dropErr != nil {
+			s.logger.Warn().Err(dropErr).Msg("failed to discard an unfinished zap index rebuild")
+		}
+		return indexed, err
+	}
+
+	err = s.db.Update(func(tx *bolt.Tx) error {
+		old := activeZapBucket(tx)
+		m := tx.Bucket(zapMeta)
+		if err := m.Put(zapActiveKey, next); err != nil {
+			return err
+		}
+		if err := m.Delete(zapBuildingKey); err != nil {
+			return err
+		}
+		if err := tx.DeleteBucket(old); err != nil && err != bolterrors.ErrBucketNotFound {
+			return err
+		}
+		return nil
+	})
+	return indexed, err
+}
+
+// scanZapsInto walks every stored event in batches, indexing zap receipts
+// into the bucket target names. It returns events scanned and zaps indexed.
+func (s *EventStore) scanZapsInto(ctx context.Context, target func(*bolt.Tx) []byte, progress func(scanned, indexed int)) (int, int, error) {
+	const batchSize = 1000 // events per read transaction
+	scanned, indexed := 0, 0
 	var lastKey []byte
 
 	for {
-		// 1. Read Batch (View Transaction)
-		var zapsToIndex []*nip01.Event
-		var zapEvsids []uint64
+		var zaps []*nip01.Event
+		var evsids []uint64
 		var newLastKey []byte
-		itemsScanned := 0
+		inBatch := 0
 
 		err := s.db.View(func(tx *bolt.Tx) error {
 			c := tx.Bucket(indexEvents).Cursor()
 			var k, v []byte
-
 			if lastKey == nil {
 				k, v = c.First()
 			} else {
 				k, v = c.Seek(lastKey)
 				if k != nil && bytes.Equal(k, lastKey) {
-					k, v = c.Next() // Resume from next
+					k, v = c.Next()
 				}
 			}
+			for ; inBatch < batchSize && k != nil; k, v = c.Next() {
+				inBatch++
+				newLastKey = append(newLastKey[:0], k...)
 
-			// Scan batch
-			for i := 0; i < batchSize && k != nil; i++ {
-				itemsScanned++
-				newLastKey = append([]byte(nil), k...) // Copy key for next iteration
-
-				// Unmarshal to check kind
 				var event nip01.Event
-				if err := json.Unmarshal(v, &event); err == nil {
-					if isZapKind(event.Kind) {
-						zapsToIndex = append(zapsToIndex, &event)
-						zapEvsids = append(zapEvsids, binary.BigEndian.Uint64(k))
-					}
-				} else {
+				if err := json.Unmarshal(v, &event); err != nil {
 					s.logger.Warn().Err(err).Uint64("evsid", binary.BigEndian.Uint64(k)).Msg("reindex: failed to unmarshal event")
+					continue
 				}
-
-				k, v = c.Next()
+				if isZapKind(event.Kind) {
+					zaps = append(zaps, &event)
+					evsids = append(evsids, binary.BigEndian.Uint64(k))
+				}
 			}
 			return nil
 		})
-
 		if err != nil {
-			return count, err
+			return scanned, indexed, err
 		}
+		scanned += inBatch
 
-		// 2. Write Batch (Update Transaction)
-		if len(zapsToIndex) > 0 {
+		if len(zaps) > 0 {
 			err := s.db.Update(func(tx *bolt.Tx) error {
-				// Ensure bucket exists once (or every time, cheap check)
-				if _, err := tx.CreateBucketIfNotExists(indexZaps); err != nil {
+				b, err := tx.CreateBucketIfNotExists(target(tx))
+				if err != nil {
 					return err
 				}
-
-				for i, event := range zapsToIndex {
-					if err := s.IndexZap(tx, event, zapEvsids[i]); err != nil {
+				for i, event := range zaps {
+					if err := putZap(b, event, evsids[i]); err != nil {
 						return err
 					}
-					count++
+					indexed++
 				}
 				return nil
 			})
 			if err != nil {
-				return count, err
-			}
-
-			if progressCb != nil {
-				progressCb(count)
+				return scanned, indexed, err
 			}
 		}
+		if progress != nil {
+			progress(scanned, indexed)
+		}
 
-		// 3. Loop Control
-		if itemsScanned < batchSize {
-			break // End of database reached
+		if inBatch < batchSize {
+			return scanned, indexed, nil
 		}
 		lastKey = newLastKey
 
 		select {
 		case <-ctx.Done():
-			return count, ctx.Err()
+			return scanned, indexed, ctx.Err()
 		default:
 		}
 	}
-
-	return count, nil
 }

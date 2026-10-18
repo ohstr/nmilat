@@ -19,20 +19,33 @@ func isZapKind(kind int) bool { return kind == 9521 || kind == 9735 }
 
 // IndexZap indexes a zap receipt — NIP-57 (Kind 9735) or AltZap (Kind 9521).
 // It extracts the amount and the receiver pubkey and stores them in a dedicated bucket.
+// A rebuild in progress gets every new zap too, so none is lost when it
+// becomes the active index.
 func (s *EventStore) IndexZap(tx *bolt.Tx, event *nip01.Event, evsid uint64) error {
 	if !isZapKind(event.Kind) {
 		return nil
 	}
+	for _, name := range [][]byte{activeZapBucket(tx), buildingZapBucket(tx)} {
+		if name == nil {
+			continue
+		}
+		bucket, err := tx.CreateBucketIfNotExists(name)
+		if err != nil {
+			return err
+		}
+		if err := putZap(bucket, event, evsid); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
+// putZap writes one zap receipt into bucket. A receipt with no parsable
+// amount or receiver is skipped.
+func putZap(bucket *bolt.Bucket, event *nip01.Event, evsid uint64) error {
 	amount, receiver, err := parseZapEvent(event)
 	if err != nil {
-		// If we can't parse it as a valid zap (no amount/receiver), just skip indexing it in this bucket.
 		return nil
-	}
-
-	bucket, err := tx.CreateBucketIfNotExists(indexZaps)
-	if err != nil {
-		return err
 	}
 
 	// Key: [Timestamp (8b)] [Evsid (8b)]
@@ -43,7 +56,7 @@ func (s *EventStore) IndexZap(tx *bolt.Tx, event *nip01.Event, evsid uint64) err
 	// Value: [Amount (8b)] [ReceiverPubkey (32b)]
 	receiverBytes, _ := hex.DecodeString(receiver) // parseZapEvent guarantees valid hex or empty
 	if len(receiverBytes) != 32 {
-		return nil // Should not happen if parseZapEvent is correct, but safety check
+		return nil
 	}
 
 	value := make([]byte, 40)
@@ -68,7 +81,7 @@ func (s *EventStore) GetTopZapped(ctx context.Context, since, until uint64, limi
 	aggregation := make(map[string]uint64)
 
 	err := s.db.View(func(tx *bolt.Tx) error {
-		b := tx.Bucket(indexZaps)
+		b := tx.Bucket(activeZapBucket(tx))
 		if b == nil {
 			return nil
 		}
