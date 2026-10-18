@@ -11,13 +11,16 @@ privacy and performance fixes.
 - Adds `EventStore.RebuildZapIndex`, which rebuilds the zap index beside the
   live one and swaps it in atomically, so top-zapped results never go empty
   during a rebuild.
+  ([#131](https://github.com/ohstr/nmilat/pull/131))
 - Adds queue-depth and drop counters for profile verification and search
   indexing, `MembershipService.Count`, `GroupsService.Count`, and
   `EventStore.TaskQueueDepth`/`InflightScans`, so an embedder can graph them.
+  ([#131](https://github.com/ohstr/nmilat/pull/131))
 - Adds `relay.Observer` and `StoreObserver` (`WithObserver`,
   `WithEventStoreObserver`) for relay metrics: sessions, messages, EVENT
   outcomes by reason and kind class, REQ/COUNT latency, subscriptions, AUTH,
   sends and store batches, without allocating on the hot path.
+  ([#131](https://github.com/ohstr/nmilat/pull/131))
 - Adds `MaxAmountMillis` to `nipcw.CreateCircleWalletResponse`, the spend cap
   as the Hub resolved it, and the refusal codes `nipcw.ErrNotReady`,
   `ErrRestricted`, `ErrWalletExists` and `ErrRateLimited`, as NIP-CW now specifies.
@@ -209,6 +212,7 @@ privacy and performance fixes.
 
 - Fixes `ReindexZaps` skipping NIP-57 zap receipts (kind 9735), so a rebuilt
   zap index no longer drops them from top-zapped results.
+  ([#131](https://github.com/ohstr/nmilat/pull/131))
 - Fixes the NIP-CASH private transport listening for a reply on a different
   relay than the one the request was sent to, and treating a relay's refusal
   of the request as sent; a reply chunk delivered by two relays now counts
