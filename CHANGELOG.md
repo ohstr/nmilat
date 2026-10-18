@@ -8,6 +8,10 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `relay.Observer` and `StoreObserver` (`WithObserver`,
+  `WithEventStoreObserver`) for relay metrics: sessions, messages, EVENT
+  outcomes by reason and kind class, REQ/COUNT latency, subscriptions, AUTH,
+  sends and store batches, without allocating on the hot path.
 - Adds `MaxAmountMillis` to `nipcw.CreateCircleWalletResponse`, the spend cap
   as the Hub resolved it, and the refusal codes `nipcw.ErrNotReady`,
   `ErrRestricted`, `ErrWalletExists` and `ErrRateLimited`, as NIP-CW now specifies.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,24 +21,34 @@ import (
 
 // ProcessPacket dispatches the packet to the appropriate handler.
 func (s *Session) ProcessPacket(ctx context.Context, p wire.Packet) error {
+	obs := s.config.observer()
 	switch packet := p.(type) {
 	case *wire.EventPacket:
+		obs.Message(MsgEvent)
 		return s.processEvent(ctx, packet)
 	case *wire.RequestPacket:
+		obs.Message(MsgReq)
 		return s.processRequest(ctx, packet)
 	case *wire.ClosePacket:
+		obs.Message(MsgClose)
 		return s.processClose(ctx, packet)
 	case *wire.AuthPacket:
+		obs.Message(MsgAuth)
 		return s.processAuth(ctx, packet)
 	case *wire.CountPacket:
+		obs.Message(MsgCount)
 		return s.processCount(ctx, packet)
 	case *wire.NegOpenPacket:
+		obs.Message(MsgNeg)
 		return s.processNegOpen(ctx, packet)
 	case *wire.NegMsgPacket:
+		obs.Message(MsgNeg)
 		return s.processNegMsg(ctx, packet)
 	case *wire.NegClosePacket:
+		obs.Message(MsgNeg)
 		return s.processNegClose(ctx, packet)
 	case *wire.NegErrPacket:
+		obs.Message(MsgNeg)
 		return s.processNegErr(ctx, packet)
 	default:
 		return fmt.Errorf("unknown packet type: %T", p)
@@ -80,6 +91,7 @@ func (s *Session) readGate() string {
 // refuse answers a REQ/COUNT the relay won't serve: a NOTICE, and the
 // CLOSED NIP-01 and NIP-45 call for so the client stops waiting.
 func (s *Session) refuse(subID, msg string) {
+	s.config.observer().ReadRefused(ParseRejectReason(msg))
 	s.reply(&wire.NoticeSubscriptionResponse{Message: msg})
 	s.reply(&wire.ClosedSubscriptionResponse{SubscriptionID: subID, Message: msg})
 }
@@ -97,12 +109,7 @@ func (s *Session) processRequest(ctx context.Context, rp *wire.RequestPacket) er
 	// docs/specs/nip29-groups-plan.md's "Visibility gating" section. Public
 	// groups, and ids naming no known group, are unaffected.
 	if groupID, denied := s.groups.deniedPrivateGroupFilter(s, rp.Filters); denied {
-		msg := groupRefusal(s, groupID)
-		s.reply(&wire.NoticeSubscriptionResponse{Message: msg})
-		s.reply(&wire.ClosedSubscriptionResponse{
-			SubscriptionID: rp.SubscriptionID,
-			Message:        msg,
-		})
+		s.refuse(rp.SubscriptionID, groupRefusal(s, groupID))
 		return nil
 	}
 
@@ -262,12 +269,14 @@ func (s *Session) processAuth(parent context.Context, ap *wire.AuthPacket) error
 }
 
 func (s *Session) acceptAuth(eventID, pubkey string) error {
+	s.config.observer().Auth(true, ReasonNone)
 	s.reply(&wire.OkSubscriptionResponse{EventID: eventID, Accepted: true, Message: "auth-success"})
 	s.config.Logger.Info().Str("pubkey", pubkey).Msg("client authenticated")
 	return nil
 }
 
 func (s *Session) rejectAuth(eventID, message string) error {
+	s.config.observer().Auth(false, ParseRejectReason(message))
 	s.reply(&wire.OkSubscriptionResponse{EventID: eventID, Accepted: false, Message: message})
 	return nil
 }
@@ -302,6 +311,7 @@ func (s *Session) processCount(parent context.Context, cp *wire.CountPacket) err
 	// denies). Route exactly the kinds that could be group metadata
 	// through the same per-event predicate before counting; every other
 	// kind keeps the fast raw-count path.
+	start := time.Now()
 	var count int64
 	var err error
 	if s.groups.needsPrivacyCheck(cp.Filters) {
@@ -316,6 +326,7 @@ func (s *Session) processCount(parent context.Context, cp *wire.CountPacket) err
 		return nil
 	}
 
+	s.config.observer().CountServed(time.Since(start))
 	s.reply(&wire.CountSubscriptionResponse{
 		SubscriptionID: cp.SubscriptionID,
 		Count:          count,
@@ -378,13 +389,10 @@ func runEventValidators(ctx context.Context, ev *nip01.Event) error {
 }
 
 func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error {
+	start := time.Now()
 
 	if s.limitation.AuthRequired && s.AuthedPubkey() == "" {
-		s.reply(&wire.OkSubscriptionResponse{
-			EventID:  ep.Event.ID,
-			Accepted: false,
-			Message:  "auth-required: valid NIP-42 authentication required",
-		})
+		s.finishEvent(ep.Event, start, false, "auth-required: valid NIP-42 authentication required")
 		return nil
 	}
 
@@ -399,11 +407,7 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 	if s.config.AgentAuthEnabled && s.config.AgentKindEnforcement {
 		if id, ok := s.IdentityMembership(ep.Event.PubKey); ok && id.Membership == MembershipVirtual && id.Conditions != nil {
 			if !id.Conditions.EvaluateKind(ep.Event.Kind) {
-				s.reply(&wire.OkSubscriptionResponse{
-					EventID:  ep.Event.ID,
-					Accepted: false,
-					Message:  "restricted: kind not authorized by credential",
-				})
+				s.finishEvent(ep.Event, start, false, "restricted: kind not authorized by credential")
 				return nil
 			}
 		}
@@ -415,11 +419,7 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 	// ev.PubKey are both readable straight off the wire struct, no crypto
 	// needed to make this determination.
 	if ok, msg := CheckSelfAuthored(ep.Event, s.selfPubkey); !ok {
-		s.reply(&wire.OkSubscriptionResponse{
-			EventID:  ep.Event.ID,
-			Accepted: false,
-			Message:  msg,
-		})
+		s.finishEvent(ep.Event, start, false, msg)
 		return nil
 	}
 
@@ -427,11 +427,7 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 
 		s.config.Logger.Error().Err(err).Msgf("failed to validate, ID=%s", ep.Event.ID)
 
-		s.reply(&wire.OkSubscriptionResponse{
-			EventID:  ep.Event.ID,
-			Accepted: false,
-			Message:  fmt.Sprintf("invalid: %s", err.Error()),
-		})
+		s.finishEvent(ep.Event, start, false, fmt.Sprintf("invalid: %s", err.Error()))
 
 		return nil
 	}
@@ -467,22 +463,14 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 				Int("required", powErr.Want).
 				Msg("event rejected: insufficient proof of work")
 
-			s.reply(&wire.OkSubscriptionResponse{
-				EventID:  ep.Event.ID,
-				Accepted: false,
-				Message:  powErr.Error(),
-			})
+			s.finishEvent(ep.Event, start, false, powErr.Error())
 
 			return nil
 		}
 
 		s.config.Logger.Error().Err(err).Msgf("failed to verify, ID=%s", ep.Event.ID)
 
-		s.reply(&wire.OkSubscriptionResponse{
-			EventID:  ep.Event.ID,
-			Accepted: false,
-			Message:  fmt.Sprintf("invalid: %s", err.Error()),
-		})
+		s.finishEvent(ep.Event, start, false, fmt.Sprintf("invalid: %s", err.Error()))
 
 		return nil
 	}
@@ -490,18 +478,14 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 	if err := runEventValidators(ctx, ep.Event); err != nil {
 		s.config.Logger.Error().Err(err).Msgf("event validation failed, ID=%s kind=%d", ep.Event.ID, ep.Event.Kind)
 
-		s.reply(&wire.OkSubscriptionResponse{
-			EventID:  ep.Event.ID,
-			Accepted: false,
-			Message:  fmt.Sprintf("invalid: %s", err.Error()),
-		})
+		s.finishEvent(ep.Event, start, false, fmt.Sprintf("invalid: %s", err.Error()))
 
 		return nil
 	}
 
 	if policy := s.config.EventPolicy; policy != nil {
 		if msg := policy(ep.Event); msg != "" {
-			s.reply(&wire.OkSubscriptionResponse{EventID: ep.Event.ID, Accepted: false, Message: msg})
+			s.finishEvent(ep.Event, start, false, msg)
 			return nil
 		}
 	}
@@ -521,11 +505,7 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 			if s.AuthedPubkey() != "" {
 				message = "restricted: a protected event may only be published by its author"
 			}
-			s.reply(&wire.OkSubscriptionResponse{
-				EventID:  ep.Event.ID,
-				Accepted: false,
-				Message:  message,
-			})
+			s.finishEvent(ep.Event, start, false, message)
 			return nil
 		}
 	}
@@ -541,6 +521,7 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 	// anyway).
 	if ep.Event.Kind == nip43.KindJoinRequest || ep.Event.Kind == nip43.KindLeaveRequest {
 		s.membership.HandleEvent(ctx, s, ep.Event)
+		s.observeCommand(ep.Event, start)
 		return nil
 	}
 
@@ -557,13 +538,14 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 	// path below.
 	if nip29.IsModerationKind(ep.Event.Kind) || nip29.IsUserRequestKind(ep.Event.Kind) {
 		s.groups.HandleEvent(ctx, s, ep.Event)
+		s.observeCommand(ep.Event, start)
 		return nil
 	}
 
 	// NIP-29 content: only members post into a private, closed or
 	// restricted group.
 	if msg := s.groups.deniedGroupWrite(ep.Event); msg != "" {
-		s.reply(&wire.OkSubscriptionResponse{EventID: ep.Event.ID, Accepted: false, Message: msg})
+		s.finishEvent(ep.Event, start, false, msg)
 		return nil
 	}
 
@@ -583,11 +565,7 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 				// auth-required, so the client can AUTH as it and retry.
 				msg = "auth-required: valid NIP-43 membership required"
 			}
-			s.reply(&wire.OkSubscriptionResponse{
-				EventID:  ep.Event.ID,
-				Accepted: false,
-				Message:  msg,
-			})
+			s.finishEvent(ep.Event, start, false, msg)
 			return nil
 		}
 	}
@@ -600,7 +578,7 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 	var replyOnce sync.Once
 	ok := func(accepted bool, msg string) {
 		replyOnce.Do(func() {
-			s.reply(&wire.OkSubscriptionResponse{EventID: ep.Event.ID, Accepted: accepted, Message: msg})
+			s.finishEvent(ep.Event, start, accepted, msg)
 		})
 	}
 	stopTimer := func() bool { return false }
@@ -684,6 +662,24 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 
 	return nil
 
+}
+
+// finishEvent sends an EVENT's OK and reports its outcome.
+func (s *Session) finishEvent(ev *nip01.Event, start time.Time, accepted bool, msg string) {
+	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: accepted, Message: msg})
+	result, reason := EventAccepted, ReasonNone
+	switch {
+	case !accepted:
+		result, reason = EventRejected, ParseRejectReason(msg)
+	case strings.HasPrefix(msg, "duplicate:"):
+		result = EventDuplicate
+	}
+	s.config.observer().EventHandled(result, reason, ClassifyKind(ev.Kind), time.Since(start))
+}
+
+// observeCommand reports a NIP-43/NIP-29 request, whose handler sent its own OK.
+func (s *Session) observeCommand(ev *nip01.Event, start time.Time) {
+	s.config.observer().EventHandled(EventCommand, ReasonNone, ClassifyKind(ev.Kind), time.Since(start))
 }
 
 /////////////////////////////////////////////////////////////////////

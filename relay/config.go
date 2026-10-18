@@ -119,6 +119,9 @@ type SessionConfig struct {
 	// to zerolog.Nop() (silent) so embedding a Session/SessionHandler never
 	// writes to the process-global logger unless the caller opts in.
 	Logger zerolog.Logger
+
+	// Observer receives activity for metrics. nil discards it.
+	Observer Observer
 }
 
 type DelegationConfig struct {
@@ -310,6 +313,9 @@ type EventStoreConfig struct {
 	// (silent) so an EventStore never writes to the process-global logger
 	// unless the caller opts in.
 	Logger zerolog.Logger
+
+	// Observer receives write and scan activity for metrics. nil discards it.
+	Observer StoreObserver
 }
 
 // EventStoreOption mutates the internal event store configuration.

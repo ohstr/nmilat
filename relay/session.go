@@ -176,9 +176,11 @@ func NewSessionContext(store *EventStore, info *ClientInfo, cfg *nip11.Metadata,
 	if sessCfg.MaxConcurrentStoreTasks <= 0 {
 		sessCfg.MaxConcurrentStoreTasks = defaultMaxConcurrentStoreTasks
 	}
+	subs := NewSubscriptions(&cfg.Limitation)
+	subs.obs = sessCfg.Observer
 	return &SessionContext{
 		store:              store,
-		subscriptions:      NewSubscriptions(&cfg.Limitation),
+		subscriptions:      subs,
 		info:               info,
 		config:             sessCfg,
 		limitation:         &cfg.Limitation,
@@ -452,6 +454,7 @@ func (s *Session) Recv(ctx context.Context) error {
 		} else if websocket.IsCloseError(err, websocket.CloseMessageTooBig) {
 			return fmt.Errorf("client sent an event that is too large")
 		} else if ok := IsPacketError(err); ok {
+			s.config.observer().Message(MsgMalformed)
 			s.reply(&wire.NoticeSubscriptionResponse{
 				Message: fmt.Sprintf("invalid request: %s", err.Error()),
 			})
@@ -527,16 +530,17 @@ func (s *Session) sendPacket(packet wire.SubscriptionResponse) error {
 		_ = s.conn.SetWriteDeadline(zero)
 	}
 
-	packetType := fmt.Sprintf("%T", packet)
 	start := time.Now()
 	err := s.conn.WriteJSON(packet)
-	if elapsed := time.Since(start); elapsed > slowSendWarnThreshold && err == nil {
+	elapsed := time.Since(start)
+	s.config.observer().Sent(elapsed, err != nil)
+	if elapsed > slowSendWarnThreshold && err == nil {
 		// Successful but slow: no error, but something (most likely a
 		// slow-reading peer) backed this up well past ordinary jitter.
 		s.config.Logger.Warn().
 			Int64("session", s.id).
 			Str("remote", s.info.RemoteAddr).
-			Str("packet_type", packetType).
+			Str("packet_type", fmt.Sprintf("%T", packet)).
 			Dur("elapsed", elapsed).
 			Int("outgoing_queue_len", len(s.incoming)).
 			Msg("sendPacket was slow -- possible backpressure on this connection")
@@ -546,7 +550,7 @@ func (s *Session) sendPacket(packet wire.SubscriptionResponse) error {
 			s.config.Logger.Warn().
 				Int64("session", s.id).
 				Str("remote", s.info.RemoteAddr).
-				Str("packet_type", packetType).
+				Str("packet_type", fmt.Sprintf("%T", packet)).
 				Err(err).
 				Msg("sendPacket failed")
 		}
@@ -677,6 +681,7 @@ type SessionHandler struct {
 	relayMetadata *nip11.Metadata
 	config        *SessionConfig
 	nextSessID    int64
+	sessionCount  atomic.Int64
 	searchService search.Service
 
 	// VerificationWorker processes NIP-05/LUD-16 profile verification jobs.
@@ -818,7 +823,13 @@ func (sh *SessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	sc.groups = sh.groups
 	session := NewSession(sessID, ws, sc, sh.relayMetadata.Limitation.MaxMessageLength)
 	sh.sessions.Store(sessID, session)
-	defer sh.sessions.Delete(sessID)
+	sh.sessionCount.Add(1)
+	sh.config.observer().SessionOpened()
+	defer func() {
+		sh.sessions.Delete(sessID)
+		sh.sessionCount.Add(-1)
+		sh.config.observer().SessionClosed()
+	}()
 
 	sh.config.Logger.Info().
 		Int64("session", sessID).
@@ -920,12 +931,7 @@ func (sh *SessionHandler) publishMembershipList() {
 
 // SessionCount returns the number of currently connected sessions.
 func (sh *SessionHandler) SessionCount() int {
-	count := 0
-	sh.sessions.Range(func(_, _ interface{}) bool {
-		count++
-		return true
-	})
-	return count
+	return int(sh.sessionCount.Load())
 }
 
 func wsHandshakeValidator(allowedOrigins []string, logger zerolog.Logger) func(*http.Request) bool {
