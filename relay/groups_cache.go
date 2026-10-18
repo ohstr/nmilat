@@ -32,6 +32,15 @@ type groupsCache struct {
 	writeMu sync.Mutex
 }
 
+// Len returns the number of cached groups.
+func (c *groupsCache) Len() int {
+	snap := c.snap.Load()
+	if snap == nil {
+		return 0
+	}
+	return len(snap.groups)
+}
+
 // Get returns the cached record for id, or nil if id names no known group.
 // Callers must not mutate the returned record.
 func (c *groupsCache) Get(id string) *GroupRecord {
@@ -170,6 +179,14 @@ type GroupsService struct {
 	// handleDeleteGroup's cascade, never for a same-group-only edit
 	// (which groupsCache's own synchronization already covers alone).
 	linkMu sync.Mutex
+}
+
+// Count returns the number of hosted groups, from the in-memory cache.
+func (g *GroupsService) Count() int {
+	if g == nil {
+		return 0
+	}
+	return g.cache.Len()
 }
 
 // NewGroupsService constructs a GroupsService backed by store, using

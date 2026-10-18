@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -37,6 +38,8 @@ type ServiceImpl struct {
 
 	batchSize     int
 	batchInterval time.Duration
+
+	dropped atomic.Uint64
 }
 
 func NewService(client Backend, batchSize int, maxChSize int) *ServiceImpl {
@@ -77,10 +80,18 @@ func (s *ServiceImpl) IndexProfile(ctx context.Context, doc *ProfileDocument) er
 	case s.inputChan <- doc:
 		return nil
 	default:
+		s.dropped.Add(1)
 		log.Warn().Str("id", doc.ID).Msg("search indexing channel full, dropping update")
 		return fmt.Errorf("indexing channel full")
 	}
 }
+
+// QueueDepth returns the number of profile updates waiting to be indexed.
+func (s *ServiceImpl) QueueDepth() int { return len(s.inputChan) }
+
+// Dropped returns the number of profile updates dropped because the queue
+// was full.
+func (s *ServiceImpl) Dropped() uint64 { return s.dropped.Load() }
 
 // IndexProfileWithMetrics adds any existing verified metrics (Nip05/Lud16/Picture)
 // to the base score before pushing to the index channel.

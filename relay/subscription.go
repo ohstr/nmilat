@@ -130,6 +130,7 @@ type SubscriptionsMap struct {
 	subs            map[string]*Subscription
 	mu              sync.Mutex
 	maxSubscription int
+	obs             Observer
 }
 
 // NewSubscriptions never writes to cfg: every session shares the relay's
@@ -150,9 +151,13 @@ func (s *SubscriptionsMap) Add(sub *Subscription) bool {
 	defer s.mu.Unlock()
 
 	if len(s.subs) >= s.maxSubscription {
+		s.observer().SubscriptionLimitHit()
 		return false
 	}
 
+	if _, replaced := s.subs[sub.id]; !replaced {
+		s.observer().SubscriptionsChanged(1)
+	}
 	s.subs[sub.id] = sub
 	return true
 }
@@ -169,6 +174,9 @@ func (s *SubscriptionsMap) StopAll() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if n := len(s.subs); n > 0 {
+		s.observer().SubscriptionsChanged(-n)
+	}
 	for _, sub := range s.subs {
 		sub.Stop()
 		delete(s.subs, sub.id)
@@ -182,6 +190,9 @@ func (s *SubscriptionsMap) StopAllIDs() []string {
 	defer s.mu.Unlock()
 
 	ids := make([]string, 0, len(s.subs))
+	if n := len(s.subs); n > 0 {
+		s.observer().SubscriptionsChanged(-n)
+	}
 	for id, sub := range s.subs {
 		sub.Stop()
 		delete(s.subs, id)
@@ -198,6 +209,7 @@ func (s *SubscriptionsMap) Close(subID string) bool {
 	if exists {
 		delete(s.subs, subID)
 		sub.Stop()
+		s.observer().SubscriptionsChanged(-1)
 	}
 
 	return exists
@@ -208,4 +220,11 @@ func (s *SubscriptionsMap) Size() int {
 	defer s.mu.Unlock()
 
 	return len(s.subs)
+}
+
+func (s *SubscriptionsMap) observer() Observer {
+	if s.obs == nil {
+		return NopObserver{}
+	}
+	return s.obs
 }

@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ohstr/nmilat/nip01"
@@ -186,6 +187,7 @@ type EventStore struct {
 	batchSize     int
 	batchInterval time.Duration
 	logger        zerolog.Logger
+	obs           StoreObserver
 	// scanSlots bounds concurrent query scan passes; nil means unbounded.
 	scanSlots chan struct{}
 	// scanSlotWait bounds the wait for a slot; 0 means no bound.
@@ -194,6 +196,8 @@ type EventStore struct {
 	// events, waking live tails instead of having them poll.
 	commitMu sync.Mutex
 	commitCh chan struct{}
+	// zapRebuilding guards RebuildZapIndex against running twice at once.
+	zapRebuilding atomic.Bool
 }
 
 func NewEventStore(path string, limitation *nip11.Limitation, opts ...EventStoreOption) (*EventStore, error) {
@@ -282,6 +286,7 @@ func NewEventStore(path string, limitation *nip11.Limitation, opts ...EventStore
 		batchSize:     cfg.BatchSize,
 		batchInterval: cfg.BatchInterval,
 		logger:        cfg.Logger,
+		obs:           cfg.Observer,
 	}
 	if cfg.MaxConcurrentScans > 0 {
 		es.scanSlots = make(chan struct{}, cfg.MaxConcurrentScans)
@@ -294,6 +299,21 @@ func NewEventStore(path string, limitation *nip11.Limitation, opts ...EventStore
 	es.startWorkers()
 
 	return es, nil
+}
+
+// TaskQueueDepth returns the number of write tasks waiting for a worker.
+func (s *EventStore) TaskQueueDepth() int { return len(s.taskQueue) }
+
+// TaskQueueCapacity returns the write task queue's size.
+func (s *EventStore) TaskQueueCapacity() int { return cap(s.taskQueue) }
+
+// InflightScans returns the number of query scans holding a scan slot, and
+// the slot limit (0 when unbounded, in which case in-flight is also 0).
+func (s *EventStore) InflightScans() (inflight, limit int) {
+	if s.scanSlots == nil {
+		return 0, 0
+	}
+	return len(s.scanSlots), cap(s.scanSlots)
 }
 
 // viewScan runs fn in a read transaction once a scan slot is free. A store
@@ -315,6 +335,7 @@ func (s *EventStore) viewScan(ctx context.Context, fn func(*bolt.Tx) error) erro
 		case <-s.closeCh:
 			return nil
 		case <-expired:
+			s.observer().ScanBusy()
 			return ErrScanBusy
 		}
 	}
@@ -405,7 +426,9 @@ func (s *EventStore) ExecuteBatch(tasks []Task) {
 	// Before the acks: subscribers waiting on new events start now.
 	s.signalCommit()
 
-	if d := time.Since(start); d > slowBatchThreshold {
+	d := time.Since(start)
+	s.observer().BatchCommitted(len(tasks), d, err != nil)
+	if d > slowBatchThreshold {
 		s.logger.Warn().Dur("took", d).Int("tasks", len(tasks)).Int("queued", len(s.taskQueue)).Msg("slow store batch")
 	}
 

@@ -68,6 +68,18 @@ func TestReindexZaps(t *testing.T) {
 		ev2Bytes, _ := json.Marshal(ev2)
 		_ = b.Put(itob(2), ev2Bytes)
 
+		// Event 3: NIP-57 zap receipt (Kind 9735)
+		ev3 := &nip01.Event{
+			Kind:      9735,
+			CreatedAt: 300,
+			Tags: [][]string{
+				{"p", "0000000000000000000000000000000000000000000000000000000000000002"},
+				{"amount", "2000000"},
+			},
+		}
+		ev3Bytes, _ := json.Marshal(ev3)
+		_ = b.Put(itob(3), ev3Bytes)
+
 		return nil
 	})
 	require.NoError(t, err)
@@ -84,13 +96,15 @@ func TestReindexZaps(t *testing.T) {
 		t.Logf("Indexed: %d", c)
 	})
 	require.NoError(t, err)
-	assert.Equal(t, 1, count, "Should index exactly 1 zap")
+	assert.Equal(t, 2, count, "Should index both the 9521 and the 9735 zap")
 
 	// 4. Verify Index
 	stats, err := store.GetTopZapped(ctx, 0, uint64(time.Now().Unix()+1000), 10)
 	require.NoError(t, err)
 
-	require.Len(t, stats, 1)
-	assert.Equal(t, "0000000000000000000000000000000000000000000000000000000000000001", stats[0].Pubkey)
-	assert.Equal(t, uint64(1000000), stats[0].TotalMLoki)
+	require.Len(t, stats, 2)
+	assert.Equal(t, "0000000000000000000000000000000000000000000000000000000000000002", stats[0].Pubkey)
+	assert.Equal(t, uint64(2000000), stats[0].TotalMLoki)
+	assert.Equal(t, "0000000000000000000000000000000000000000000000000000000000000001", stats[1].Pubkey)
+	assert.Equal(t, uint64(1000000), stats[1].TotalMLoki)
 }

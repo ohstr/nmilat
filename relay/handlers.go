@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/utils"
@@ -150,6 +151,8 @@ func (h *StandardRequestHandler) Handle(ctx context.Context, s *Session, rp *wir
 		defer utils.RecoverPanic(s.config.Logger)
 
 		var wg sync.WaitGroup
+		start := time.Now()
+		delivered, stored := 0, true
 		go sub.Start(ctx, &wg)
 
 		for {
@@ -161,9 +164,16 @@ func (h *StandardRequestHandler) Handle(ctx context.Context, s *Session, rp *wir
 				}
 				s.reply(&wire.EventSubscriptionResponse{SubscriptionID: sub.id, EventBytes: event.Bytes})
 				wg.Done()
+				if stored {
+					delivered++
+				}
 
 			case <-eose:
 				s.reply(&wire.EOSESubscriptionResponse{SubscriptionID: sub.id})
+				if stored {
+					stored = false
+					s.config.observer().ReqServed(time.Since(start), delivered)
+				}
 
 			case err := <-errs:
 				s.reply(&wire.ClosedSubscriptionResponse{
