@@ -36,7 +36,9 @@ type ProfileVerificationWorker struct {
 	TotalProcessed atomic.Uint64
 	TotalErrors    atomic.Uint64
 	TotalEnqueued  atomic.Uint64
-	StartTime      time.Time
+	// TotalDropped counts jobs refused because the queue was full.
+	TotalDropped atomic.Uint64
+	StartTime    time.Time
 }
 
 // NewProfileVerificationWorker inherits its logger from store, which already
@@ -91,6 +93,7 @@ func (w *ProfileVerificationWorker) QueueJob(event *nip01.Event) {
 		case w.jobChan <- job:
 			w.TotalEnqueued.Add(1)
 		default:
+			w.TotalDropped.Add(1)
 		}
 	}
 }
@@ -214,6 +217,9 @@ func (w *ProfileVerificationWorker) processJob(job VerificationJob) {
 		}
 	}
 }
+
+// QueueDepth returns the number of jobs waiting for a worker.
+func (w *ProfileVerificationWorker) QueueDepth() int { return len(w.jobChan) }
 
 // GetStats returns thread-safe metadata about the worker workload
 func (w *ProfileVerificationWorker) GetStats() map[string]interface{} {

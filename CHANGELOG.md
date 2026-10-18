@@ -8,6 +8,9 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds queue-depth and drop counters for profile verification and search
+  indexing, `MembershipService.Count`, `GroupsService.Count`, and
+  `EventStore.TaskQueueDepth`/`InflightScans`, so an embedder can graph them.
 - Adds `relay.Observer` and `StoreObserver` (`WithObserver`,
   `WithEventStoreObserver`) for relay metrics: sessions, messages, EVENT
   outcomes by reason and kind class, REQ/COUNT latency, subscriptions, AUTH,

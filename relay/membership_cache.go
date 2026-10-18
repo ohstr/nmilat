@@ -192,6 +192,18 @@ func (m *MembershipService) LoadFromStore() error {
 	return nil
 }
 
+// Count returns the number of current members, from the in-memory cache.
+func (m *MembershipService) Count() int {
+	if m == nil {
+		return 0
+	}
+	snap := m.cache.snap.Load()
+	if snap == nil {
+		return 0
+	}
+	return len(snap.members)
+}
+
 // IsMember reports whether pubkey is a current, direct/active NIP-43
 // member.
 func (m *MembershipService) IsMember(pubkey string) bool {
