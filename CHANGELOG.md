@@ -231,6 +231,9 @@ privacy and performance fixes.
   meaningless key; `GetPublicKey`, `Event.Sign` and every encrypt, sign and
   proof path now refuse it with `utils.ErrInvalidPrivateKey`.
   ([#141](https://github.com/ohstr/nmilat/pull/141))
+- Fixes event ids for tags containing U+2028 or U+2029 differing from every
+  other client, so a relay or Hub on nmilat no longer rejects such an event
+  signed elsewhere; tags are now escaped exactly like the content.
 - Fixes `ReindexZaps` skipping NIP-57 zap receipts (kind 9735), so a rebuilt
   zap index no longer drops them from top-zapped results.
   ([#131](https://github.com/ohstr/nmilat/pull/131))
