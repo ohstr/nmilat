@@ -11,8 +11,8 @@ import (
 	"strconv"
 	"strings"
 
-	btcec "github.com/flokiorg/go-flokicoin/crypto"
 	"github.com/flokiorg/go-flokicoin/crypto/schnorr"
+	"github.com/ohstr/nmilat/utils"
 )
 
 // Failure modes for VerifyDelegationToken/ValidateConditions, for callers
@@ -30,12 +30,10 @@ var (
 // delegatePubkey: Delegate's public key (hex)
 // conditions: Delegation conditions (e.g., "kind=25521")
 func SignDelegationToken(privkey, delegatePubkey, conditions string) (string, error) {
-	privateKeyBytes, err := hex.DecodeString(privkey)
+	privKey, err := utils.ParsePrivateKeyHex(privkey)
 	if err != nil {
 		return "", fmt.Errorf("invalid private key: %w", err)
 	}
-
-	privKey, _ := btcec.PrivKeyFromBytes(privateKeyBytes)
 
 	tokenStr := delegationString(delegatePubkey, conditions)
 	h := sha256.Sum256([]byte(tokenStr))

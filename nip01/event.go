@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	btcec "github.com/flokiorg/go-flokicoin/crypto"
 	"github.com/flokiorg/go-flokicoin/crypto/schnorr"
 	"github.com/ohstr/nmilat/nip13"
 	"github.com/ohstr/nmilat/utils"
@@ -243,12 +242,11 @@ func (ev *Event) Verify(opts ...VerifyOption) error {
 
 func (ev *Event) Sign(privateKey string) error {
 
-	privateKeyBytes, err := hex.DecodeString(privateKey)
+	privKey, err := utils.ParsePrivateKeyHex(privateKey)
 	if err != nil {
 		return fmt.Errorf("invalid private key: %w", err)
 	}
-
-	privKey, pubKey := btcec.PrivKeyFromBytes(privateKeyBytes)
+	pubKey := privKey.PubKey()
 	publicKeyBytes := pubKey.SerializeCompressed()
 
 	// set public key to the event

@@ -13,7 +13,6 @@ import (
 	"github.com/ohstr/nmilat/nipIC"
 	"github.com/ohstr/nmilat/utils"
 
-	btcec "github.com/flokiorg/go-flokicoin/crypto"
 	"github.com/flokiorg/go-flokicoin/crypto/schnorr"
 )
 
@@ -23,11 +22,10 @@ import (
 // uses (schnorr.ParsePubKey for the 32-byte x-only nostr pubkey,
 // nip44.GenerateConversationKey, nip44.Decrypt).
 func decryptFromPubkey(privKeyHex, pubKeyHex, ciphertext string) (string, error) {
-	privBytes, err := hex.DecodeString(privKeyHex)
+	priv, err := utils.ParsePrivateKeyHex(privKeyHex)
 	if err != nil {
 		return "", fmt.Errorf("nipcash: invalid private key: %w", err)
 	}
-	priv, _ := btcec.PrivKeyFromBytes(privBytes)
 	pubBytes, err := hex.DecodeString(pubKeyHex)
 	if err != nil {
 		return "", fmt.Errorf("nipcash: invalid public key: %w", err)

@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"time"
 
-	btcec "github.com/flokiorg/go-flokicoin/crypto"
 	"github.com/flokiorg/go-flokicoin/crypto/schnorr"
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/utils"
@@ -255,11 +254,10 @@ func ParticipationProofDigest(aTag string) []byte {
 // SignParticipationProof signs an activity's "a" tag with a participant's
 // private key and returns the hex proof for the 5th term of their "p" tag.
 func SignParticipationProof(privateKey, aTag string) (string, error) {
-	privateKeyBytes, err := hex.DecodeString(privateKey)
+	privKey, err := utils.ParsePrivateKeyHex(privateKey)
 	if err != nil {
 		return "", fmt.Errorf("nip53: invalid private key: %w", err)
 	}
-	privKey, _ := btcec.PrivKeyFromBytes(privateKeyBytes)
 	sig, err := schnorr.Sign(privKey, ParticipationProofDigest(aTag))
 	if err != nil {
 		return "", fmt.Errorf("nip53: failed to sign participation proof: %w", err)

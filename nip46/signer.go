@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strings"
 
-	btcec "github.com/flokiorg/go-flokicoin/crypto"
 	"github.com/flokiorg/go-flokicoin/crypto/schnorr"
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip04"
@@ -109,11 +108,10 @@ func (k *LocalKey) Decrypt(_ context.Context, scheme, peerPubKey, ciphertext str
 }
 
 func (k *LocalKey) conversationKey(peerPubKey string) ([]byte, error) {
-	privBytes, err := hex.DecodeString(k.priv)
+	priv, err := utils.ParsePrivateKeyHex(k.priv)
 	if err != nil {
 		return nil, err
 	}
-	priv, _ := btcec.PrivKeyFromBytes(privBytes)
 	pubBytes, err := hex.DecodeString(peerPubKey)
 	if err != nil {
 		return nil, fmt.Errorf("invalid peer pubkey: %w", err)

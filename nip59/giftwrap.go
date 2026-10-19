@@ -21,6 +21,7 @@ import (
 	"github.com/flokiorg/go-flokicoin/crypto/schnorr"
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip44"
+	"github.com/ohstr/nmilat/utils"
 )
 
 const (
@@ -68,11 +69,10 @@ func RandomizedCreatedAt() uint64 {
 //
 // recipientPubKeyHex is a 32-byte x-only Nostr pubkey.
 func Wrap(payload *nip01.Event, senderPrivKeyHex, recipientPubKeyHex string) (*nip01.Event, error) {
-	senderPrivBytes, err := hex.DecodeString(senderPrivKeyHex)
+	senderPriv, err := utils.ParsePrivateKeyHex(senderPrivKeyHex)
 	if err != nil {
 		return nil, fmt.Errorf("nip59: invalid sender private key: %w", err)
 	}
-	senderPriv, _ := btcec.PrivKeyFromBytes(senderPrivBytes)
 
 	recipientPubBytes, err := hex.DecodeString(recipientPubKeyHex)
 	if err != nil {
