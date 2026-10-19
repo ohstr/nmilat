@@ -10,6 +10,7 @@ privacy and performance fixes.
 
 - Adds `utils.ParsePrivateKeyHex`, which decodes a hex secret key and refuses
   one outside [1, n-1].
+  ([#141](https://github.com/ohstr/nmilat/pull/141))
 - Adds `nip11.Metadata.Banner`, NIP-11's "banner" image URL, settable from
   config as `banner`.
   ([#132](https://github.com/ohstr/nmilat/pull/132))
@@ -229,6 +230,7 @@ privacy and performance fixes.
 - Fixes a secret key of 0 or at or above the curve order being reduced into a
   meaningless key; `GetPublicKey`, `Event.Sign` and every encrypt, sign and
   proof path now refuse it with `utils.ErrInvalidPrivateKey`.
+  ([#141](https://github.com/ohstr/nmilat/pull/141))
 - Fixes `ReindexZaps` skipping NIP-57 zap receipts (kind 9735), so a rebuilt
   zap index no longer drops them from top-zapped results.
   ([#131](https://github.com/ohstr/nmilat/pull/131))
