@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -21,6 +22,14 @@ import (
 
 const (
 	Version = 2
+
+	// MinPlaintextSize and MaxPlaintextSize bound a plaintext's length in bytes.
+	MinPlaintextSize = 1
+	MaxPlaintextSize = 1<<32 - 1
+
+	// extendedPrefixThreshold is the first length written with the 6-byte
+	// prefix (two zero bytes, then a u32) instead of a u16.
+	extendedPrefixThreshold = 65536
 )
 
 var (
@@ -28,6 +37,9 @@ var (
 	ErrMessageTooShort = errors.New("message too short")
 	ErrInvalidPadding  = errors.New("invalid padding")
 	ErrInvalidMAC      = errors.New("invalid MAC")
+	// ErrInvalidPlaintextLength is a plaintext shorter than MinPlaintextSize
+	// or longer than MaxPlaintextSize: no peer could open it.
+	ErrInvalidPlaintextLength = errors.New("invalid plaintext length")
 )
 
 // GenerateConversationKey computes the conversation key using HKDF-SHA256-Extract
@@ -54,11 +66,25 @@ func getMessageKeys(conversationKey, nonce []byte) (chachaKey, chachaNonce, hmac
 
 // Encrypt encrypts plaintext using NIP-44 v2.
 func Encrypt(plaintext string, conversationKey []byte) (string, error) {
+	if err := checkPlaintextLen(len(plaintext)); err != nil {
+		return "", err
+	}
 	nonce := make([]byte, 32)
 	if _, err := rand.Read(nonce); err != nil {
 		return "", err
 	}
+	return encryptWithNonce(plaintext, conversationKey, nonce)
+}
 
+// checkPlaintextLen refuses a length NIP-44 cannot carry.
+func checkPlaintextLen(n int) error {
+	if n < MinPlaintextSize || n > MaxPlaintextSize {
+		return fmt.Errorf("%w: %d bytes", ErrInvalidPlaintextLength, n)
+	}
+	return nil
+}
+
+func encryptWithNonce(plaintext string, conversationKey, nonce []byte) (string, error) {
 	chachaKey, chachaNonce, hmacKey, err := getMessageKeys(conversationKey, nonce)
 	if err != nil {
 		return "", err
@@ -136,38 +162,45 @@ func hmacAad(key, message, aad []byte) []byte {
 	return h.Sum(nil)
 }
 
+// pad frames plaintext with its length, a u16 below extendedPrefixThreshold
+// and [0, 0] plus a u32 from it on, then zero padding. The length must have
+// passed checkPlaintextLen.
 func pad(plaintext string) []byte {
-	unpadded := []byte(plaintext)
-	unpaddedLen := len(unpadded)
-	prefix := make([]byte, 2)
-	prefix[0] = byte(unpaddedLen >> 8)
-	prefix[1] = byte(unpaddedLen)
-
-	paddedLen := calcPaddedLen(unpaddedLen)
-	result := make([]byte, 2+paddedLen)
-	copy(result[0:2], prefix)
-	copy(result[2:2+unpaddedLen], unpadded)
-	// Padding bytes are 0 in nostr-tools (based on code I saw, subarray suffix left empty)
-	// Spec says "padded with random data" is RECOMMENDED, but zeroes are simpler and also valid if decrypted correctly.
-	// nostr-tools uses `new Uint8Array(...)` which is zeroes.
+	unpaddedLen := len(plaintext)
+	prefixLen := 2
+	if unpaddedLen >= extendedPrefixThreshold {
+		prefixLen = 6
+	}
+	result := make([]byte, prefixLen+calcPaddedLen(unpaddedLen))
+	if prefixLen == 2 {
+		binary.BigEndian.PutUint16(result, uint16(unpaddedLen))
+	} else {
+		binary.BigEndian.PutUint32(result[2:], uint32(unpaddedLen))
+	}
+	copy(result[prefixLen:], plaintext)
 	return result
 }
 
+// unpad reverses pad. A u16 length of 0 signals the extended prefix, which
+// must then carry a length of at least extendedPrefixThreshold.
 func unpad(padded []byte) (string, error) {
 	if len(padded) < 2 {
 		return "", ErrInvalidPadding
 	}
-	unpaddedLen := int(padded[0])<<8 | int(padded[1])
-	if unpaddedLen < 1 || unpaddedLen > 65535 {
+	unpaddedLen, prefixLen := int(binary.BigEndian.Uint16(padded)), 2
+	if unpaddedLen == 0 {
+		if len(padded) < 6 {
+			return "", ErrInvalidPadding
+		}
+		unpaddedLen, prefixLen = int(binary.BigEndian.Uint32(padded[2:])), 6
+		if unpaddedLen < extendedPrefixThreshold {
+			return "", ErrInvalidPadding
+		}
+	}
+	if len(padded) != prefixLen+calcPaddedLen(unpaddedLen) {
 		return "", ErrInvalidPadding
 	}
-	if len(padded) != 2+calcPaddedLen(unpaddedLen) {
-		return "", ErrInvalidPadding
-	}
-	if unpaddedLen > len(padded)-2 {
-		return "", ErrInvalidPadding
-	}
-	return string(padded[2 : 2+unpaddedLen]), nil
+	return string(padded[prefixLen : prefixLen+unpaddedLen]), nil
 }
 
 func calcPaddedLen(l int) int {
