@@ -220,6 +220,7 @@ privacy and performance fixes.
 - Fixes `nip44.Encrypt` sealing an empty plaintext no peer can open and
   wrapping the length of one above 65535 bytes; it now follows NIP-44's current
   rules, 1 byte to 4 GiB with a 6-byte length prefix from 65536 bytes on.
+  ([#139](https://github.com/ohstr/nmilat/pull/139))
 - Fixes `ReindexZaps` skipping NIP-57 zap receipts (kind 9735), so a rebuilt
   zap index no longer drops them from top-zapped results.
   ([#131](https://github.com/ohstr/nmilat/pull/131))
