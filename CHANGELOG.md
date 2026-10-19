@@ -223,6 +223,7 @@ privacy and performance fixes.
   ([#139](https://github.com/ohstr/nmilat/pull/139))
 - Fixes the BOLT11 decoder wrapping an amount too large for int64 millis into a
   different, sometimes negative, amount; such an invoice is now refused.
+  ([#140](https://github.com/ohstr/nmilat/pull/140))
 - Fixes `ReindexZaps` skipping NIP-57 zap receipts (kind 9735), so a rebuilt
   zap index no longer drops them from top-zapped results.
   ([#131](https://github.com/ohstr/nmilat/pull/131))
