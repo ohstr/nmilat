@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	btcec "github.com/flokiorg/go-flokicoin/crypto"
 	"github.com/flokiorg/go-flokicoin/crypto/schnorr"
 
 	"github.com/ohstr/nmilat/nip44"
@@ -194,11 +193,10 @@ func (p CreateCircleWalletParams) ParseResult(hubPubkey string, data []byte) (*C
 // each package's own error-wrapping conventions) that a shared package
 // isn't worth the indirection.
 func decryptFromPubkey(privKeyHex, pubKeyHex, ciphertext string) (string, error) {
-	privBytes, err := hex.DecodeString(privKeyHex)
+	priv, err := utils.ParsePrivateKeyHex(privKeyHex)
 	if err != nil {
 		return "", fmt.Errorf("nipcw: invalid private key: %w", err)
 	}
-	priv, _ := btcec.PrivKeyFromBytes(privBytes)
 	pubBytes, err := hex.DecodeString(pubKeyHex)
 	if err != nil {
 		return "", fmt.Errorf("nipcw: invalid public key: %w", err)

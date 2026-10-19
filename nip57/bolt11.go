@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -170,15 +171,16 @@ func decodeBolt11Amount(amountPart string) (int64, error) {
 		return 0, fmt.Errorf("invalid bolt11 amount %q: %w", amountPart, err)
 	}
 
+	var mlokiPerUnit int64
 	switch multiplier {
 	case 0:
-		return value * 100_000_000_000, nil // whole currency units -> mloki
+		mlokiPerUnit = 100_000_000_000 // whole currency units
 	case 'm':
-		return value * 100_000_000, nil
+		mlokiPerUnit = 100_000_000
 	case 'u':
-		return value * 100_000, nil
+		mlokiPerUnit = 100_000
 	case 'n':
-		return value * 100, nil
+		mlokiPerUnit = 100
 	case 'p':
 		if value%10 != 0 {
 			return 0, fmt.Errorf("invalid pico bolt11 amount %q: not a multiple of 10", amountPart)
@@ -187,4 +189,9 @@ func decodeBolt11Amount(amountPart string) (int64, error) {
 	default:
 		return 0, fmt.Errorf("unknown bolt11 amount multiplier %q", string(multiplier))
 	}
+	// A wrapped product would pay a different amount than the invoice names.
+	if value > math.MaxInt64/mlokiPerUnit {
+		return 0, fmt.Errorf("invalid bolt11 amount %q: does not fit in int64 mloki", amountPart)
+	}
+	return value * mlokiPerUnit, nil
 }

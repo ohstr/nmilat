@@ -10,6 +10,7 @@ import (
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip44"
 	"github.com/ohstr/nmilat/nip59"
+	"github.com/ohstr/nmilat/utils"
 )
 
 // WrapRequest builds the kind-23190 event a hub actually accepts, from an
@@ -137,11 +138,10 @@ func ConversationKeyFor(eventPubkeyXOnly, counterpartyPrivKeyHex string) ([32]by
 		return out, fmt.Errorf("%w: event pubkey is not a valid point: %v", ErrEnvelopeMalformed, err)
 	}
 
-	privBytes, err := hex.DecodeString(counterpartyPrivKeyHex)
+	priv, err := utils.ParsePrivateKeyHex(counterpartyPrivKeyHex)
 	if err != nil {
 		return out, fmt.Errorf("transport: invalid private key: %w", err)
 	}
-	priv, _ := btcec.PrivKeyFromBytes(privBytes)
 
 	key, err := nip44.GenerateConversationKey(priv, pub)
 	if err != nil {

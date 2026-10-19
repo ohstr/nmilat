@@ -11,7 +11,7 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/flokiorg/go-flokicoin/crypto"
+	"github.com/ohstr/nmilat/utils"
 	"github.com/rs/zerolog/log"
 )
 
@@ -253,15 +253,11 @@ func NewHandler(md *Metadata, supported NIPSet) http.Handler {
 }
 
 func DerivePubKey(privHex string) (string, error) {
-	b, err := hex.DecodeString(privHex)
+	priv, err := utils.ParsePrivateKeyHex(privHex)
 	if err != nil {
 		return "", err
 	}
-	if len(b) != 32 {
-		return "", fmt.Errorf("invalid private key length")
-	}
-
-	_, pubKey := crypto.PrivKeyFromBytes(b)
+	pubKey := priv.PubKey()
 	publicKeyBytes := pubKey.SerializeCompressed()
 	return hex.EncodeToString(publicKeyBytes[1:]), nil
 }

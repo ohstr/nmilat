@@ -142,3 +142,35 @@ func TestDecodeBolt11AmountInvalidPico(t *testing.T) {
 		t.Error("expected error for pico amount not divisible by 10")
 	}
 }
+
+// An amount too large for int64 mloki is refused, never wrapped into a
+// different (or negative) amount.
+func TestDecodeBolt11HRP_RefusesAnAmountThatOverflows(t *testing.T) {
+	for _, hrp := range []string{
+		"lnfc99999999999",        // issue #135: wrapped to 1864711949423024128
+		"lnfc92233720368547758m", // issue #135: wrapped to -8000000
+		"lnfc92233721",
+		"lnfc92233720369m",
+		"lnfc92233720368548u",
+		"lnfc92233720368547759n",
+	} {
+		if _, got, err := decodeBolt11HRP(hrp); err == nil {
+			t.Errorf("decodeBolt11HRP(%q) = %d, want an overflow error", hrp, got)
+		}
+	}
+}
+
+// The largest amount each multiplier can carry still decodes exactly.
+func TestDecodeBolt11HRP_LargestAmountPerMultiplier(t *testing.T) {
+	for hrp, want := range map[string]int64{
+		"lnfc92233720":             9_223_372_000_000_000_000,
+		"lnfc92233720368m":         9_223_372_036_800_000_000,
+		"lnfc92233720368547u":      9_223_372_036_854_700_000,
+		"lnfc92233720368547758n":   9_223_372_036_854_775_800,
+		"lnfc9223372036854775800p": 922_337_203_685_477_580,
+	} {
+		if _, got, err := decodeBolt11HRP(hrp); err != nil || got != want {
+			t.Errorf("decodeBolt11HRP(%q) = %d, %v; want %d", hrp, got, err, want)
+		}
+	}
+}

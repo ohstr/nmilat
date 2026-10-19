@@ -6,7 +6,6 @@ package utils
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/ohstr/nmilat/nip16"
@@ -227,23 +226,29 @@ func EscapeJSONString(s string) string {
 // needs no tag at all — and it was refused by a live relay with
 // "event ID mismatch", having verified perfectly against this library's own
 // checks. Two self-consistent halves disagreeing.
+//
+// Tag strings are escaped exactly like the content (EscapeJSONString), as
+// nostr-tools, rust-nostr and go-nostr do. encoding/json also escapes U+2028
+// and U+2029 and rewrites invalid UTF-8, which gave such an event a different
+// id here than everywhere else.
 func MarshalTags(tags [][]string) ([]byte, error) {
-	if tags == nil {
-		// Not an optimisation: this is the whole fix. Returning the literal keeps
-		// it independent of how encoding/json treats a nil versus empty slice.
-		return []byte("[]"), nil
+	var buf bytes.Buffer
+	buf.WriteByte('[')
+	for i, tag := range tags {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		buf.WriteByte('[')
+		for j, v := range tag {
+			if j > 0 {
+				buf.WriteByte(',')
+			}
+			buf.WriteByte('"')
+			buf.WriteString(EscapeJSONString(v))
+			buf.WriteByte('"')
+		}
+		buf.WriteByte(']')
 	}
-	buffer := &bytes.Buffer{}
-	encoder := json.NewEncoder(buffer)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(tags); err != nil {
-		return nil, fmt.Errorf("failed serializing tags=%v, %w", tags, err)
-	}
-
-	bytes := buffer.Bytes()
-	if len(bytes) > 0 && bytes[len(bytes)-1] == '\n' {
-		bytes = bytes[:len(bytes)-1] // remove the last newline if exists
-	}
-
-	return bytes, nil
+	buf.WriteByte(']')
+	return buf.Bytes(), nil
 }

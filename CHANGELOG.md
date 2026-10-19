@@ -8,6 +8,9 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `utils.ParsePrivateKeyHex`, which decodes a hex secret key and refuses
+  one outside [1, n-1].
+  ([#141](https://github.com/ohstr/nmilat/pull/141))
 - Adds `nip11.Metadata.Banner`, NIP-11's "banner" image URL, settable from
   config as `banner`.
   ([#132](https://github.com/ohstr/nmilat/pull/132))
@@ -213,6 +216,25 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes `NWCClient` accepting a response signed by any key, so anyone on the
+  relay could answer a request with a forged result; responses must now come
+  from the wallet's pubkey and carry a valid signature.
+  ([#138](https://github.com/ohstr/nmilat/pull/138))
+- Fixes `nip44.Encrypt` sealing an empty plaintext no peer can open and
+  wrapping the length of one above 65535 bytes; it now follows NIP-44's current
+  rules, 1 byte to 4 GiB with a 6-byte length prefix from 65536 bytes on.
+  ([#139](https://github.com/ohstr/nmilat/pull/139))
+- Fixes the BOLT11 decoder wrapping an amount too large for int64 millis into a
+  different, sometimes negative, amount; such an invoice is now refused.
+  ([#140](https://github.com/ohstr/nmilat/pull/140))
+- Fixes a secret key of 0 or at or above the curve order being reduced into a
+  meaningless key; `GetPublicKey`, `Event.Sign` and every encrypt, sign and
+  proof path now refuse it with `utils.ErrInvalidPrivateKey`.
+  ([#141](https://github.com/ohstr/nmilat/pull/141))
+- Fixes event ids for tags containing U+2028 or U+2029 differing from every
+  other client, so a relay or Hub on nmilat no longer rejects such an event
+  signed elsewhere; tags are now escaped exactly like the content.
+  ([#142](https://github.com/ohstr/nmilat/pull/142))
 - Fixes `ReindexZaps` skipping NIP-57 zap receipts (kind 9735), so a rebuilt
   zap index no longer drops them from top-zapped results.
   ([#131](https://github.com/ohstr/nmilat/pull/131))

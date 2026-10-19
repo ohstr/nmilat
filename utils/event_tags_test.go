@@ -192,3 +192,21 @@ func TestMarshalTags(t *testing.T) {
 		t.Errorf("MarshalTags([][]string{}) = %s but MarshalTags(nil) = %s; both mean no tags", explicit, empty)
 	}
 }
+
+// A nil tag inside the list is an empty array, as nostr-tools writes it, not
+// encoding/json's null.
+func TestMarshalTags_NilInnerTagIsEmptyArray(t *testing.T) {
+	if got, _ := MarshalTags([][]string{nil, {"p", "x"}}); string(got) != `[[],["p","x"]]` {
+		t.Errorf("MarshalTags = %s, want [[],[\"p\",\"x\"]]", got)
+	}
+}
+
+// Tag strings use exactly the content's escaping.
+func TestMarshalTags_EscapesLikeContent(t *testing.T) {
+	for _, s := range []string{"x y", "x y", "<>&", "\x00\x1f\x7f", "\"\\\n\r\t\b\f", "\xff\xfe"} {
+		got, _ := MarshalTags([][]string{{s}})
+		if want := `[["` + EscapeJSONString(s) + `"]]`; string(got) != want {
+			t.Errorf("MarshalTags(%q) = %q, want %q", s, got, want)
+		}
+	}
+}

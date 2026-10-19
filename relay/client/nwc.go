@@ -214,7 +214,7 @@ func (c *NWCClient) dispatch() {
 				c.mu.Lock()
 				sub, found := c.subs[m.SubscriptionID]
 				c.mu.Unlock()
-				if !found {
+				if !found || !c.fromWallet(m.Event) {
 					continue
 				}
 				// Fall back to the encryption this client itself used for
@@ -341,6 +341,13 @@ func (c *NWCClient) stopNotifications(subID string) {
 	}
 }
 
+// fromWallet reports whether ev is signed by the wallet itself. Anyone can
+// publish an event tagged with a request id and encrypted to the app, and it
+// decrypts fine, so a response or notification from any other key is dropped.
+func (c *NWCClient) fromWallet(ev *nip01.Event) bool {
+	return ev != nil && ev.PubKey == c.walletPubkey && ev.Verify() == nil
+}
+
 // deliverNotification routes an event on a Notifications subscription to its
 // channel, reporting whether the subscription ID was one. Events not signed
 // by the wallet, or that fail to decrypt, are dropped.
@@ -351,7 +358,7 @@ func (c *NWCClient) deliverNotification(m *wire.EventSubscriptionResponse) bool 
 	if !isNotif {
 		return false
 	}
-	if m.Event == nil || m.Event.PubKey != c.walletPubkey || m.Event.Verify() != nil {
+	if !c.fromWallet(m.Event) {
 		return true
 	}
 	notif, err := nip47.ParseNotificationEvent(m.Event, c.appPrivKey)
@@ -441,7 +448,7 @@ func (c *NWCClient) subscribeAndSend(ctx context.Context, method string, params 
 	}
 
 	filters := nip01.NewSubscriptionFilterGroup(
-		nip01.NewFilter().WithKinds(nip47.KindNWCResponse).WithTag("e", reqEvent.ID),
+		nip01.NewFilter().WithKinds(nip47.KindNWCResponse).WithAuthors(c.walletPubkey).WithTag("e", reqEvent.ID),
 	)
 	if ok := c.conn.SubscribeWithID(subID, filters); !ok {
 		cleanup()

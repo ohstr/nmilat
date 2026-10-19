@@ -17,6 +17,7 @@ import (
 
 	btcec "github.com/flokiorg/go-flokicoin/crypto"
 	"github.com/flokiorg/go-flokicoin/crypto/schnorr"
+	"github.com/ohstr/nmilat/utils"
 )
 
 func Encrypt(data, senderPrivKey, receiverPubKey string) (string, error) {
@@ -66,11 +67,10 @@ func Decrypt(data, senderPubKeyHex, receiverPrivKeyHex string) (string, error) {
 
 func deriveSharedSecret(privKeyHex, pubKeyHex string) ([]byte, error) {
 
-	privKeyBytes, err := hex.DecodeString(privKeyHex)
+	privKey, err := utils.ParsePrivateKeyHex(privKeyHex)
 	if err != nil {
 		return nil, fmt.Errorf("invalid private key: %w", err)
 	}
-	privKey, _ := btcec.PrivKeyFromBytes(privKeyBytes)
 
 	pubKeyBytes, err := hex.DecodeString(pubKeyHex)
 	if err != nil {
