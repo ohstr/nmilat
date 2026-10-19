@@ -216,6 +216,7 @@ privacy and performance fixes.
 - Fixes `NWCClient` accepting a response signed by any key, so anyone on the
   relay could answer a request with a forged result; responses must now come
   from the wallet's pubkey and carry a valid signature.
+  ([#138](https://github.com/ohstr/nmilat/pull/138))
 - Fixes `ReindexZaps` skipping NIP-57 zap receipts (kind 9735), so a rebuilt
   zap index no longer drops them from top-zapped results.
   ([#131](https://github.com/ohstr/nmilat/pull/131))
