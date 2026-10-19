@@ -10,6 +10,7 @@ privacy and performance fixes.
 
 - Adds `nip11.Metadata.Banner`, NIP-11's "banner" image URL, settable from
   config as `banner`.
+  ([#132](https://github.com/ohstr/nmilat/pull/132))
 - Adds `EventStore.RebuildZapIndex`, which rebuilds the zap index beside the
   live one and swaps it in atomically, so top-zapped results never go empty
   during a rebuild.
