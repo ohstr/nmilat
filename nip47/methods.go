@@ -279,9 +279,21 @@ type CircleWalletInfo struct {
 	// FeesPpm is the circle_hub's configured forwarding fee (parts per
 	// million of each circle_wallet child's own outgoing, non-self payment —
 	// see transactions_service.go's CalculateFeeSkimMloki on the Hub side).
-	FeesPpm      int    `json:"fees_ppm"`
+	FeesPpm int `json:"fees_ppm"`
+	// CirclePolicy is CirclePolicyAllowlist or CirclePolicyFollowSet.
 	CirclePolicy string `json:"circle_policy"`
+	// Identity is the node's x-only key that signs the Hub's kind-11190
+	// announcement, present only when the Hub offers NIP-CW Private Join. Trust
+	// it only from this response: whoever supplies it picks the inbox the join is
+	// encrypted to.
+	Identity string `json:"identity,omitempty"`
 }
+
+// circle_policy values (NIP-CW §Membership).
+const (
+	CirclePolicyAllowlist = "allowlist"
+	CirclePolicyFollowSet = "follow_set"
+)
 
 // SignMessageParams is the sign_message request payload. Like
 // multi_pay_invoice, sign_message is not defined by the NIP-47 spec text but

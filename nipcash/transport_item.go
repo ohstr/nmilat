@@ -101,6 +101,13 @@ func buildItem(id, target, connSecret, method string, wireParams any, cred Crede
 	return item, nil
 }
 
+// BuildItem is buildItem for a method defined outside this package, such as
+// NIP-CW's create_circle_wallet, so its item is assembled the same way. connSecret
+// signs the bill proof; cred signs the item proof.
+func BuildItem(id, target, connSecret, method string, wireParams any, cred Credential, b ItemBinding) (transport.Item, error) {
+	return buildItem(id, target, connSecret, method, wireParams, cred, b)
+}
+
 // Item builds a cash_redeem item for the private transport.
 //
 // The item's params are the same wire request this call sends on the standard
