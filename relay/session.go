@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -550,7 +552,14 @@ func (s *Session) sendPacket(packet wire.SubscriptionResponse) error {
 			Msg("sendPacket was slow -- possible backpressure on this connection")
 	}
 	if err != nil {
-		if shouldLogError(err) {
+		if peerGone(err) {
+			s.config.Logger.Debug().
+				Int64("session", s.id).
+				Str("remote", s.info.RemoteAddr).
+				Str("packet_type", fmt.Sprintf("%T", packet)).
+				Err(err).
+				Msg("sendPacket: peer already gone")
+		} else if shouldLogError(err) {
 			s.writeWarn().
 				Int64("session", s.id).
 				Str("remote", s.info.RemoteAddr).
@@ -582,6 +591,15 @@ func (s *Session) writeControl(messageType int, data []byte) error {
 	if err := s.conn.WriteControl(messageType, data, deadline); err != nil {
 		// Ignore errors if connection is already closed/closing
 		if errors.Is(err, websocket.ErrCloseSent) || errors.Is(err, net.ErrClosed) {
+			return err
+		}
+		if peerGone(err) {
+			s.config.Logger.Debug().
+				Int64("session", s.id).
+				Str("remote", s.info.RemoteAddr).
+				Str("frame", controlFrameName(messageType)).
+				Err(err).
+				Msg("writeControl: peer already gone")
 			return err
 		}
 		if shouldLogError(err) {
@@ -626,8 +644,9 @@ func (s *Session) Close() {
 		s.subscriptions.StopAll()
 		closePayload := websocket.FormatCloseMessage(websocket.CloseNormalClosure, "")
 		if err := s.writeControl(websocket.CloseMessage, closePayload); err != nil {
+			// writeControl already reported it, at the level it deserves.
 			if !errors.Is(err, websocket.ErrCloseSent) && !errors.Is(err, net.ErrClosed) {
-				s.config.Logger.Err(err).
+				s.config.Logger.Debug().Err(err).
 					Int64("session", s.id).
 					Str("remote", s.info.RemoteAddr).
 					Msg("failed to send close control frame")
@@ -1036,11 +1055,17 @@ func parseOriginURL(origin string) (string, string, string, error) {
 	return scheme, hostname, port, nil
 }
 
+// peerGone reports a write that failed only because the client already
+// hung up -- ordinary churn, not a relay fault.
+func peerGone(err error) bool {
+	return errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, io.EOF)
+}
+
 func shouldLogError(err error) bool {
 	var netErr net.Error
 	if errors.As(err, &netErr) {
-		// Only suppress logging for timeouts; everything else (including resets)
-		// is important for diagnosing client disconnects.
+		// Only suppress logging for timeouts here; writes to a peer that
+		// already hung up are filtered first, by peerGone.
 		return !netErr.Timeout()
 	}
 	return true
