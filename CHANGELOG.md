@@ -233,6 +233,10 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes NIP-50 search results coming back newest profile first instead of
+  best match first, and `limit` keeping the most recently updated profiles;
+  results now follow the search ranking, with `limit` applied after it.
+  ([#155](https://github.com/ohstr/nmilat/pull/155))
 - Fixes `nipcw/client.Client.Join` hiding why a join was not private when the
   standard join fails after a fallback; `errors.Is` now finds the fallback
   reason, such as `cashclient.ErrNoAnnouncement`, as well as the refusal.

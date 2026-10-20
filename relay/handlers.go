@@ -1,8 +1,11 @@
 package relay
 
 import (
+	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -41,9 +44,11 @@ func (h *NIP50Handler) CanHandle(rp *wire.RequestPacket) bool {
 func (h *NIP50Handler) Handle(ctx context.Context, s *Session, rp *wire.RequestPacket) (bool, error) {
 	// logic adapted from original processRequest
 	var searchQuery string
+	var clientLimit int
 	for _, f := range rp.Filters.GetAll() {
 		if f.Search != "" {
 			searchQuery = f.Search
+			clientLimit = f.Limit
 			break
 		}
 	}
@@ -87,11 +92,15 @@ func (h *NIP50Handler) Handle(ctx context.Context, s *Session, rp *wire.RequestP
 				newFilter := *f             // shallow copy
 				newFilter.Search = ""       // clear search
 				newFilter.Authors = pubkeys // inject results
+				newFilter.Limit = 0         // applied after ranking, not by created_at
 				if len(newFilter.Kinds) == 0 {
 					newFilter.Kinds = []int{0}
 				}
 				newGroup.Add(&newFilter)
 			}
+			rp.Filters = newGroup
+			// NIP-50: results in descending search quality, limit after ranking.
+			return openSubscription(ctx, s, rp, newSearchRank(pubkeys, clientLimit))
 		}
 		rp.Filters = newGroup
 	}
@@ -111,7 +120,58 @@ func (h *StandardRequestHandler) CanHandle(rp *wire.RequestPacket) bool {
 }
 
 func (h *StandardRequestHandler) Handle(ctx context.Context, s *Session, rp *wire.RequestPacket) (bool, error) {
+	return openSubscription(ctx, s, rp, nil)
+}
 
+// searchRank orders a search's stored events by their author's position in
+// the search results, then caps them at the client's limit (0: no cap).
+type searchRank struct {
+	rank  map[string]int
+	limit int
+}
+
+func newSearchRank(pubkeys []string, limit int) *searchRank {
+	r := &searchRank{rank: make(map[string]int, len(pubkeys)), limit: limit}
+	for i, pk := range pubkeys {
+		if _, seen := r.rank[pk]; !seen {
+			r.rank[pk] = i
+		}
+	}
+	return r
+}
+
+// order sorts events by author rank, newest first within one author, and
+// applies the limit.
+func (r *searchRank) order(events []*PotentialEvent) []*PotentialEvent {
+	ranks := make(map[*PotentialEvent]int, len(events))
+	for _, ev := range events {
+		var head struct {
+			PubKey string `json:"pubkey"`
+		}
+		rank, ok := 0, false
+		if json.Unmarshal(ev.Bytes, &head) == nil {
+			rank, ok = r.rank[head.PubKey]
+		}
+		if !ok {
+			rank = len(r.rank)
+		}
+		ranks[ev] = rank
+	}
+	slices.SortStableFunc(events, func(a, b *PotentialEvent) int {
+		if c := cmp.Compare(ranks[a], ranks[b]); c != 0 {
+			return c
+		}
+		return cmp.Compare(b.CreatedAt, a.CreatedAt)
+	})
+	if r.limit > 0 && len(events) > r.limit {
+		events = events[:r.limit]
+	}
+	return events
+}
+
+// openSubscription opens rp as a live subscription. With rank set, stored
+// events are held until EOSE and sent in rank order; the live tail is not.
+func openSubscription(ctx context.Context, s *Session, rp *wire.RequestPacket, rank *searchRank) (bool, error) {
 	sub, exists := s.subscriptions.Get(rp.SubscriptionID)
 	if exists {
 		if sub.query.filters.Equals(rp.Filters) {
@@ -153,12 +213,18 @@ func (h *StandardRequestHandler) Handle(ctx context.Context, s *Session, rp *wir
 		var wg sync.WaitGroup
 		start := time.Now()
 		delivered, stored := 0, true
+		var ranked []*PotentialEvent
 		go sub.Start(ctx, &wg)
 
 		for {
 			select {
 			case event := <-toSend:
 				if checkGroupPrivacy && s.groups.deniedPrivateGroupPotentialEvent(s, event) {
+					wg.Done()
+					continue
+				}
+				if rank != nil && stored {
+					ranked = append(ranked, event)
 					wg.Done()
 					continue
 				}
@@ -169,6 +235,13 @@ func (h *StandardRequestHandler) Handle(ctx context.Context, s *Session, rp *wir
 				}
 
 			case <-eose:
+				if rank != nil && stored {
+					for _, event := range rank.order(ranked) {
+						s.reply(&wire.EventSubscriptionResponse{SubscriptionID: sub.id, EventBytes: event.Bytes})
+						delivered++
+					}
+					ranked = nil
+				}
 				s.reply(&wire.EOSESubscriptionResponse{SubscriptionID: sub.id})
 				if stored {
 					stored = false
