@@ -75,9 +75,12 @@ func newReplyRelay(t *testing.T, refuse bool, reply *nip01.Event) *replyRelay {
 					write(conn, &wire.OkSubscriptionResponse{EventID: p.Event.ID, Accepted: false, Message: "blocked: test"})
 					continue
 				}
-				write(conn, &wire.OkSubscriptionResponse{EventID: p.Event.ID, Accepted: true})
+				// Count before the OK, which may return the client's publish at once.
 				r.mu.Lock()
 				r.published++
+				r.mu.Unlock()
+				write(conn, &wire.OkSubscriptionResponse{EventID: p.Event.ID, Accepted: true})
+				r.mu.Lock()
 				targets := make(map[*websocket.Conn]string, len(r.subs))
 				for c, id := range r.subs {
 					targets[c] = id

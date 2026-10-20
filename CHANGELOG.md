@@ -229,6 +229,10 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes `nipcw/client.Client.Join` hiding why a join was not private when the
+  standard join fails after a fallback; `errors.Is` now finds the fallback
+  reason, such as `cashclient.ErrNoAnnouncement`, as well as the refusal.
+  ([#151](https://github.com/ohstr/nmilat/pull/151))
 - Fixes `NWCClient` accepting a response signed by any key, so anyone on the
   relay could answer a request with a forged result; responses must now come
   from the wallet's pubkey and carry a valid signature.

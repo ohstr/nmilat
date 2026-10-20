@@ -3,10 +3,10 @@ package client
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 
 	"github.com/ohstr/nmilat/nip47"
+	cashclient "github.com/ohstr/nmilat/nipcash/client"
 	"github.com/ohstr/nmilat/nipcw"
 	relayclient "github.com/ohstr/nmilat/relay/client"
 )
@@ -79,12 +79,20 @@ func TestJoin_NoAnnouncementFallsBackAndSaysSo(t *testing.T) {
 	}
 }
 
-// A fallback that fails too must still say a private join was abandoned.
+// A fallback that fails too must still say, via errors.Is, that the join was
+// not private, and keep the standard refusal matchable.
 func TestJoin_FailedFallbackKeepsReason(t *testing.T) {
-	p := &joinPaths{privateErr: &unavailableError{err: errors.New("no announcement")}, standardErr: context.DeadlineExceeded}
-	_, err := join(context.Background(), &nip47.CircleWalletInfo{Identity: testIdentity}, JoinOptions{}, p.private, p.standard)
-	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "no announcement") {
-		t.Fatalf("err %v: want the standard error and the fallback reason", err)
+	refused := &relayclient.WalletError{Method: nipcw.MethodCreateCircleWallet, Code: nipcw.ErrRestricted}
+	for name, standardErr := range map[string]error{"timeout": context.DeadlineExceeded, "refusal": refused} {
+		p := &joinPaths{privateErr: &unavailableError{err: cashclient.ErrNoAnnouncement}, standardErr: standardErr}
+		_, err := join(context.Background(), &nip47.CircleWalletInfo{Identity: testIdentity}, JoinOptions{}, p.private, p.standard)
+		if !errors.Is(err, standardErr) || !errors.Is(err, cashclient.ErrNoAnnouncement) {
+			t.Fatalf("%s: err %v: want both the standard error and the fallback reason", name, err)
+		}
+		var walletErr *relayclient.WalletError
+		if name == "refusal" && (!errors.As(err, &walletErr) || walletErr.Code != nipcw.ErrRestricted) {
+			t.Fatalf("%s: err %v: want the refusal code to survive", name, err)
+		}
 	}
 }
 
