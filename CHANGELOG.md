@@ -8,6 +8,9 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `nipcw/client.ErrJoinNotSent`, which marks a `Join` that failed before
+  anything was sent, so a caller can tell it from one whose outcome is unknown.
+  ([#157](https://github.com/ohstr/nmilat/pull/157))
 - Adds `nip47.CircleWalletInfo.Identity`, the node key a Hub reports in
   `get_info` when it offers NIP-CW Private Join, and the `circle_policy`
   constants `CirclePolicyAllowlist` and `CirclePolicyFollowSet`.

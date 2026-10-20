@@ -37,12 +37,19 @@ func (p *joinPaths) standard(context.Context) (*nipcw.CreateCircleWalletResponse
 	return &nipcw.CreateCircleWalletResponse{WalletPubkey: "standard"}, nil
 }
 
+// infoOf is a get_info that reports info.
+func infoOf(info *nip47.CircleWalletInfo) func(context.Context) (*nip47.GetInfoResult, error) {
+	return func(context.Context) (*nip47.GetInfoResult, error) {
+		return &nip47.GetInfoResult{CircleWallet: info}, nil
+	}
+}
+
 const testIdentity = "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
 
 func TestJoin_NoIdentityUsesStandard(t *testing.T) {
 	for _, info := range []*nip47.CircleWalletInfo{nil, {CirclePolicy: nip47.CirclePolicyAllowlist}} {
 		p := &joinPaths{}
-		got, err := join(context.Background(), info, JoinOptions{}, p.private, p.standard)
+		got, err := join(context.Background(), infoOf(info), JoinOptions{}, p.private, p.standard)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -54,7 +61,7 @@ func TestJoin_NoIdentityUsesStandard(t *testing.T) {
 
 func TestJoin_IdentityJoinsPrivately(t *testing.T) {
 	p := &joinPaths{}
-	got, err := join(context.Background(), &nip47.CircleWalletInfo{Identity: testIdentity}, JoinOptions{}, p.private, p.standard)
+	got, err := join(context.Background(), infoOf(&nip47.CircleWalletInfo{Identity: testIdentity}), JoinOptions{}, p.private, p.standard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +77,7 @@ func TestJoin_IdentityJoinsPrivately(t *testing.T) {
 func TestJoin_NoAnnouncementFallsBackAndSaysSo(t *testing.T) {
 	reason := errors.New("no announcement")
 	p := &joinPaths{privateErr: &unavailableError{err: reason}}
-	got, err := join(context.Background(), &nip47.CircleWalletInfo{Identity: testIdentity}, JoinOptions{}, p.private, p.standard)
+	got, err := join(context.Background(), infoOf(&nip47.CircleWalletInfo{Identity: testIdentity}), JoinOptions{}, p.private, p.standard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +92,7 @@ func TestJoin_FailedFallbackKeepsReason(t *testing.T) {
 	refused := &relayclient.WalletError{Method: nipcw.MethodCreateCircleWallet, Code: nipcw.ErrRestricted}
 	for name, standardErr := range map[string]error{"timeout": context.DeadlineExceeded, "refusal": refused} {
 		p := &joinPaths{privateErr: &unavailableError{err: cashclient.ErrNoAnnouncement}, standardErr: standardErr}
-		_, err := join(context.Background(), &nip47.CircleWalletInfo{Identity: testIdentity}, JoinOptions{}, p.private, p.standard)
+		_, err := join(context.Background(), infoOf(&nip47.CircleWalletInfo{Identity: testIdentity}), JoinOptions{}, p.private, p.standard)
 		if !errors.Is(err, standardErr) || !errors.Is(err, cashclient.ErrNoAnnouncement) {
 			t.Fatalf("%s: err %v: want both the standard error and the fallback reason", name, err)
 		}
@@ -102,7 +109,7 @@ func TestJoin_RequirePrivateRefusesFallback(t *testing.T) {
 		"no announcement": {Identity: testIdentity},
 	} {
 		p := &joinPaths{privateErr: &unavailableError{err: errors.New("no announcement")}}
-		_, err := join(context.Background(), info, JoinOptions{RequirePrivate: true}, p.private, p.standard)
+		_, err := join(context.Background(), infoOf(info), JoinOptions{RequirePrivate: true}, p.private, p.standard)
 		if !errors.Is(err, ErrPrivateJoinUnavailable) || p.standardCalls != 0 {
 			t.Fatalf("%s: err %v, standard calls %d", name, err, p.standardCalls)
 		}
@@ -113,10 +120,46 @@ func TestJoin_RequirePrivateRefusesFallback(t *testing.T) {
 func TestJoin_SentPrivateJoinNeverFallsBack(t *testing.T) {
 	refused := &relayclient.WalletError{Method: nipcw.MethodCreateCircleWallet, Code: nipcw.ErrRestricted}
 	p := &joinPaths{privateErr: refused}
-	_, err := join(context.Background(), &nip47.CircleWalletInfo{Identity: testIdentity}, JoinOptions{}, p.private, p.standard)
+	_, err := join(context.Background(), infoOf(&nip47.CircleWalletInfo{Identity: testIdentity}), JoinOptions{}, p.private, p.standard)
 	var walletErr *relayclient.WalletError
 	if !errors.As(err, &walletErr) || walletErr.Code != nipcw.ErrRestricted || p.standardCalls != 0 {
 		t.Fatalf("err %v, standard calls %d: want the refusal, no fallback", err, p.standardCalls)
+	}
+}
+
+// A get_info failure comes before any join is sent, so the caller may forget
+// the connection key; the cause must stay matchable.
+func TestJoin_GetInfoFailureIsNotSent(t *testing.T) {
+	cause := &relayclient.WalletError{Method: nip47.MethodGetInfo, Code: "INTERNAL"}
+	p := &joinPaths{}
+	getInfo := func(context.Context) (*nip47.GetInfoResult, error) { return nil, cause }
+	_, err := join(context.Background(), getInfo, JoinOptions{}, p.private, p.standard)
+	var walletErr *relayclient.WalletError
+	if !errors.Is(err, ErrJoinNotSent) || !errors.As(err, &walletErr) || walletErr != cause {
+		t.Fatalf("err %v: want ErrJoinNotSent wrapping the get_info error", err)
+	}
+	if p.privateCalls != 0 || p.standardCalls != 0 {
+		t.Fatalf("private %d, standard %d: want nothing sent", p.privateCalls, p.standardCalls)
+	}
+}
+
+// A failure once a join was sent has an unknown outcome, so it must never
+// claim nothing was sent.
+func TestJoin_SentFailureIsNotNotSent(t *testing.T) {
+	refused := &relayclient.WalletError{Method: nipcw.MethodCreateCircleWallet, Code: nipcw.ErrRestricted}
+	notServed := &cashclient.NotServedError{Method: nipcw.MethodCreateCircleWallet}
+	for name, tc := range map[string]struct {
+		info *nip47.CircleWalletInfo
+		p    *joinPaths
+	}{
+		"standard refusal":       {nil, &joinPaths{standardErr: refused}},
+		"private not served":     {&nip47.CircleWalletInfo{Identity: testIdentity}, &joinPaths{privateErr: notServed}},
+		"failure after fallback": {&nip47.CircleWalletInfo{Identity: testIdentity}, &joinPaths{privateErr: &unavailableError{err: cashclient.ErrNoAnnouncement}, standardErr: context.DeadlineExceeded}},
+	} {
+		_, err := join(context.Background(), infoOf(tc.info), JoinOptions{}, tc.p.private, tc.p.standard)
+		if err == nil || errors.Is(err, ErrJoinNotSent) {
+			t.Fatalf("%s: err %v: want a failure that is not ErrJoinNotSent", name, err)
+		}
 	}
 }
 
