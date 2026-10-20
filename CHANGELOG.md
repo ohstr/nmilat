@@ -173,6 +173,7 @@ privacy and performance fixes.
 - Logs a write to a client that already hung up (broken pipe, connection
   reset) at debug instead of warn/error, and only once per close. Ordinary
   disconnects no longer look like relay faults.
+  ([#153](https://github.com/ohstr/nmilat/pull/153))
 - Changes `create_circle_wallet` to the member-generated connection key NIP-CW
   now specifies: the client sends only `connection_pubkey` (new
   `nipcw.ConnectionKey`, bound by a `connection` tag in the identity proof) and
