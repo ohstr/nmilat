@@ -157,6 +157,10 @@ privacy and performance fixes.
 
 ### Changed
 
+- Logs session open/close, AUTH, rejected events and refused WebSocket
+  upgrades at debug instead of info/warn/error, and rate-limits slow/failed
+  write warnings. A busy relay no longer floods its log, and clients can no
+  longer write error lines at will.
 - Changes `create_circle_wallet` to the member-generated connection key NIP-CW
   now specifies: the client sends only `connection_pubkey` (new
   `nipcw.ConnectionKey`, bound by a `connection` tag in the identity proof) and

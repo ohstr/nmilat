@@ -271,7 +271,7 @@ func (s *Session) processAuth(parent context.Context, ap *wire.AuthPacket) error
 func (s *Session) acceptAuth(eventID, pubkey string) error {
 	s.config.observer().Auth(true, ReasonNone)
 	s.reply(&wire.OkSubscriptionResponse{EventID: eventID, Accepted: true, Message: "auth-success"})
-	s.config.Logger.Info().Str("pubkey", pubkey).Msg("client authenticated")
+	s.config.Logger.Debug().Str("pubkey", pubkey).Msg("client authenticated")
 	return nil
 }
 
@@ -425,7 +425,7 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 
 	if err := ep.Event.Validate(); err != nil {
 
-		s.config.Logger.Error().Err(err).Msgf("failed to validate, ID=%s", ep.Event.ID)
+		s.config.Logger.Debug().Err(err).Str("id", ep.Event.ID).Msg("event rejected: invalid")
 
 		s.finishEvent(ep.Event, start, false, fmt.Sprintf("invalid: %s", err.Error()))
 
@@ -457,7 +457,7 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 		// distinguishes "mine harder" from "your event is malformed".
 		var powErr *nip01.InsufficientPowError
 		if errors.As(err, &powErr) {
-			s.config.Logger.Info().
+			s.config.Logger.Debug().
 				Str("id", ep.Event.ID).
 				Int("difficulty", powErr.Got).
 				Int("required", powErr.Want).
@@ -468,7 +468,7 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 			return nil
 		}
 
-		s.config.Logger.Error().Err(err).Msgf("failed to verify, ID=%s", ep.Event.ID)
+		s.config.Logger.Debug().Err(err).Str("id", ep.Event.ID).Msg("event rejected: verification failed")
 
 		s.finishEvent(ep.Event, start, false, fmt.Sprintf("invalid: %s", err.Error()))
 
@@ -476,7 +476,7 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 	}
 
 	if err := runEventValidators(ctx, ep.Event); err != nil {
-		s.config.Logger.Error().Err(err).Msgf("event validation failed, ID=%s kind=%d", ep.Event.ID, ep.Event.Kind)
+		s.config.Logger.Debug().Err(err).Str("id", ep.Event.ID).Int("kind", ep.Event.Kind).Msg("event rejected: kind validation failed")
 
 		s.finishEvent(ep.Event, start, false, fmt.Sprintf("invalid: %s", err.Error()))
 

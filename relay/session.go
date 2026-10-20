@@ -45,6 +45,10 @@ var (
 	wsBufferPool            = new(sync.Pool)
 	ErrSessionClosed        = errors.New("session closed")
 	ErrRateLimited          = errors.New("rate-limited: too many concurrent tasks")
+
+	// writeWarnSampler caps slow/failed write warnings relay-wide, so one
+	// stuck peer can't flood the log; metrics still count every occurrence.
+	writeWarnSampler = &zerolog.BurstSampler{Burst: 10, Period: time.Minute}
 )
 
 type sessionContextKey struct{}
@@ -537,7 +541,7 @@ func (s *Session) sendPacket(packet wire.SubscriptionResponse) error {
 	if elapsed > slowSendWarnThreshold && err == nil {
 		// Successful but slow: no error, but something (most likely a
 		// slow-reading peer) backed this up well past ordinary jitter.
-		s.config.Logger.Warn().
+		s.writeWarn().
 			Int64("session", s.id).
 			Str("remote", s.info.RemoteAddr).
 			Str("packet_type", fmt.Sprintf("%T", packet)).
@@ -547,7 +551,7 @@ func (s *Session) sendPacket(packet wire.SubscriptionResponse) error {
 	}
 	if err != nil {
 		if shouldLogError(err) {
-			s.config.Logger.Warn().
+			s.writeWarn().
 				Int64("session", s.id).
 				Str("remote", s.info.RemoteAddr).
 				Str("packet_type", fmt.Sprintf("%T", packet)).
@@ -558,6 +562,12 @@ func (s *Session) sendPacket(packet wire.SubscriptionResponse) error {
 	}
 
 	return nil
+}
+
+// writeWarn starts a write-path warning, rate-limited by writeWarnSampler.
+func (s *Session) writeWarn() *zerolog.Event {
+	l := s.config.Logger.Sample(writeWarnSampler)
+	return l.Warn()
 }
 
 func (s *Session) writeControl(messageType int, data []byte) error {
@@ -575,7 +585,7 @@ func (s *Session) writeControl(messageType int, data []byte) error {
 			return err
 		}
 		if shouldLogError(err) {
-			s.config.Logger.Warn().
+			s.writeWarn().
 				Int64("session", s.id).
 				Str("remote", s.info.RemoteAddr).
 				Str("frame", controlFrameName(messageType)).
@@ -599,7 +609,7 @@ func (s *Session) receiveMessages(ctx context.Context) error {
 		default:
 			if err := s.Recv(ctx); err != nil {
 				if errors.Is(err, ErrSessionClosed) {
-					s.config.Logger.Info().
+					s.config.Logger.Debug().
 						Int64("session", s.id).
 						Str("remote", s.info.RemoteAddr).
 						Msg("session closed by peer")
@@ -797,7 +807,7 @@ func (sh *SessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	ws, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		sh.config.Logger.Warn().AnErr("upgrade", err).Msg("ws")
+		sh.config.Logger.Debug().Err(err).Str("remote", r.RemoteAddr).Msg("websocket upgrade failed")
 		return
 	}
 
@@ -831,8 +841,9 @@ func (sh *SessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		sh.config.observer().SessionClosed()
 	}()
 
-	sh.config.Logger.Info().
+	sh.config.Logger.Debug().
 		Int64("session", sessID).
+		Str("remote", info.RemoteAddr).
 		Msg("session started")
 
 	if err := session.Start(r.Context()); err != nil && shouldLogError(err) {
@@ -842,7 +853,7 @@ func (sh *SessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Msg("unexpected error in session")
 	}
 
-	sh.config.Logger.Info().
+	sh.config.Logger.Debug().
 		Int64("session", sessID).
 		Msg("session ended")
 }
@@ -969,7 +980,7 @@ func wsHandshakeValidator(allowedOrigins []string, logger zerolog.Logger) func(*
 			}
 		}
 
-		logger.Warn().Msgf("Rejected WebSocket connection, origin=%s", browserOrigin)
+		logger.Debug().Str("origin", browserOrigin).Msg("rejected websocket origin")
 		return false
 	}
 
