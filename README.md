@@ -787,12 +787,18 @@ func main() {
 	// The wallet's connection key is generated here, on the member's side; the
 	// Hub only ever sees its pubkey. Set Connection yourself to save the secret
 	// before sending.
-	wallet, err := circleHub.CreateCircleWallet(ctx, nipcw.CreateCircleWalletParams{
+	//
+	// Join goes over NIP-CASH's private transport when the Hub offers it, so the
+	// join isn't visible on the shared Hub connection, and reports a fallback.
+	wallet, err := circleHub.Join(ctx, nipcw.CreateCircleWalletParams{
 		Credential:      nipcw.BySigning(memberPrivKeyHex),
 		MaxAmountMillis: 100_000_000,
-	})
+	}, cwclient.JoinOptions{})
 	if err != nil {
 		panic(err)
+	}
+	if wallet.FallbackReason != nil {
+		fmt.Println("joined, but not privately:", wallet.FallbackReason)
 	}
 
 	// Invoice from their own Circle Wallet — same host as the Cash Hub, so
