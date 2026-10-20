@@ -54,6 +54,14 @@ type BatchSession struct {
 // announcement names its own relays those take over afterwards, since the token's
 // hints were fixed when the bill was minted and a hub may have moved since.
 func (c *Client) NewBatchSession(ctx context.Context, hubXOnly string, relays []string) (*BatchSession, error) {
+	return OpenBatchSession(ctx, hubXOnly, relays)
+}
+
+// OpenBatchSession is NewBatchSession for a caller with no cash connection, such
+// as a prospective circle member joining over the private transport: hubXOnly is
+// then the identity the Hub reported in get_info (NIP-CW §Finding the Private
+// Transport), and relays are the Hub connection's.
+func OpenBatchSession(ctx context.Context, hubXOnly string, relays []string) (*BatchSession, error) {
 	if len(relays) == 0 {
 		return nil, fmt.Errorf("nipcash/client: no relays to look for %s's announcement on", hubXOnly)
 	}

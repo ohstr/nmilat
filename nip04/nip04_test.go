@@ -65,3 +65,20 @@ func TestNip04(t *testing.T) {
 	})
 
 }
+
+func TestDecryptRefusesPartialBlocks(t *testing.T) {
+	sender := "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798" // pubkey of secret 1
+	receiver := "0000000000000000000000000000000000000000000000000000000000000002"
+
+	for name, data := range map[string]string{
+		"empty":    "?iv=AAAAAAAAAAAAAAAAAAAAAA==",
+		"6 bytes":  "AAAAAAAA?iv=AAAAAAAAAAAAAAAAAAAAAA==",
+		"17 bytes": "AAAAAAAAAAAAAAAAAAAAAAA=?iv=AAAAAAAAAAAAAAAAAAAAAA==",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Decrypt(data, sender, receiver); err == nil {
+				t.Fatal("expected an error")
+			}
+		})
+	}
+}

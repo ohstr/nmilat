@@ -8,6 +8,14 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `nip47.CircleWalletInfo.Identity`, the node key a Hub reports in
+  `get_info` when it offers NIP-CW Private Join, and the `circle_policy`
+  constants `CirclePolicyAllowlist` and `CirclePolicyFollowSet`.
+  ([#146](https://github.com/ohstr/nmilat/pull/146))
+- Adds `nipcw/client.Client.Join`, which joins a circle over NIP-CASH's private
+  transport when the Hub offers it, so the join is not visible on the shared
+  Hub connection; a fallback to the standard transport is reported, never silent.
+  ([#146](https://github.com/ohstr/nmilat/pull/146))
 - Adds `utils.ParsePrivateKeyHex`, which decodes a hex secret key and refuses
   one outside [1, n-1].
   ([#141](https://github.com/ohstr/nmilat/pull/141))
@@ -240,6 +248,9 @@ privacy and performance fixes.
   other client, so a relay or Hub on nmilat no longer rejects such an event
   signed elsewhere; tags are now escaped exactly like the content.
   ([#142](https://github.com/ohstr/nmilat/pull/142))
+- Fixes `nip04.Decrypt` panicking on a ciphertext that is not a whole number
+  of AES blocks, so one malformed payload could crash the caller; it now
+  returns an error. ([#144](https://github.com/ohstr/nmilat/pull/144))
 - Fixes `ReindexZaps` skipping NIP-57 zap receipts (kind 9735), so a rebuilt
   zap index no longer drops them from top-zapped results.
   ([#131](https://github.com/ohstr/nmilat/pull/131))
