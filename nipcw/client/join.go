@@ -15,6 +15,10 @@ import (
 // join could not travel over the private transport, so nothing was sent.
 var ErrPrivateJoinUnavailable = errors.New("nipcw/client: private join is unavailable")
 
+// ErrJoinNotSent means Join failed before any join request was sent, so no
+// wallet was created and the join is safe to retry.
+var ErrJoinNotSent = errors.New("nipcw/client: join not sent")
+
 // JoinOptions tunes Join.
 type JoinOptions struct {
 	// RequirePrivate refuses with ErrPrivateJoinUnavailable rather than join
@@ -48,6 +52,9 @@ type JoinResult struct {
 // A private join the Hub did not answer is a *cashclient.NotServedError. A
 // standard join that fails after a fallback also wraps the fallback reason, so
 // errors.Is(err, cashclient.ErrNoAnnouncement) reports it was not private.
+// Failures before any join is sent (get_info, generating the connection key)
+// wrap ErrJoinNotSent along with their cause; failures after it never do.
+// ErrPrivateJoinUnavailable also means nothing was sent.
 //
 // As with CreateCircleWallet, a zero params.Connection gets a fresh key whose
 // secret appears only in the result; a caller that must survive a lost reply
@@ -55,13 +62,9 @@ type JoinResult struct {
 func (c *Client) Join(ctx context.Context, params nipcw.CreateCircleWalletParams, opts JoinOptions) (*JoinResult, error) {
 	params, err := withConnectionKey(params)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: connection key: %w", ErrJoinNotSent, err)
 	}
-	info, err := c.nwc.GetInfo(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("nipcw/client: get_info: %w", err)
-	}
-	return join(ctx, info.CircleWallet, opts,
+	return join(ctx, c.nwc.GetInfo, opts,
 		func(ctx context.Context, identity string) (*nipcw.CreateCircleWalletResponse, error) {
 			return c.privateJoin(ctx, identity, params)
 		},
@@ -82,7 +85,12 @@ func (e *unavailableError) Error() string { return e.err.Error() }
 func (e *unavailableError) Unwrap() error { return e.err }
 
 // join is Join's transport choice, apart from the network so it can be tested.
-func join(ctx context.Context, info *nip47.CircleWalletInfo, opts JoinOptions, private privateJoinFunc, standard joinFunc) (*JoinResult, error) {
+func join(ctx context.Context, getInfo func(context.Context) (*nip47.GetInfoResult, error), opts JoinOptions, private privateJoinFunc, standard joinFunc) (*JoinResult, error) {
+	result, err := getInfo(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%w: get_info: %w", ErrJoinNotSent, err)
+	}
+	info := result.CircleWallet
 	if info == nil || info.Identity == "" {
 		if opts.RequirePrivate {
 			return nil, fmt.Errorf("%w: the Hub does not offer it", ErrPrivateJoinUnavailable)
