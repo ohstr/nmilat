@@ -19,6 +19,9 @@ import (
 type Client struct {
 	nwc       *relayclient.NWCClient
 	hubPubkey string
+	// pairing is kept for Join: its secret signs a private join's bill proof and
+	// its relays are where the Hub's announcement is looked up.
+	pairing *nip47.PairingInfo
 }
 
 // Connect dials pairingURI (a raw nostr+walletconnect://... connection
@@ -33,7 +36,7 @@ func Connect(ctx context.Context, pairingURI string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{nwc: nwc, hubPubkey: pairing.WalletPubkey}, nil
+	return &Client{nwc: nwc, hubPubkey: pairing.WalletPubkey, pairing: pairing}, nil
 }
 
 // Close releases the underlying connection.
