@@ -237,7 +237,7 @@ privacy and performance fixes.
   ([#142](https://github.com/ohstr/nmilat/pull/142))
 - Fixes `nip04.Decrypt` panicking on a ciphertext that is not a whole number
   of AES blocks, so one malformed payload could crash the caller; it now
-  returns an error.
+  returns an error. ([#144](https://github.com/ohstr/nmilat/pull/144))
 - Fixes `ReindexZaps` skipping NIP-57 zap receipts (kind 9735), so a rebuilt
   zap index no longer drops them from top-zapped results.
   ([#131](https://github.com/ohstr/nmilat/pull/131))
