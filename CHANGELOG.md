@@ -8,6 +8,9 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `nip47.CircleWalletInfo.Identity`, the node key a Hub reports in
+  `get_info` when it offers NIP-CW Private Join, and the `circle_policy`
+  constants `CirclePolicyAllowlist` and `CirclePolicyFollowSet`.
 - Adds `utils.ParsePrivateKeyHex`, which decodes a hex secret key and refuses
   one outside [1, n-1].
   ([#141](https://github.com/ohstr/nmilat/pull/141))

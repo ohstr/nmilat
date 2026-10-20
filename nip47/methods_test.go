@@ -20,7 +20,8 @@ func TestGetInfoResult_CircleWalletRoundTrips(t *testing.T) {
 			"available_millis": 42000,
 			"max_exp_secs": 86400,
 			"fees_ppm": 5000,
-			"circle_policy": "allowlist"
+			"circle_policy": "follow_set",
+			"identity": "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
 		}
 	}`
 	var got GetInfoResult
@@ -30,7 +31,10 @@ func TestGetInfoResult_CircleWalletRoundTrips(t *testing.T) {
 	if got.CircleWallet == nil {
 		t.Fatalf("CircleWallet = nil, want populated — the circle_wallet wire field was dropped")
 	}
-	want := CircleWalletInfo{AvailableMillis: 42000, MaxExpSecs: 86400, FeesPpm: 5000, CirclePolicy: "allowlist"}
+	want := CircleWalletInfo{
+		AvailableMillis: 42000, MaxExpSecs: 86400, FeesPpm: 5000, CirclePolicy: CirclePolicyFollowSet,
+		Identity: "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+	}
 	if *got.CircleWallet != want {
 		t.Errorf("CircleWallet = %+v, want %+v", *got.CircleWallet, want)
 	}
