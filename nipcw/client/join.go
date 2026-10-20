@@ -45,7 +45,9 @@ type JoinResult struct {
 //
 // Refusals carry the standard join's codes either way (nipcw.ErrNotReady,
 // ErrRestricted, ErrWalletExists, ErrRateLimited) as a *relayclient.WalletError.
-// A private join the Hub did not answer is a *cashclient.NotServedError.
+// A private join the Hub did not answer is a *cashclient.NotServedError. A
+// standard join that fails after a fallback also wraps the fallback reason, so
+// errors.Is(err, cashclient.ErrNoAnnouncement) reports it was not private.
 //
 // As with CreateCircleWallet, a zero params.Connection gets a fresh key whose
 // secret appears only in the result; a caller that must survive a lost reply
@@ -105,8 +107,8 @@ func join(ctx context.Context, info *nip47.CircleWalletInfo, opts JoinOptions, p
 	}
 	resp, err = standard(ctx)
 	if err != nil {
-		// Kept so a caller still learns a private join was tried and abandoned.
-		return nil, fmt.Errorf("%w (after private join was unavailable: %v)", err, unavailable.err)
+		// Both wrapped, so errors.Is still finds why the join was not private.
+		return nil, fmt.Errorf("%w (after private join was unavailable: %w)", err, unavailable.err)
 	}
 	return &JoinResult{CreateCircleWalletResponse: resp, FallbackReason: unavailable.err}, nil
 }
