@@ -161,6 +161,7 @@ privacy and performance fixes.
   upgrades at debug instead of info/warn/error, and rate-limits slow/failed
   write warnings. A busy relay no longer floods its log, and clients can no
   longer write error lines at will.
+  ([#148](https://github.com/ohstr/nmilat/pull/148))
 - Changes `create_circle_wallet` to the member-generated connection key NIP-CW
   now specifies: the client sends only `connection_pubkey` (new
   `nipcw.ConnectionKey`, bound by a `connection` tag in the identity proof) and
