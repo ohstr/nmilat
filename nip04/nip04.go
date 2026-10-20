@@ -111,6 +111,10 @@ func decryptAESCBC(iv, key, ciphertext []byte) ([]byte, error) {
 		return nil, fmt.Errorf("iv: invalid length %d", len(iv))
 	}
 
+	if len(ciphertext) == 0 || len(ciphertext)%aes.BlockSize != 0 {
+		return nil, fmt.Errorf("ciphertext: invalid length %d", len(ciphertext))
+	}
+
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err

@@ -235,6 +235,9 @@ privacy and performance fixes.
   other client, so a relay or Hub on nmilat no longer rejects such an event
   signed elsewhere; tags are now escaped exactly like the content.
   ([#142](https://github.com/ohstr/nmilat/pull/142))
+- Fixes `nip04.Decrypt` panicking on a ciphertext that is not a whole number
+  of AES blocks, so one malformed payload could crash the caller; it now
+  returns an error.
 - Fixes `ReindexZaps` skipping NIP-57 zap receipts (kind 9735), so a rebuilt
   zap index no longer drops them from top-zapped results.
   ([#131](https://github.com/ohstr/nmilat/pull/131))
