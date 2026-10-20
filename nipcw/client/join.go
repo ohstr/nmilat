@@ -46,6 +46,10 @@ type JoinResult struct {
 // Refusals carry the standard join's codes either way (nipcw.ErrNotReady,
 // ErrRestricted, ErrWalletExists, ErrRateLimited) as a *relayclient.WalletError.
 // A private join the Hub did not answer is a *cashclient.NotServedError.
+//
+// As with CreateCircleWallet, a zero params.Connection gets a fresh key whose
+// secret appears only in the result; a caller that must survive a lost reply
+// sets and saves its own.
 func (c *Client) Join(ctx context.Context, params nipcw.CreateCircleWalletParams, opts JoinOptions) (*JoinResult, error) {
 	params, err := withConnectionKey(params)
 	if err != nil {
@@ -101,7 +105,8 @@ func join(ctx context.Context, info *nip47.CircleWalletInfo, opts JoinOptions, p
 	}
 	resp, err = standard(ctx)
 	if err != nil {
-		return nil, err
+		// Kept so a caller still learns a private join was tried and abandoned.
+		return nil, fmt.Errorf("%w (after private join was unavailable: %v)", err, unavailable.err)
 	}
 	return &JoinResult{CreateCircleWalletResponse: resp, FallbackReason: unavailable.err}, nil
 }
@@ -118,16 +123,20 @@ func (c *Client) privateJoin(ctx context.Context, identity string, params nipcw.
 		return nil, &unavailableError{err: err}
 	}
 	outcomes, sendErr := session.CreateCircleWalletMany(ctx, []cashclient.BatchCircleJoin{{ID: "join", Hub: hub, Params: params}})
+	if len(outcomes) == 0 && sendErr != nil {
+		// No outcomes means the item was never packed, so nothing was sent.
+		return nil, &unavailableError{err: sendErr}
+	}
 	if len(outcomes) != 1 {
-		if sendErr != nil {
-			return nil, sendErr
-		}
 		return nil, &cashclient.NotServedError{Method: nipcw.MethodCreateCircleWallet}
 	}
 	o := outcomes[0]
 	switch {
 	case o.Succeeded():
 		return o.Result, nil
+	case o.Undecodable:
+		// The Hub ran the join, so this is not a refusal: the wallet may exist.
+		return nil, fmt.Errorf("nipcw/client: the Hub answered the join but its reply could not be read, so the wallet may exist: %s", o.Error.Message)
 	case o.State == cashclient.OutcomeError && o.Error != nil:
 		return nil, &relayclient.WalletError{Method: nipcw.MethodCreateCircleWallet, Code: o.Error.Code, Message: o.Error.Message}
 	case sendErr != nil:

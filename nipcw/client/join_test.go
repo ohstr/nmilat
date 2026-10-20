@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/ohstr/nmilat/nip47"
@@ -12,11 +13,11 @@ import (
 
 // joinPaths records which transport join took.
 type joinPaths struct {
-	privateErr       error
-	privateIdentity  string
-	privateCalls     int
-	standardCalls    int
-	standardResponse *nipcw.CreateCircleWalletResponse
+	privateErr      error
+	privateIdentity string
+	privateCalls    int
+	standardCalls   int
+	standardErr     error
 }
 
 func (p *joinPaths) private(_ context.Context, identity string) (*nipcw.CreateCircleWalletResponse, error) {
@@ -30,6 +31,9 @@ func (p *joinPaths) private(_ context.Context, identity string) (*nipcw.CreateCi
 
 func (p *joinPaths) standard(context.Context) (*nipcw.CreateCircleWalletResponse, error) {
 	p.standardCalls++
+	if p.standardErr != nil {
+		return nil, p.standardErr
+	}
 	return &nipcw.CreateCircleWalletResponse{WalletPubkey: "standard"}, nil
 }
 
@@ -72,6 +76,15 @@ func TestJoin_NoAnnouncementFallsBackAndSaysSo(t *testing.T) {
 	}
 	if got.Private || !errors.Is(got.FallbackReason, reason) || p.standardCalls != 1 {
 		t.Fatalf("result %+v, standard calls %d: want a reported fallback", got, p.standardCalls)
+	}
+}
+
+// A fallback that fails too must still say a private join was abandoned.
+func TestJoin_FailedFallbackKeepsReason(t *testing.T) {
+	p := &joinPaths{privateErr: &unavailableError{err: errors.New("no announcement")}, standardErr: context.DeadlineExceeded}
+	_, err := join(context.Background(), &nip47.CircleWalletInfo{Identity: testIdentity}, JoinOptions{}, p.private, p.standard)
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "no announcement") {
+		t.Fatalf("err %v: want the standard error and the fallback reason", err)
 	}
 }
 
