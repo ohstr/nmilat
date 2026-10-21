@@ -2,6 +2,8 @@ package ranking
 
 import (
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/ohstr/nmilat/config"
 )
@@ -37,7 +39,7 @@ func CalculateScore(name, displayName, about, nip05, lud16, picture string) int6
 	}
 
 	// Gibberish / Spam filter
-	if len(name) > cfg.MinGibberishLen && !hasVowels(name) {
+	if isGibberish(name, cfg.MinGibberishLen) {
 		score += cfg.GibberishPenalty
 	}
 
@@ -58,7 +60,17 @@ func isHex(s string) bool {
 	return true
 }
 
-func hasVowels(s string) bool {
-	vowels := "aeiouAEIOU"
-	return strings.ContainsAny(s, vowels)
+// isGibberish flags a name longer than minLen characters with no Latin
+// vowel. Names written in other scripts have no Latin vowels, so any
+// non-ASCII letter exempts the name.
+func isGibberish(name string, minLen int) bool {
+	if utf8.RuneCountInString(name) <= minLen {
+		return false
+	}
+	for _, c := range name {
+		if c > unicode.MaxASCII && unicode.IsLetter(c) {
+			return false
+		}
+	}
+	return !strings.ContainsAny(name, "aeiouyAEIOUY")
 }

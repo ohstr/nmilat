@@ -244,6 +244,8 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes the gibberish-name search penalty hitting names written in non-Latin
+  scripts.
 - Fixes profiles shown as having no NIP-05 or lightning address when they do:
   identifiers with TLDs longer than four letters are checked now, and a
   timeout, block or 5xx keeps the previous result and is retried instead of
