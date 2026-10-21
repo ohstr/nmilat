@@ -8,6 +8,7 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `config.Configure`, so an embedder can set its own scoring weights.
 - Adds `nip47.CircleWalletInfo.PerWalletMaxMillis` and `MinBudgetRenewal`, a
   Hub's per-wallet ceiling and budget-renewal floor from NIP-CW `get_info`, so a
   client can check a join before sending it.

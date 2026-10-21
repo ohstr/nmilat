@@ -6,6 +6,7 @@ package config
 import (
 	_ "embed"
 	"sync"
+	"sync/atomic"
 
 	"gopkg.in/yaml.v3"
 )
@@ -53,17 +54,27 @@ type EngineConfig struct {
 }
 
 var (
-	instance *AppConfig
+	instance atomic.Pointer[AppConfig]
 	once     sync.Once
 )
 
-// Get returns the singleton AppConfig, parsed once from the embedded config.yaml.
+// Get returns the AppConfig: the embedded config.yaml plus any Configure
+// overrides. Treat it as read-only.
 func Get() *AppConfig {
 	once.Do(func() {
-		instance = &AppConfig{}
-		if err := yaml.Unmarshal(configData, instance); err != nil {
+		cfg := &AppConfig{}
+		if err := yaml.Unmarshal(configData, cfg); err != nil {
 			panic("failed to parse embedded config.yaml: " + err.Error())
 		}
+		instance.Store(cfg)
 	})
-	return instance
+	return instance.Load()
+}
+
+// Configure replaces the config with a copy changed by fn, e.g. to apply
+// an embedder's scoring weights at startup.
+func Configure(fn func(*AppConfig)) {
+	next := *Get()
+	fn(&next)
+	instance.Store(&next)
 }
