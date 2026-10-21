@@ -50,7 +50,9 @@ var (
 	// 10 was indexIdentities, removed as dead (never read anywhere).
 	indexProfileMetrics = []byte{11}
 	// indexVerificationDue orders profile checks by when they're due.
-	indexVerificationDue = []byte{12}
+	// 12-15 are membership and groups buckets (store_membership.go,
+	// store_groups.go); TestBucketIDsAreUnique guards against reuse.
+	indexVerificationDue = []byte{16}
 
 	maxUint64Bytes = itob(0xFFFFFFFFFFFFFFFF)
 	// maxSuffixBytes is the largest possible created_at+evsid suffix on a
