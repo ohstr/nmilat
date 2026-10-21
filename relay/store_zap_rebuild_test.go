@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 
@@ -43,8 +44,17 @@ func putRawEvents(t *testing.T, store *EventStore, first uint64, events ...*nip0
 	return first
 }
 
-func rawZap(kind int, receiver, msats string, createdAt uint64) *nip01.Event {
-	return &nip01.Event{Kind: kind, CreatedAt: createdAt, Tags: [][]string{{"p", receiver}, {"amount", msats}}}
+// rawZap builds a valid receipt from a fixed sender and LNURL server.
+func rawZap(t testing.TB, kind int, receiver, msats string, createdAt uint64) *nip01.Event {
+	t.Helper()
+	amount, err := strconv.ParseInt(msats, 10, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return zapReceipt(t, zapSpec{
+		Kind: kind, Sender: newTestKey(t, 1), Provider: newTestKey(t, 2),
+		Recipient: receiver, Amount: amount, CreatedAt: createdAt,
+	})
 }
 
 func topZapped(t *testing.T, store *EventStore) map[string]uint64 {
@@ -63,8 +73,8 @@ func topZapped(t *testing.T, store *EventStore) map[string]uint64 {
 func TestRebuildZapIndex_ReplacesStaleIndexAtomically(t *testing.T) {
 	store := newStore(t)
 	putRawEvents(t, store, 1,
-		rawZap(9735, zapReceiverA, "1000", 100),
-		rawZap(9521, zapReceiverB, "2000", 200),
+		rawZap(t, 9735, zapReceiverA, "1000", 100),
+		rawZap(t, 9521, zapReceiverB, "2000", 200),
 		&nip01.Event{Kind: 1, CreatedAt: 150},
 	)
 	// A stale entry only the old index holds.
@@ -73,7 +83,7 @@ func TestRebuildZapIndex_ReplacesStaleIndexAtomically(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		return putZap(b, rawZap(9735, zapReceiverC, "9999", 50), 99)
+		return putZap(b, rawZap(t, 9735, zapReceiverC, "9999", 50), 99)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -111,9 +121,9 @@ func TestRebuildZapIndex_ReplacesStaleIndexAtomically(t *testing.T) {
 
 func TestRebuildZapIndex_KeepsZapsStoredDuringRebuild(t *testing.T) {
 	store := newStore(t)
-	putRawEvents(t, store, 1, rawZap(9735, zapReceiverA, "1000", 100))
+	putRawEvents(t, store, 1, rawZap(t, 9735, zapReceiverA, "1000", 100))
 
-	live := CreateEvent(t, 9735, []string{"p", zapReceiverB}, []string{"amount", "5000"})
+	live := rawZap(t, 9735, zapReceiverB, "5000", uint64(time.Now().Unix()))
 	inserted := false
 	_, err := store.RebuildZapIndex(context.Background(), func(int, int) {
 		if !inserted {
@@ -131,7 +141,7 @@ func TestRebuildZapIndex_KeepsZapsStoredDuringRebuild(t *testing.T) {
 
 func TestRebuildZapIndex_RefusesConcurrentRebuild(t *testing.T) {
 	store := newStore(t)
-	putRawEvents(t, store, 1, rawZap(9735, zapReceiverA, "1000", 100))
+	putRawEvents(t, store, 1, rawZap(t, 9735, zapReceiverA, "1000", 100))
 
 	var second error
 	_, err := store.RebuildZapIndex(context.Background(), func(int, int) {
@@ -155,7 +165,7 @@ func TestRebuildZapIndex_CancelKeepsOldIndex(t *testing.T) {
 		events = append(events, &nip01.Event{Kind: 1, CreatedAt: uint64(i + 1)})
 	}
 	next := putRawEvents(t, store, 1, events...)
-	putRawEvents(t, store, next, rawZap(9735, zapReceiverA, "1000", 100))
+	putRawEvents(t, store, next, rawZap(t, 9735, zapReceiverA, "1000", 100))
 	if _, err := store.ReindexZaps(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +202,7 @@ func TestRebuildZapIndex_SurvivesReopen(t *testing.T) {
 	}
 
 	store := open()
-	putRawEvents(t, store, 1, rawZap(9735, zapReceiverA, "1000", 100))
+	putRawEvents(t, store, 1, rawZap(t, 9735, zapReceiverA, "1000", 100))
 	if _, err := store.RebuildZapIndex(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}

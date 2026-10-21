@@ -29,25 +29,8 @@ func TestReindexZaps(t *testing.T) {
 	// 1. Seed DB with events (some zaps, some not)
 	ctx := context.Background()
 
-	zapEvent := &nip01.Event{
-		Kind:      9735,
-		CreatedAt: uint64(time.Now().Unix()),
-		Tags: [][]string{
-			{"p", "0000000000000000000000000000000000000000000000000000000000000001"},
-			{"amount", "1000000"}, // 1000 sats
-		},
-		Content: "Zap!",
-	}
-	// generate ID and normalize
-	// (skipping ID generation for brevity as IndexZap doesn't strictly require valid IDs if we manually insert,
-	// but store.insert does. Let's just manually put into bucket to simulate existing data)
-
-	// We need to use store.insert to ensure it's in indexEvents
-	// But store.insert automatically calls IndexZap if we don't disable it.
-	// We want to test ReindexZap, so ideally we insert WITHOUT indexing first?
-	// Or we just checking if ReindexZaps works idempotently or fixes missing indexes.
-	// But store.insert calls IndexZap.
-	// Let's manually insert into indexEvents to simulate "old data not indexed"
+	// Put events straight into the events bucket, as data stored before the
+	// zap index existed.
 
 	err = store.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(indexEvents)
@@ -57,26 +40,13 @@ func TestReindexZaps(t *testing.T) {
 		ev1Bytes, _ := json.Marshal(ev1)
 		_ = b.Put(itob(1), ev1Bytes)
 
-		// Event 2: Zap (Kind 9521)
-		ev2 := zapEvent
-		ev2.Kind = 9521
-		ev2.CreatedAt = 200
-		ev2.Tags = [][]string{
-			{"p", "0000000000000000000000000000000000000000000000000000000000000001"},
-			{"description", `{"kind":9520,"tags":[["amount","1000000"]]}`},
-		}
+		// Event 2: AltZap receipt (Kind 9521)
+		ev2 := rawZap(t, 9521, "0000000000000000000000000000000000000000000000000000000000000001", "1000000", 200)
 		ev2Bytes, _ := json.Marshal(ev2)
 		_ = b.Put(itob(2), ev2Bytes)
 
 		// Event 3: NIP-57 zap receipt (Kind 9735)
-		ev3 := &nip01.Event{
-			Kind:      9735,
-			CreatedAt: 300,
-			Tags: [][]string{
-				{"p", "0000000000000000000000000000000000000000000000000000000000000002"},
-				{"amount", "2000000"},
-			},
-		}
+		ev3 := rawZap(t, 9735, "0000000000000000000000000000000000000000000000000000000000000002", "2000000", 300)
 		ev3Bytes, _ := json.Marshal(ev3)
 		_ = b.Put(itob(3), ev3Bytes)
 

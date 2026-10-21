@@ -8,6 +8,9 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `EventStore.GetProfileStats`: a profile's zaps received and sent (count,
+  amount, distinct zappers, first and last time) and follower/following counts,
+  from an index kept current on every write and built once on first start.
 - Adds `config.Configure`, so an embedder can set its own scoring weights.
   ([#164](https://github.com/ohstr/nmilat/pull/164))
 - Adds `ProfileMetrics.CheckScore`, which rescores a profile from its stored
@@ -252,6 +255,9 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes top-zapped counting invalid receipts, self-zaps, duplicate receipts of
+  one payment and deleted receipts; once a recipient's LNURL server key is
+  verified, only receipts that server signed count.
 - Fixes the gibberish-name search penalty hitting names written in non-Latin
   scripts. ([#164](https://github.com/ohstr/nmilat/pull/164))
 - Fixes search scores dropping a profile's base score once its checks ran, and

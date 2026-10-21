@@ -39,45 +39,20 @@ func TestZapCacheWebIdentityScenarios(t *testing.T) {
 	now := time.Now()
 	ts := uint64(now.Add(-1 * time.Hour).Unix())
 
+	sender, provider := newTestKey(t, 1), newTestKey(t, 2)
+	zap := func(z zapSpec) *nip01.Event {
+		z.Kind, z.Sender, z.Provider, z.CreatedAt = 9521, sender, provider, ts
+		return zapReceipt(t, z)
+	}
 	events := []*nip01.Event{
 		// 1. Web-identity-linked with p[2] set and r tag → indexed under ResolvedDiscord
-		{
-			Kind:      9521,
-			CreatedAt: ts,
-			Tags: [][]string{
-				{"p", ConnKeyDiscord, "discord"},
-				{"r", ResolvedDiscord},
-				{"amount", "1000"},
-			},
-		},
+		zap(zapSpec{Connection: [2]string{"discord", "user1"}, Resolved: ResolvedDiscord, Amount: 1000}),
 		// 2. Web-identity-linked without p[2] but r tag present → indexed under ResolvedTelegram
-		{
-			Kind:      9521,
-			CreatedAt: ts,
-			Tags: [][]string{
-				{"p", ConnKeyTelegram},
-				{"r", ResolvedTelegram},
-				{"amount", "2000"},
-			},
-		},
+		zap(zapSpec{Recipient: ConnKeyTelegram, Resolved: ResolvedTelegram, Amount: 2000}),
 		// 3. Web-identity-unlinked: p[2] = "discord", no r tag → NOT indexed
-		{
-			Kind:      9521,
-			CreatedAt: ts,
-			Tags: [][]string{
-				{"p", ConnKeyDiscord, "discord"},
-				{"amount", "9999"},
-			},
-		},
+		zap(zapSpec{Connection: [2]string{"discord", "user2"}, Amount: 9999}),
 		// 4. Direct Nostr zap to the same pubkey as ResolvedDiscord → amounts should merge
-		{
-			Kind:      9521,
-			CreatedAt: ts,
-			Tags: [][]string{
-				{"p", NostrUser, "nostr"},
-				{"amount", "500"},
-			},
-		},
+		zap(zapSpec{Recipient: NostrUser, Amount: 500}),
 	}
 
 	err = store.db.Update(func(tx *bolt.Tx) error {
@@ -139,41 +114,16 @@ func TestZapCacheScenarios(t *testing.T) {
 
 	// Test Events
 	events := []*nip01.Event{
-		// 1. User A: 1000 sats (Inside window) - Realistic Kind 9521
-		{
-			Kind:      9521,
-			CreatedAt: timestamp1HourAgo,
-			Tags:      [][]string{{"p", UserA}, {"description", `{"kind":9520,"tags":[["amount","1000"],["p","` + UserA + `"]]}`}},
-			Content:   "Zap A 1",
-		},
-		// 2. User A: 500 sats (Inside window) - Realistic Kind 9521
-		{
-			Kind:      9521,
-			CreatedAt: timestamp2HoursAgo,
-			Tags:      [][]string{{"p", UserA}, {"description", `{"kind":9520,"tags":[["amount","500"],["p","` + UserA + `"]]}`}},
-			Content:   "Zap A 2",
-		},
-		// 3. User B: 2000 sats (Inside window) - Realistic Kind 9521
-		{
-			Kind:      9521,
-			CreatedAt: timestamp1HourAgo,
-			Tags:      [][]string{{"p", UserB}, {"description", `{"kind":9520,"tags":[["amount","2000"],["p","` + UserB + `"]]}`}},
-			Content:   "Zap B 1",
-		},
+		// 1. User A: 1000 sats (Inside window)
+		rawZap(t, 9521, UserA, "1000", timestamp1HourAgo),
+		// 2. User A: 500 sats (Inside window)
+		rawZap(t, 9521, UserA, "500", timestamp2HoursAgo),
+		// 3. User B: 2000 sats (Inside window)
+		rawZap(t, 9521, UserB, "2000", timestamp1HourAgo),
 		// 4. User A: 5000 sats (Outside window - Too old)
-		{
-			Kind:      9521,
-			CreatedAt: timestamp25HoursAgo,
-			Tags:      [][]string{{"p", UserA}, {"description", `{"kind":9520,"tags":[["amount","5000"]]}`}},
-			Content:   "Zap A Old",
-		},
+		rawZap(t, 9521, UserA, "5000", timestamp25HoursAgo),
 		// 5. User B: 5000 sats (Outside window - Future)
-		{
-			Kind:      9521,
-			CreatedAt: timestampFuture,
-			Tags:      [][]string{{"p", UserB}, {"description", `{"kind":9520,"tags":[["amount","5000"]]}`}},
-			Content:   "Zap B Future",
-		},
+		rawZap(t, 9521, UserB, "5000", timestampFuture),
 		// 6. User C: Invalid kind (Not a zap)
 		{
 			Kind:      1,
