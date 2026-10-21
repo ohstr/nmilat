@@ -244,6 +244,7 @@ privacy and performance fixes.
   `SessionConfig` leaves `OutgoingBufferSize` or `MaxConcurrentStoreTasks` at
   zero: each session now fills those defaults on its own copy instead of
   writing them into the config every session shares.
+  ([#162](https://github.com/ohstr/nmilat/pull/162))
 - Fixes NIP-50 search results coming back newest profile first instead of
   best match first, and `limit` keeping the most recently updated profiles;
   results now follow the search ranking, with `limit` applied after it.
