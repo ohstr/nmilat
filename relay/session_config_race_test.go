@@ -75,7 +75,7 @@ func TestConcurrentSessionsWithZeroSizedSessionConfig(t *testing.T) {
 				t.Errorf("dial: %v", err)
 				return
 			}
-			defer conn.Close()
+			defer func() { _ = conn.Close() }()
 			awaitResponse(t, conn, func(r wire.SubscriptionResponse) bool {
 				_, ok := r.(*wire.AuthChallengeResponse)
 				return ok
