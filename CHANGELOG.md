@@ -8,6 +8,9 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds followers and received zaps to a profile's search score: each sender
+  adds a capped amount, scaled by their own profile score, so many throwaway
+  keys or a self-run LNURL server add little. Weights live in `search.social`.
 - Adds `EventStore.GetProfileStats`: a profile's zaps received and sent (count,
   amount, distinct zappers, first and last time) and follower/following counts,
   from an index kept current on every write and built once on first start.

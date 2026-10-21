@@ -210,7 +210,38 @@ func (w *ProfileVerificationWorker) sweeper() {
 	}
 }
 
+// maxSocialRefresh bounds the social scores refreshed per sweep.
+const maxSocialRefresh = 5000
+
+// refreshSocial rescores profiles whose zaps or follows changed and pushes
+// any changed score to search.
+func (w *ProfileVerificationWorker) refreshSocial() {
+	pubkeys := w.store.TakeSocialDirty(maxSocialRefresh)
+	if len(pubkeys) == 0 {
+		return
+	}
+	scores := make(map[string]int64, len(pubkeys))
+	for _, pk := range pubkeys {
+		if score, err := w.store.ComputeSocialScore(pk); err == nil {
+			scores[pk] = score
+		}
+	}
+	changed, err := w.store.SetSocialScores(scores)
+	if err != nil {
+		w.logger.Error().Err(err).Msg("failed to store social scores")
+		return
+	}
+	if w.searchService == nil {
+		return
+	}
+	for pk, m := range changed {
+		_ = w.searchService.UpdateScore(context.Background(), pk, m.TotalScore())
+	}
+}
+
 func (w *ProfileVerificationWorker) sweep() {
+	w.refreshSocial()
+
 	w.mu.Lock()
 	var deferred []string
 	for pk := range w.deferred {

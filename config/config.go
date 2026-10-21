@@ -24,6 +24,25 @@ type SearchConfig struct {
 	Scoring      ScoringConfig      `yaml:"scoring"`
 	Verification VerificationConfig `yaml:"verification"`
 	Engine       EngineConfig       `yaml:"engine"`
+	Social       SocialConfig       `yaml:"social"`
+}
+
+// SocialConfig weighs followers and received zaps into a profile's score.
+// Zaps count by sender: each sender adds at most PerSenderCap sats,
+// scaled by how established the sender's own profile is.
+type SocialConfig struct {
+	FollowersWeight float64 `yaml:"followers_weight"`
+	FollowersCap    float64 `yaml:"followers_cap"`
+	ZapsWeight      float64 `yaml:"zaps_weight"`
+	ZappersWeight   float64 `yaml:"zappers_weight"`
+	ZapsCap         float64 `yaml:"zaps_cap"`
+	// PerSenderCap is in sats (units, not milli-units).
+	PerSenderCap uint64 `yaml:"per_sender_cap"`
+	// TrustedSenderScore is the base+check score at which a sender counts
+	// fully; below it the sender counts proportionally, never less than
+	// MinSenderFactor.
+	TrustedSenderScore float64 `yaml:"trusted_sender_score"`
+	MinSenderFactor    float64 `yaml:"min_sender_factor"`
 }
 
 // ScoringConfig holds profile scoring values.

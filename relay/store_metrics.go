@@ -45,6 +45,9 @@ type ProfileMetrics struct {
 	Nip05Score   int64 `json:"nip05_score"`
 	Lud16Score   int64 `json:"lud16_score"`
 	PictureScore int64 `json:"picture_score"`
+	// SocialScore is followers and zaps (EventStore.SocialScore), kept
+	// current as they change.
+	SocialScore int64 `json:"social_score,omitempty"`
 
 	Nip05   CheckState `json:"nip05"`
 	Lud16   CheckState `json:"lud16"`
@@ -60,9 +63,9 @@ type ProfileMetrics struct {
 	RequeueAt int64 `json:"requeue_at,omitempty"`
 }
 
-// TotalScore is the profile's search score: BaseScore plus CheckScore.
+// TotalScore is the profile's search score: base, checks and social.
 func (p *ProfileMetrics) TotalScore() int64 {
-	return p.BaseScore + p.CheckScore()
+	return p.BaseScore + p.CheckScore() + p.SocialScore
 }
 
 // CheckScore is what the NIP-05, LUD-16 and picture checks add to a

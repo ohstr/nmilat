@@ -646,8 +646,8 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 				if err != nil || m == nil {
 					return 0, err
 				}
-				// doc.Score is the base; add what the checks earned.
-				return m.CheckScore(), nil
+				// doc.Score is the base; add the checks and social score.
+				return m.CheckScore() + m.SocialScore, nil
 			})
 			if err != nil {
 				s.config.Logger.Warn().Err(err).Msg("failed to queue profile for indexing")
