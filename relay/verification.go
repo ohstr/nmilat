@@ -32,6 +32,8 @@ type VerificationJob struct {
 	Nip05   string
 	Lud16   string
 	Picture string
+	// Base is the kind 0's heuristic score (search.FromEvent).
+	Base int64
 	// Force fetches every field regardless of its schedule.
 	Force bool
 }
@@ -134,11 +136,16 @@ func jobFromEvent(event *nip01.Event) (VerificationJob, bool) {
 	}
 	// Invalid content still produces a job: it clears stale results.
 	_ = utils.UnmarshalJSON([]byte(event.Content), &profile)
+	var base int64
+	if doc := search.FromEvent(event); doc != nil {
+		base = doc.Score
+	}
 	return VerificationJob{
 		Pubkey:  event.PubKey,
 		Nip05:   profile.Nip05,
 		Lud16:   profile.Lud16,
 		Picture: profile.Picture,
+		Base:    base,
 	}, true
 }
 
@@ -335,6 +342,7 @@ func (w *ProfileVerificationWorker) processJob(ctx context.Context, job Verifica
 	appCfg := config.Get()
 	update := func(m *ProfileMetrics) {
 		m.RequeueAt = 0
+		m.BaseScore = job.Base
 		states := []*CheckState{&m.Nip05, &m.Lud16, &m.Picture}
 		for i, f := range fields {
 			w.apply(states[i], f.value, f.valid, results[i], now)
@@ -458,32 +466,9 @@ func (w *ProfileVerificationWorker) backoff(attempt int, retryAfter time.Duratio
 	return max(d, retryAfter)
 }
 
-// scoreChecks derives the verification scores from the check statuses.
+// scoreChecks stores the scores derived from the check statuses.
 func scoreChecks(m *ProfileMetrics, appCfg *config.AppConfig) {
-	cfg := appCfg.Search.Verification
-	// A field with no status yet (data from before checks were tracked)
-	// keeps its score.
-	if m.Nip05.Status != "" || m.Nip05.Value == "" {
-		m.Nip05Score = 0
-		if m.Nip05.Status == CheckOK {
-			m.Nip05Score = cfg.Nip05Score
-		}
-	}
-	if m.Lud16.Status != "" || m.Lud16.Value == "" {
-		m.Lud16Score = 0
-		if m.Lud16.Status == CheckOK {
-			m.Lud16Score = int64(max(m.Lud16Chains, 1)) * cfg.Lud16Score
-			if cfg.Lud16ChainLimit > 0 && m.Lud16Score > cfg.Lud16ChainLimit {
-				m.Lud16Score = cfg.Lud16ChainLimit
-			}
-		}
-	}
-	if m.Picture.Status != "" || m.Picture.Value == "" {
-		m.PictureScore = 0
-		if m.Picture.Status == CheckOK {
-			m.PictureScore = appCfg.Search.Scoring.PictureBonus
-		}
-	}
+	m.Nip05Score, m.Lud16Score, m.PictureScore = m.checkScores(appCfg)
 }
 
 func (w *ProfileVerificationWorker) checkNip05(ctx context.Context, pubkey, nip05 string) checkResult {

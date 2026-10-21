@@ -9,6 +9,8 @@ privacy and performance fixes.
 ### Added
 
 - Adds `config.Configure`, so an embedder can set its own scoring weights.
+- Adds `ProfileMetrics.CheckScore`, which rescores a profile from its stored
+  check results with the current weights, without fetching anything.
 - Adds `nip47.CircleWalletInfo.PerWalletMaxMillis` and `MinBudgetRenewal`, a
   Hub's per-wallet ceiling and budget-renewal floor from NIP-CW `get_info`, so a
   client can check a join before sending it.
@@ -247,6 +249,8 @@ privacy and performance fixes.
 
 - Fixes the gibberish-name search penalty hitting names written in non-Latin
   scripts.
+- Fixes search scores dropping a profile's base score once its checks ran, and
+  counting a picture twice; a broken picture now takes its bonus back.
 - Fixes profiles shown as having no NIP-05 or lightning address when they do:
   identifiers with TLDs longer than four letters are checked now, and a
   timeout, block or 5xx keeps the previous result and is retried instead of

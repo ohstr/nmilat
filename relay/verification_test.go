@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ohstr/nmilat/config"
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/relay/migrations"
 	"github.com/stretchr/testify/assert"
@@ -397,4 +398,44 @@ func TestScheduleLegacyVerificationMigration(t *testing.T) {
 	due, err := store.DueVerifications(now.Unix(), 10, nil)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"zero"}, due)
+}
+
+func TestVerification_PushedScoreKeepsBase(t *testing.T) {
+	f := newVerifyFixture(t, VerificationConfig{})
+	var pushed int64
+	f.w.searchService = &MockSearchService{UpdateScoreFunc: func(_ context.Context, _ string, score int64) error {
+		pushed = score
+		return nil
+	}}
+	f.web.set("example.com", nip05JSON(map[string]string{"bob": publicKey}))
+	f.web.set("img.example.com", statusHandler(http.StatusOK, ""))
+	profile := map[string]string{
+		"name": "bob", "about": "a bio longer than fifteen characters",
+		"picture": "https://img.example.com/a.png", "nip05": "bob@example.com",
+	}
+
+	m := f.run(profile, false)
+	// Base 10+10+30, NIP-05 +50; a good picture isn't counted twice.
+	assert.Equal(t, int64(50), m.BaseScore)
+	assert.Equal(t, int64(100), pushed)
+
+	f.web.set("img.example.com", statusHandler(http.StatusNotFound, ""))
+	f.run(profile, true)
+	assert.Equal(t, int64(70), pushed, "a broken picture takes its bonus back")
+}
+
+func TestVerification_ScoreFollowsConfigWithoutFetching(t *testing.T) {
+	f := newVerifyFixture(t, VerificationConfig{})
+	f.web.set("example.com", nip05JSON(map[string]string{"bob": publicKey}))
+	m := f.run(map[string]string{"name": "bob", "nip05": "bob@example.com"}, false)
+	assert.Equal(t, int64(60), m.TotalScore())
+
+	prev := *config.Get()
+	t.Cleanup(func() { config.Configure(func(c *config.AppConfig) { *c = prev }) })
+	config.Configure(func(c *config.AppConfig) { c.Search.Verification.Nip05Score = 80 })
+
+	m, err := f.store.GetProfileMetrics(publicKey)
+	require.NoError(t, err)
+	assert.Equal(t, int64(90), m.TotalScore())
+	assert.Equal(t, 1, f.web.count("example.com"))
 }

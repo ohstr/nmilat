@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 
+	"github.com/ohstr/nmilat/config"
 	bolt "go.etcd.io/bbolt"
 )
 
@@ -59,10 +60,47 @@ type ProfileMetrics struct {
 	RequeueAt int64 `json:"requeue_at,omitempty"`
 }
 
-// TotalScore strictly evaluates the sum of all metrics
-// to provide a single score metric.
+// TotalScore is the profile's search score: BaseScore plus CheckScore.
 func (p *ProfileMetrics) TotalScore() int64 {
-	return p.BaseScore + p.Nip05Score + p.Lud16Score + p.PictureScore
+	return p.BaseScore + p.CheckScore()
+}
+
+// CheckScore is what the NIP-05, LUD-16 and picture checks add to a
+// profile's base score, using the current scoring config.
+func (p *ProfileMetrics) CheckScore() int64 {
+	nip05, lud16, picture := p.checkScores(config.Get())
+	return nip05 + lud16 + picture
+}
+
+// checkScores derives each check's score from its status. A field with no
+// status yet (stored before checks were tracked) keeps its stored score.
+func (p *ProfileMetrics) checkScores(appCfg *config.AppConfig) (nip05, lud16, picture int64) {
+	cfg := appCfg.Search.Verification
+	nip05, lud16, picture = p.Nip05Score, p.Lud16Score, p.PictureScore
+	if p.Nip05.Status != "" || p.Nip05.Value == "" {
+		nip05 = 0
+		if p.Nip05.Status == CheckOK {
+			nip05 = cfg.Nip05Score
+		}
+	}
+	if p.Lud16.Status != "" || p.Lud16.Value == "" {
+		lud16 = 0
+		if p.Lud16.Status == CheckOK {
+			lud16 = int64(max(p.Lud16Chains, 1)) * cfg.Lud16Score
+			if cfg.Lud16ChainLimit > 0 && lud16 > cfg.Lud16ChainLimit {
+				lud16 = cfg.Lud16ChainLimit
+			}
+		}
+	}
+	// The base score already counts a picture URL; a picture that turns
+	// out broken takes that bonus back.
+	if p.Picture.Status != "" || p.Picture.Value == "" {
+		picture = 0
+		if p.Picture.Status == CheckFailed || p.Picture.Status == CheckError {
+			picture = -appCfg.Search.Scoring.PictureBonus
+		}
+	}
+	return nip05, lud16, picture
 }
 
 // NextDue is the earliest time a check is due, 0 if none is.
