@@ -177,6 +177,8 @@ privacy and performance fixes.
 
 ### Changed
 
+- Changes profile verification to check a profile's `lud06` LNURL when it has
+  no `lud16`, so older profiles get their lightning address verified too.
 - Changes profile verification to fetch only for a new or changed identifier,
   an expired result, a retry or `VerifyNow`, rate-limited per host;
   `SessionConfig.Verification` sets the TTL, backoff and limits, and the unused
