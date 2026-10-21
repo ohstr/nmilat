@@ -287,6 +287,12 @@ type CircleWalletInfo struct {
 	// it only from this response: whoever supplies it picks the inbox the join is
 	// encrypted to.
 	Identity string `json:"identity,omitempty"`
+	// PerWalletMaxMillis is the Hub's ceiling on a joiner's max_amount, in the
+	// same unit. Zero means the Hub didn't report it.
+	PerWalletMaxMillis int64 `json:"per_wallet_max_millis,omitempty"`
+	// MinBudgetRenewal is the tightest budget_renewal the Hub accepts
+	// ("daily"/"weekly"/"monthly"/"yearly"/"never"). Empty means not reported.
+	MinBudgetRenewal string `json:"min_budget_renewal,omitempty"`
 }
 
 // circle_policy values (NIP-CW §Membership).

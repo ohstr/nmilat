@@ -8,6 +8,10 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `nip47.CircleWalletInfo.PerWalletMaxMillis` and `MinBudgetRenewal`, a
+  Hub's per-wallet ceiling and budget-renewal floor from NIP-CW `get_info`, so a
+  client can check a join before sending it.
+  ([#159](https://github.com/ohstr/nmilat/pull/159))
 - Adds `nipcw/client.ErrJoinNotSent`, which marks a `Join` that failed before
   anything was sent, so a caller can tell it from one whose outcome is unknown.
   ([#157](https://github.com/ohstr/nmilat/pull/157))
