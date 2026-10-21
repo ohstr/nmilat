@@ -91,4 +91,17 @@ func TestIsValidPictureURL(t *testing.T) {
 	if IsValidPictureURL("ftp://example.com/pic.png") {
 		t.Error("expected non-http(s) scheme to be invalid")
 	}
+	if IsValidPictureURL("https://") {
+		t.Error("expected a URL without a host to be invalid")
+	}
+}
+
+func TestNip05Normalization(t *testing.T) {
+	if got := GetNip05URL(" Bob@Nostrplebs.Social "); got != "https://nostrplebs.social/.well-known/nostr.json?name=bob" {
+		t.Fatalf("GetNip05URL = %q", got)
+	}
+	body := `{"names":{"Bob":"pubkeyabc"}}`
+	if !VerifyNip05(strings.NewReader(body), "pubkeyabc", "bob@example.com") {
+		t.Fatal("names should match case-insensitively")
+	}
 }
