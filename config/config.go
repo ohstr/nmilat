@@ -23,7 +23,6 @@ type SearchConfig struct {
 	Scoring      ScoringConfig      `yaml:"scoring"`
 	Verification VerificationConfig `yaml:"verification"`
 	Engine       EngineConfig       `yaml:"engine"`
-	Cache        CacheConfig        `yaml:"cache"`
 }
 
 // ScoringConfig holds profile scoring values.
@@ -40,10 +39,9 @@ type ScoringConfig struct {
 
 // VerificationConfig holds verification scoring values.
 type VerificationConfig struct {
-	Nip05Score             int64 `yaml:"nip05_score"`
-	Lud16Score             int64 `yaml:"lud16_score"`
-	Lud16ChainLimit        int64 `yaml:"lud16_chain_limit"`
-	DefaultPredefinedBonus int64 `yaml:"default_predefined_bonus"`
+	Nip05Score      int64 `yaml:"nip05_score"`
+	Lud16Score      int64 `yaml:"lud16_score"`
+	Lud16ChainLimit int64 `yaml:"lud16_chain_limit"`
 }
 
 // EngineConfig holds search engine tuning settings.
@@ -52,11 +50,6 @@ type EngineConfig struct {
 	TypoOneMinWordSize int `yaml:"typo_one_min_word_size"`
 	TypoTwoMinWordSize int `yaml:"typo_two_min_word_size"`
 	AboutMaxLength     int `yaml:"about_max_length"`
-}
-
-// CacheConfig holds cache-related settings.
-type CacheConfig struct {
-	VerificationTTLHours int `yaml:"verification_ttl_hours"`
 }
 
 var (

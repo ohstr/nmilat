@@ -1,26 +1,10 @@
 package ranking
 
 import (
-	"regexp"
 	"strings"
 
 	"github.com/ohstr/nmilat/config"
 )
-
-var (
-	// Basic regex for email-like format: user@domain.tld
-	nip05Regex = regexp.MustCompile(`^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$`)
-	// Basic regex for Lightning Address (email-like)
-	lud16Regex = regexp.MustCompile(`^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$`)
-)
-
-func IsValidNip05Format(s string) bool {
-	return nip05Regex.MatchString(s)
-}
-
-func IsValidLud16Format(s string) bool {
-	return lud16Regex.MatchString(s)
-}
 
 // CalculateScore computes the relevance score for a profile based on heuristics.
 // Score = Base + (Completeness * 10) + (Signals * 20) - Penalties

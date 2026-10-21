@@ -17,9 +17,6 @@ func TestGet_ParsesEmbeddedConfig(t *testing.T) {
 	if cfg.Search.Engine.MaxTotalHits != 10000 {
 		t.Errorf("expected max_total_hits=10000, got %d", cfg.Search.Engine.MaxTotalHits)
 	}
-	if cfg.Search.Cache.VerificationTTLHours != 336 {
-		t.Errorf("expected verification_ttl_hours=336, got %d", cfg.Search.Cache.VerificationTTLHours)
-	}
 }
 
 func TestGet_ReturnsSingleton(t *testing.T) {
