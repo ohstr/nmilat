@@ -176,11 +176,17 @@ func NewSessionContext(store *EventStore, info *ClientInfo, cfg *nip11.Metadata,
 	if sessCfg == nil {
 		sessCfg = defaultSessionConfig()
 	}
-	if sessCfg.OutgoingBufferSize <= 0 {
-		sessCfg.OutgoingBufferSize = defaultOutgoingBufferSize
-	}
-	if sessCfg.MaxConcurrentStoreTasks <= 0 {
-		sessCfg.MaxConcurrentStoreTasks = defaultMaxConcurrentStoreTasks
+	// sessCfg is shared by every session on the handler, so fill defaults
+	// on a per-session copy rather than writing into the caller's struct.
+	if sessCfg.OutgoingBufferSize <= 0 || sessCfg.MaxConcurrentStoreTasks <= 0 {
+		c := *sessCfg
+		if c.OutgoingBufferSize <= 0 {
+			c.OutgoingBufferSize = defaultOutgoingBufferSize
+		}
+		if c.MaxConcurrentStoreTasks <= 0 {
+			c.MaxConcurrentStoreTasks = defaultMaxConcurrentStoreTasks
+		}
+		sessCfg = &c
 	}
 	subs := NewSubscriptions(&cfg.Limitation)
 	subs.obs = sessCfg.Observer
