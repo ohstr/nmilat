@@ -202,8 +202,8 @@ privacy and performance fixes.
   ([#91](https://github.com/ohstr/nmilat/pull/91))
 - Moves `ReadEventsFromStore` from `relay/client` to `relay`, so `relay/client`
   and `nip46/bunker` no longer pull in bbolt and yaml. ([#91](https://github.com/ohstr/nmilat/pull/91))
-- Requires Go 1.26.9, which fixes nine standard-library vulnerabilities.
-  ([#89](https://github.com/ohstr/nmilat/pull/89))
+- Requires Go 1.26.10 for its standard-library security fixes.
+  ([#89](https://github.com/ohstr/nmilat/pull/89), [#161](https://github.com/ohstr/nmilat/pull/161))
 - Sends the NIP-42 AUTH challenge on every connection, not only when
   `auth_required` is on. ([#65](https://github.com/ohstr/nmilat/pull/65))
 - Returns whether the relay refused the read from
