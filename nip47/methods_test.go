@@ -2,6 +2,7 @@ package nip47
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -21,7 +22,9 @@ func TestGetInfoResult_CircleWalletRoundTrips(t *testing.T) {
 			"max_exp_secs": 86400,
 			"fees_ppm": 5000,
 			"circle_policy": "follow_set",
-			"identity": "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+			"identity": "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+			"per_wallet_max_millis": 500000,
+			"min_budget_renewal": "monthly"
 		}
 	}`
 	var got GetInfoResult
@@ -33,10 +36,26 @@ func TestGetInfoResult_CircleWalletRoundTrips(t *testing.T) {
 	}
 	want := CircleWalletInfo{
 		AvailableMillis: 42000, MaxExpSecs: 86400, FeesPpm: 5000, CirclePolicy: CirclePolicyFollowSet,
-		Identity: "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+		Identity:           "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+		PerWalletMaxMillis: 500000, MinBudgetRenewal: "monthly",
 	}
 	if *got.CircleWallet != want {
 		t.Errorf("CircleWallet = %+v, want %+v", *got.CircleWallet, want)
+	}
+}
+
+// TestCircleWalletInfo_UnreportedLimitsStayOffTheWire checks that a Hub that
+// doesn't report its per-wallet ceiling or renewal floor (both OPTIONAL in
+// NIP-CW) sends neither key, rather than a misleading 0 or "".
+func TestCircleWalletInfo_UnreportedLimitsStayOffTheWire(t *testing.T) {
+	raw, err := json.Marshal(CircleWalletInfo{AvailableMillis: 1, CirclePolicy: CirclePolicyAllowlist})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	for _, key := range []string{"per_wallet_max_millis", "min_budget_renewal"} {
+		if strings.Contains(string(raw), key) {
+			t.Errorf("%s = present in %s, want omitted", key, raw)
+		}
 	}
 }
 
