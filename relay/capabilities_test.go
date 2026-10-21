@@ -49,11 +49,13 @@ func TestSupportedNIPsConditional(t *testing.T) {
 		Self:       publicKey,
 	}
 	sh := NewSessionHandler(store, metadata, &MockSearchService{}, WithSessionConfig(SessionConfig{
-		Delegation: &DelegationConfig{Issuer: "issuer", Conditions: "cond", Token: "tok"},
+		Delegation:         &DelegationConfig{Issuer: "issuer", Conditions: "cond", Token: "tok"},
+		EnableProfileStats: true,
+		PrivKey:            authTestPrivKey,
 	}), WithLogger(testlogger.New(t)))
 
 	got := sh.SupportedNIPs().Slice()
-	for _, want := range []int{42, 43, 26, 50} {
+	for _, want := range []int{42, 43, 26, 50, 85} {
 		if !hasNIP(got, want) {
 			t.Errorf("SupportedNIPs() = %v, want conditional NIP %d present", got, want)
 		}

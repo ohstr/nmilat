@@ -8,6 +8,10 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds NIP-85 user assertions: with `SessionConfig.EnableProfileStats`, a REQ
+  for kind 30382 with `#d` pubkeys gets relay-signed stats (rank, followers,
+  following, zaps received/sent with first and last time, verified
+  NIP-05/lightning address), and NIP-11 lists 85.
 - Adds followers and received zaps to a profile's search score: each sender
   adds a capped amount, scaled by their own profile score, so many throwaway
   keys or a self-run LNURL server add little. Weights live in `search.social`.

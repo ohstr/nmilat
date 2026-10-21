@@ -43,6 +43,8 @@ type SocialConfig struct {
 	// MinSenderFactor.
 	TrustedSenderScore float64 `yaml:"trusted_sender_score"`
 	MinSenderFactor    float64 `yaml:"min_sender_factor"`
+	// RankScore is the profile score that maps to NIP-85 rank 100.
+	RankScore float64 `yaml:"rank_score"`
 }
 
 // ScoringConfig holds profile scoring values.

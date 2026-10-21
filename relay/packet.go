@@ -653,11 +653,10 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 				s.config.Logger.Warn().Err(err).Msg("failed to queue profile for indexing")
 			}
 		}
-
-		// Verification Workers (Async)
-		if s.VerificationWorker != nil {
-			s.VerificationWorker.QueueJob(ep.Event)
-		}
+	}
+	// Profile checks feed search ranking and NIP-85 assertions.
+	if ep.Event.Kind == 0 && s.VerificationWorker != nil && (s.SearchService != nil || s.config.EnableProfileStats) {
+		s.VerificationWorker.QueueJob(ep.Event)
 	}
 
 	return nil

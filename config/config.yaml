@@ -34,3 +34,4 @@ search:
     per_sender_cap: 100000   # most sats one sender can add
     trusted_sender_score: 60 # sender score that counts fully
     min_sender_factor: 0.1   # weight of a sender with no score
+    rank_score: 300          # profile score shown as NIP-85 rank 100

@@ -146,6 +146,9 @@ func (sh *SessionHandler) SupportedNIPs() nip11.NIPSet {
 	if sh.searchService != nil {
 		nips = append(nips, nip11.NIP(50)) // NIP-50: Search Capability
 	}
+	if sh.config != nil && sh.config.EnableProfileStats && sh.config.PrivKey != "" {
+		nips = append(nips, nip11.NIP(85)) // NIP-85: Trusted Assertions
+	}
 
 	return nip11.NewNIPSet(nips...)
 }
