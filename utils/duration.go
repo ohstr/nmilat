@@ -25,11 +25,11 @@ func ParseDuration(s string) (time.Duration, error) {
 	var total time.Duration
 	for in != "" {
 		i := 0
-		for i < len(in) && (in[i] >= '0' && in[i] <= '9' || in[i] == '.') {
+		for i < len(in) && isNumeric(in[i]) {
 			i++
 		}
 		j := i
-		for j < len(in) && !(in[j] >= '0' && in[j] <= '9' || in[j] == '.') {
+		for j < len(in) && !isNumeric(in[j]) {
 			j++
 		}
 		num, unit := in[:i], in[i:j]
@@ -49,6 +49,8 @@ func ParseDuration(s string) (time.Duration, error) {
 	}
 	return total, nil
 }
+
+func isNumeric(c byte) bool { return c >= '0' && c <= '9' || c == '.' }
 
 var durationUnits = map[string]time.Duration{
 	"s":  time.Second,

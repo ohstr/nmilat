@@ -7,6 +7,7 @@ import (
 
 	"github.com/ohstr/nmilat/nip01"
 	bolt "go.etcd.io/bbolt"
+	bolterrors "go.etcd.io/bbolt/errors"
 )
 
 // indexCounters keeps exact counts so they're O(1) to read: stored events
@@ -208,7 +209,7 @@ func (s *EventStore) backfillCounters() {
 					finished, err = step(tx)
 					return err
 				}); err != nil {
-					if !errors.Is(err, bolt.ErrDatabaseNotOpen) {
+					if !errors.Is(err, bolterrors.ErrDatabaseNotOpen) {
 						s.logger.Error().Err(err).Msg("failed to count stored events")
 					}
 					return

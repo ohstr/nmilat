@@ -402,8 +402,8 @@ func (s *EventStore) TopZapped(ctx context.Context, since, until uint64, coin Co
 		seen := map[string]bool{}
 		c := b.Cursor()
 		// Newest first, like rankZaps: a payment counts as its newest copy.
-		k, v := c.Seek(itob(until + 1))
-		if k == nil {
+		var k, v []byte
+		if k, _ = c.Seek(itob(until + 1)); k == nil {
 			k, v = c.Last()
 		} else {
 			k, v = c.Prev()
