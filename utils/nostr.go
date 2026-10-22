@@ -11,7 +11,7 @@ import (
 
 // GetNip05URL returns the URL to fetch the NIP-05 JSON for a given identifier.
 func GetNip05URL(nip05 string) string {
-	name, domain, ok := ParseIdentifier(nip05)
+	name, domain, ok := splitIdentifier(nip05)
 	if !ok {
 		return ""
 	}
@@ -20,7 +20,7 @@ func GetNip05URL(nip05 string) string {
 
 // GetLud16URL returns the URL to fetch the LNURL-pay JSON for a given LUD-16 identifier.
 func GetLud16URL(lud16 string) string {
-	name, domain, ok := ParseIdentifier(lud16)
+	name, domain, ok := splitIdentifier(lud16)
 	if !ok {
 		return ""
 	}
@@ -49,7 +49,7 @@ func GetFullHTTPURL(r *http.Request) string {
 // VerifyNip05 parses the NIP-05 response and checks if the given pubkey matches the name.
 // Names are matched case-insensitively.
 func VerifyNip05(r io.Reader, pubkey, nip05 string) bool {
-	name, _, ok := ParseIdentifier(nip05)
+	name, _, ok := splitIdentifier(nip05)
 	if !ok {
 		return false
 	}
