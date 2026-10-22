@@ -370,6 +370,10 @@ func (s *EventStore) commitSignal() <-chan struct{} {
 	return s.commitCh
 }
 
+// Commits counts writes that may have changed stored events; equal values
+// mean nothing changed in between.
+func (s *EventStore) Commits() uint64 { return s.commits.Load() }
+
 func (s *EventStore) signalCommit() {
 	s.commits.Add(1)
 	s.commitMu.Lock()
