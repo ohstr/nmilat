@@ -460,6 +460,25 @@ func TestCountSubscriptionResponse_MarshalJSON(t *testing.T) {
 	}
 }
 
+func TestCountSubscriptionResponse_Approximate(t *testing.T) {
+	for _, c := range []struct {
+		csr  CountSubscriptionResponse
+		want string
+	}{
+		{CountSubscriptionResponse{SubscriptionID: "s", Count: 3}, `["COUNT","s",{"count":3}]`},
+		{CountSubscriptionResponse{SubscriptionID: "s", Count: 3, Approximate: true}, `["COUNT","s",{"count":3,"approximate":true}]`},
+	} {
+		data, err := c.csr.MarshalJSON()
+		if err != nil || string(data) != c.want {
+			t.Errorf("MarshalJSON = %s, %v; want %s", data, err, c.want)
+		}
+		var got CountSubscriptionResponse
+		if err := got.UnmarshalJSON(data); err != nil || got != c.csr {
+			t.Errorf("round trip = %+v, %v; want %+v", got, err, c.csr)
+		}
+	}
+}
+
 func TestCountSubscriptionResponse_RoundTrip(t *testing.T) {
 	csr := &CountSubscriptionResponse{SubscriptionID: "sub1", Count: 42}
 	data, err := csr.MarshalJSON()

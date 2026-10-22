@@ -553,11 +553,17 @@ func (csr *ClosedSubscriptionResponse) UnmarshalJSON(data []byte) error {
 type CountSubscriptionResponse struct {
 	SubscriptionID string
 	Count          int64
+	// Approximate marks Count as a lower bound (NIP-45).
+	Approximate bool
 }
 
 func (csr *CountSubscriptionResponse) MarshalJSON() ([]byte, error) {
-	// NIP-45: ["COUNT", <subscription_id>, { "count": <num> }]
-	return json.Marshal([]interface{}{"COUNT", csr.SubscriptionID, map[string]int64{"count": csr.Count}})
+	// NIP-45: ["COUNT", <subscription_id>, { "count": <num>, "approximate": true }]
+	payload := struct {
+		Count       int64 `json:"count"`
+		Approximate bool  `json:"approximate,omitempty"`
+	}{csr.Count, csr.Approximate}
+	return json.Marshal([]interface{}{"COUNT", csr.SubscriptionID, payload})
 }
 
 func (csr *CountSubscriptionResponse) UnmarshalJSON(data []byte) error {
@@ -571,12 +577,13 @@ func (csr *CountSubscriptionResponse) UnmarshalJSON(data []byte) error {
 	csr.SubscriptionID = strings.ReplaceAll(string(result[1]), `"`, "")
 
 	var payload struct {
-		Count int64 `json:"count"`
+		Count       int64 `json:"count"`
+		Approximate bool  `json:"approximate"`
 	}
 	if err := json.Unmarshal(result[2], &payload); err != nil {
 		return fmt.Errorf("invalid COUNT payload: %w", err)
 	}
-	csr.Count = payload.Count
+	csr.Count, csr.Approximate = payload.Count, payload.Approximate
 	return nil
 }
 
