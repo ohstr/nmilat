@@ -150,12 +150,25 @@ func (s *EventStore) RebuildZapIndex(ctx context.Context, progress func(scanned,
 // scanZapsInto walks every stored event in batches, indexing zap receipts
 // into the bucket target names. It returns events scanned and zaps indexed.
 func (s *EventStore) scanZapsInto(ctx context.Context, target func(*bolt.Tx) []byte, progress func(scanned, indexed int)) (int, int, error) {
+	return s.scanEventsInto(ctx, isZapKind, func(tx *bolt.Tx, ev *nip01.Event, evsid uint64) error {
+		b, err := tx.CreateBucketIfNotExists(target(tx))
+		if err != nil {
+			return err
+		}
+		return putZap(b, ev, evsid)
+	}, progress)
+}
+
+// scanEventsInto walks every stored event in batches, calling apply in a
+// write transaction for each one whose kind matches. It returns events
+// scanned and applied.
+func (s *EventStore) scanEventsInto(ctx context.Context, match func(kind int) bool, apply func(tx *bolt.Tx, ev *nip01.Event, evsid uint64) error, progress func(scanned, indexed int)) (int, int, error) {
 	const batchSize = 1000 // events per read transaction
 	scanned, indexed := 0, 0
 	var lastKey []byte
 
 	for {
-		var zaps []*nip01.Event
+		var matched []*nip01.Event
 		var evsids []uint64
 		var newLastKey []byte
 		inBatch := 0
@@ -180,8 +193,8 @@ func (s *EventStore) scanZapsInto(ctx context.Context, target func(*bolt.Tx) []b
 					s.logger.Warn().Err(err).Uint64("evsid", binary.BigEndian.Uint64(k)).Msg("reindex: failed to unmarshal event")
 					continue
 				}
-				if isZapKind(event.Kind) {
-					zaps = append(zaps, &event)
+				if match(event.Kind) {
+					matched = append(matched, &event)
 					evsids = append(evsids, binary.BigEndian.Uint64(k))
 				}
 			}
@@ -192,14 +205,10 @@ func (s *EventStore) scanZapsInto(ctx context.Context, target func(*bolt.Tx) []b
 		}
 		scanned += inBatch
 
-		if len(zaps) > 0 {
+		if len(matched) > 0 {
 			err := s.db.Update(func(tx *bolt.Tx) error {
-				b, err := tx.CreateBucketIfNotExists(target(tx))
-				if err != nil {
-					return err
-				}
-				for i, event := range zaps {
-					if err := putZap(b, event, evsids[i]); err != nil {
+				for i, event := range matched {
+					if err := apply(tx, event, evsids[i]); err != nil {
 						return err
 					}
 					indexed++

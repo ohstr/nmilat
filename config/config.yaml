@@ -24,3 +24,14 @@ search:
     typo_one_min_word_size: 5
     typo_two_min_word_size: 9
     about_max_length: 1024   # truncation limit for about field
+
+  social:
+    followers_weight: 20     # x log10(1 + followers)
+    followers_cap: 100
+    zaps_weight: 20          # x log10(1 + sender-weighted sats received)
+    zappers_weight: 10       # x log10(1 + sender-weighted distinct zappers)
+    zaps_cap: 100
+    per_sender_cap: 100000   # most sats one sender can add
+    trusted_sender_score: 60 # sender score that counts fully
+    min_sender_factor: 0.1   # weight of a sender with no score
+    rank_score: 300          # profile score shown as NIP-85 rank 100

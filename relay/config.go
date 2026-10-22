@@ -55,6 +55,14 @@ type SessionConfig struct {
 	// itself just because a PrivKey happens to be configured.
 	EnableTopZapped bool
 
+	// EnableProfileStats serves NIP-85 user assertions (kind 30382,
+	// handler_assertions.go) signed with PrivKey, and checks profiles'
+	// NIP-05/LUD-16 even without a search service. Off by default.
+	EnableProfileStats bool
+	// MaxStatsTargets caps the #d pubkeys one assertions REQ may ask for;
+	// <= 0 uses DefaultMaxStatsTargets.
+	MaxStatsTargets int
+
 	// MembershipInviteTTL bounds how long a NIP-43 invite claim (kind
 	// 28935) remains valid after being issued. <= 0 falls back to
 	// defaultMembershipInviteTTL.
@@ -127,6 +135,9 @@ type SessionConfig struct {
 	// Verification tunes NIP-05/LUD-16/picture checks.
 	Verification VerificationConfig
 }
+
+// DefaultMaxStatsTargets is the default MaxStatsTargets.
+const DefaultMaxStatsTargets = 500
 
 // Defaults for a zero VerificationConfig field.
 const (

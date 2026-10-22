@@ -4,13 +4,9 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
-	"fmt"
 	"sort"
-	"strconv"
 
 	"github.com/ohstr/nmilat/nip01"
-	"github.com/ohstr/nmilat/utils"
 	bolt "go.etcd.io/bbolt"
 )
 
@@ -42,28 +38,43 @@ func (s *EventStore) IndexZap(tx *bolt.Tx, event *nip01.Event, evsid uint64) err
 
 // putZap writes one zap receipt into bucket. A receipt with no parsable
 // amount or receiver is skipped.
+//
+// Key: created_at(8) + evsid(8). Value: amount(8) + receiver(32), then a
+// zapEntry (Other = sender) for the counting rules; values written before
+// that are just the first 40 bytes.
 func putZap(bucket *bolt.Bucket, event *nip01.Event, evsid uint64) error {
-	amount, receiver, err := parseZapEvent(event)
+	f, err := parseZapFact(event)
 	if err != nil {
 		return nil
 	}
-
-	// Key: [Timestamp (8b)] [Evsid (8b)]
-	key := make([]byte, 16)
-	binary.BigEndian.PutUint64(key[0:8], uint64(event.CreatedAt))
-	binary.BigEndian.PutUint64(key[8:16], evsid)
-
-	// Value: [Amount (8b)] [ReceiverPubkey (32b)]
-	receiverBytes, _ := hex.DecodeString(receiver) // parseZapEvent guarantees valid hex or empty
-	if len(receiverBytes) != 32 {
+	receiver, err := hex.DecodeString(f.Receiver)
+	if err != nil || len(receiver) != 32 {
 		return nil
 	}
+	value := make([]byte, 40, 40+zapEntryLen)
+	binary.BigEndian.PutUint64(value[0:8], f.Amount)
+	copy(value[8:40], receiver)
+	value = append(value, zapEntry{Amount: f.Amount, Other: f.Sender, Signer: f.Signer, PaymentHash: f.PaymentHash, Valid: f.Valid}.encode()...)
+	return bucket.Put(zapKey(event, evsid), value)
+}
 
-	value := make([]byte, 40)
-	binary.BigEndian.PutUint64(value[0:8], amount)
-	copy(value[8:40], receiverBytes)
+func zapKey(event *nip01.Event, evsid uint64) []byte {
+	return append(itob(event.CreatedAt), itob(evsid)...)
+}
 
-	return bucket.Put(key, value)
+// unindexZap removes a deleted receipt from the zap index.
+func (s *EventStore) unindexZap(tx *bolt.Tx, event *nip01.Event, evsid uint64) error {
+	if !isZapKind(event.Kind) {
+		return nil
+	}
+	for _, name := range [][]byte{activeZapBucket(tx), buildingZapBucket(tx)} {
+		if b := tx.Bucket(name); name != nil && b != nil {
+			if err := b.Delete(zapKey(event, evsid)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // ZapStats contains the aggregated zap amount for a pubkey.
@@ -87,6 +98,8 @@ func (s *EventStore) GetTopZapped(ctx context.Context, since, until uint64, limi
 		}
 
 		c := b.Cursor()
+		keys := lnurlKeys{tx: tx, cache: map[string]string{}}
+		seen := map[string]bool{}
 
 		// Start from 'since'
 		minKey := make([]byte, 16)
@@ -104,13 +117,18 @@ func (s *EventStore) GetTopZapped(ctx context.Context, since, until uint64, limi
 				break
 			}
 
-			if len(v) != 40 {
+			if len(v) < 40 {
 				continue
 			}
 
 			amount := binary.BigEndian.Uint64(v[0:8])
-			receiverBytes := v[8:40]
-			receiver := hex.EncodeToString(receiverBytes)
+			receiver := hex.EncodeToString(v[8:40])
+
+			// Entries written before the counting rules (40 bytes) count
+			// as they did until the next rebuild.
+			if e, ok := decodeZapEntry(v[40:]); ok && !zapCounts(e, e.Other, receiver, keys.get(receiver), seen) {
+				continue
+			}
 
 			aggregation[receiver] += amount
 		}
@@ -149,91 +167,6 @@ func (s *EventStore) GetTopZapped(ctx context.Context, since, until uint64, limi
 	}
 
 	return result, nil
-}
-
-// parseZapEvent extracts amount (in sats/msats normalized) and receiver pubkey.
-func parseZapEvent(event *nip01.Event) (uint64, string, error) {
-	// 1. Extract Receiver: collect p[1]/p[2] and r[1] in one pass.
-	// p[1] may be a Nostr pubkey or a ConnectionKey (both are valid 64-hex).
-	// p[2] is the provider ("nostr", "discord", "telegram", …); absent means "nostr".
-	// r[1] is the resolved Nostr pubkey when p[1] is a ConnectionKey (web-identity-linked).
-	var pVal, pProvider, rVal string
-	for _, tag := range event.Tags {
-		if len(tag) < 2 {
-			continue
-		}
-		switch tag[0] {
-		case "p":
-			if pVal == "" {
-				pVal = tag[1]
-				if len(tag) >= 3 {
-					pProvider = tag[2]
-				}
-			}
-		case "r":
-			if rVal == "" {
-				rVal = tag[1]
-			}
-		}
-	}
-
-	if err := utils.Validate32Key(pVal); err != nil {
-		return 0, "", fmt.Errorf("no valid receiver p tag: %w", err)
-	}
-
-	var receiver string
-	switch {
-	case utils.Validate32Key(rVal) == nil:
-		// r tag present and valid → use resolved Nostr pubkey (web-identity-linked, with or without p[2])
-		receiver = rVal
-	case pProvider == "" || pProvider == "nostr":
-		// no r tag, no web identity marker → p[1] is a pure Nostr pubkey
-		receiver = pVal
-	default:
-		// Web Identity (non-Nostr platform) recipient with no resolved Nostr
-		// pubkey in the "r" tag → exclude from leaderboard, since there's no
-		// Nostr identity to credit.
-		return 0, "", fmt.Errorf("p tag references a non-nostr provider (%q) but no resolved pubkey was found in an r tag", pProvider)
-	}
-
-	// 2. Extract Amount
-	// Kind 9521: Check 'amount' tag assuming msats string.
-	var amount uint64
-
-	for _, tag := range event.Tags {
-		if len(tag) < 2 {
-			continue
-		}
-		if tag[0] == "amount" {
-			// Assuming value is in msats
-			val, err := strconv.ParseUint(tag[1], 10, 64)
-			if err == nil {
-				amount = val
-			}
-		} else if tag[0] == "description" && amount == 0 {
-			// For Kind 9521, the amount is often in the embedded zap request (description tag)
-			var inner struct {
-				Tags [][]string `json:"tags"`
-			}
-			if err := json.Unmarshal([]byte(tag[1]), &inner); err == nil {
-				for _, it := range inner.Tags {
-					if len(it) >= 2 && it[0] == "amount" {
-						val, err := strconv.ParseUint(it[1], 10, 64)
-						if err == nil {
-							amount = val
-						}
-						break
-					}
-				}
-			}
-		}
-	}
-
-	if amount == 0 {
-		return 0, "", fmt.Errorf(`no "amount" tag found on the zap event or its embedded zap request ("description" tag)`)
-	}
-
-	return amount, receiver, nil
 }
 
 // QueryEvents finds events matching the filter.

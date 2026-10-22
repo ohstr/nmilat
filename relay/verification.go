@@ -2,12 +2,14 @@ package relay
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -132,6 +134,7 @@ func jobFromEvent(event *nip01.Event) (VerificationJob, bool) {
 	var profile struct {
 		Nip05   string `json:"nip05"`
 		Lud16   string `json:"lud16"`
+		Lud06   string `json:"lud06"`
 		Picture string `json:"picture"`
 	}
 	// Invalid content still produces a job: it clears stale results.
@@ -143,7 +146,7 @@ func jobFromEvent(event *nip01.Event) (VerificationJob, bool) {
 	return VerificationJob{
 		Pubkey:  event.PubKey,
 		Nip05:   profile.Nip05,
-		Lud16:   profile.Lud16,
+		Lud16:   cmp.Or(profile.Lud16, profile.Lud06),
 		Picture: profile.Picture,
 		Base:    base,
 	}, true
@@ -207,7 +210,38 @@ func (w *ProfileVerificationWorker) sweeper() {
 	}
 }
 
+// maxSocialRefresh bounds the social scores refreshed per sweep.
+const maxSocialRefresh = 5000
+
+// refreshSocial rescores profiles whose zaps or follows changed and pushes
+// any changed score to search.
+func (w *ProfileVerificationWorker) refreshSocial() {
+	pubkeys := w.store.TakeSocialDirty(maxSocialRefresh)
+	if len(pubkeys) == 0 {
+		return
+	}
+	scores := make(map[string]int64, len(pubkeys))
+	for _, pk := range pubkeys {
+		if score, err := w.store.ComputeSocialScore(pk); err == nil {
+			scores[pk] = score
+		}
+	}
+	changed, err := w.store.SetSocialScores(scores)
+	if err != nil {
+		w.logger.Error().Err(err).Msg("failed to store social scores")
+		return
+	}
+	if w.searchService == nil {
+		return
+	}
+	for pk, m := range changed {
+		_ = w.searchService.UpdateScore(context.Background(), pk, m.TotalScore())
+	}
+}
+
 func (w *ProfileVerificationWorker) sweep() {
+	w.refreshSocial()
+
 	w.mu.Lock()
 	var deferred []string
 	for pk := range w.deferred {
@@ -316,7 +350,7 @@ func (w *ProfileVerificationWorker) processJob(ctx context.Context, job Verifica
 	nip05, lud16, picture := normalizeIdentifier(job.Nip05), normalizeIdentifier(job.Lud16), job.Picture
 	fields := []field{
 		{&metrics.Nip05, nip05, validIdentifier(nip05), func(ctx context.Context, v string) checkResult { return w.checkNip05(ctx, job.Pubkey, v) }},
-		{&metrics.Lud16, lud16, validIdentifier(lud16), w.checkLud16},
+		{&metrics.Lud16, lud16, payURL(lud16) != "", w.checkLud16},
 		{&metrics.Picture, picture, utils.IsValidPictureURL(picture), w.checkPicture},
 	}
 
@@ -378,6 +412,9 @@ func (w *ProfileVerificationWorker) processJob(ctx context.Context, job Verifica
 func normalizeIdentifier(id string) string {
 	if name, domain, ok := utils.ParseIdentifier(id); ok {
 		return name + "@" + domain
+	}
+	if lower := strings.ToLower(strings.TrimSpace(id)); strings.HasPrefix(lower, "lnurl") {
+		return lower
 	}
 	return id
 }
@@ -482,8 +519,26 @@ func (w *ProfileVerificationWorker) checkNip05(ctx context.Context, pubkey, nip0
 	return checkResult{outcome: outcomeOK}
 }
 
+// payURL is the LNURL-pay endpoint of a lightning address, or of a bech32
+// LNURL (lud06); "" if it's neither, or names an IP, a port or a local
+// host, which the relay won't fetch on a profile's behalf.
+func payURL(v string) string {
+	if validIdentifier(v) {
+		return utils.GetLud16URL(v)
+	}
+	raw, err := utils.DecodeLNURL(v)
+	if err != nil {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Port() != "" || !utils.IsPublicHostname(u.Hostname()) {
+		return ""
+	}
+	return raw
+}
+
 func (w *ProfileVerificationWorker) checkLud16(ctx context.Context, lud16 string) checkResult {
-	status, body, retryAfter, err := w.fetch(ctx, http.MethodGet, utils.GetLud16URL(lud16), nil)
+	status, body, retryAfter, err := w.fetch(ctx, http.MethodGet, payURL(lud16), nil)
 	if r, done := classify(status, retryAfter, err); done {
 		return r
 	}

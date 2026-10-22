@@ -71,23 +71,11 @@ func TestCacheHandler(t *testing.T) {
 
 	// Insert some Zaps via Reindex-compatible logic or direct IndexZap
 	err = store.db.Update(func(tx *bolt.Tx) error {
-		// Event 1 (User A: 1000)
-		ev1 := &nip01.Event{
-			Kind:      9521,
-			CreatedAt: uint64(time.Now().Unix()),
-			Tags:      [][]string{{"p", UserA}, {"amount", "1000"}},
-		}
-		if err := store.IndexZap(tx, ev1, 1); err != nil {
+		now := uint64(time.Now().Unix())
+		if err := store.IndexZap(tx, rawZap(t, 9521, UserA, "1000", now), 1); err != nil {
 			return err
 		}
-
-		// Event 2 (User B: 5000)
-		ev2 := &nip01.Event{
-			Kind:      9521,
-			CreatedAt: uint64(time.Now().Unix()),
-			Tags:      [][]string{{"p", UserB}, {"description", `{"kind":9520,"tags":[["amount","5000"]]}`}},
-		}
-		if err := store.IndexZap(tx, ev2, 2); err != nil {
+		if err := store.IndexZap(tx, rawZap(t, 9735, UserB, "5000", now), 2); err != nil {
 			return err
 		}
 		return nil
@@ -151,8 +139,7 @@ func TestCacheHandler(t *testing.T) {
 	var stats []ZapStats
 	err = json.Unmarshal([]byte(content["content"].(string)), &stats)
 	require.NoError(t, err)
-	// Both events index successfully (UserA via a direct "amount" tag, UserB via
-	// the amount embedded in its "description" zap request), sorted descending by total.
+	// Both zaps count, sorted descending by total.
 	require.Len(t, stats, 2)
 	assert.Equal(t, UserB, stats[0].Pubkey)
 	assert.Equal(t, uint64(5000), stats[0].TotalMLoki)

@@ -202,6 +202,13 @@ type EventStore struct {
 	commitCh chan struct{}
 	// zapRebuilding guards RebuildZapIndex against running twice at once.
 	zapRebuilding atomic.Bool
+	// socialRebuilding guards RebuildSocialIndex the same way.
+	socialRebuilding atomic.Bool
+
+	// socialDirty holds profiles whose zaps or follows changed, for a
+	// score refresh (TakeSocialDirty).
+	socialMu    sync.Mutex
+	socialDirty map[string]bool
 }
 
 func NewEventStore(path string, limitation *nip11.Limitation, opts ...EventStoreOption) (*EventStore, error) {
@@ -560,6 +567,7 @@ func (s *EventStore) startWorkers() {
 		defer s.workersWg.Done()
 		s.startHousekeeper()
 	}()
+	s.backfillSocialIndex()
 }
 
 func (s *EventStore) insert(tx *bolt.Tx, ev *nip01.Event) error {
@@ -775,8 +783,13 @@ func (s *EventStore) delete(tx *bolt.Tx, evsid uint64, ev *nip01.Event) error { 
 	if err != nil {
 		return err
 	}
-
-	return delEventIndexes(tx, keys)
+	if err := delEventIndexes(tx, keys); err != nil {
+		return err
+	}
+	if err := s.unindexZap(tx, ev, evsid); err != nil {
+		return err
+	}
+	return s.unindexSocial(tx, ev, evsid)
 }
 
 func (s *EventStore) insertEvent(tx *bolt.Tx, event *nip01.Event) (uint64, error) {
@@ -972,8 +985,10 @@ func (s *EventStore) insertIndexes(tx *bolt.Tx, event *nip01.Event, evsid uint64
 	if err := putEventIndexes(tx, keys); err != nil {
 		return err
 	}
-
-	return s.IndexZap(tx, event, evsid)
+	if err := s.IndexZap(tx, event, evsid); err != nil {
+		return err
+	}
+	return s.indexSocial(tx, event, evsid)
 }
 
 func (s *EventStore) findEventUsingTx(tx *bolt.Tx, evsid uint64) (*nip01.Event, error) {

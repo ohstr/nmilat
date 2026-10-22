@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/ohstr/nmilat/config"
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/relay/migrations"
+	"github.com/ohstr/nmilat/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	bolt "go.etcd.io/bbolt"
@@ -271,6 +273,37 @@ func TestVerification_Lud16(t *testing.T) {
 	assert.Equal(t, CheckFailed, m.Lud16.Status)
 	assert.Equal(t, int64(0), m.Lud16Score)
 	assert.False(t, m.Lud16AllowsNostr)
+}
+
+func TestVerification_Lud06WhenNoLud16(t *testing.T) {
+	f := newVerifyFixture(t, VerificationConfig{})
+	f.web.set("pay.example.com", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/lnurlp/bob", r.URL.Path)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"tag": "payRequest", "callback": "https://pay.example.com/cb",
+			"allowsNostr": true, "nostrPubkey": "abcd",
+		})
+	})
+	lnurl, err := utils.EncodeLNURL("https://pay.example.com/lnurlp/bob")
+	require.NoError(t, err)
+
+	m := f.run(map[string]string{"lud06": strings.ToUpper(lnurl)}, false)
+	assert.Equal(t, CheckOK, m.Lud16.Status)
+	assert.Equal(t, lnurl, m.Lud16.Value)
+	assert.Equal(t, "abcd", m.Lud16NostrPubkey)
+
+	// An LNURL pointing at an internal address is never fetched.
+	internal, err := utils.EncodeLNURL("https://10.0.0.1/lnurlp/bob")
+	require.NoError(t, err)
+	f.web.set("10.0.0.1", nip05JSON(nil))
+	m = f.run(map[string]string{"lud06": internal}, false)
+	assert.Equal(t, CheckInvalid, m.Lud16.Status)
+	assert.Zero(t, f.web.count("10.0.0.1"))
+
+	// lud16 wins when both are set.
+	f.web.set("getalby.com", nip05JSON(nil))
+	f.run(map[string]string{"lud06": lnurl, "lud16": "bob@getalby.com"}, false)
+	assert.Equal(t, 1, f.web.count("getalby.com"))
 }
 
 func TestVerification_PictureFallsBackToGet(t *testing.T) {
