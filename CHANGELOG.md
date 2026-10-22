@@ -311,6 +311,7 @@ privacy and performance fixes.
   which strfry and most relays drop mid-sync. Messages now stop at
   `Negentropy.FrameSizeLimit` (30 000 bytes by default) and the rest follows
   in later rounds, split and encoded as the reference negentropy does.
+  ([#169](https://github.com/ohstr/nmilat/pull/169))
 - Fixes zap amounts in different coins being added together in the zap
   ranking, NIP-85 `zap_amt_*` and the social score.
   ([#167](https://github.com/ohstr/nmilat/pull/167))
