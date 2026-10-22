@@ -1,7 +1,6 @@
 package relay
 
 import (
-	"encoding/json"
 	"testing"
 
 	"github.com/ohstr/nmilat/nip01"
@@ -47,13 +46,6 @@ func zapReceipt(t testing.TB, z zapSpec) *nip01.Event {
 	})
 	require.NoError(t, err)
 	return ev
-}
-
-func mustJSON(t testing.TB, ev *nip01.Event) []byte {
-	t.Helper()
-	b, err := json.Marshal(ev)
-	require.NoError(t, err)
-	return b
 }
 
 func TestZapReceiptHelperValidates(t *testing.T) {
