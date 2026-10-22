@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"net/http"
 	"runtime"
 	"time"
 
@@ -122,6 +123,84 @@ type SessionConfig struct {
 
 	// Observer receives activity for metrics. nil discards it.
 	Observer Observer
+
+	// Verification tunes NIP-05/LUD-16/picture checks.
+	Verification VerificationConfig
+}
+
+// Defaults for a zero VerificationConfig field.
+const (
+	DefaultVerificationTTL             = 14 * 24 * time.Hour
+	DefaultVerificationRetryInitial    = time.Hour
+	DefaultVerificationRetryMax        = 24 * time.Hour
+	DefaultVerificationMaxAttempts     = 5
+	DefaultVerificationPerHostInterval = 250 * time.Millisecond
+	DefaultVerificationSweepInterval   = time.Minute
+	DefaultVerificationTimeout         = 10 * time.Second
+)
+
+// VerificationConfig tunes profile checks. A check is fetched only for a
+// new or changed identifier, when its TTL or retry time comes, or when
+// forced; zero fields use the Default* values above.
+type VerificationConfig struct {
+	// TTL is how long a definitive result is kept before it's checked
+	// again. Negative never re-checks an unchanged identifier.
+	TTL time.Duration
+	// RetryInitial is the wait after a first transient failure (network,
+	// 5xx, 429, ...); it doubles per attempt up to RetryMax. A longer
+	// Retry-After from the server wins.
+	RetryInitial time.Duration
+	RetryMax     time.Duration
+	// MaxAttempts transient failures in a row end in CheckError until the
+	// next TTL.
+	MaxAttempts int
+	// PerHostInterval spaces requests to the same host.
+	PerHostInterval time.Duration
+	// SweepInterval is how often due checks are picked up.
+	SweepInterval time.Duration
+	// HTTPClient makes the requests; nil uses one with
+	// DefaultVerificationTimeout.
+	HTTPClient *http.Client
+	// UserAgent is sent with every request; "" uses "nmilat".
+	UserAgent string
+}
+
+func (c VerificationConfig) withDefaults() VerificationConfig {
+	if c.TTL == 0 {
+		c.TTL = DefaultVerificationTTL
+	}
+	if c.RetryInitial <= 0 {
+		c.RetryInitial = DefaultVerificationRetryInitial
+	}
+	if c.RetryMax <= 0 {
+		c.RetryMax = DefaultVerificationRetryMax
+	}
+	if c.RetryMax < c.RetryInitial {
+		c.RetryMax = c.RetryInitial
+	}
+	if c.MaxAttempts <= 0 {
+		c.MaxAttempts = DefaultVerificationMaxAttempts
+	}
+	if c.PerHostInterval <= 0 {
+		c.PerHostInterval = DefaultVerificationPerHostInterval
+	}
+	if c.SweepInterval <= 0 {
+		c.SweepInterval = DefaultVerificationSweepInterval
+	}
+	if c.HTTPClient == nil {
+		c.HTTPClient = &http.Client{Timeout: DefaultVerificationTimeout}
+	}
+	if c.UserAgent == "" {
+		c.UserAgent = "nmilat"
+	}
+	return c
+}
+
+// WithVerificationConfig sets SessionConfig.Verification.
+func WithVerificationConfig(v VerificationConfig) SessionOption {
+	return func(cfg *SessionConfig) {
+		cfg.Verification = v
+	}
 }
 
 type DelegationConfig struct {

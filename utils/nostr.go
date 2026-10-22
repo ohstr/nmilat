@@ -5,29 +5,26 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
 // GetNip05URL returns the URL to fetch the NIP-05 JSON for a given identifier.
 func GetNip05URL(nip05 string) string {
-	parts := strings.Split(nip05, "@")
-	if len(parts) != 2 {
+	name, domain, ok := splitIdentifier(nip05)
+	if !ok {
 		return ""
 	}
-	name := parts[0]
-	domain := parts[1]
-	return fmt.Sprintf("https://%s/.well-known/nostr.json?name=%s", domain, name)
+	return fmt.Sprintf("https://%s/.well-known/nostr.json?name=%s", domain, url.QueryEscape(name))
 }
 
 // GetLud16URL returns the URL to fetch the LNURL-pay JSON for a given LUD-16 identifier.
 func GetLud16URL(lud16 string) string {
-	parts := strings.Split(lud16, "@")
-	if len(parts) != 2 {
+	name, domain, ok := splitIdentifier(lud16)
+	if !ok {
 		return ""
 	}
-	name := parts[0]
-	domain := parts[1]
-	return fmt.Sprintf("https://%s/.well-known/lnurlp/%s", domain, name)
+	return fmt.Sprintf("https://%s/.well-known/lnurlp/%s", domain, url.PathEscape(name))
 }
 
 // GetDomainOnly extracts the domain from a NIP-05 or LUD-16 identifier.
@@ -50,12 +47,12 @@ func GetFullHTTPURL(r *http.Request) string {
 }
 
 // VerifyNip05 parses the NIP-05 response and checks if the given pubkey matches the name.
+// Names are matched case-insensitively.
 func VerifyNip05(r io.Reader, pubkey, nip05 string) bool {
-	parts := strings.Split(nip05, "@")
-	if len(parts) != 2 {
+	name, _, ok := splitIdentifier(nip05)
+	if !ok {
 		return false
 	}
-	name := parts[0]
 
 	var res struct {
 		Names map[string]string `json:"names"`
@@ -67,6 +64,11 @@ func VerifyNip05(r io.Reader, pubkey, nip05 string) bool {
 	if pk, ok := res.Names[name]; ok {
 		return strings.EqualFold(pk, pubkey)
 	}
+	for n, pk := range res.Names {
+		if strings.EqualFold(n, name) {
+			return strings.EqualFold(pk, pubkey)
+		}
+	}
 	return false
 }
 
@@ -77,10 +79,9 @@ func UnmarshalJSON(data []byte, v interface{}) error {
 
 // IsValidPictureURL performs a basic check to see if a string looks like a valid HTTP or HTTPS URL.
 func IsValidPictureURL(u string) bool {
-	if u == "" {
+	p, err := url.Parse(strings.TrimSpace(u))
+	if err != nil {
 		return false
 	}
-	// Basic prefix check instead of full url.Parse to avoid importing net/url just for this if possible
-	// Or we can just import net/url
-	return strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://")
+	return (p.Scheme == "http" || p.Scheme == "https") && p.Host != ""
 }

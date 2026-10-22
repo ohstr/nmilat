@@ -98,20 +98,26 @@ func TestIsHex(t *testing.T) {
 	}
 }
 
-func TestHasVowels(t *testing.T) {
+func TestIsGibberish(t *testing.T) {
 	tests := []struct {
 		input string
 		want  bool
 	}{
-		{"hello", true},
-		{"SKY", false}, // Y is not in list
-		{"apple", true},
-		{"123", false},
+		{"bcdfghj", true},
+		{"0000000", true},
+		{"hello world", false},
+		{"Rhythmic", false},
+		{"bcd", false},
+		// Other scripts have no Latin vowels and are never gibberish.
+		{"中本聪", false},
+		{"ВладимирП", false},
+		{"محمدعلي", false},
+		{"たなかたろう", false},
 	}
 
 	for _, tt := range tests {
-		if got := hasVowels(tt.input); got != tt.want {
-			t.Errorf("hasVowels(%q) = %v, want %v", tt.input, got, tt.want)
+		if got := isGibberish(tt.input, 6); got != tt.want {
+			t.Errorf("isGibberish(%q) = %v, want %v", tt.input, got, tt.want)
 		}
 	}
 }

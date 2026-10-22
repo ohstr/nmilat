@@ -49,6 +49,10 @@ var (
 	indexZaps       = []byte{9}
 	// 10 was indexIdentities, removed as dead (never read anywhere).
 	indexProfileMetrics = []byte{11}
+	// indexVerificationDue orders profile checks by when they're due.
+	// 12-15 are membership and groups buckets (store_membership.go,
+	// store_groups.go); TestBucketIDsAreUnique guards against reuse.
+	indexVerificationDue = []byte{16}
 
 	maxUint64Bytes = itob(0xFFFFFFFFFFFFFFFF)
 	// maxSuffixBytes is the largest possible created_at+evsid suffix on a
@@ -232,6 +236,11 @@ func NewEventStore(path string, limitation *nip11.Limitation, opts ...EventStore
 	mgr := migrations.NewManager(db, migrations.WithLogger(cfg.Logger))
 	mgr.Register(&migrations.ResetVerificationCacheMigration{
 		MetricsBucket: indexProfileMetrics,
+	})
+	mgr.Register(&migrations.ScheduleLegacyVerification{
+		MetricsBucket: indexProfileMetrics,
+		DueBucket:     indexVerificationDue,
+		DueKey:        verificationDueKey,
 	})
 	mgr.Register(&migrations.RebuildTimeOrderedIndexes{
 		EventsBucket:   indexEvents,

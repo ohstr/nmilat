@@ -797,7 +797,7 @@ func NewSessionHandler(store *EventStore, relayMetadata *nip11.Metadata, searchS
 		relayMetadata:      relayMetadata,
 		config:             cfg,
 		searchService:      searchService,
-		VerificationWorker: NewProfileVerificationWorker(store, searchService),
+		VerificationWorker: NewProfileVerificationWorker(store, searchService, cfg.Verification),
 		membership:         membership,
 		groups:             groups,
 	}

@@ -1,26 +1,12 @@
 package ranking
 
 import (
-	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/ohstr/nmilat/config"
 )
-
-var (
-	// Basic regex for email-like format: user@domain.tld
-	nip05Regex = regexp.MustCompile(`^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$`)
-	// Basic regex for Lightning Address (email-like)
-	lud16Regex = regexp.MustCompile(`^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$`)
-)
-
-func IsValidNip05Format(s string) bool {
-	return nip05Regex.MatchString(s)
-}
-
-func IsValidLud16Format(s string) bool {
-	return lud16Regex.MatchString(s)
-}
 
 // CalculateScore computes the relevance score for a profile based on heuristics.
 // Score = Base + (Completeness * 10) + (Signals * 20) - Penalties
@@ -53,7 +39,7 @@ func CalculateScore(name, displayName, about, nip05, lud16, picture string) int6
 	}
 
 	// Gibberish / Spam filter
-	if len(name) > cfg.MinGibberishLen && !hasVowels(name) {
+	if isGibberish(name, cfg.MinGibberishLen) {
 		score += cfg.GibberishPenalty
 	}
 
@@ -74,7 +60,17 @@ func isHex(s string) bool {
 	return true
 }
 
-func hasVowels(s string) bool {
-	vowels := "aeiouAEIOU"
-	return strings.ContainsAny(s, vowels)
+// isGibberish flags a name longer than minLen characters with no Latin
+// vowel. Names written in other scripts have no Latin vowels, so any
+// non-ASCII letter exempts the name.
+func isGibberish(name string, minLen int) bool {
+	if utf8.RuneCountInString(name) <= minLen {
+		return false
+	}
+	for _, c := range name {
+		if c > unicode.MaxASCII && unicode.IsLetter(c) {
+			return false
+		}
+	}
+	return !strings.ContainsAny(name, "aeiouyAEIOUY")
 }

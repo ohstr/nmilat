@@ -6,6 +6,7 @@ package config
 import (
 	_ "embed"
 	"sync"
+	"sync/atomic"
 
 	"gopkg.in/yaml.v3"
 )
@@ -23,7 +24,6 @@ type SearchConfig struct {
 	Scoring      ScoringConfig      `yaml:"scoring"`
 	Verification VerificationConfig `yaml:"verification"`
 	Engine       EngineConfig       `yaml:"engine"`
-	Cache        CacheConfig        `yaml:"cache"`
 }
 
 // ScoringConfig holds profile scoring values.
@@ -40,10 +40,9 @@ type ScoringConfig struct {
 
 // VerificationConfig holds verification scoring values.
 type VerificationConfig struct {
-	Nip05Score             int64 `yaml:"nip05_score"`
-	Lud16Score             int64 `yaml:"lud16_score"`
-	Lud16ChainLimit        int64 `yaml:"lud16_chain_limit"`
-	DefaultPredefinedBonus int64 `yaml:"default_predefined_bonus"`
+	Nip05Score      int64 `yaml:"nip05_score"`
+	Lud16Score      int64 `yaml:"lud16_score"`
+	Lud16ChainLimit int64 `yaml:"lud16_chain_limit"`
 }
 
 // EngineConfig holds search engine tuning settings.
@@ -54,23 +53,28 @@ type EngineConfig struct {
 	AboutMaxLength     int `yaml:"about_max_length"`
 }
 
-// CacheConfig holds cache-related settings.
-type CacheConfig struct {
-	VerificationTTLHours int `yaml:"verification_ttl_hours"`
-}
-
 var (
-	instance *AppConfig
+	instance atomic.Pointer[AppConfig]
 	once     sync.Once
 )
 
-// Get returns the singleton AppConfig, parsed once from the embedded config.yaml.
+// Get returns the AppConfig: the embedded config.yaml plus any Configure
+// overrides. Treat it as read-only.
 func Get() *AppConfig {
 	once.Do(func() {
-		instance = &AppConfig{}
-		if err := yaml.Unmarshal(configData, instance); err != nil {
+		cfg := &AppConfig{}
+		if err := yaml.Unmarshal(configData, cfg); err != nil {
 			panic("failed to parse embedded config.yaml: " + err.Error())
 		}
+		instance.Store(cfg)
 	})
-	return instance
+	return instance.Load()
+}
+
+// Configure replaces the config with a copy changed by fn, e.g. to apply
+// an embedder's scoring weights at startup.
+func Configure(fn func(*AppConfig)) {
+	next := *Get()
+	fn(&next)
+	instance.Store(&next)
 }

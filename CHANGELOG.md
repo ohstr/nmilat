@@ -8,6 +8,11 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `config.Configure`, so an embedder can set its own scoring weights.
+  ([#164](https://github.com/ohstr/nmilat/pull/164))
+- Adds `ProfileMetrics.CheckScore`, which rescores a profile from its stored
+  check results with the current weights, without fetching anything.
+  ([#164](https://github.com/ohstr/nmilat/pull/164))
 - Adds `nip47.CircleWalletInfo.PerWalletMaxMillis` and `MinBudgetRenewal`, a
   Hub's per-wallet ceiling and budget-renewal floor from NIP-CW `get_info`, so a
   client can check a join before sending it.
@@ -172,6 +177,11 @@ privacy and performance fixes.
 
 ### Changed
 
+- Changes profile verification to fetch only for a new or changed identifier,
+  an expired result, a retry or `VerifyNow`, rate-limited per host;
+  `SessionConfig.Verification` sets the TTL, backoff and limits, and the unused
+  `verification_ttl_hours` and `default_predefined_bonus` settings are removed.
+  ([#164](https://github.com/ohstr/nmilat/pull/164))
 - Logs session open/close, AUTH, rejected events and refused WebSocket
   upgrades at debug instead of info/warn/error, and rate-limits slow/failed
   write warnings. A busy relay no longer floods its log, and clients can no
@@ -240,6 +250,16 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes the gibberish-name search penalty hitting names written in non-Latin
+  scripts. ([#164](https://github.com/ohstr/nmilat/pull/164))
+- Fixes search scores dropping a profile's base score once its checks ran, and
+  counting a picture twice; a broken picture now takes its bonus back.
+  ([#164](https://github.com/ohstr/nmilat/pull/164))
+- Fixes profiles shown as having no NIP-05 or lightning address when they do:
+  identifiers with TLDs longer than four letters are checked now, and a
+  timeout, block or 5xx keeps the previous result and is retried instead of
+  counting as "not verified" for two weeks.
+  ([#164](https://github.com/ohstr/nmilat/pull/164))
 - Fixes a data race when two connections open at once on a relay whose
   `SessionConfig` leaves `OutgoingBufferSize` or `MaxConcurrentStoreTasks` at
   zero: each session now fills those defaults on its own copy instead of

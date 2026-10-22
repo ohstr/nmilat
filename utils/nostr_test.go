@@ -91,4 +91,34 @@ func TestIsValidPictureURL(t *testing.T) {
 	if IsValidPictureURL("ftp://example.com/pic.png") {
 		t.Error("expected non-http(s) scheme to be invalid")
 	}
+	if IsValidPictureURL("https://") {
+		t.Error("expected a URL without a host to be invalid")
+	}
+}
+
+// A client may resolve a local or test server; only a relay fetching on
+// others' behalf (ParseIdentifier) refuses IPs and ports.
+func TestURLBuildersAcceptLocalHosts(t *testing.T) {
+	if got := GetNip05URL("alice@127.0.0.1:43733"); got != "https://127.0.0.1:43733/.well-known/nostr.json?name=alice" {
+		t.Fatalf("GetNip05URL = %q", got)
+	}
+	if got := GetLud16URL("alice@localhost:8080"); got != "https://localhost:8080/.well-known/lnurlp/alice" {
+		t.Fatalf("GetLud16URL = %q", got)
+	}
+	if _, _, ok := ParseIdentifier("alice@127.0.0.1:43733"); ok {
+		t.Fatal("ParseIdentifier must refuse an IP and port")
+	}
+	if got := GetNip05URL("alice@evil.com/x?"); got != "" {
+		t.Fatalf("GetNip05URL accepted a path: %q", got)
+	}
+}
+
+func TestNip05Normalization(t *testing.T) {
+	if got := GetNip05URL(" Bob@Nostrplebs.Social "); got != "https://nostrplebs.social/.well-known/nostr.json?name=bob" {
+		t.Fatalf("GetNip05URL = %q", got)
+	}
+	body := `{"names":{"Bob":"pubkeyabc"}}`
+	if !VerifyNip05(strings.NewReader(body), "pubkeyabc", "bob@example.com") {
+		t.Fatal("names should match case-insensitively")
+	}
 }

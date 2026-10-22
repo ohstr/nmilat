@@ -78,8 +78,16 @@ func FetchLud16PayResponse(ctx context.Context, client *http.Client, lud16 strin
 	if err != nil {
 		return nil, err
 	}
+	return ParsePayResponse(lud16, body)
+}
 
+// ParsePayResponse parses an LNURL-pay document fetched for lud16. A
+// LUD-06 {"status":"ERROR"} reply or a document without a callback is an
+// error.
+func ParsePayResponse(lud16 string, body []byte) (*PayResponse, error) {
 	var wire struct {
+		Status         string `json:"status"`
+		Reason         string `json:"reason"`
 		Tag            string `json:"tag"`
 		Callback       string `json:"callback"`
 		MinSendable    int64  `json:"minSendable"`
@@ -91,6 +99,9 @@ func FetchLud16PayResponse(ctx context.Context, client *http.Client, lud16 strin
 	}
 	if err := json.Unmarshal(body, &wire); err != nil {
 		return nil, fmt.Errorf("lud16 %q: parse pay response: %w", lud16, err)
+	}
+	if strings.EqualFold(wire.Status, "ERROR") {
+		return nil, fmt.Errorf("lud16 %q: %s", lud16, wire.Reason)
 	}
 	if wire.Callback == "" {
 		return nil, fmt.Errorf("lud16 %q: pay response has no callback", lud16)

@@ -208,8 +208,8 @@ func TestMigrationV2IsIdempotent(t *testing.T) {
 	first := bucketKeys(t, store, indexKind)
 	store.Close()
 
-	if got := migrationVersion(t, path); got != 2 {
-		t.Fatalf("migration version = %d, want 2", got)
+	if got := migrationVersion(t, path); got < 2 {
+		t.Fatalf("migration version = %d, want at least 2", got)
 	}
 
 	// Reopening runs no migration, and must not disturb the indexes.
@@ -325,8 +325,8 @@ func TestMigrationV2OnAnEmptyStore(t *testing.T) {
 	}
 	store.Close()
 
-	if got := migrationVersion(t, path); got != 2 {
-		t.Errorf("migration version = %d, want 2", got)
+	if got := migrationVersion(t, path); got < 2 {
+		t.Errorf("migration version = %d, want at least 2", got)
 	}
 }
 
