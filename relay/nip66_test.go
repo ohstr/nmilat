@@ -85,7 +85,7 @@ func TestRelayDiscovery_KindsAndNetworks(t *testing.T) {
 }
 
 func TestPublishSelfSigned_SkipsUnchangedAndStaysNewer(t *testing.T) {
-	store := newStore(t)
+	store := newIndexedStore(t)
 	ctx := context.Background()
 	key := newTestKey(t, 7)
 	build := func(events uint64) *nip01.Event {

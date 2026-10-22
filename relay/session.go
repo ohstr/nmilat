@@ -790,6 +790,7 @@ func NewSessionHandler(store *EventStore, relayMetadata *nip11.Metadata, searchS
 	if nip29Registered() && relayMetadata != nil && relayMetadata.URL == "" {
 		cfg.Logger.Warn().Msg("NIP-29 group hosting is enabled but nip11.url is not set: NIP-42 AUTH will fail its relay-tag check on every connection, so a private group (the default on creation) will be invisible even to its own creator. Set nip11.url to this relay's own canonical address (e.g. wss://relay.example.com).")
 	}
+	warnMissingIndexes(cfg, store, searchService != nil)
 
 	sh := &SessionHandler{
 		store:              store,

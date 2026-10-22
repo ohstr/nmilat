@@ -79,7 +79,13 @@ func CreateEventsFromKinds(t testing.TB, kinds []int, IDOffset int, tags ...[]st
 	return events
 }
 
-func newStore(t testing.TB) *EventStore {
+// allIndexes opens a store with every derived index.
+var allIndexes = WithEventStoreIndexes(DerivedIndexes{Zaps: true, Social: true})
+
+// newIndexedStore is newStore with every derived index.
+func newIndexedStore(t testing.TB) *EventStore { return newStore(t, allIndexes) }
+
+func newStore(t testing.TB, opts ...EventStoreOption) *EventStore {
 	f, err := os.CreateTemp("", "test.db")
 	if err != nil {
 		t.Fatal(err)
@@ -91,7 +97,7 @@ func newStore(t testing.TB) *EventStore {
 		_ = os.Remove(f.Name())
 	})
 
-	store, err := NewEventStore(f.Name(), &nip11.Limitation{MaxLimit: 1000}, WithEventStoreLogger(testlogger.New(t)))
+	store, err := NewEventStore(f.Name(), &nip11.Limitation{MaxLimit: 1000}, append([]EventStoreOption{WithEventStoreLogger(testlogger.New(t))}, opts...)...)
 	if err != nil {
 		t.Fatal(err)
 	}

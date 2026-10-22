@@ -22,7 +22,7 @@ func TestReindexZaps(t *testing.T) {
 	defer func() { _ = os.Remove(tmpFile.Name()) }()
 	_ = tmpFile.Close()
 
-	store, err := NewEventStore(tmpFile.Name(), &nip11.Limitation{}, WithEventStoreLogger(testlogger.New(t)))
+	store, err := NewEventStore(tmpFile.Name(), &nip11.Limitation{}, WithEventStoreLogger(testlogger.New(t)), allIndexes)
 	require.NoError(t, err)
 	defer store.Close()
 

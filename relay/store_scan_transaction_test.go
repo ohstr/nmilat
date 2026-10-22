@@ -50,11 +50,11 @@ const (
 
 // newStoreAtPath is newStore, but it also returns the database path so a test
 // can stat the file and confirm a write really did grow it.
-func newStoreAtPath(t testing.TB) (*EventStore, string) {
+func newStoreAtPath(t testing.TB, opts ...EventStoreOption) (*EventStore, string) {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "scan-txn-test.db")
-	store, err := NewEventStore(path, &nip11.Limitation{MaxLimit: 1000}, WithEventStoreLogger(testlogger.New(t)))
+	store, err := NewEventStore(path, &nip11.Limitation{MaxLimit: 1000}, append([]EventStoreOption{WithEventStoreLogger(testlogger.New(t))}, opts...)...)
 	if err != nil {
 		t.Fatal(err)
 	}

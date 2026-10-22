@@ -168,6 +168,9 @@ func configKey(c ZapRankingConfig, totals bool) string {
 // ZapRanking returns the ranking for window and coin from the cache,
 // computing it on first use.
 func (s *EventStore) ZapRanking(ctx context.Context, cfg ZapRankingConfig, window ZapWindow, coin Coin) (ZapRanking, error) {
+	if !s.zaps.enabled {
+		return ZapRanking{}, ErrIndexDisabled
+	}
 	cfg = cfg.withDefaults()
 	lists, at, err := s.zapRank.get(ctx, s, cfg, false)
 	if err != nil {
@@ -179,6 +182,9 @@ func (s *EventStore) ZapRanking(ctx context.Context, cfg ZapRankingConfig, windo
 // ZapTotals returns all-time counted zap totals per coin, in milli-units,
 // from the same cache (whose pass then covers all time).
 func (s *EventStore) ZapTotals(ctx context.Context, cfg ZapRankingConfig) (map[Coin]uint64, error) {
+	if !s.zaps.enabled {
+		return nil, ErrIndexDisabled
+	}
 	cfg = cfg.withDefaults()
 	if _, _, err := s.zapRank.get(ctx, s, cfg, true); err != nil {
 		return nil, err
@@ -389,6 +395,9 @@ func sortRanked(z []RankedZap) {
 // TopZapped ranks receivers by counted zaps in coin created in [since,
 // until], uncached; the reference the cache must match.
 func (s *EventStore) TopZapped(ctx context.Context, since, until uint64, coin Coin, limit int) ([]RankedZap, error) {
+	if !s.zaps.enabled {
+		return nil, ErrIndexDisabled
+	}
 	if limit <= 0 {
 		return nil, nil
 	}

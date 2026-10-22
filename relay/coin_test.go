@@ -91,7 +91,7 @@ func TestZapEntry_CoinRoundTrip(t *testing.T) {
 }
 
 func TestIndexes_RebuildOnOpenToRecordCoins(t *testing.T) {
-	store, path := newStoreAtPath(t)
+	store, path := newStoreAtPath(t, allIndexes)
 	f := &socialFixture{t: t, store: store, alice: newTestKey(t, 10), bob: newTestKey(t, 11), provider: newTestKey(t, 12), at: 1_700_000_000}
 	f.insert(f.zap(f.bob.pub, f.alice.pub, 1_000), f.zap(f.bob.pub, f.alice.pub, 2_000, func(z *zapSpec) { z.Kind = nipAZ.KindAltZapReceipt }))
 
@@ -117,7 +117,7 @@ func TestIndexes_RebuildOnOpenToRecordCoins(t *testing.T) {
 	assert.Equal(t, []Coin{CoinUnknown, CoinUnknown}, storedCoins(t, store))
 	store.Close()
 
-	reopened, err := NewEventStore(path, &nip11.Limitation{MaxLimit: 1000}, WithEventStoreLogger(testlogger.New(t)))
+	reopened, err := NewEventStore(path, &nip11.Limitation{MaxLimit: 1000}, WithEventStoreLogger(testlogger.New(t)), allIndexes)
 	require.NoError(t, err)
 	t.Cleanup(reopened.Close)
 	require.Eventually(t, func() bool { return hasCoinsFlags(reopened) }, 5*time.Second, 10*time.Millisecond)
@@ -127,7 +127,7 @@ func TestIndexes_RebuildOnOpenToRecordCoins(t *testing.T) {
 }
 
 func TestIndexes_EmptyStoreNeedsNoRebuild(t *testing.T) {
-	store := newStore(t)
+	store := newIndexedStore(t)
 	assert.True(t, hasCoinsFlags(store))
 	assert.True(t, store.SocialIndexBuilt())
 }

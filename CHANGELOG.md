@@ -219,6 +219,12 @@ privacy and performance fixes.
 
 ### Changed
 
+- Changes the zap and social indexes to opt-in with `WithEventStoreIndexes`:
+  a store opened without one neither writes nor rebuilds it, and its readers
+  return `ErrIndexDisabled`. A disabled index keeps its data, marked stale
+  by the first write it misses and rebuilt in the background once enabled
+  again (`ZapIndexState`/`SocialIndexState` report it).
+  ([#171](https://github.com/ohstr/nmilat/pull/171))
 - Changes NIP-45 COUNT: a filter of only `kinds` (or nothing) is answered
   exactly from the counters, past `max_limit`, without a scan; any other
   filter that stops at its limit answers `"approximate": true`.
@@ -307,6 +313,19 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes follower counts doubling when a contact list and its replacement
+  were written in the same batch.
+  ([#171](https://github.com/ohstr/nmilat/pull/171))
+- Fixes `ClearZapIndex`/`ClearSocialIndex` leaving the index marked current
+  and racing a running rebuild. They now refuse during one, and work on a
+  disabled index.
+  ([#171](https://github.com/ohstr/nmilat/pull/171))
+- Fixes social scores staying stale after a social index rebuild; every
+  profile is rescored in the background.
+  ([#171](https://github.com/ohstr/nmilat/pull/171))
+- Fixes a crashed rebuild's leftover generation receiving every later write;
+  it is dropped on open.
+  ([#171](https://github.com/ohstr/nmilat/pull/171))
 - Fixes a NIP-77 sync with a large diff sending one message of several MB,
   which strfry and most relays drop mid-sync. Messages now stop at
   `Negentropy.FrameSizeLimit` (30 000 bytes by default) and the rest follows

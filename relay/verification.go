@@ -222,12 +222,15 @@ func (w *ProfileVerificationWorker) sweeper() {
 }
 
 // maxSocialRefresh bounds the social scores refreshed per sweep.
-const maxSocialRefresh = 5000
+var maxSocialRefresh = 5000
 
-// refreshSocial rescores profiles whose zaps or follows changed and pushes
-// any changed score to search.
+// refreshSocial rescores profiles whose zaps or follows changed, then those
+// a social rebuild left to rescore, and pushes any changed score to search.
 func (w *ProfileVerificationWorker) refreshSocial() {
 	pubkeys := w.store.TakeSocialDirty(maxSocialRefresh)
+	if n := maxSocialRefresh - len(pubkeys); n > 0 {
+		pubkeys = append(pubkeys, w.store.TakeSocialRescore(n)...)
+	}
 	if len(pubkeys) == 0 {
 		return
 	}

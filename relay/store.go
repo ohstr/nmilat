@@ -204,15 +204,15 @@ type EventStore struct {
 	commits atomic.Uint64
 	// zapRank caches zap-ranking lists (zap_ranking.go).
 	zapRank zapRankingCache
-	// zapRebuilding guards RebuildZapIndex against running twice at once.
-	zapRebuilding atomic.Bool
-	// socialRebuilding guards RebuildSocialIndex the same way.
-	socialRebuilding atomic.Bool
+	// zaps and social are the derived indexes (derived_indexes.go).
+	zaps, social *derivedIndex
 
 	// socialDirty holds profiles whose zaps or follows changed, for a
 	// score refresh (TakeSocialDirty).
 	socialMu    sync.Mutex
 	socialDirty map[string]bool
+	// rescoreAfter is the last profile TakeSocialRescore returned.
+	rescoreAfter []byte
 }
 
 func NewEventStore(path string, limitation *nip11.Limitation, opts ...EventStoreOption) (*EventStore, error) {
@@ -315,6 +315,7 @@ func NewEventStore(path string, limitation *nip11.Limitation, opts ...EventStore
 		es.scanSlotWait = cfg.ScanSlotWait
 	}
 	es.commitCh = make(chan struct{})
+	newDerivedIndexes(es, cfg.Indexes)
 
 	es.startWorkers()
 

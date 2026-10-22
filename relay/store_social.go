@@ -25,7 +25,7 @@ import (
 //
 //	zr: receiver(32) + created_at(8) + evsid(8) -> zapEntry (Other = sender)
 //	zs: sender(32)   + created_at(8) + evsid(8) -> zapEntry (Other = receiver)
-//	fe: followed(32) + follower(32)             -> nil
+//	fe: followed(32) + follower(32)             -> 1
 //	fc: followed(32) -> followers (8)
 //	fg: author(32)   -> following (8)
 var (
@@ -40,8 +40,8 @@ var (
 	subFollowing   = []byte("fg")
 )
 
-// ErrSocialRebuildInProgress is returned by RebuildSocialIndex while
-// another rebuild is running.
+// ErrSocialRebuildInProgress is returned by RebuildSocialIndex and
+// ClearSocialIndex while another of them is running.
 var ErrSocialRebuildInProgress = errors.New("social index rebuild already in progress")
 
 const kindContacts = 3
@@ -80,6 +80,9 @@ func (s *EventStore) unindexSocial(tx *bolt.Tx, ev *nip01.Event, evsid uint64) e
 func (s *EventStore) applySocial(tx *bolt.Tx, ev *nip01.Event, evsid uint64, add bool) error {
 	if !isSocialKind(ev.Kind) {
 		return nil
+	}
+	if !s.social.enabled {
+		return s.social.skip(tx)
 	}
 	for _, name := range [][]byte{activeSocialBucket(tx), buildingSocialBucket(tx)} {
 		if name == nil {
@@ -186,7 +189,8 @@ func applyFollows(gen *bolt.Bucket, ev *nip01.Event, add bool) ([]string, error)
 		exists := edges.Get(key) != nil
 		switch {
 		case add && !exists:
-			if err := edges.Put(key, nil); err != nil {
+			// Not nil: bolt reads a nil value back as missing until commit.
+			if err := edges.Put(key, []byte{1}); err != nil {
 				return nil, err
 			}
 			if err := addCount(counts, target, 1); err != nil {
@@ -344,6 +348,9 @@ func (s *EventStore) GetProfileStats(pubkey string) (*ProfileStats, error) {
 	if err != nil || len(pk) != 32 {
 		return nil, errors.New("invalid pubkey")
 	}
+	if !s.social.enabled {
+		return nil, ErrIndexDisabled
+	}
 	st := &ProfileStats{Pubkey: pubkey, RecdBySender: map[string]uint64{}}
 	err = s.db.View(func(tx *bolt.Tx) error {
 		gen := tx.Bucket(activeSocialBucket(tx))
@@ -494,20 +501,10 @@ func (s *EventStore) CountSocialProfiles() int64 {
 	return int64(n)
 }
 
-// ClearSocialIndex empties the active social index without touching the
-// stored events.
+// ClearSocialIndex deletes the social index without touching the stored
+// events, enabled or not; an enabled one is rebuilt on the next open.
 func (s *EventStore) ClearSocialIndex(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return s.db.Update(func(tx *bolt.Tx) error {
-		name := activeSocialBucket(tx)
-		if err := tx.DeleteBucket(name); err != nil && !errors.Is(err, bolterrors.ErrBucketNotFound) {
-			return err
-		}
-		_, err := tx.CreateBucketIfNotExists(name)
-		return err
-	})
+	return s.clearIndex(ctx, s.social, ErrSocialRebuildInProgress)
 }
 
 // RebuildSocialIndex rebuilds the social index from every stored event
@@ -515,10 +512,13 @@ func (s *EventStore) ClearSocialIndex(ctx context.Context) error {
 // meanwhile land in both. progress, if set, gets events scanned and
 // indexed after each batch; cancelling ctx discards the new generation.
 func (s *EventStore) RebuildSocialIndex(ctx context.Context, progress func(scanned, indexed int)) (int, error) {
-	if !s.socialRebuilding.CompareAndSwap(false, true) {
+	if !s.social.enabled {
+		return 0, ErrIndexDisabled
+	}
+	if !s.social.rebuilding.CompareAndSwap(false, true) {
 		return 0, ErrSocialRebuildInProgress
 	}
-	defer s.socialRebuilding.Store(false)
+	defer s.social.rebuilding.Store(false)
 
 	var next []byte
 	err := s.db.Update(func(tx *bolt.Tx) error {
@@ -584,90 +584,23 @@ func (s *EventStore) RebuildSocialIndex(ctx context.Context, progress func(scann
 		if err := m.Put(coinsKey, []byte{1}); err != nil {
 			return err
 		}
+		// The rebuild marks nothing dirty; TakeSocialRescore rescores all.
+		if err := m.Put(socialRescoreKey, []byte{1}); err != nil {
+			return err
+		}
 		if err := tx.DeleteBucket(old); err != nil && !errors.Is(err, bolterrors.ErrBucketNotFound) {
 			return err
 		}
 		return nil
 	})
+	if err == nil {
+		s.socialMu.Lock()
+		s.rescoreAfter = nil
+		s.socialMu.Unlock()
+	}
 	return indexed, err
 }
 
-// SocialIndexRebuilding reports whether RebuildSocialIndex is running.
-func (s *EventStore) SocialIndexRebuilding() bool { return s.socialRebuilding.Load() }
-
-// backfillIndexes rebuilds, once and in the background, the social index
-// when it was never built and either index when its entries predate coins.
-// An empty store just records both as current.
-func (s *EventStore) backfillIndexes() {
-	var social, zaps bool
-	_ = s.db.Update(func(tx *bolt.Tx) error {
-		sm, zm := tx.Bucket(socialMeta), tx.Bucket(zapMeta)
-		social = sm == nil || sm.Get(socialBuiltAt) == nil || sm.Get(coinsKey) == nil
-		zaps = zm == nil || zm.Get(coinsKey) == nil
-		if !social && !zaps {
-			return nil
-		}
-		if b := tx.Bucket(indexEvents); b != nil {
-			if k, _ := b.Cursor().First(); k != nil {
-				return nil
-			}
-		}
-		social, zaps = false, false
-		sm, err := tx.CreateBucketIfNotExists(socialMeta)
-		if err != nil {
-			return err
-		}
-		zm, err = tx.CreateBucketIfNotExists(zapMeta)
-		if err != nil {
-			return err
-		}
-		if err := sm.Put(socialBuiltAt, itob(uint64(time.Now().Unix()))); err != nil {
-			return err
-		}
-		if err := sm.Put(coinsKey, []byte{1}); err != nil {
-			return err
-		}
-		return zm.Put(coinsKey, []byte{1})
-	})
-	if !social && !zaps {
-		return
-	}
-	s.workersWg.Add(1)
-	go func() {
-		defer s.workersWg.Done()
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		go func() {
-			select {
-			case <-s.closeCh:
-				cancel()
-			case <-ctx.Done():
-			}
-		}()
-		if social {
-			s.logger.Info().Msg("building the social index from stored events")
-			n, err := s.RebuildSocialIndex(ctx, nil)
-			if !s.logRebuild("social", n, err) {
-				return
-			}
-		}
-		if zaps {
-			s.logger.Info().Msg("rebuilding the zap index to record each zap's coin")
-			n, err := s.RebuildZapIndex(ctx, nil)
-			s.logRebuild("zap", n, err)
-		}
-	}()
-}
-
-// logRebuild logs a background rebuild's outcome; false when it didn't finish.
-func (s *EventStore) logRebuild(index string, n int, err error) bool {
-	switch {
-	case errors.Is(err, context.Canceled):
-		return false
-	case err != nil:
-		s.logger.Error().Err(err).Str("index", index).Msg("failed to build the index")
-		return false
-	}
-	s.logger.Info().Str("index", index).Int("indexed", n).Msg("index built")
-	return true
-}
+// SocialIndexRebuilding reports whether a social index rebuild or clear is
+// running.
+func (s *EventStore) SocialIndexRebuilding() bool { return s.social.rebuilding.Load() }

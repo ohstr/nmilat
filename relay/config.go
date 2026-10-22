@@ -392,6 +392,9 @@ type EventStoreConfig struct {
 
 	// Observer receives write and scan activity for metrics. nil discards it.
 	Observer StoreObserver
+
+	// Indexes selects the derived indexes the store keeps; none by default.
+	Indexes DerivedIndexes
 }
 
 // EventStoreOption mutates the internal event store configuration.
@@ -438,6 +441,15 @@ func WithEventStoreScanSlotWait(d time.Duration) EventStoreOption {
 func WithEventStoreLogger(logger zerolog.Logger) EventStoreOption {
 	return func(cfg *EventStoreConfig) {
 		cfg.Logger = logger
+	}
+}
+
+// WithEventStoreIndexes enables derived indexes, for the features that
+// read them. An index enabled on a store that has events without it is
+// built in the background on open.
+func WithEventStoreIndexes(ix DerivedIndexes) EventStoreOption {
+	return func(cfg *EventStoreConfig) {
+		cfg.Indexes = ix
 	}
 }
 
