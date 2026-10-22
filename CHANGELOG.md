@@ -12,12 +12,15 @@ privacy and performance fixes.
   for kind 30382 with `#d` pubkeys gets relay-signed stats (rank, followers,
   following, zaps received/sent with first and last time, verified
   NIP-05/lightning address), and NIP-11 lists 85.
+  ([#165](https://github.com/ohstr/nmilat/pull/165))
 - Adds followers and received zaps to a profile's search score: each sender
   adds a capped amount, scaled by their own profile score, so many throwaway
   keys or a self-run LNURL server add little. Weights live in `search.social`.
+  ([#165](https://github.com/ohstr/nmilat/pull/165))
 - Adds `EventStore.GetProfileStats`: a profile's zaps received and sent (count,
   amount, distinct zappers, first and last time) and follower/following counts,
   from an index kept current on every write and built once on first start.
+  ([#165](https://github.com/ohstr/nmilat/pull/165))
 - Adds `config.Configure`, so an embedder can set its own scoring weights.
   ([#164](https://github.com/ohstr/nmilat/pull/164))
 - Adds `ProfileMetrics.CheckScore`, which rescores a profile from its stored
@@ -189,6 +192,7 @@ privacy and performance fixes.
 
 - Changes profile verification to check a profile's `lud06` LNURL when it has
   no `lud16`, so older profiles get their lightning address verified too.
+  ([#165](https://github.com/ohstr/nmilat/pull/165))
 - Changes profile verification to fetch only for a new or changed identifier,
   an expired result, a retry or `VerifyNow`, rate-limited per host;
   `SessionConfig.Verification` sets the TTL, backoff and limits, and the unused
@@ -265,6 +269,7 @@ privacy and performance fixes.
 - Fixes top-zapped counting invalid receipts, self-zaps, duplicate receipts of
   one payment and deleted receipts; once a recipient's LNURL server key is
   verified, only receipts that server signed count.
+  ([#165](https://github.com/ohstr/nmilat/pull/165))
 - Fixes the gibberish-name search penalty hitting names written in non-Latin
   scripts. ([#164](https://github.com/ohstr/nmilat/pull/164))
 - Fixes search scores dropping a profile's base score once its checks ran, and
