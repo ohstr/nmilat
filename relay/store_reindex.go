@@ -25,8 +25,8 @@ var (
 	coinsKey = []byte("coins")
 )
 
-// ErrZapRebuildInProgress is returned by RebuildZapIndex while another
-// rebuild is running.
+// ErrZapRebuildInProgress is returned by RebuildZapIndex, ReindexZaps and
+// ClearZapIndex while another of them is running.
 var ErrZapRebuildInProgress = errors.New("zap index rebuild already in progress")
 
 // activeZapBucket returns the name of the bucket readers use.
@@ -50,27 +50,23 @@ func buildingZapBucket(tx *bolt.Tx) []byte {
 	return nil
 }
 
-// ClearZapIndex empties the active zap index without touching the stored
-// events. RebuildZapIndex is the way to refresh it without an empty window.
+// ClearZapIndex deletes the zap index without touching the stored events,
+// enabled or not; an enabled one is rebuilt on the next open.
+// RebuildZapIndex is the way to refresh it without an empty window.
 func (s *EventStore) ClearZapIndex(ctx context.Context) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-	return s.db.Update(func(tx *bolt.Tx) error {
-		name := activeZapBucket(tx)
-		if err := tx.DeleteBucket(name); err != nil && err != bolterrors.ErrBucketNotFound {
-			return err
-		}
-		_, err := tx.CreateBucketIfNotExists(name)
-		return err
-	})
+	return s.clearIndex(ctx, s.zaps, ErrZapRebuildInProgress)
 }
 
 // ReindexZaps scans every stored event into the active zap index in place.
 // It returns the number of zaps indexed.
 func (s *EventStore) ReindexZaps(ctx context.Context, progressCb func(count int)) (int, error) {
+	if !s.zaps.enabled {
+		return 0, ErrIndexDisabled
+	}
+	if !s.zaps.rebuilding.CompareAndSwap(false, true) {
+		return 0, ErrZapRebuildInProgress
+	}
+	defer s.zaps.rebuilding.Store(false)
 	_, indexed, err := s.scanZapsInto(ctx, activeZapBucket, func(_, indexed int) {
 		if progressCb != nil {
 			progressCb(indexed)
@@ -85,10 +81,13 @@ func (s *EventStore) ReindexZaps(ctx context.Context, progressCb func(count int)
 // progress, if set, is called after each batch with the number of events
 // scanned and zaps indexed so far. Cancelling ctx discards the new bucket.
 func (s *EventStore) RebuildZapIndex(ctx context.Context, progress func(scanned, indexed int)) (int, error) {
-	if !s.zapRebuilding.CompareAndSwap(false, true) {
+	if !s.zaps.enabled {
+		return 0, ErrIndexDisabled
+	}
+	if !s.zaps.rebuilding.CompareAndSwap(false, true) {
 		return 0, ErrZapRebuildInProgress
 	}
-	defer s.zapRebuilding.Store(false)
+	defer s.zaps.rebuilding.Store(false)
 
 	var next []byte
 	err := s.db.Update(func(tx *bolt.Tx) error {
@@ -153,8 +152,8 @@ func (s *EventStore) RebuildZapIndex(ctx context.Context, progress func(scanned,
 	return indexed, err
 }
 
-// ZapIndexRebuilding reports whether RebuildZapIndex is running.
-func (s *EventStore) ZapIndexRebuilding() bool { return s.zapRebuilding.Load() }
+// ZapIndexRebuilding reports whether a zap index rebuild or clear is running.
+func (s *EventStore) ZapIndexRebuilding() bool { return s.zaps.rebuilding.Load() }
 
 // scanZapsInto walks every stored event in batches, indexing zap receipts
 // into the bucket target names. It returns events scanned and zaps indexed.

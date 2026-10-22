@@ -15,10 +15,14 @@ func isZapKind(kind int) bool { return kind == 9521 || kind == 9735 }
 // IndexZap indexes a zap receipt — NIP-57 (Kind 9735) or AltZap (Kind 9521).
 // It extracts the amount and the receiver pubkey and stores them in a dedicated bucket.
 // A rebuild in progress gets every new zap too, so none is lost when it
-// becomes the active index.
+// becomes the active index. It does nothing while the zap index is
+// disabled.
 func (s *EventStore) IndexZap(tx *bolt.Tx, event *nip01.Event, evsid uint64) error {
 	if !isZapKind(event.Kind) {
 		return nil
+	}
+	if !s.zaps.enabled {
+		return s.zaps.skip(tx)
 	}
 	for _, name := range [][]byte{activeZapBucket(tx), buildingZapBucket(tx)} {
 		if name == nil {
@@ -65,6 +69,9 @@ func zapKey(event *nip01.Event, evsid uint64) []byte {
 func (s *EventStore) unindexZap(tx *bolt.Tx, event *nip01.Event, evsid uint64) error {
 	if !isZapKind(event.Kind) {
 		return nil
+	}
+	if !s.zaps.enabled {
+		return s.zaps.skip(tx)
 	}
 	for _, name := range [][]byte{activeZapBucket(tx), buildingZapBucket(tx)} {
 		if b := tx.Bucket(name); name != nil && b != nil {

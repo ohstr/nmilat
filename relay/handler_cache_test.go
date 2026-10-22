@@ -30,7 +30,7 @@ type rankingFixture struct {
 }
 
 func newRankingFixture(t *testing.T) *rankingFixture {
-	return &rankingFixture{t: t, store: newStore(t), sender: newTestKey(t, 1), provider: newTestKey(t, 2), now: uint64(time.Now().Unix())}
+	return &rankingFixture{t: t, store: newIndexedStore(t), sender: newTestKey(t, 1), provider: newTestKey(t, 2), now: uint64(time.Now().Unix())}
 }
 
 // zap stores a receipt paying receiver amount whole units of coin, ago before now.

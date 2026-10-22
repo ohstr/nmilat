@@ -39,7 +39,7 @@ func (h *AssertionsHandler) CanHandle(rp *wire.RequestPacket) bool {
 }
 
 func (h *AssertionsHandler) Handle(ctx context.Context, s *Session, rp *wire.RequestPacket) (bool, error) {
-	if !s.config.EnableProfileStats || s.config.PrivKey == "" {
+	if !s.config.EnableProfileStats || s.config.PrivKey == "" || !s.store.social.enabled {
 		return false, nil
 	}
 	self, err := utils.GetPublicKey(s.config.PrivKey)

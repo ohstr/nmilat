@@ -3,6 +3,7 @@ package relay
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -103,6 +104,10 @@ func (h *CacheHandler) zapRanking(ctx context.Context, s *Session, rp *wire.Requ
 	}
 
 	ranking, err := s.store.ZapRanking(ctx, cfg, window, coin)
+	if errors.Is(err, ErrIndexDisabled) {
+		s.reply(&wire.ClosedSubscriptionResponse{SubscriptionID: rp.SubscriptionID, Message: "restricted: zap ranking is not enabled on this relay"})
+		return true, nil
+	}
 	if err != nil {
 		return true, fmt.Errorf("zap ranking: %w", err)
 	}

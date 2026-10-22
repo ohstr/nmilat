@@ -84,7 +84,7 @@ type verifyFixture struct {
 }
 
 func newVerifyFixture(t *testing.T, cfg VerificationConfig) *verifyFixture {
-	f := &verifyFixture{t: t, store: newStore(t), web: newFakeWeb(), now: time.Unix(1_700_000_000, 0)}
+	f := &verifyFixture{t: t, store: newIndexedStore(t), web: newFakeWeb(), now: time.Unix(1_700_000_000, 0)}
 	cfg.HTTPClient = &http.Client{Transport: f.web}
 	if cfg.PerHostInterval == 0 {
 		cfg.PerHostInterval = time.Nanosecond
@@ -408,7 +408,7 @@ func TestHostLimiter(t *testing.T) {
 }
 
 func TestScheduleLegacyVerificationMigration(t *testing.T) {
-	store := newStore(t)
+	store := newIndexedStore(t)
 	now := time.Unix(1_700_000_000, 0)
 	put := func(pk string, v string) {
 		require.NoError(t, store.Db().Update(func(tx *bolt.Tx) error {

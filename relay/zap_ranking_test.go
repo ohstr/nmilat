@@ -165,7 +165,7 @@ func TestZapTotals(t *testing.T) {
 }
 
 func BenchmarkZapRanking(b *testing.B) {
-	store := newStore(b)
+	store := newIndexedStore(b)
 	sender, provider := newTestKey(b, 1), newTestKey(b, 2)
 	now := uint64(time.Now().Unix())
 	var events []*nip01.Event

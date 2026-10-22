@@ -14,7 +14,7 @@ import (
 
 func newAssertionsSession(t *testing.T) *Session {
 	t.Helper()
-	sess := newGroupsEnabledTestSession(t)
+	sess := newGroupsEnabledTestSession(t, allIndexes)
 	sess.config.EnableProfileStats = true
 	return sess
 }

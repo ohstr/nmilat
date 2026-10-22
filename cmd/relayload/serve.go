@@ -86,7 +86,8 @@ func runServe(args []string) error {
 			MaxMessageLength: 262144,
 		},
 	}
-	// Same construction as ncli relay: default store options.
+	// Same construction as an ncli relay with no cache features: default
+	// store options, so no derived indexes.
 	store, err := relay.NewEventStore(*db, &meta.Limitation)
 	if err != nil {
 		return err

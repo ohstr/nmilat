@@ -73,7 +73,7 @@ func topZapped(t *testing.T, store *EventStore) map[string]uint64 {
 }
 
 func TestRebuildZapIndex_ReplacesStaleIndexAtomically(t *testing.T) {
-	store := newStore(t)
+	store := newIndexedStore(t)
 	putRawEvents(t, store, 1,
 		rawZap(t, 9735, zapReceiverA, "1000", 100),
 		rawZap(t, 9521, zapReceiverB, "2000", 200),
@@ -122,7 +122,7 @@ func TestRebuildZapIndex_ReplacesStaleIndexAtomically(t *testing.T) {
 }
 
 func TestRebuildZapIndex_KeepsZapsStoredDuringRebuild(t *testing.T) {
-	store := newStore(t)
+	store := newIndexedStore(t)
 	putRawEvents(t, store, 1, rawZap(t, 9735, zapReceiverA, "1000", 100))
 
 	live := rawZap(t, 9735, zapReceiverB, "5000", uint64(time.Now().Unix()))
@@ -142,7 +142,7 @@ func TestRebuildZapIndex_KeepsZapsStoredDuringRebuild(t *testing.T) {
 }
 
 func TestRebuildZapIndex_RefusesConcurrentRebuild(t *testing.T) {
-	store := newStore(t)
+	store := newIndexedStore(t)
 	putRawEvents(t, store, 1, rawZap(t, 9735, zapReceiverA, "1000", 100))
 
 	var second error
@@ -160,7 +160,7 @@ func TestRebuildZapIndex_RefusesConcurrentRebuild(t *testing.T) {
 }
 
 func TestRebuildZapIndex_CancelKeepsOldIndex(t *testing.T) {
-	store := newStore(t)
+	store := newIndexedStore(t)
 	// More than one scan batch, so the rebuild checks ctx between them.
 	events := make([]*nip01.Event, 0, 1500)
 	for i := 0; i < 1500; i++ {
@@ -196,7 +196,7 @@ func TestRebuildZapIndex_CancelKeepsOldIndex(t *testing.T) {
 func TestRebuildZapIndex_SurvivesReopen(t *testing.T) {
 	path := t.TempDir() + "/zaps.db"
 	open := func() *EventStore {
-		store, err := NewEventStore(path, &nip11.Limitation{MaxLimit: 1000}, WithEventStoreLogger(testlogger.New(t)))
+		store, err := NewEventStore(path, &nip11.Limitation{MaxLimit: 1000}, WithEventStoreLogger(testlogger.New(t)), allIndexes)
 		if err != nil {
 			t.Fatal(err)
 		}

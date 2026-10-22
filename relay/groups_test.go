@@ -17,9 +17,9 @@ import (
 // GroupsService wired in, the relay's own selfPubkey set to authTestPubKey
 // (so relay-authored mirror events can be signed with authTestPrivKey), and
 // PrivKey configured for the same reason.
-func newGroupsEnabledTestSession(t *testing.T) *Session {
+func newGroupsEnabledTestSession(t *testing.T, opts ...EventStoreOption) *Session {
 	t.Helper()
-	store := newStore(t)
+	store := newStore(t, opts...)
 	cfg := defaultSessionConfig()
 	cfg.PrivKey = authTestPrivKey
 	sc := NewSessionContext(store, &ClientInfo{}, &nip11.Metadata{

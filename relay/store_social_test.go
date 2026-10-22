@@ -25,7 +25,7 @@ type socialFixture struct {
 
 func newSocialFixture(t *testing.T) *socialFixture {
 	return &socialFixture{
-		t: t, store: newStore(t),
+		t: t, store: newIndexedStore(t),
 		alice: newTestKey(t, 10), bob: newTestKey(t, 11), provider: newTestKey(t, 12),
 		at: 1_700_000_000,
 	}
@@ -217,7 +217,7 @@ func TestRebuildSocialIndex_MatchesIncremental(t *testing.T) {
 }
 
 func TestSocialIndex_BackfillsOnOpen(t *testing.T) {
-	store, path := newStoreAtPath(t)
+	store, path := newStoreAtPath(t, allIndexes)
 	f := &socialFixture{t: t, store: store, alice: newTestKey(t, 10), bob: newTestKey(t, 11), provider: newTestKey(t, 12), at: 1_700_000_000}
 	putRawEvents(t, store, 1, f.zap(f.bob.pub, f.alice.pub, 1_000), f.contacts(f.bob, 100, f.alice.pub))
 	require.NoError(t, store.db.Update(func(tx *bolt.Tx) error {
@@ -225,7 +225,7 @@ func TestSocialIndex_BackfillsOnOpen(t *testing.T) {
 	}))
 	store.Close()
 
-	reopened, err := NewEventStore(path, &nip11.Limitation{MaxLimit: 1000}, WithEventStoreLogger(testlogger.New(t)))
+	reopened, err := NewEventStore(path, &nip11.Limitation{MaxLimit: 1000}, WithEventStoreLogger(testlogger.New(t)), allIndexes)
 	require.NoError(t, err)
 	t.Cleanup(reopened.Close)
 	require.Eventually(t, reopened.SocialIndexBuilt, 5*time.Second, 10*time.Millisecond)
