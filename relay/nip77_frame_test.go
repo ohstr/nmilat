@@ -28,12 +28,16 @@ func TestNegentropyLargeDiffUnderMessageLimit(t *testing.T) {
 		clientOnly = 4000
 	)
 
+	// The store doesn't verify signatures, so rehash one signed event
+	// instead of signing thousands (slow under -race).
 	events := make([]*nip01.Event, 0, shared+serverOnly)
 	base := uint64(time.Now().Unix()) - 10_000
+	template := CreateEventWithTimestamp(t, 1, base)
 	for i := range shared + serverOnly {
-		ev := CreateEventWithTimestamp(t, 1, base+uint64(i%300))
+		ev := template.Copy()
+		ev.CreatedAt = base + uint64(i%300)
 		ev.Content = fmt.Sprintf("negentropy %d", i)
-		if err := ev.Sign("0acd12cbf0fb87cd13b17bc9b57dffd11b3870b407984cec5a4ce2a69b90268c"); err != nil {
+		if err := ev.Rehash(); err != nil {
 			t.Fatal(err)
 		}
 		events = append(events, ev)
