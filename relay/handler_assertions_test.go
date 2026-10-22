@@ -151,3 +151,38 @@ func TestAssertions_OtherProvidersAndDisabledFallThrough(t *testing.T) {
 	require.Len(t, events, 1)
 	assert.Equal(t, stored.ID, events[0].ID)
 }
+
+// A REQ that also asks for other kinds (as `ncli profile` does) gets the
+// assertions and the stored events, then one EOSE.
+func TestAssertions_MixedREQ(t *testing.T) {
+	sess := newAssertionsSession(t)
+	alice := newTestKey(t, 70)
+	profile := &nip01.Event{PubKey: alice.pub, CreatedAt: 100, Kind: 0, Content: `{"name":"alice"}`}
+	require.NoError(t, profile.Sign(alice.priv))
+	InsertTestEvents(t, sess.store, []*nip01.Event{profile})
+	require.NoError(t, sess.store.UpdateProfileMetrics(alice.pub, func(m *ProfileMetrics) { m.BaseScore = 10 }))
+
+	rp := &wire.RequestPacket{SubscriptionID: "m", Filters: nip01.NewSubscriptionFilterGroup(
+		&nip01.SubscriptionFilter{Kinds: []int{0}, Authors: []string{alice.pub}},
+		&nip01.SubscriptionFilter{Kinds: []int{KindUserAssertion}, Tags: dTags(alice.pub)},
+	)}
+	require.NoError(t, sess.processRequest(context.Background(), rp))
+
+	kinds := map[int]int{}
+	for done := false; !done; {
+		switch r := nextReply(t, sess).(type) {
+		case *wire.EventSubscriptionResponse:
+			ev := r.Event
+			if ev == nil {
+				ev = &nip01.Event{}
+				require.NoError(t, json.Unmarshal(r.EventBytes, ev))
+			}
+			kinds[ev.Kind]++
+		case *wire.EOSESubscriptionResponse:
+			done = true
+		default:
+			t.Fatalf("unexpected reply %T", r)
+		}
+	}
+	assert.Equal(t, map[int]int{0: 1, KindUserAssertion: 1}, kinds)
+}

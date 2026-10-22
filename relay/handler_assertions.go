@@ -19,27 +19,23 @@ import (
 // KindUserAssertion is NIP-85's assertion about a user (kind 30382).
 const KindUserAssertion = 30382
 
-// AssertionsHandler answers NIP-85 user-assertion REQs (kinds [30382]
+// AssertionsHandler answers NIP-85 user-assertion filters (kinds [30382]
 // with #d target pubkeys) from the relay's profile stats, signed with
-// SessionConfig.PrivKey. A REQ for another provider's assertions (authors
-// without the relay key) falls through to the stored events.
+// SessionConfig.PrivKey. A filter for another provider's assertions
+// (authors without the relay key) is served from stored events, and so is
+// the rest of a REQ that mixes assertion filters with others.
 //
 // Tags beyond NIP-85's: following, zappers_recd, zap_first_recd,
 // zap_last_recd, zap_first_sent, zap_last_sent (unix times), and
 // nip05_verified / lud16_verified (the identifier, when verified).
 type AssertionsHandler struct{}
 
+func isAssertionFilter(f *nip01.SubscriptionFilter) bool {
+	return len(f.Kinds) == 1 && f.Kinds[0] == KindUserAssertion
+}
+
 func (h *AssertionsHandler) CanHandle(rp *wire.RequestPacket) bool {
-	filters := rp.Filters.GetAll()
-	if len(filters) == 0 {
-		return false
-	}
-	for _, f := range filters {
-		if len(f.Kinds) != 1 || f.Kinds[0] != KindUserAssertion {
-			return false
-		}
-	}
-	return true
+	return slices.ContainsFunc(rp.Filters.GetAll(), isAssertionFilter)
 }
 
 func (h *AssertionsHandler) Handle(ctx context.Context, s *Session, rp *wire.RequestPacket) (bool, error) {
@@ -51,11 +47,20 @@ func (h *AssertionsHandler) Handle(ctx context.Context, s *Session, rp *wire.Req
 		return false, nil
 	}
 
-	var targets []string
+	var ours, rest []*nip01.SubscriptionFilter
 	for _, f := range rp.Filters.GetAll() {
-		if len(f.Authors) > 0 && !slices.Contains(f.Authors, self) {
-			return false, nil
+		if isAssertionFilter(f) && (len(f.Authors) == 0 || slices.Contains(f.Authors, self)) {
+			ours = append(ours, f)
+		} else {
+			rest = append(rest, f)
 		}
+	}
+	if len(ours) == 0 {
+		return false, nil
+	}
+
+	var targets []string
+	for _, f := range ours {
 		for _, d := range f.Tags["d"] {
 			d = strings.ToLower(d)
 			if utils.Validate32Key(d) == nil && !slices.Contains(targets, d) {
@@ -64,6 +69,9 @@ func (h *AssertionsHandler) Handle(ctx context.Context, s *Session, rp *wire.Req
 		}
 	}
 	if len(targets) == 0 {
+		if len(rest) > 0 {
+			return false, nil
+		}
 		s.reply(&wire.ClosedSubscriptionResponse{
 			SubscriptionID: rp.SubscriptionID,
 			Message:        "restricted: profile assertions need #d target pubkeys",
@@ -96,6 +104,11 @@ func (h *AssertionsHandler) Handle(ctx context.Context, s *Session, rp *wire.Req
 		}
 	}
 	s.SendEvents(rp.SubscriptionID, events)
+	if len(rest) > 0 {
+		// The other filters go on to the stored events, which end with EOSE.
+		rp.Filters = nip01.NewSubscriptionFilterGroup(rest...)
+		return false, nil
+	}
 	s.SendEOSE(rp.SubscriptionID)
 	return true, nil
 }
