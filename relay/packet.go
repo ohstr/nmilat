@@ -128,7 +128,15 @@ func (s *Session) runRequestHandlers(ctx context.Context, rp *wire.RequestPacket
 		if h.CanHandle(rp) {
 			done, err := h.Handle(ctx, s, rp)
 			if err != nil {
-				// If handler returns error, we might want to close sub or log
+				var fe *FilterError
+				if errors.As(err, &fe) {
+					s.config.Logger.Debug().Err(err).Str("sub", rp.SubscriptionID).Msg("invalid filter")
+					s.reply(&wire.ClosedSubscriptionResponse{
+						SubscriptionID: rp.SubscriptionID,
+						Message:        "invalid: " + fe.Msg,
+					})
+					return true
+				}
 				s.config.Logger.Error().Err(err).Str("sub", rp.SubscriptionID).Msg("handler error")
 				s.reply(&wire.ClosedSubscriptionResponse{
 					SubscriptionID: rp.SubscriptionID,

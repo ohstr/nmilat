@@ -871,7 +871,8 @@ func (sh *SessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Str("remote", info.RemoteAddr).
 		Msg("session started")
 
-	if err := session.Start(r.Context()); err != nil && shouldLogError(err) {
+	err = session.Start(r.Context())
+	if err != nil && shouldLogError(err) {
 		sh.config.Logger.Error().
 			Int64("session", sessID).
 			Err(err).
@@ -880,6 +881,7 @@ func (sh *SessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	sh.config.Logger.Debug().
 		Int64("session", sessID).
+		AnErr("reason", err).
 		Msg("session ended")
 }
 
@@ -1068,6 +1070,10 @@ func peerGone(err error) bool {
 }
 
 func shouldLogError(err error) bool {
+	// A client over max_message_length, or hanging up, is routine.
+	if errors.Is(err, websocket.ErrReadLimit) || peerGone(err) {
+		return false
+	}
 	var netErr net.Error
 	if errors.As(err, &netErr) {
 		// Only suppress logging for timeouts here; writes to a peer that

@@ -2306,16 +2306,35 @@ func findFirstDtagValue(tags [][]string) string {
 	return ""
 }
 
+// FilterError is a filter value the client got wrong, such as an author
+// that isn't 64 hex characters; it's answered CLOSED "invalid:".
+type FilterError struct{ Msg string }
+
+func (e *FilterError) Error() string { return e.Msg }
+
+// decodeKey decodes a 32-byte hex id or pubkey from a filter.
+func decodeKey(what, s string) ([]byte, error) {
+	b, err := hex.DecodeString(s)
+	if err != nil || len(b) != 32 {
+		return nil, &FilterError{Msg: fmt.Sprintf("bad %s %q: want 64 hex characters", what, truncate(s, 70))}
+	}
+	return b, nil
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
+}
+
 // Helper to handle creation of cursors by ID
 func createCursorsByID(ids []string) ([]*storeCursor, error) {
 	var cursors []*storeCursor
 	for _, eid := range ids {
-		prefix, err := hex.DecodeString(eid)
+		prefix, err := decodeKey("id", eid)
 		if err != nil {
 			return nil, err
-		}
-		if len(prefix) != 32 {
-			return nil, fmt.Errorf("bad eid size")
 		}
 		cursors = append(cursors, newStoreCursor(
 			concatKey(prefix, maxSuffixBytes),
@@ -2369,12 +2388,9 @@ func createCursorsByTags(tags map[string][]string) ([]*storeCursor, error) {
 func createCursorsByAuthors(authors []string) ([]*storeCursor, error) {
 	var cursors []*storeCursor
 	for _, pubKey := range authors {
-		prefix, err := hex.DecodeString(pubKey)
+		prefix, err := decodeKey("author", pubKey)
 		if err != nil {
 			return nil, err
-		}
-		if len(prefix) != 32 {
-			return nil, fmt.Errorf("bad pubkey size")
 		}
 		cursors = append(cursors, newStoreCursor(
 			concatKey(prefix, maxSuffixBytes),
@@ -2419,12 +2435,9 @@ func createCursorsByKindsAndAuthors(kinds []int, authors []string) ([]*storeCurs
 	for _, kind := range kinds {
 		prefixKind := itob(uint64(kind))
 		for _, pubKey := range authors {
-			pubKeyBytes, err := hex.DecodeString(pubKey)
+			pubKeyBytes, err := decodeKey("author", pubKey)
 			if err != nil {
 				return nil, err
-			}
-			if len(pubKeyBytes) != 32 {
-				return nil, fmt.Errorf("bad pubkey size")
 			}
 			prefix := concatKey(prefixKind, pubKeyBytes)
 			cursors = append(cursors, newStoreCursor(
