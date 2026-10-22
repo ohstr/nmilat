@@ -27,8 +27,8 @@ type RequestHandler interface {
 
 const (
 	// Cache directives
-	CacheField        = "cache"
-	CacheActionTopZap = "top-zapped"
+	CacheField            = "cache"
+	CacheActionZapRanking = "zap-ranking"
 
 	// NIP-50 constants
 	ImpossibleID = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"

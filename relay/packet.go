@@ -319,15 +319,22 @@ func (s *Session) processCount(parent context.Context, cp *wire.CountPacket) err
 	// denies). Route exactly the kinds that could be group metadata
 	// through the same per-event predicate before counting; every other
 	// kind keeps the fast raw-count path.
+	//
+	// Kind-only filters with no privacy check are answered from the
+	// counters, exactly and without a scan. A scan that stops at the limit
+	// is a lower bound, reported as approximate.
 	start := time.Now()
 	var count int64
+	var approx bool
 	var err error
 	if s.groups.needsPrivacyCheck(cp.Filters) {
-		count, err = s.store.CountEventsFiltered(parent, cp.Filters, func(pe *PotentialEvent) bool {
+		count, approx, err = s.store.CountEventsApprox(parent, cp.Filters, func(pe *PotentialEvent) bool {
 			return s.groups.deniedPrivateGroupPotentialEvent(s, pe)
 		})
+	} else if n, ok := s.store.CountFromCounters(cp.Filters); ok {
+		count = n
 	} else {
-		count, err = s.store.CountEvents(parent, cp.Filters)
+		count, approx, err = s.store.CountEventsApprox(parent, cp.Filters, nil)
 	}
 	if err != nil {
 		s.refuse(cp.SubscriptionID, fmt.Sprintf("error: count failed: %s", err.Error()))
@@ -338,6 +345,7 @@ func (s *Session) processCount(parent context.Context, cp *wire.CountPacket) err
 	s.reply(&wire.CountSubscriptionResponse{
 		SubscriptionID: cp.SubscriptionID,
 		Count:          count,
+		Approximate:    approx,
 	})
 
 	return nil

@@ -126,7 +126,7 @@ func userAssertion(store *EventStore, cfg *SessionConfig, self, pubkey string) (
 	}
 	// Once served, a profile stays served, so a drop to zero reaches
 	// clients too.
-	tags := assertionTags(st, m, assertions.has(self, pubkey))
+	tags := assertionTags(st, m, assertions.has(self, pubkey), cfg.Zaps.withDefaults().Coins)
 	if tags == nil {
 		return nil, nil
 	}
@@ -140,8 +140,9 @@ func userAssertion(store *EventStore, cfg *SessionConfig, self, pubkey string) (
 }
 
 // assertionTags is the NIP-85 tag set for a profile, nil if it has no
-// stats, was never checked and wasn't served before.
-func assertionTags(st *ProfileStats, m *ProfileMetrics, served bool) [][]string {
+// stats, was never checked and wasn't served before. Amounts are sats, plus
+// a _<coin> tag for each other coin in coins with an amount.
+func assertionTags(st *ProfileStats, m *ProfileMetrics, served bool, coins []Coin) [][]string {
 	known := served || st.Followers > 0 || st.Following > 0 || st.ZapCntRecd > 0 || st.ZapCntSent > 0 ||
 		m.BaseScore != 0 || m.Nip05.Value != "" || m.Lud16.Value != ""
 	if !known {
@@ -158,6 +159,17 @@ func assertionTags(st *ProfileStats, m *ProfileMetrics, served bool) [][]string 
 		{"zappers_recd", num(int64(st.ZappersRecd))},
 		{"zap_cnt_sent", num(int64(st.ZapCntSent))},
 		{"zap_amt_sent", num(int64(st.ZapAmtSent / 1000))},
+	}
+	for _, c := range coins {
+		if c == CoinSats {
+			continue
+		}
+		if n := WholeUnits(st.AmtRecd[c]); n > 0 {
+			tags = append(tags, []string{"zap_amt_recd_" + c.String(), num(int64(n))})
+		}
+		if n := WholeUnits(st.AmtSent[c]); n > 0 {
+			tags = append(tags, []string{"zap_amt_sent_" + c.String(), num(int64(n))})
+		}
 	}
 	for _, t := range []struct {
 		name string

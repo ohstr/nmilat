@@ -116,7 +116,7 @@ func applySocialTo(gen *bolt.Bucket, ev *nip01.Event, evsid uint64, add bool) ([
 	if err != nil {
 		return nil, err
 	}
-	entry := zapEntry{Amount: f.Amount, Signer: f.Signer, PaymentHash: f.PaymentHash, Valid: f.Valid}
+	entry := zapEntry{Amount: f.Amount, Signer: f.Signer, PaymentHash: f.PaymentHash, Valid: f.Valid, Coin: f.Coin}
 	touched := []string{f.Receiver}
 	keys := []struct {
 		b     *bolt.Bucket
@@ -280,7 +280,9 @@ func (s *EventStore) TakeSocialDirty(limit int) []string {
 }
 
 // ProfileStats summarizes a profile's zaps and follows. Only zaps that
-// count are included (see zapCounts). Amounts are in milli-units.
+// count are included (see zapCounts). Counts and zappers cover every coin;
+// ZapAmtRecd/ZapAmtSent are sats and AmtRecd/AmtSent hold each coin's
+// amount, all in milli-units.
 type ProfileStats struct {
 	Pubkey string `json:"pubkey"`
 
@@ -289,6 +291,9 @@ type ProfileStats struct {
 	ZappersRecd int    `json:"zappers_recd"`
 	ZapCntSent  int    `json:"zap_cnt_sent"`
 	ZapAmtSent  uint64 `json:"zap_amt_sent"`
+
+	AmtRecd [numCoins]uint64 `json:"-"`
+	AmtSent [numCoins]uint64 `json:"-"`
 
 	// Unix times; 0 when there is none.
 	ZapFirstRecd int64 `json:"zap_first_recd"`
@@ -299,8 +304,38 @@ type ProfileStats struct {
 	Followers int64 `json:"followers"`
 	Following int64 `json:"following"`
 
-	// RecdBySender is the counted amount received from each sender.
+	// RecdBySender is the counted sats received from each sender.
 	RecdBySender map[string]uint64 `json:"-"`
+}
+
+// MarshalJSON adds zap_amt_recd_<coin>/zap_amt_sent_<coin> for each coin
+// besides sats with an amount, as the NIP-85 tags name them.
+func (st ProfileStats) MarshalJSON() ([]byte, error) {
+	type plain ProfileStats
+	b, err := json.Marshal(plain(st))
+	if err != nil {
+		return nil, err
+	}
+	extra := map[string]uint64{}
+	for _, c := range Coins() {
+		if c == CoinSats {
+			continue
+		}
+		if st.AmtRecd[c] > 0 {
+			extra["zap_amt_recd_"+c.String()] = st.AmtRecd[c]
+		}
+		if st.AmtSent[c] > 0 {
+			extra["zap_amt_sent_"+c.String()] = st.AmtSent[c]
+		}
+	}
+	if len(extra) == 0 {
+		return b, nil
+	}
+	e, err := json.Marshal(extra)
+	if err != nil {
+		return nil, err
+	}
+	return append(append(b[:len(b)-1], ','), e[1:]...), nil
 }
 
 // GetProfileStats computes a profile's stats from the social index.
@@ -329,17 +364,22 @@ func (s *EventStore) GetProfileStats(pubkey string) (*ProfileStats, error) {
 		}
 
 		seen := map[string]bool{}
+		zappers := map[string]bool{}
 		eachZap(gen.Bucket(subZapsRecd), pk, func(at int64, e zapEntry) {
 			if !zapCounts(e, e.Other, pubkey, keys.get(pubkey), seen) {
 				return
 			}
 			st.ZapCntRecd++
-			st.ZapAmtRecd += e.Amount
-			st.RecdBySender[e.Other] += e.Amount
+			st.AmtRecd[e.Coin] += e.Amount
+			zappers[e.Other] = true
+			if e.Coin == CoinSats {
+				st.RecdBySender[e.Other] += e.Amount
+			}
 			st.ZapFirstRecd = minNonZero(st.ZapFirstRecd, at)
 			st.ZapLastRecd = max(st.ZapLastRecd, at)
 		})
-		st.ZappersRecd = len(st.RecdBySender)
+		st.ZappersRecd = len(zappers)
+		st.ZapAmtRecd = st.AmtRecd[CoinSats]
 
 		seen = map[string]bool{}
 		eachZap(gen.Bucket(subZapsSent), pk, func(at int64, e zapEntry) {
@@ -347,10 +387,11 @@ func (s *EventStore) GetProfileStats(pubkey string) (*ProfileStats, error) {
 				return
 			}
 			st.ZapCntSent++
-			st.ZapAmtSent += e.Amount
+			st.AmtSent[e.Coin] += e.Amount
 			st.ZapFirstSent = minNonZero(st.ZapFirstSent, at)
 			st.ZapLastSent = max(st.ZapLastSent, at)
 		})
+		st.ZapAmtSent = st.AmtSent[CoinSats]
 		return nil
 	})
 	return st, err
@@ -540,6 +581,9 @@ func (s *EventStore) RebuildSocialIndex(ctx context.Context, progress func(scann
 		if err := m.Put(socialBuiltAt, itob(uint64(time.Now().Unix()))); err != nil {
 			return err
 		}
+		if err := m.Put(coinsKey, []byte{1}); err != nil {
+			return err
+		}
 		if err := tx.DeleteBucket(old); err != nil && !errors.Is(err, bolterrors.ErrBucketNotFound) {
 			return err
 		}
@@ -548,10 +592,44 @@ func (s *EventStore) RebuildSocialIndex(ctx context.Context, progress func(scann
 	return indexed, err
 }
 
-// backfillSocialIndex builds the social index once, in the background,
-// for a store whose events predate it.
-func (s *EventStore) backfillSocialIndex() {
-	if s.SocialIndexBuilt() {
+// SocialIndexRebuilding reports whether RebuildSocialIndex is running.
+func (s *EventStore) SocialIndexRebuilding() bool { return s.socialRebuilding.Load() }
+
+// backfillIndexes rebuilds, once and in the background, the social index
+// when it was never built and either index when its entries predate coins.
+// An empty store just records both as current.
+func (s *EventStore) backfillIndexes() {
+	var social, zaps bool
+	_ = s.db.Update(func(tx *bolt.Tx) error {
+		sm, zm := tx.Bucket(socialMeta), tx.Bucket(zapMeta)
+		social = sm == nil || sm.Get(socialBuiltAt) == nil || sm.Get(coinsKey) == nil
+		zaps = zm == nil || zm.Get(coinsKey) == nil
+		if !social && !zaps {
+			return nil
+		}
+		if b := tx.Bucket(indexEvents); b != nil {
+			if k, _ := b.Cursor().First(); k != nil {
+				return nil
+			}
+		}
+		social, zaps = false, false
+		sm, err := tx.CreateBucketIfNotExists(socialMeta)
+		if err != nil {
+			return err
+		}
+		zm, err = tx.CreateBucketIfNotExists(zapMeta)
+		if err != nil {
+			return err
+		}
+		if err := sm.Put(socialBuiltAt, itob(uint64(time.Now().Unix()))); err != nil {
+			return err
+		}
+		if err := sm.Put(coinsKey, []byte{1}); err != nil {
+			return err
+		}
+		return zm.Put(coinsKey, []byte{1})
+	})
+	if !social && !zaps {
 		return
 	}
 	s.workersWg.Add(1)
@@ -566,14 +644,30 @@ func (s *EventStore) backfillSocialIndex() {
 			case <-ctx.Done():
 			}
 		}()
-		s.logger.Info().Msg("building the social index from stored events")
-		n, err := s.RebuildSocialIndex(ctx, nil)
-		switch {
-		case errors.Is(err, context.Canceled):
-		case err != nil:
-			s.logger.Error().Err(err).Msg("failed to build the social index")
-		default:
-			s.logger.Info().Int("indexed", n).Msg("social index built")
+		if social {
+			s.logger.Info().Msg("building the social index from stored events")
+			n, err := s.RebuildSocialIndex(ctx, nil)
+			if !s.logRebuild("social", n, err) {
+				return
+			}
+		}
+		if zaps {
+			s.logger.Info().Msg("rebuilding the zap index to record each zap's coin")
+			n, err := s.RebuildZapIndex(ctx, nil)
+			s.logRebuild("zap", n, err)
 		}
 	}()
+}
+
+// logRebuild logs a background rebuild's outcome; false when it didn't finish.
+func (s *EventStore) logRebuild(index string, n int, err error) bool {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return false
+	case err != nil:
+		s.logger.Error().Err(err).Str("index", index).Msg("failed to build the index")
+		return false
+	}
+	s.logger.Info().Str("index", index).Int("indexed", n).Msg("index built")
+	return true
 }

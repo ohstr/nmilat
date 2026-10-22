@@ -200,6 +200,10 @@ type EventStore struct {
 	// events, waking live tails instead of having them poll.
 	commitMu sync.Mutex
 	commitCh chan struct{}
+	// commits counts signalCommit calls, so a cache can tell nothing changed.
+	commits atomic.Uint64
+	// zapRank caches zap-ranking lists (zap_ranking.go).
+	zapRank zapRankingCache
 	// zapRebuilding guards RebuildZapIndex against running twice at once.
 	zapRebuilding atomic.Bool
 	// socialRebuilding guards RebuildSocialIndex the same way.
@@ -366,7 +370,12 @@ func (s *EventStore) commitSignal() <-chan struct{} {
 	return s.commitCh
 }
 
+// Commits counts writes that may have changed stored events; equal values
+// mean nothing changed in between.
+func (s *EventStore) Commits() uint64 { return s.commits.Load() }
+
 func (s *EventStore) signalCommit() {
+	s.commits.Add(1)
 	s.commitMu.Lock()
 	close(s.commitCh)
 	s.commitCh = make(chan struct{})
@@ -567,7 +576,8 @@ func (s *EventStore) startWorkers() {
 		defer s.workersWg.Done()
 		s.startHousekeeper()
 	}()
-	s.backfillSocialIndex()
+	s.backfillIndexes()
+	s.backfillCounters()
 }
 
 func (s *EventStore) insert(tx *bolt.Tx, ev *nip01.Event) error {
@@ -786,6 +796,9 @@ func (s *EventStore) delete(tx *bolt.Tx, evsid uint64, ev *nip01.Event) error { 
 	if err := delEventIndexes(tx, keys); err != nil {
 		return err
 	}
+	if err := countDelete(tx, keys); err != nil {
+		return err
+	}
 	if err := s.unindexZap(tx, ev, evsid); err != nil {
 		return err
 	}
@@ -980,6 +993,9 @@ func delEventIndexes(tx *bolt.Tx, k *indexKeys) error {
 func (s *EventStore) insertIndexes(tx *bolt.Tx, event *nip01.Event, evsid uint64) error {
 	keys, err := indexKeysFor(event, evsid, s.limitation.MaxIndexableTags)
 	if err != nil {
+		return err
+	}
+	if err := countInsert(tx, keys); err != nil {
 		return err
 	}
 	if err := putEventIndexes(tx, keys); err != nil {
@@ -1219,9 +1235,17 @@ func (s *EventStore) CountEventsFiltered(ctx context.Context, filters *nip01.Sub
 }
 
 func (s *EventStore) countEvents(ctx context.Context, filters *nip01.SubscriptionFilterGroup, deny func(*PotentialEvent) bool) (int64, error) {
+	n, _, err := s.CountEventsApprox(ctx, filters, deny)
+	return n, err
+}
+
+// CountEventsApprox counts like CountEventsFiltered (deny may be nil) and
+// reports whether a filter hit its limit (the relay's max_limit when it
+// sets none), in which case the count is a lower bound.
+func (s *EventStore) CountEventsApprox(ctx context.Context, filters *nip01.SubscriptionFilterGroup, deny func(*PotentialEvent) bool) (int64, bool, error) {
 	scan, err := NewStoreQuery(s, filters)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 
 	potEventsCh := make(chan *PotentialEvent)
@@ -1239,12 +1263,16 @@ func (s *EventStore) countEvents(ctx context.Context, filters *nip01.Subscriptio
 
 	// Fetch trigger	// pass the transaction to scan.Fetch
 	if err = scan.fetch(ctx, nil, potEventsCh, &wg, false); err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	wg.Wait()
 	close(potEventsCh)
 
-	return count, nil
+	capped := false
+	for _, ss := range scan.scanners {
+		capped = capped || ss.capped
+	}
+	return count, capped, nil
 }
 
 func (s *EventStore) InsertEvents(ctx context.Context, events []*nip01.Event) error {
@@ -1650,6 +1678,8 @@ type storeScan struct {
 	// hasWatermark is set once a scan has snapshotted lastMaxEvsid, after
 	// which the live tail only reads arrivals above it (see scanTail).
 	hasWatermark bool
+	// capped is set when a scan stopped at its filter's limit.
+	capped bool
 	*scanContext
 }
 
@@ -1875,6 +1905,7 @@ func (ss *storeScan) scan(ctx context.Context, tx *bolt.Tx, potEvents chan<- *Po
 		}
 
 		if !fetchUntilEmpty && emitted >= ss.filter.Limit {
+			ss.capped = true
 			break
 		}
 

@@ -44,16 +44,12 @@ type SessionConfig struct {
 	// it's answered "error: relay busy". <= 0 waits indefinitely.
 	StoreReplyTimeout time.Duration
 
-	// Default limits for cache and search
-	DefaultCacheWindow time.Duration
-	DefaultCacheLimit  int
+	// DefaultSearchLimit is a NIP-50 search's limit when it sets none.
 	DefaultSearchLimit int
 
-	// EnableTopZapped gates the signed "top zapped" cache response (see
-	// handler_cache.go). Off by default: serving it requires signing with
-	// PrivKey, so it must be turned on deliberately rather than activating
-	// itself just because a PrivKey happens to be configured.
-	EnableTopZapped bool
+	// Zaps configures the signed zap-ranking cache action
+	// (handler_cache.go). Off unless Zaps.Enabled; it signs with PrivKey.
+	Zaps ZapRankingConfig
 
 	// EnableProfileStats serves NIP-85 user assertions (kind 30382,
 	// handler_assertions.go) signed with PrivKey, and checks profiles'
@@ -282,14 +278,6 @@ func WithSessionMaxConcurrentTasks(limit int) SessionOption {
 	}
 }
 
-// WithSessionCacheConfig sets the default window and limit for cache requests.
-func WithSessionCacheConfig(window time.Duration, limit int) SessionOption {
-	return func(target *SessionConfig) {
-		target.DefaultCacheWindow = window
-		target.DefaultCacheLimit = limit
-	}
-}
-
 // WithSessionSearchLimit sets the default limit for search requests.
 func WithSessionSearchLimit(limit int) SessionOption {
 	return func(target *SessionConfig) {
@@ -306,12 +294,12 @@ func WithSessionPrivKey(key string) SessionOption {
 	}
 }
 
-// WithSessionTopZapped enables or disables the signed "top zapped" cache
-// response (see handler_cache.go). Setting this alone, unlike
-// WithSessionConfig, does not discard any other configured defaults.
-func WithSessionTopZapped(enabled bool) SessionOption {
+// WithSessionZaps configures the zap-ranking cache action. Setting this
+// alone, unlike WithSessionConfig, does not discard any other configured
+// defaults.
+func WithSessionZaps(zaps ZapRankingConfig) SessionOption {
 	return func(target *SessionConfig) {
-		target.EnableTopZapped = enabled
+		target.Zaps = zaps
 	}
 }
 
@@ -375,8 +363,6 @@ func defaultSessionConfig() *SessionConfig {
 		OutgoingBufferSize:      defaultOutgoingBufferSize,
 		MaxConcurrentStoreTasks: defaultMaxConcurrentStoreTasks,
 		StoreReplyTimeout:       defaultStoreReplyTimeout,
-		DefaultCacheWindow:      24 * time.Hour,
-		DefaultCacheLimit:       50,
 		DefaultSearchLimit:      100,
 		AllowedOrigins:          wsDefaultAllowedOrigins,
 		Logger:                  zerolog.Nop(),
