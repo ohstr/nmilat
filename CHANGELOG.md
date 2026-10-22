@@ -15,22 +15,28 @@ privacy and performance fixes.
   `limit` is capped at `MaxLimit`. Lists are computed together in one pass on
   first use, reused for `Refresh`, served stale while one refresh runs,
   skipped when nothing was written and dropped when idle.
+  ([#167](https://github.com/ohstr/nmilat/pull/167))
 - Adds each zap's coin (`Coin`: sats from a `bc`/`tb`/`tbs`/`bcrt` invoice,
   loki from `fc`, else a 9521's `chain` tag) to the zap and social indexes.
   A store from before rebuilds both once in the background on open.
+  ([#167](https://github.com/ohstr/nmilat/pull/167))
 - Adds `zap_amt_recd_<coin>`/`zap_amt_sent_<coin>` NIP-85 tags for each
   configured coin besides sats with an amount, and `ProfileStats.AmtRecd`/
   `AmtSent` per coin.
+  ([#167](https://github.com/ohstr/nmilat/pull/167))
 - Adds exact counters of stored events per kind and distinct authors, kept
   in the same transaction as the indexes (`EventStore.Counts`); an older
   store is counted in the background in short write transactions.
+  ([#167](https://github.com/ohstr/nmilat/pull/167))
 - Adds `RelayDiscovery` and `EventStore.PublishSelfSigned`, to publish the
   relay's own NIP-66 kind 30166 (counts, zap totals, supported NIPs,
   requirements), stored only when something changed.
+  ([#167](https://github.com/ohstr/nmilat/pull/167))
 - Adds `EventStore.ZapTotals`, `TopZapped` (one window and coin, uncached)
   and `Commits`, `utils.ParseDuration` (`s`, `m`, `h`, `d`, `w`, `mo`) and
   the `nip57/nip57test` package, which builds valid 9735 and 9521 receipts
   in either coin for tests.
+  ([#167](https://github.com/ohstr/nmilat/pull/167))
 - Adds NIP-85 user assertions: with `SessionConfig.EnableProfileStats`, a REQ
   for kind 30382 with `#d` pubkeys gets relay-signed stats (rank, followers,
   following, zaps received/sent with first and last time, verified
@@ -216,12 +222,15 @@ privacy and performance fixes.
 - Changes NIP-45 COUNT: a filter of only `kinds` (or nothing) is answered
   exactly from the counters, past `max_limit`, without a scan; any other
   filter that stops at its limit answers `"approximate": true`.
+  ([#167](https://github.com/ohstr/nmilat/pull/167))
 - Changes the social score to count received sats only; zaps in other coins
   still count toward `zap_cnt_*` and zappers.
+  ([#167](https://github.com/ohstr/nmilat/pull/167))
 - Removes the `top-zapped`/`get_top_zapped` cache action,
   `GetTopZapped`/`ZapStats`, `SessionConfig.EnableTopZapped`,
   `DefaultCacheWindow`/`DefaultCacheLimit`, `WithSessionTopZapped` and
   `WithSessionCacheConfig`; use `zap-ranking` and `SessionConfig.Zaps`.
+  ([#167](https://github.com/ohstr/nmilat/pull/167))
 - Changes profile verification to check a profile's `lud06` LNURL when it has
   no `lud16`, so older profiles get their lightning address verified too.
   ([#165](https://github.com/ohstr/nmilat/pull/165))
@@ -300,10 +309,12 @@ privacy and performance fixes.
 
 - Fixes zap amounts in different coins being added together in the zap
   ranking, NIP-85 `zap_amt_*` and the social score.
+  ([#167](https://github.com/ohstr/nmilat/pull/167))
 - Fixes an unknown cache action falling through to a REQ with an empty
   filter, which streamed the whole store; it's `CLOSED "invalid: unknown
   cache action ..."`. A ranking window like `7d` was also read with Go's
   duration parser and silently became the default.
+  ([#167](https://github.com/ohstr/nmilat/pull/167))
 - Fixes a panic in a profile check killing the relay: each check and each
   verification job now recovers, logs the panic and counts the check as a
   transient failure. ([#166](https://github.com/ohstr/nmilat/pull/166))
