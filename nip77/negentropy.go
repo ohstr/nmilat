@@ -12,6 +12,14 @@ import (
 const (
 	ProtocolVersion1  = 0x61
 	InfiniteTimestamp = math.MaxUint64
+
+	// DefaultFrameSizeLimit caps one encoded message, in bytes. Hex doubles
+	// it on the wire, so it fits a 64 KiB max_message_length.
+	DefaultFrameSizeLimit = 30_000
+	// MinFrameSizeLimit is the smallest limit that still makes progress.
+	MinFrameSizeLimit = 4096
+
+	buckets = 16
 )
 
 // Item represents a single event in the reconciliation set.
@@ -45,31 +53,30 @@ func (i Item) Compare(other Item) int {
 type Negentropy struct {
 	Items       []Item
 	IsInitiator bool // true = client (initiator), false = server (responder)
+	// FrameSizeLimit caps each encoded message in bytes; 0 is unlimited and
+	// anything below MinFrameSizeLimit is raised to it.
+	FrameSizeLimit int
+
+	// reported holds ids the initiator already returned: a range cut by a
+	// frame limit can be listed again in a later round.
+	reported map[string]bool
 }
 
+// New expects items sorted by (Timestamp, ID).
 func New(items []Item) *Negentropy {
-	// Assumption: items are already sorted by Timestamp, ID
-	return &Negentropy{Items: items}
+	return &Negentropy{Items: items, FrameSizeLimit: DefaultFrameSizeLimit}
 }
 
-// Initiate builds the initial client message: a single range covering the
-// entire ID space with a fingerprint over all local items.
+// Initiate builds the initial client message over all local items.
 func (n *Negentropy) Initiate() *Message {
 	n.IsInitiator = true
-	fp := computeFingerprint(n.Items)
 	return &Message{
 		ProtocolVersion: ProtocolVersion1,
-		Ranges: []Range{
-			{
-				UpperBound: Bound{Timestamp: InfiniteTimestamp},
-				Mode:       1, // Fingerprint
-				Payload:    fp,
-			},
-		},
+		Ranges:          n.splitRange(0, len(n.Items), Bound{Timestamp: InfiniteTimestamp}),
 	}
 }
 
-// IsComplete returns true when all ranges in a response are Skip (mode 0),
+// IsComplete returns true when a message has no ranges other than Skip,
 // indicating that reconciliation has converged.
 func IsComplete(msg *Message) bool {
 	for _, r := range msg.Ranges {

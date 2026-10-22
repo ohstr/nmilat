@@ -43,7 +43,8 @@ jobs:
           git diff --exit-code go.mod go.sum
 
       - name: Test
-        run: go test -race ./...
+        # relay alone takes ~9m under -race; go test's default is 10m
+        run: go test -race -timeout 20m ./...
 
   lint:
     runs-on: ubuntu-latest
