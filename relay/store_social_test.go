@@ -235,3 +235,10 @@ func TestSocialIndex_BackfillsOnOpen(t *testing.T) {
 	assert.Equal(t, 1, st.ZapCntRecd)
 	assert.Equal(t, int64(1), st.Followers)
 }
+
+func TestSocialIndex_ReplacedContactsInOneBatch(t *testing.T) {
+	f := newSocialFixture(t)
+	f.insert(f.contacts(f.bob, 100, f.alice.pub), f.contacts(f.bob, 200, f.alice.pub, f.provider.pub))
+	assert.Equal(t, int64(1), f.stats(f.alice.pub).Followers)
+	assert.Equal(t, int64(1), f.stats(f.provider.pub).Followers)
+}

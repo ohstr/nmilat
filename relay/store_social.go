@@ -25,7 +25,7 @@ import (
 //
 //	zr: receiver(32) + created_at(8) + evsid(8) -> zapEntry (Other = sender)
 //	zs: sender(32)   + created_at(8) + evsid(8) -> zapEntry (Other = receiver)
-//	fe: followed(32) + follower(32)             -> nil
+//	fe: followed(32) + follower(32)             -> 1
 //	fc: followed(32) -> followers (8)
 //	fg: author(32)   -> following (8)
 var (
@@ -186,7 +186,8 @@ func applyFollows(gen *bolt.Bucket, ev *nip01.Event, add bool) ([]string, error)
 		exists := edges.Get(key) != nil
 		switch {
 		case add && !exists:
-			if err := edges.Put(key, nil); err != nil {
+			// Not nil: bolt reads a nil value back as missing until commit.
+			if err := edges.Put(key, []byte{1}); err != nil {
 				return nil, err
 			}
 			if err := addCount(counts, target, 1); err != nil {

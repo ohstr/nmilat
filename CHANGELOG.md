@@ -307,6 +307,9 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes follower counts doubling when a contact list and its replacement
+  were written in the same batch.
+  ([#PRNUM](https://github.com/ohstr/nmilat/pull/PRNUM))
 - Fixes a NIP-77 sync with a large diff sending one message of several MB,
   which strfry and most relays drop mid-sync. Messages now stop at
   `Negentropy.FrameSizeLimit` (30 000 bytes by default) and the rest follows
