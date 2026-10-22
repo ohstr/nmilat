@@ -219,6 +219,18 @@ func TestVerification_ExpiryRefetchesAndNegativeTTLNever(t *testing.T) {
 	assert.Equal(t, 1, g.web.count("example.com"))
 }
 
+// A profile can't make the relay fetch an internal address.
+func TestVerification_RefusesIPsAndPorts(t *testing.T) {
+	f := newVerifyFixture(t, VerificationConfig{})
+	f.web.set("169.254.169.254", nip05JSON(map[string]string{"x": publicKey}))
+	f.web.set("127.0.0.1", nip05JSON(map[string]string{"x": publicKey}))
+
+	m := f.run(map[string]string{"nip05": "x@169.254.169.254", "lud16": "x@127.0.0.1:2375"}, false)
+	assert.Equal(t, CheckInvalid, m.Nip05.Status)
+	assert.Equal(t, CheckInvalid, m.Lud16.Status)
+	assert.Zero(t, f.web.count("169.254.169.254")+f.web.count("127.0.0.1"))
+}
+
 func TestVerification_InvalidAndRemoved(t *testing.T) {
 	f := newVerifyFixture(t, VerificationConfig{})
 	f.web.set("example.com", nip05JSON(map[string]string{"bob": publicKey}))
