@@ -567,7 +567,7 @@ func (s *EventStore) startWorkers() {
 		defer s.workersWg.Done()
 		s.startHousekeeper()
 	}()
-	s.backfillSocialIndex()
+	s.backfillIndexes()
 }
 
 func (s *EventStore) insert(tx *bolt.Tx, ev *nip01.Event) error {

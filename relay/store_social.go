@@ -116,7 +116,7 @@ func applySocialTo(gen *bolt.Bucket, ev *nip01.Event, evsid uint64, add bool) ([
 	if err != nil {
 		return nil, err
 	}
-	entry := zapEntry{Amount: f.Amount, Signer: f.Signer, PaymentHash: f.PaymentHash, Valid: f.Valid}
+	entry := zapEntry{Amount: f.Amount, Signer: f.Signer, PaymentHash: f.PaymentHash, Valid: f.Valid, Coin: f.Coin}
 	touched := []string{f.Receiver}
 	keys := []struct {
 		b     *bolt.Bucket
@@ -540,6 +540,9 @@ func (s *EventStore) RebuildSocialIndex(ctx context.Context, progress func(scann
 		if err := m.Put(socialBuiltAt, itob(uint64(time.Now().Unix()))); err != nil {
 			return err
 		}
+		if err := m.Put(coinsKey, []byte{1}); err != nil {
+			return err
+		}
 		if err := tx.DeleteBucket(old); err != nil && !errors.Is(err, bolterrors.ErrBucketNotFound) {
 			return err
 		}
@@ -548,10 +551,44 @@ func (s *EventStore) RebuildSocialIndex(ctx context.Context, progress func(scann
 	return indexed, err
 }
 
-// backfillSocialIndex builds the social index once, in the background,
-// for a store whose events predate it.
-func (s *EventStore) backfillSocialIndex() {
-	if s.SocialIndexBuilt() {
+// SocialIndexRebuilding reports whether RebuildSocialIndex is running.
+func (s *EventStore) SocialIndexRebuilding() bool { return s.socialRebuilding.Load() }
+
+// backfillIndexes rebuilds, once and in the background, the social index
+// when it was never built and either index when its entries predate coins.
+// An empty store just records both as current.
+func (s *EventStore) backfillIndexes() {
+	var social, zaps bool
+	_ = s.db.Update(func(tx *bolt.Tx) error {
+		sm, zm := tx.Bucket(socialMeta), tx.Bucket(zapMeta)
+		social = sm == nil || sm.Get(socialBuiltAt) == nil || sm.Get(coinsKey) == nil
+		zaps = zm == nil || zm.Get(coinsKey) == nil
+		if !social && !zaps {
+			return nil
+		}
+		if b := tx.Bucket(indexEvents); b != nil {
+			if k, _ := b.Cursor().First(); k != nil {
+				return nil
+			}
+		}
+		social, zaps = false, false
+		sm, err := tx.CreateBucketIfNotExists(socialMeta)
+		if err != nil {
+			return err
+		}
+		zm, err = tx.CreateBucketIfNotExists(zapMeta)
+		if err != nil {
+			return err
+		}
+		if err := sm.Put(socialBuiltAt, itob(uint64(time.Now().Unix()))); err != nil {
+			return err
+		}
+		if err := sm.Put(coinsKey, []byte{1}); err != nil {
+			return err
+		}
+		return zm.Put(coinsKey, []byte{1})
+	})
+	if !social && !zaps {
 		return
 	}
 	s.workersWg.Add(1)
@@ -566,14 +603,30 @@ func (s *EventStore) backfillSocialIndex() {
 			case <-ctx.Done():
 			}
 		}()
-		s.logger.Info().Msg("building the social index from stored events")
-		n, err := s.RebuildSocialIndex(ctx, nil)
-		switch {
-		case errors.Is(err, context.Canceled):
-		case err != nil:
-			s.logger.Error().Err(err).Msg("failed to build the social index")
-		default:
-			s.logger.Info().Int("indexed", n).Msg("social index built")
+		if social {
+			s.logger.Info().Msg("building the social index from stored events")
+			n, err := s.RebuildSocialIndex(ctx, nil)
+			if !s.logRebuild("social", n, err) {
+				return
+			}
+		}
+		if zaps {
+			s.logger.Info().Msg("rebuilding the zap index to record each zap's coin")
+			n, err := s.RebuildZapIndex(ctx, nil)
+			s.logRebuild("zap", n, err)
 		}
 	}()
+}
+
+// logRebuild logs a background rebuild's outcome; false when it didn't finish.
+func (s *EventStore) logRebuild(index string, n int, err error) bool {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return false
+	case err != nil:
+		s.logger.Error().Err(err).Str("index", index).Msg("failed to build the index")
+		return false
+	}
+	s.logger.Info().Str("index", index).Int("indexed", n).Msg("index built")
+	return true
 }

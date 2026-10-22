@@ -20,6 +20,9 @@ var (
 	zapActiveKey   = []byte("active")
 	zapBuildingKey = []byte("building")
 	zapGenKey      = []byte("gen")
+	// coinsKey marks an index (zap or social) rebuilt since zaps record their
+	// coin; without it, entries may lack one and the index is rebuilt once.
+	coinsKey = []byte("coins")
 )
 
 // ErrZapRebuildInProgress is returned by RebuildZapIndex while another
@@ -139,6 +142,9 @@ func (s *EventStore) RebuildZapIndex(ctx context.Context, progress func(scanned,
 		if err := m.Delete(zapBuildingKey); err != nil {
 			return err
 		}
+		if err := m.Put(coinsKey, []byte{1}); err != nil {
+			return err
+		}
 		if err := tx.DeleteBucket(old); err != nil && err != bolterrors.ErrBucketNotFound {
 			return err
 		}
@@ -146,6 +152,9 @@ func (s *EventStore) RebuildZapIndex(ctx context.Context, progress func(scanned,
 	})
 	return indexed, err
 }
+
+// ZapIndexRebuilding reports whether RebuildZapIndex is running.
+func (s *EventStore) ZapIndexRebuilding() bool { return s.zapRebuilding.Load() }
 
 // scanZapsInto walks every stored event in batches, indexing zap receipts
 // into the bucket target names. It returns events scanned and zaps indexed.

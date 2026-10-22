@@ -17,7 +17,9 @@ type zapFact struct {
 	Receiver string // hex pubkey credited
 	Sender   string // hex pubkey (or ConnectionKey) that paid; "" if unknown
 	Signer   string // receipt signer: the recipient's LNURL server
-	Amount   uint64 // milli-units, from the invoice when it has one
+	Amount   uint64 // milli-units of Coin, from the invoice when it has one
+	// Coin is the invoice's coin, else the 9521 chain's; unknown otherwise.
+	Coin Coin
 	// PaymentHash identifies the payment, so duplicate receipts count once.
 	PaymentHash string
 	// Valid: the receipt passed NIP-57/NIP-AZ validation (signatures,
@@ -35,7 +37,7 @@ func parseZapFact(ev *nip01.Event) (*zapFact, error) {
 	}
 	f := &zapFact{Receiver: receiver, Signer: ev.PubKey}
 
-	var bolt11, description, senderTag, resolvedSender, amountTag string
+	var bolt11, description, senderTag, resolvedSender, amountTag, chain string
 	for _, tag := range ev.Tags {
 		if len(tag) < 2 {
 			continue
@@ -53,6 +55,8 @@ func parseZapFact(ev *nip01.Event) (*zapFact, error) {
 			resolvedSender = tag[1]
 		case "amount":
 			amountTag = tag[1]
+		case "chain":
+			chain = tag[1]
 		}
 	}
 
@@ -81,6 +85,10 @@ func parseZapFact(ev *nip01.Event) (*zapFact, error) {
 		if invoice.AmountMloki > 0 {
 			f.Amount = uint64(invoice.AmountMloki)
 		}
+		f.Coin = coinForCurrency(invoice.Currency)
+	}
+	if f.Coin == CoinUnknown && ev.Kind == nipAZ.KindAltZapReceipt {
+		f.Coin = chainCoins[nipAZ.Chain(chain)]
 	}
 	if f.Amount == 0 {
 		f.Amount, _ = strconv.ParseUint(amountTag, 10, 64)
@@ -150,12 +158,15 @@ type zapEntry struct {
 	Signer      string
 	PaymentHash string
 	Valid       bool
+	Coin        Coin
 }
 
+// zapEntryLen is an entry without its trailing coin byte, as written before
+// coins were recorded; such entries decode as CoinUnknown.
 const zapEntryLen = 8 + 32 + 32 + 32 + 1
 
 func (e zapEntry) encode() []byte {
-	v := make([]byte, zapEntryLen)
+	v := make([]byte, zapEntryLen+1)
 	copy(v[:8], itob(e.Amount))
 	putHex32(v[8:40], e.Other)
 	putHex32(v[40:72], e.Signer)
@@ -163,6 +174,7 @@ func (e zapEntry) encode() []byte {
 	if e.Valid {
 		v[104] = 1
 	}
+	v[zapEntryLen] = byte(e.Coin)
 	return v
 }
 
@@ -170,13 +182,17 @@ func decodeZapEntry(v []byte) (zapEntry, bool) {
 	if len(v) < zapEntryLen {
 		return zapEntry{}, false
 	}
-	return zapEntry{
+	e := zapEntry{
 		Amount:      btoi(v[:8]),
 		Other:       hex32(v[8:40]),
 		Signer:      hex32(v[40:72]),
 		PaymentHash: hex32(v[72:104]),
 		Valid:       v[104] == 1,
-	}, true
+	}
+	if len(v) > zapEntryLen && v[zapEntryLen] < numCoins {
+		e.Coin = Coin(v[zapEntryLen])
+	}
+	return e, true
 }
 
 // putHex32 writes a 64-char hex value into dst; anything else stays zero.

@@ -51,10 +51,10 @@ func putZap(bucket *bolt.Bucket, event *nip01.Event, evsid uint64) error {
 	if err != nil || len(receiver) != 32 {
 		return nil
 	}
-	value := make([]byte, 40, 40+zapEntryLen)
+	value := make([]byte, 40, 40+zapEntryLen+1)
 	binary.BigEndian.PutUint64(value[0:8], f.Amount)
 	copy(value[8:40], receiver)
-	value = append(value, zapEntry{Amount: f.Amount, Other: f.Sender, Signer: f.Signer, PaymentHash: f.PaymentHash, Valid: f.Valid}.encode()...)
+	value = append(value, zapEntry{Amount: f.Amount, Other: f.Sender, Signer: f.Signer, PaymentHash: f.PaymentHash, Valid: f.Valid, Coin: f.Coin}.encode()...)
 	return bucket.Put(zapKey(event, evsid), value)
 }
 
