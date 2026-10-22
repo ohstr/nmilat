@@ -30,6 +30,8 @@ func (pe *PacketError) Error() string {
 	return pe.Message
 }
 
+func (pe *PacketError) Unwrap() error { return pe.Origin }
+
 func NewPacketError(message string, err error, args ...interface{}) *PacketError {
 	if len(args) > 0 {
 		message = fmt.Sprintf(message, args...)

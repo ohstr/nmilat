@@ -484,3 +484,29 @@ func TestVerification_ScoreFollowsConfigWithoutFetching(t *testing.T) {
 	assert.Equal(t, int64(90), m.TotalScore())
 	assert.Equal(t, 1, f.web.count("example.com"))
 }
+
+// A picture IsValidPictureURL accepts (it trims) but http.NewRequest can't
+// parse used to reach httpClient.Do(nil) and crash the relay.
+func TestVerification_PictureThatFailsNewRequest(t *testing.T) {
+	for _, pic := range []string{" https://img.example.com/a.png", "https://img.example.com/a.png\n"} {
+		require.True(t, utils.IsValidPictureURL(pic))
+		f := newVerifyFixture(t, VerificationConfig{})
+		f.web.set("img.example.com", statusHandler(http.StatusOK, ""))
+		var m *ProfileMetrics
+		require.NotPanics(t, func() { m = f.run(map[string]string{"picture": pic}, false) })
+		assert.NotEqual(t, CheckOK, m.Picture.Status)
+		assert.Zero(t, f.web.count("img.example.com"))
+	}
+}
+
+// A panic inside one check goroutine must not take the process down.
+func TestVerification_PanickingCheckIsContained(t *testing.T) {
+	f := newVerifyFixture(t, VerificationConfig{})
+	f.web.set("img.example.com", func(http.ResponseWriter, *http.Request) { panic("boom") })
+	f.web.set("example.com", nip05JSON(map[string]string{"bob": publicKey}))
+
+	m := f.run(map[string]string{"picture": "https://img.example.com/a.png", "nip05": "bob@example.com"}, false)
+
+	assert.Equal(t, CheckOK, m.Nip05.Status)
+	assert.NotEqual(t, CheckOK, m.Picture.Status)
+}

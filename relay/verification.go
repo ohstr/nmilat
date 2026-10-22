@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -190,9 +191,19 @@ func (w *ProfileVerificationWorker) worker() {
 		if w.ctx.Err() != nil {
 			return
 		}
-		w.processJob(w.ctx, job)
+		w.safeProcessJob(job)
 		w.done(job.Pubkey)
 	}
+}
+
+// safeProcessJob keeps a panic in one profile from killing the relay.
+func (w *ProfileVerificationWorker) safeProcessJob(job VerificationJob) {
+	defer func() {
+		if p := recover(); p != nil {
+			w.logger.Error().Str("pubkey", job.Pubkey).Interface("panic", p).Bytes("stack", debug.Stack()).Msg("profile verification panicked")
+		}
+	}()
+	w.processJob(w.ctx, job)
 }
 
 // sweeper persists deferred profiles and queues checks as they come due.
@@ -364,6 +375,12 @@ func (w *ProfileVerificationWorker) processJob(ctx context.Context, job Verifica
 		wg.Add(1)
 		go func(i int, f field) {
 			defer wg.Done()
+			defer func() {
+				if p := recover(); p != nil {
+					w.logger.Error().Str("pubkey", job.Pubkey).Str("value", f.value).Interface("panic", p).Bytes("stack", debug.Stack()).Msg("profile check panicked")
+					results[i] = &checkResult{outcome: outcomeTransient, err: fmt.Sprintf("panic: %v", p)}
+				}
+			}()
 			r := f.check(ctx, f.value)
 			results[i] = &r
 		}(i, f)
