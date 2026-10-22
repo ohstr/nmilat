@@ -266,6 +266,13 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes a panic in a profile check killing the relay: each check and each
+  verification job now recovers, logs the panic and counts the check as a
+  transient failure. ([#166](https://github.com/ohstr/nmilat/pull/166))
+- Fixes a REQ with a malformed `ids` or `authors` value being logged at error
+  and answered `CLOSED "error: ..."`; it's now `CLOSED "invalid: ..."`, logged
+  at debug. A client going over `max_message_length` or resetting the
+  connection is no longer logged as an unexpected session error. ([#166](https://github.com/ohstr/nmilat/pull/166))
 - Fixes top-zapped counting invalid receipts, self-zaps, duplicate receipts of
   one payment and deleted receipts; once a recipient's LNURL server key is
   verified, only receipts that server signed count.
