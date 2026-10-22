@@ -208,7 +208,7 @@ func TestReconcileIdListResponse(t *testing.T) {
 		},
 	}
 
-	t.Run("initiator responds with Skip", func(t *testing.T) {
+	t.Run("initiator responds with nothing", func(t *testing.T) {
 		neg := New(items)
 		neg.IsInitiator = true
 
@@ -216,11 +216,9 @@ func TestReconcileIdListResponse(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Reconcile error: %v", err)
 		}
-		if len(resp.Ranges) != 1 {
-			t.Fatalf("expected 1 range, got %d", len(resp.Ranges))
-		}
-		if resp.Ranges[0].Mode != 0 {
-			t.Errorf("initiator should respond with Skip (mode 0), got mode %d", resp.Ranges[0].Mode)
+		// A trailing Skip is dropped, so the reply is empty and complete.
+		if len(resp.Ranges) != 0 || !IsComplete(resp) {
+			t.Fatalf("initiator should respond with no ranges, got %d", len(resp.Ranges))
 		}
 		if len(have) != 2 {
 			t.Errorf("expected 2 have IDs, got %d", len(have))

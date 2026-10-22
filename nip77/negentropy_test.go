@@ -111,12 +111,9 @@ func TestReconcile_Match(t *testing.T) {
 		t.Errorf("Expected match (skip), got diffs: have=%d need=%d", len(have), len(need))
 	}
 
-	if len(resp.Ranges) != 1 {
-		t.Fatalf("Expected 1 range response, got %d", len(resp.Ranges))
-	}
-
-	if resp.Ranges[0].Mode != 0 {
-		t.Errorf("Expected Skip (0) mode, got %d", resp.Ranges[0].Mode)
+	// A full match merges into no ranges at all, which is complete.
+	if len(resp.Ranges) != 0 || !IsComplete(resp) {
+		t.Fatalf("Expected an empty, complete response, got %d ranges", len(resp.Ranges))
 	}
 }
 
@@ -146,7 +143,7 @@ func TestReconcile_Mismatch(t *testing.T) {
 		t.Fatalf("Reconcile error: %v", err)
 	}
 
-	// We expect since len(n.Items) < 100, we send IdList
+	// We expect since len(n.Items) < 32, we send IdList
 	if len(resp.Ranges) != 1 {
 		t.Fatalf("Expected 1 range response, got %d", len(resp.Ranges))
 	}
