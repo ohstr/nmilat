@@ -280,7 +280,9 @@ func (s *EventStore) TakeSocialDirty(limit int) []string {
 }
 
 // ProfileStats summarizes a profile's zaps and follows. Only zaps that
-// count are included (see zapCounts). Amounts are in milli-units.
+// count are included (see zapCounts). Counts and zappers cover every coin;
+// ZapAmtRecd/ZapAmtSent are sats and AmtRecd/AmtSent hold each coin's
+// amount, all in milli-units.
 type ProfileStats struct {
 	Pubkey string `json:"pubkey"`
 
@@ -289,6 +291,9 @@ type ProfileStats struct {
 	ZappersRecd int    `json:"zappers_recd"`
 	ZapCntSent  int    `json:"zap_cnt_sent"`
 	ZapAmtSent  uint64 `json:"zap_amt_sent"`
+
+	AmtRecd [numCoins]uint64 `json:"-"`
+	AmtSent [numCoins]uint64 `json:"-"`
 
 	// Unix times; 0 when there is none.
 	ZapFirstRecd int64 `json:"zap_first_recd"`
@@ -299,8 +304,38 @@ type ProfileStats struct {
 	Followers int64 `json:"followers"`
 	Following int64 `json:"following"`
 
-	// RecdBySender is the counted amount received from each sender.
+	// RecdBySender is the counted sats received from each sender.
 	RecdBySender map[string]uint64 `json:"-"`
+}
+
+// MarshalJSON adds zap_amt_recd_<coin>/zap_amt_sent_<coin> for each coin
+// besides sats with an amount, as the NIP-85 tags name them.
+func (st ProfileStats) MarshalJSON() ([]byte, error) {
+	type plain ProfileStats
+	b, err := json.Marshal(plain(st))
+	if err != nil {
+		return nil, err
+	}
+	extra := map[string]uint64{}
+	for _, c := range Coins() {
+		if c == CoinSats {
+			continue
+		}
+		if st.AmtRecd[c] > 0 {
+			extra["zap_amt_recd_"+c.String()] = st.AmtRecd[c]
+		}
+		if st.AmtSent[c] > 0 {
+			extra["zap_amt_sent_"+c.String()] = st.AmtSent[c]
+		}
+	}
+	if len(extra) == 0 {
+		return b, nil
+	}
+	e, err := json.Marshal(extra)
+	if err != nil {
+		return nil, err
+	}
+	return append(append(b[:len(b)-1], ','), e[1:]...), nil
 }
 
 // GetProfileStats computes a profile's stats from the social index.
@@ -329,17 +364,22 @@ func (s *EventStore) GetProfileStats(pubkey string) (*ProfileStats, error) {
 		}
 
 		seen := map[string]bool{}
+		zappers := map[string]bool{}
 		eachZap(gen.Bucket(subZapsRecd), pk, func(at int64, e zapEntry) {
 			if !zapCounts(e, e.Other, pubkey, keys.get(pubkey), seen) {
 				return
 			}
 			st.ZapCntRecd++
-			st.ZapAmtRecd += e.Amount
-			st.RecdBySender[e.Other] += e.Amount
+			st.AmtRecd[e.Coin] += e.Amount
+			zappers[e.Other] = true
+			if e.Coin == CoinSats {
+				st.RecdBySender[e.Other] += e.Amount
+			}
 			st.ZapFirstRecd = minNonZero(st.ZapFirstRecd, at)
 			st.ZapLastRecd = max(st.ZapLastRecd, at)
 		})
-		st.ZappersRecd = len(st.RecdBySender)
+		st.ZappersRecd = len(zappers)
+		st.ZapAmtRecd = st.AmtRecd[CoinSats]
 
 		seen = map[string]bool{}
 		eachZap(gen.Bucket(subZapsSent), pk, func(at int64, e zapEntry) {
@@ -347,10 +387,11 @@ func (s *EventStore) GetProfileStats(pubkey string) (*ProfileStats, error) {
 				return
 			}
 			st.ZapCntSent++
-			st.ZapAmtSent += e.Amount
+			st.AmtSent[e.Coin] += e.Amount
 			st.ZapFirstSent = minNonZero(st.ZapFirstSent, at)
 			st.ZapLastSent = max(st.ZapLastSent, at)
 		})
+		st.ZapAmtSent = st.AmtSent[CoinSats]
 		return nil
 	})
 	return st, err
