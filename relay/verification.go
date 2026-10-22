@@ -520,13 +520,21 @@ func (w *ProfileVerificationWorker) checkNip05(ctx context.Context, pubkey, nip0
 }
 
 // payURL is the LNURL-pay endpoint of a lightning address, or of a bech32
-// LNURL (lud06); "" if it's neither.
+// LNURL (lud06); "" if it's neither, or names an IP, a port or a local
+// host, which the relay won't fetch on a profile's behalf.
 func payURL(v string) string {
-	if u := utils.GetLud16URL(v); u != "" {
-		return u
+	if validIdentifier(v) {
+		return utils.GetLud16URL(v)
 	}
-	u, _ := utils.DecodeLNURL(v)
-	return u
+	raw, err := utils.DecodeLNURL(v)
+	if err != nil {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Port() != "" || !utils.IsPublicHostname(u.Hostname()) {
+		return ""
+	}
+	return raw
 }
 
 func (w *ProfileVerificationWorker) checkLud16(ctx context.Context, lud16 string) checkResult {

@@ -292,6 +292,14 @@ func TestVerification_Lud06WhenNoLud16(t *testing.T) {
 	assert.Equal(t, lnurl, m.Lud16.Value)
 	assert.Equal(t, "abcd", m.Lud16NostrPubkey)
 
+	// An LNURL pointing at an internal address is never fetched.
+	internal, err := utils.EncodeLNURL("https://10.0.0.1/lnurlp/bob")
+	require.NoError(t, err)
+	f.web.set("10.0.0.1", nip05JSON(nil))
+	m = f.run(map[string]string{"lud06": internal}, false)
+	assert.Equal(t, CheckInvalid, m.Lud16.Status)
+	assert.Zero(t, f.web.count("10.0.0.1"))
+
 	// lud16 wins when both are set.
 	f.web.set("getalby.com", nip05JSON(nil))
 	f.run(map[string]string{"lud06": lnurl, "lud16": "bob@getalby.com"}, false)
