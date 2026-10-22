@@ -73,7 +73,7 @@ func TestZapCacheWebIdentityScenarios(t *testing.T) {
 
 	until := uint64(now.Unix())
 	since := uint64(now.Add(-2 * time.Hour).Unix())
-	stats, err := store.GetTopZapped(context.Background(), since, until, 10)
+	stats, err := store.TopZapped(context.Background(), since, until, CoinLoki, 10)
 	require.NoError(t, err)
 
 	// ResolvedTelegram: 2000
@@ -81,10 +81,10 @@ func TestZapCacheWebIdentityScenarios(t *testing.T) {
 	require.Len(t, stats, 2, "web-identity-unlinked entry must not appear")
 
 	assert.Equal(t, ResolvedTelegram, stats[0].Pubkey)
-	assert.Equal(t, uint64(2000), stats[0].TotalMLoki)
+	assert.Equal(t, uint64(2000), stats[0].Total)
 
 	assert.Equal(t, NostrUser, stats[1].Pubkey)
-	assert.Equal(t, uint64(1500), stats[1].TotalMLoki, "web-identity-linked and direct zap amounts must merge")
+	assert.Equal(t, uint64(1500), stats[1].Total, "web-identity-linked and direct zap amounts must merge")
 }
 
 func TestZapCacheScenarios(t *testing.T) {
@@ -162,7 +162,7 @@ func TestZapCacheScenarios(t *testing.T) {
 	// User A's old zap (5000) is excluded.
 	// User B's future zap (5000) is excluded (because query 'until' is 'now')
 
-	stats, err := store.GetTopZapped(context.Background(), start24h, timestampNow, 10)
+	stats, err := store.TopZapped(context.Background(), start24h, timestampNow, CoinLoki, 10)
 	require.NoError(t, err)
 
 	// Validate Order (B > A)
@@ -170,23 +170,23 @@ func TestZapCacheScenarios(t *testing.T) {
 
 	// Rank 1: User B
 	assert.Equal(t, UserB, stats[0].Pubkey)
-	assert.Equal(t, uint64(2000), stats[0].TotalMLoki)
+	assert.Equal(t, uint64(2000), stats[0].Total)
 
 	// Rank 2: User A
 	assert.Equal(t, UserA, stats[1].Pubkey)
-	assert.Equal(t, uint64(1500), stats[1].TotalMLoki)
+	assert.Equal(t, uint64(1500), stats[1].Total)
 
 	// Query Case 2: All Time (technically just very old start)
 	// Window: [0, now + 2h]
 	// Should include the old zap, and the future zap
-	statsAll, err := store.GetTopZapped(context.Background(), 0, timestampFuture+100, 10)
+	statsAll, err := store.TopZapped(context.Background(), 0, timestampFuture+100, CoinLoki, 10)
 	require.NoError(t, err)
 
 	// User A: 1500 + 5000 (old) = 6500
 	// User B: 2000 + 5000 (future) = 7000
 	require.Len(t, statsAll, 2)
 	assert.Equal(t, UserB, statsAll[0].Pubkey)
-	assert.Equal(t, uint64(7000), statsAll[0].TotalMLoki)
+	assert.Equal(t, uint64(7000), statsAll[0].Total)
 	assert.Equal(t, UserA, statsAll[1].Pubkey)
-	assert.Equal(t, uint64(6500), statsAll[1].TotalMLoki)
+	assert.Equal(t, uint64(6500), statsAll[1].Total)
 }

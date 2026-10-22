@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
-	"sort"
 
 	"github.com/ohstr/nmilat/nip01"
 	bolt "go.etcd.io/bbolt"
@@ -75,98 +74,6 @@ func (s *EventStore) unindexZap(tx *bolt.Tx, event *nip01.Event, evsid uint64) e
 		}
 	}
 	return nil
-}
-
-// ZapStats contains the aggregated zap amount for a pubkey.
-type ZapStats struct {
-	Pubkey     string `json:"pubkey"`
-	TotalMLoki uint64 `json:"total_mloki"`
-}
-
-// GetTopZapped returns the top zapped public keys within the specified time window.
-func (s *EventStore) GetTopZapped(ctx context.Context, since, until uint64, limit int) ([]ZapStats, error) {
-	if limit <= 0 {
-		return nil, nil
-	}
-
-	aggregation := make(map[string]uint64)
-
-	err := s.db.View(func(tx *bolt.Tx) error {
-		b := tx.Bucket(activeZapBucket(tx))
-		if b == nil {
-			return nil
-		}
-
-		c := b.Cursor()
-		keys := lnurlKeys{tx: tx, cache: map[string]string{}}
-		seen := map[string]bool{}
-
-		// Start from 'since'
-		minKey := make([]byte, 16)
-		binary.BigEndian.PutUint64(minKey[0:8], since)
-		// Evsid 0 for start of the timestamp
-
-		// Iterate
-		for k, v := c.Seek(minKey); k != nil; k, v = c.Next() {
-			if len(k) < 8 {
-				continue
-			}
-
-			timestamp := binary.BigEndian.Uint64(k[0:8])
-			if timestamp > until {
-				break
-			}
-
-			if len(v) < 40 {
-				continue
-			}
-
-			amount := binary.BigEndian.Uint64(v[0:8])
-			receiver := hex.EncodeToString(v[8:40])
-
-			// Entries written before the counting rules (40 bytes) count
-			// as they did until the next rebuild.
-			if e, ok := decodeZapEntry(v[40:]); ok && !zapCounts(e, e.Other, receiver, keys.get(receiver), seen) {
-				continue
-			}
-
-			aggregation[receiver] += amount
-		}
-
-		return nil
-	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	// Sort results
-	type kv struct {
-		Key   string
-		Value uint64
-	}
-
-	var sorted []kv
-	for k, v := range aggregation {
-		sorted = append(sorted, kv{k, v})
-	}
-
-	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].Value > sorted[j].Value
-	})
-
-	result := make([]ZapStats, 0, limit)
-	for i, kv := range sorted {
-		if i >= limit {
-			break
-		}
-		result = append(result, ZapStats{
-			Pubkey:     kv.Key,
-			TotalMLoki: kv.Value,
-		})
-	}
-
-	return result, nil
 }
 
 // QueryEvents finds events matching the filter.

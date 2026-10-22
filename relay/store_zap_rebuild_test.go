@@ -59,13 +59,15 @@ func rawZap(t testing.TB, kind int, receiver, msats string, createdAt uint64) *n
 
 func topZapped(t *testing.T, store *EventStore) map[string]uint64 {
 	t.Helper()
-	stats, err := store.GetTopZapped(context.Background(), 0, uint64(time.Now().Unix()+3600), 100)
-	if err != nil {
-		t.Fatal(err)
-	}
 	out := map[string]uint64{}
-	for _, s := range stats {
-		out[s.Pubkey] = s.TotalMLoki
+	for _, coin := range Coins() {
+		ranked, err := store.TopZapped(context.Background(), 0, uint64(time.Now().Unix()+3600), coin, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, z := range ranked {
+			out[z.Pubkey] += z.Total
+		}
 	}
 	return out
 }

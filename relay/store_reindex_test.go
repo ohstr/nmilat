@@ -69,12 +69,15 @@ func TestReindexZaps(t *testing.T) {
 	assert.Equal(t, 2, count, "Should index both the 9521 and the 9735 zap")
 
 	// 4. Verify Index
-	stats, err := store.GetTopZapped(ctx, 0, uint64(time.Now().Unix()+1000), 10)
+	// The 9735 paid sats, the 9521 loki: each ranks only in its own coin.
+	sats, err := store.TopZapped(ctx, 0, uint64(time.Now().Unix()+1000), CoinSats, 10)
 	require.NoError(t, err)
-
-	require.Len(t, stats, 2)
-	assert.Equal(t, "0000000000000000000000000000000000000000000000000000000000000002", stats[0].Pubkey)
-	assert.Equal(t, uint64(2000000), stats[0].TotalMLoki)
-	assert.Equal(t, "0000000000000000000000000000000000000000000000000000000000000001", stats[1].Pubkey)
-	assert.Equal(t, uint64(1000000), stats[1].TotalMLoki)
+	require.Len(t, sats, 1)
+	assert.Equal(t, "0000000000000000000000000000000000000000000000000000000000000002", sats[0].Pubkey)
+	assert.Equal(t, uint64(2000000), sats[0].Total)
+	loki, err := store.TopZapped(ctx, 0, uint64(time.Now().Unix()+1000), CoinLoki, 10)
+	require.NoError(t, err)
+	require.Len(t, loki, 1)
+	assert.Equal(t, "0000000000000000000000000000000000000000000000000000000000000001", loki[0].Pubkey)
+	assert.Equal(t, uint64(1000000), loki[0].Total)
 }

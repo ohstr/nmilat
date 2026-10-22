@@ -200,6 +200,10 @@ type EventStore struct {
 	// events, waking live tails instead of having them poll.
 	commitMu sync.Mutex
 	commitCh chan struct{}
+	// commits counts signalCommit calls, so a cache can tell nothing changed.
+	commits atomic.Uint64
+	// zapRank caches zap-ranking lists (zap_ranking.go).
+	zapRank zapRankingCache
 	// zapRebuilding guards RebuildZapIndex against running twice at once.
 	zapRebuilding atomic.Bool
 	// socialRebuilding guards RebuildSocialIndex the same way.
@@ -367,6 +371,7 @@ func (s *EventStore) commitSignal() <-chan struct{} {
 }
 
 func (s *EventStore) signalCommit() {
+	s.commits.Add(1)
 	s.commitMu.Lock()
 	close(s.commitCh)
 	s.commitCh = make(chan struct{})

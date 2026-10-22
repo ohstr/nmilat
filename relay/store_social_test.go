@@ -141,10 +141,10 @@ func TestProfileStats_RequiresTheRecipientsLNURLServer(t *testing.T) {
 	assert.Equal(t, uint64(1_000), a.ZapAmtRecd)
 	assert.Equal(t, 1, f.stats(f.bob.pub).ZapCntSent)
 
-	top, err := f.store.GetTopZapped(context.Background(), 0, f.at+1, 10)
+	top, err := f.store.TopZapped(context.Background(), 0, f.at+1, CoinSats, 10)
 	require.NoError(t, err)
 	require.Len(t, top, 1)
-	assert.Equal(t, uint64(1_000), top[0].TotalMLoki, "top-zapped applies the same rules")
+	assert.Equal(t, uint64(1_000), top[0].Total, "the zap ranking applies the same rules")
 }
 
 func TestProfileStats_DeletedZapIsRemoved(t *testing.T) {
@@ -156,7 +156,7 @@ func TestProfileStats_DeletedZapIsRemoved(t *testing.T) {
 	f.insert(f.deletion(f.provider, z.ID))
 	assert.Equal(t, 0, f.stats(f.alice.pub).ZapCntRecd)
 	assert.Equal(t, 0, f.stats(f.bob.pub).ZapCntSent)
-	top, err := f.store.GetTopZapped(context.Background(), 0, f.at+1, 10)
+	top, err := f.store.TopZapped(context.Background(), 0, f.at+1, CoinSats, 10)
 	require.NoError(t, err)
 	assert.Empty(t, top)
 }
