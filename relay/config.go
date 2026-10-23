@@ -395,6 +395,13 @@ type EventStoreConfig struct {
 
 	// Indexes selects the derived indexes the store keeps; none by default.
 	Indexes DerivedIndexes
+
+	// IndexMaintenance chooses who runs the derived indexes' operations:
+	// the store itself (MaintenanceAuto, the default) or the embedder.
+	IndexMaintenance IndexMaintenance
+
+	// Feeds are registered when the store opens (WithEventStoreFeeds).
+	Feeds []Feed
 }
 
 // EventStoreOption mutates the internal event store configuration.
@@ -446,10 +453,17 @@ func WithEventStoreLogger(logger zerolog.Logger) EventStoreOption {
 
 // WithEventStoreIndexes enables derived indexes, for the features that
 // read them. An index enabled on a store that has events without it is
-// built in the background on open.
+// brought current in the background (see WithEventStoreIndexMaintenance).
 func WithEventStoreIndexes(ix DerivedIndexes) EventStoreOption {
 	return func(cfg *EventStoreConfig) {
 		cfg.Indexes = ix
+	}
+}
+
+// WithEventStoreIndexMaintenance sets EventStoreConfig.IndexMaintenance.
+func WithEventStoreIndexMaintenance(m IndexMaintenance) EventStoreOption {
+	return func(cfg *EventStoreConfig) {
+		cfg.IndexMaintenance = m
 	}
 }
 

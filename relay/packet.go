@@ -15,7 +15,6 @@ import (
 	"github.com/ohstr/nmilat/nip70"
 	"github.com/ohstr/nmilat/nip77"
 	"github.com/ohstr/nmilat/nipAA"
-	"github.com/ohstr/nmilat/search"
 	"github.com/ohstr/nmilat/wire"
 )
 
@@ -651,30 +650,9 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 
 	}()
 
+	// Search and profile checks follow stored profiles through their feeds
+	// (SearchIndexer, ProfileVerificationWorker), not from here.
 	s.executeStoreTask(ctx, task)
-
-	// NIP-50 INDEXING (Async)
-	if ep.Event.Kind == 0 && s.SearchService != nil {
-		doc := search.FromEvent(ep.Event)
-		if doc != nil {
-			err := s.SearchService.IndexProfileWithMetrics(ctx, doc, func(pubkey string) (int64, error) {
-				m, err := s.store.GetProfileMetrics(pubkey)
-				if err != nil || m == nil {
-					return 0, err
-				}
-				// doc.Score is the base; add the checks and social score.
-				return m.CheckScore() + m.SocialScore, nil
-			})
-			if err != nil {
-				s.config.Logger.Warn().Err(err).Msg("failed to queue profile for indexing")
-			}
-		}
-	}
-	// Profile checks feed search ranking and NIP-85 assertions.
-	if ep.Event.Kind == 0 && s.VerificationWorker != nil && (s.SearchService != nil || s.config.EnableProfileStats) {
-		s.VerificationWorker.QueueJob(ep.Event)
-	}
-
 	return nil
 
 }

@@ -38,6 +38,9 @@ type StoreObserver interface {
 	BatchCommitted(n int, d time.Duration, failed bool)
 	// ScanBusy counts a read refused for want of a scan slot.
 	ScanBusy()
+	// IndexBatchCommitted reports one write transaction of a derived index
+	// operation (rebuild, catch-up, rescore, reap); index is constant.
+	IndexBatchCommitted(index string, d time.Duration)
 }
 
 // NopObserver discards everything. Embed it to implement only some methods.
@@ -56,6 +59,7 @@ func (NopObserver) Auth(bool, RejectReason)                                     
 func (NopObserver) Sent(time.Duration, bool)                                         {}
 func (NopObserver) BatchCommitted(int, time.Duration, bool)                          {}
 func (NopObserver) ScanBusy()                                                        {}
+func (NopObserver) IndexBatchCommitted(string, time.Duration)                        {}
 
 // MessageType is a client message's type.
 type MessageType uint8

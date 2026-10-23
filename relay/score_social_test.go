@@ -1,7 +1,6 @@
 package relay
 
 import (
-	"context"
 	"testing"
 
 	"github.com/ohstr/nmilat/config"
@@ -33,11 +32,7 @@ func TestSocialScore_WeighsSendersByTheirOwnScore(t *testing.T) {
 
 func TestSocialScore_RefreshedForDirtyProfiles(t *testing.T) {
 	f := newVerifyFixture(t, VerificationConfig{})
-	var pushed = map[string]int64{}
-	f.w.searchService = &MockSearchService{UpdateScoreFunc: func(_ context.Context, pk string, score int64) error {
-		pushed[pk] = score
-		return nil
-	}}
+	require.NoError(t, f.store.EnsureFeed(SearchFeed))
 	alice, bob := newTestKey(t, 10), newTestKey(t, 11)
 	ev := &nip01.Event{PubKey: bob.pub, CreatedAt: 100, Kind: 3, Tags: [][]string{{"p", alice.pub}}}
 	require.NoError(t, ev.Sign(bob.priv))
@@ -47,6 +42,8 @@ func TestSocialScore_RefreshedForDirtyProfiles(t *testing.T) {
 	m, err := f.store.GetProfileMetrics(alice.pub)
 	require.NoError(t, err)
 	assert.Equal(t, int64(6), m.SocialScore, "20 x log10(2)")
-	assert.Equal(t, m.TotalScore(), pushed[alice.pub])
+	batch, err := f.store.FeedChanges(SearchFeed.Name, 0, 10)
+	require.NoError(t, err)
+	assert.Contains(t, batch.Dirty, alice.pub, "queued for search with its new score")
 	assert.Empty(t, f.store.TakeSocialDirty(10))
 }

@@ -153,7 +153,7 @@ type SessionContext struct {
 	relayURL           string
 	selfPubkey         string
 	storeLimiter       chan struct{}
-	SearchService      search.Service
+	SearchService      search.Searcher
 	VerificationWorker *ProfileVerificationWorker
 
 	// membership resolves NIP-43 active-member status. nil means NIP-43 is
@@ -172,7 +172,7 @@ type SessionContext struct {
 	*replyer
 }
 
-func NewSessionContext(store *EventStore, info *ClientInfo, cfg *nip11.Metadata, searchService search.Service, vWorker *ProfileVerificationWorker, sessCfg *SessionConfig) *SessionContext {
+func NewSessionContext(store *EventStore, info *ClientInfo, cfg *nip11.Metadata, searchService search.Searcher, vWorker *ProfileVerificationWorker, sessCfg *SessionConfig) *SessionContext {
 	if sessCfg == nil {
 		sessCfg = defaultSessionConfig()
 	}
@@ -717,7 +717,7 @@ type SessionHandler struct {
 	config        *SessionConfig
 	nextSessID    int64
 	sessionCount  atomic.Int64
-	searchService search.Service
+	searchService search.Searcher
 
 	// VerificationWorker processes NIP-05/LUD-16 profile verification jobs.
 	// NewSessionHandler constructs it but does not start it — call
@@ -748,7 +748,7 @@ type SessionHandler struct {
 // constructed but not started — call VerificationWorker.Start(n) before
 // serving traffic if profile verification should run, or use relay.New,
 // which does this for you.
-func NewSessionHandler(store *EventStore, relayMetadata *nip11.Metadata, searchService search.Service, opts ...SessionOption) *SessionHandler {
+func NewSessionHandler(store *EventStore, relayMetadata *nip11.Metadata, searchService search.Searcher, opts ...SessionOption) *SessionHandler {
 	cfg := defaultSessionConfig()
 	for _, opt := range opts {
 		opt(cfg)
@@ -798,7 +798,7 @@ func NewSessionHandler(store *EventStore, relayMetadata *nip11.Metadata, searchS
 		relayMetadata:      relayMetadata,
 		config:             cfg,
 		searchService:      searchService,
-		VerificationWorker: NewProfileVerificationWorker(store, searchService, cfg.Verification),
+		VerificationWorker: NewProfileVerificationWorker(store, cfg.Verification),
 		membership:         membership,
 		groups:             groups,
 	}

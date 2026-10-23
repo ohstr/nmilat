@@ -65,11 +65,11 @@ func TestZapCacheWebIdentityScenarios(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	count, err := store.ReindexZaps(context.Background(), nil)
+	res, err := store.RebuildIndex(context.Background(), IndexZaps, nil)
 	require.NoError(t, err)
-	// ReindexZaps counts all Kind 9521 events processed (4), regardless of whether
-	// they were stored — web-identity-unlinked zaps are silently skipped by IndexZap.
-	assert.Equal(t, 4, count)
+	// Every Kind 9521 event is applied (4), whether or not it is kept —
+	// web-identity-unlinked zaps are silently skipped.
+	assert.Equal(t, int64(4), res.Applied)
 
 	until := uint64(now.Unix())
 	since := uint64(now.Add(-2 * time.Hour).Unix())
@@ -145,12 +145,11 @@ func TestZapCacheScenarios(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Run ReindexZaps
-	count, err := store.ReindexZaps(context.Background(), nil)
+	res, err := store.RebuildIndex(context.Background(), IndexZaps, nil)
 	require.NoError(t, err)
 	// We expect 5 zaps to be indexed (even if outside query window, they are valid zaps)
 	// The 6th event is Kind 1, so it shouldn't be indexed.
-	assert.Equal(t, 5, count, "Should index 5 valid zap events")
+	assert.Equal(t, int64(5), res.Applied, "Should index 5 valid zap events")
 
 	// Query Case 1: 24 Hour Window
 	// Window: [now - 24h, now]

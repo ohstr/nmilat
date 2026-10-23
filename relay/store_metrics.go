@@ -143,7 +143,7 @@ func (s *EventStore) GetProfileMetrics(pubkey string) (*ProfileMetrics, error) {
 // metrics, keeping the verification due queue in step with NextDue.
 func (s *EventStore) UpdateProfileMetrics(pubkey string, modifier func(*ProfileMetrics)) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
-		return updateProfileMetrics(tx, []byte(pubkey), modifier)
+		return s.updateProfileMetrics(tx, []byte(pubkey), modifier)
 	})
 }
 
@@ -152,7 +152,7 @@ func (s *EventStore) UpdateProfileMetrics(pubkey string, modifier func(*ProfileM
 func (s *EventStore) UpdateProfileMetricsBatch(pubkeys []string, modifier func(*ProfileMetrics)) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		for _, pk := range pubkeys {
-			if err := updateProfileMetrics(tx, []byte(pk), modifier); err != nil {
+			if err := s.updateProfileMetrics(tx, []byte(pk), modifier); err != nil {
 				return err
 			}
 		}
@@ -160,7 +160,9 @@ func (s *EventStore) UpdateProfileMetricsBatch(pubkeys []string, modifier func(*
 	})
 }
 
-func updateProfileMetrics(tx *bolt.Tx, key []byte, modifier func(*ProfileMetrics)) error {
+// updateProfileMetrics applies modifier to one profile's metrics; a
+// changed score queues the profile on the feeds that follow scores.
+func (s *EventStore) updateProfileMetrics(tx *bolt.Tx, key []byte, modifier func(*ProfileMetrics)) error {
 	b, err := tx.CreateBucketIfNotExists(indexProfileMetrics)
 	if err != nil {
 		return err
@@ -176,9 +178,14 @@ func updateProfileMetrics(tx *bolt.Tx, key []byte, modifier func(*ProfileMetrics
 			return err
 		}
 	}
-	before := metrics.NextDue()
+	before, score := metrics.NextDue(), metrics.TotalScore()
 	modifier(&metrics)
 	after := metrics.NextDue()
+	if metrics.TotalScore() != score {
+		if err := s.feedsRescored(tx, string(key)); err != nil {
+			return err
+		}
+	}
 
 	if before != after {
 		if before > 0 {

@@ -117,7 +117,7 @@ func TestProfileStats_ExcludesSelfZapsDuplicatesAndInvalid(t *testing.T) {
 	f.insert(paid, again, f.zap(f.alice.pub, f.alice.pub, 50_000))
 	// An unsigned look-alike never validates.
 	putRawEvents(t, f.store, 1000, &nip01.Event{Kind: 9735, CreatedAt: 5, Tags: [][]string{{"p", f.alice.pub}, {"amount", "99000"}}})
-	_, err := f.store.RebuildSocialIndex(context.Background(), nil)
+	_, err := f.store.RebuildIndex(context.Background(), IndexSocial, nil)
 	require.NoError(t, err)
 
 	a := f.stats(f.alice.pub)
@@ -205,15 +205,15 @@ func TestRebuildSocialIndex_MatchesIncremental(t *testing.T) {
 		before[pk] = f.stats(pk)
 	}
 
-	require.NoError(t, f.store.ClearSocialIndex(context.Background()))
-	assert.Equal(t, int64(0), f.stats(carol).Followers)
-
-	_, err := f.store.RebuildSocialIndex(context.Background(), nil)
+	res, err := f.store.RebuildIndex(context.Background(), IndexSocial, nil)
 	require.NoError(t, err)
 	for pk, want := range before {
 		assert.Equal(t, want, f.stats(pk), pk)
 	}
-	assert.True(t, f.store.SocialIndexBuilt())
+	assert.Equal(t, res.EntriesBefore, res.EntriesAfter)
+	st, err := f.store.IndexStatus(IndexSocial)
+	require.NoError(t, err)
+	assert.NotZero(t, st.BuiltAt)
 }
 
 func TestSocialIndex_BackfillsOnOpen(t *testing.T) {
@@ -221,14 +221,17 @@ func TestSocialIndex_BackfillsOnOpen(t *testing.T) {
 	f := &socialFixture{t: t, store: store, alice: newTestKey(t, 10), bob: newTestKey(t, 11), provider: newTestKey(t, 12), at: 1_700_000_000}
 	putRawEvents(t, store, 1, f.zap(f.bob.pub, f.alice.pub, 1_000), f.contacts(f.bob, 100, f.alice.pub))
 	require.NoError(t, store.db.Update(func(tx *bolt.Tx) error {
-		return tx.Bucket(socialMeta).Delete(socialBuiltAt)
+		return store.markDirty(tx, store.social, "test")
 	}))
 	store.Close()
 
 	reopened, err := NewEventStore(path, &nip11.Limitation{MaxLimit: 1000}, WithEventStoreLogger(testlogger.New(t)), allIndexes)
 	require.NoError(t, err)
 	t.Cleanup(reopened.Close)
-	require.Eventually(t, reopened.SocialIndexBuilt, 5*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		st, err := reopened.IndexStatus(IndexSocial)
+		return err == nil && st.State == StateReady && st.Running == "" && st.Action != ActionRebuild
+	}, 5*time.Second, 10*time.Millisecond)
 
 	st, err := reopened.GetProfileStats(f.alice.pub)
 	require.NoError(t, err)

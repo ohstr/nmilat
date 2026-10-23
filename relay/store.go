@@ -206,13 +206,10 @@ type EventStore struct {
 	zapRank zapRankingCache
 	// zaps and social are the derived indexes (derived_indexes.go).
 	zaps, social *derivedIndex
-
-	// socialDirty holds profiles whose zaps or follows changed, for a
-	// score refresh (TakeSocialDirty).
-	socialMu    sync.Mutex
-	socialDirty map[string]bool
-	// rescoreAfter is the last profile TakeSocialRescore returned.
-	rescoreAfter []byte
+	// maintenance runs the derived indexes' operations when MaintenanceAuto.
+	maintenance IndexMaintenance
+	// feeds are the registered feeds (feed.go).
+	feeds *atomic.Pointer[feedSet]
 }
 
 func NewEventStore(path string, limitation *nip11.Limitation, opts ...EventStoreOption) (*EventStore, error) {
@@ -279,7 +276,7 @@ func NewEventStore(path string, limitation *nip11.Limitation, opts ...EventStore
 	}
 
 	if err := db.Update(func(tx *bolt.Tx) error {
-		buckets := [][]byte{indexEvents, indexID, indexPubkey, indexKind, indexTag, indexCreatedAt, indexKindPubkey, indexExpiration}
+		buckets := [][]byte{indexEvents, indexID, indexPubkey, indexKind, indexTag, indexCreatedAt, indexKindPubkey, indexExpiration, storeMeta}
 		for _, bucketName := range buckets {
 			_, err := tx.CreateBucketIfNotExists(bucketName)
 			if err != nil {
@@ -307,6 +304,7 @@ func NewEventStore(path string, limitation *nip11.Limitation, opts ...EventStore
 		batchInterval: cfg.BatchInterval,
 		logger:        cfg.Logger,
 		obs:           cfg.Observer,
+		maintenance:   cfg.IndexMaintenance,
 	}
 	if cfg.MaxConcurrentScans > 0 {
 		es.scanSlots = make(chan struct{}, cfg.MaxConcurrentScans)
@@ -316,6 +314,14 @@ func NewEventStore(path string, limitation *nip11.Limitation, opts ...EventStore
 	}
 	es.commitCh = make(chan struct{})
 	newDerivedIndexes(es, cfg.Indexes)
+	if err := es.openFeeds(cfg.Feeds); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("failed to open the feeds: %w", err)
+	}
+	if err := es.prepareIndexes(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("failed to prepare the derived indexes: %w", err)
+	}
 
 	es.startWorkers()
 
@@ -577,7 +583,9 @@ func (s *EventStore) startWorkers() {
 		defer s.workersWg.Done()
 		s.startHousekeeper()
 	}()
-	s.backfillIndexes()
+	if s.maintenance == MaintenanceAuto {
+		s.maintainIndexes()
+	}
 	s.backfillCounters()
 }
 
@@ -800,10 +808,13 @@ func (s *EventStore) delete(tx *bolt.Tx, evsid uint64, ev *nip01.Event) error { 
 	if err := countDelete(tx, keys); err != nil {
 		return err
 	}
-	if err := s.unindexZap(tx, ev, evsid); err != nil {
+	if err := s.write(tx, s.zaps, ev, evsid, false); err != nil {
 		return err
 	}
-	return s.unindexSocial(tx, ev, evsid)
+	if err := s.write(tx, s.social, ev, evsid, false); err != nil {
+		return err
+	}
+	return s.feedsDeleted(tx, ev)
 }
 
 func (s *EventStore) insertEvent(tx *bolt.Tx, event *nip01.Event) (uint64, error) {
@@ -822,6 +833,10 @@ func (s *EventStore) insertEvent(tx *bolt.Tx, event *nip01.Event) (uint64, error
 	}
 
 	if err := evBuckets.Put(evsidBytes, eventSerialized); err != nil {
+		return 0, err
+	}
+	// So the next open can tell this store's writes from another program's.
+	if err := s.stampSeq(tx, evsid); err != nil {
 		return 0, err
 	}
 
@@ -1002,10 +1017,10 @@ func (s *EventStore) insertIndexes(tx *bolt.Tx, event *nip01.Event, evsid uint64
 	if err := putEventIndexes(tx, keys); err != nil {
 		return err
 	}
-	if err := s.IndexZap(tx, event, evsid); err != nil {
+	if err := s.write(tx, s.zaps, event, evsid, true); err != nil {
 		return err
 	}
-	return s.indexSocial(tx, event, evsid)
+	return s.write(tx, s.social, event, evsid, true)
 }
 
 func (s *EventStore) findEventUsingTx(tx *bolt.Tx, evsid uint64) (*nip01.Event, error) {

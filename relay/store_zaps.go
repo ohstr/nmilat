@@ -9,34 +9,29 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-// isZapKind reports whether kind is a zap receipt the zap index holds.
-func isZapKind(kind int) bool { return kind == 9521 || kind == 9735 }
-
-// IndexZap indexes a zap receipt — NIP-57 (Kind 9735) or AltZap (Kind 9521).
-// It extracts the amount and the receiver pubkey and stores them in a dedicated bucket.
-// A rebuild in progress gets every new zap too, so none is lost when it
-// becomes the active index. It does nothing while the zap index is
-// disabled.
-func (s *EventStore) IndexZap(tx *bolt.Tx, event *nip01.Event, evsid uint64) error {
-	if !isZapKind(event.Kind) {
-		return nil
+// applyZap adds (or removes) one zap receipt — NIP-57 (kind 9735) or
+// AltZap (kind 9521) — in a zap generation and returns the change in its
+// entries.
+func applyZap(_ *EventStore, tx *bolt.Tx, gen []byte, event *nip01.Event, evsid uint64, add bool) (int64, []string, error) {
+	b, err := tx.CreateBucketIfNotExists(gen)
+	if err != nil {
+		return 0, nil, err
 	}
-	if !s.zaps.enabled {
-		return s.zaps.skip(tx)
+	key := zapKey(event, evsid)
+	had := b.Get(key) != nil
+	if !add {
+		if !had {
+			return 0, nil, nil
+		}
+		return -1, nil, b.Delete(key)
 	}
-	for _, name := range [][]byte{activeZapBucket(tx), buildingZapBucket(tx)} {
-		if name == nil {
-			continue
-		}
-		bucket, err := tx.CreateBucketIfNotExists(name)
-		if err != nil {
-			return err
-		}
-		if err := putZap(bucket, event, evsid); err != nil {
-			return err
-		}
+	if err := putZap(b, event, evsid); err != nil {
+		return 0, nil, err
 	}
-	return nil
+	if !had && b.Get(key) != nil {
+		return 1, nil, nil
+	}
+	return 0, nil, nil
 }
 
 // putZap writes one zap receipt into bucket. A receipt with no parsable
@@ -63,24 +58,6 @@ func putZap(bucket *bolt.Bucket, event *nip01.Event, evsid uint64) error {
 
 func zapKey(event *nip01.Event, evsid uint64) []byte {
 	return append(itob(event.CreatedAt), itob(evsid)...)
-}
-
-// unindexZap removes a deleted receipt from the zap index.
-func (s *EventStore) unindexZap(tx *bolt.Tx, event *nip01.Event, evsid uint64) error {
-	if !isZapKind(event.Kind) {
-		return nil
-	}
-	if !s.zaps.enabled {
-		return s.zaps.skip(tx)
-	}
-	for _, name := range [][]byte{activeZapBucket(tx), buildingZapBucket(tx)} {
-		if b := tx.Bucket(name); name != nil && b != nil {
-			if err := b.Delete(zapKey(event, evsid)); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
 }
 
 // QueryEvents finds events matching the filter.
