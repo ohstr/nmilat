@@ -89,9 +89,15 @@ func newVerifyFixture(t *testing.T, cfg VerificationConfig) *verifyFixture {
 	if cfg.PerHostInterval == 0 {
 		cfg.PerHostInterval = time.Nanosecond
 	}
-	f.w = NewProfileVerificationWorker(f.store, nil, cfg)
+	f.w = NewProfileVerificationWorker(f.store, cfg)
 	f.w.now = func() time.Time { return f.now }
 	return f
+}
+
+func (f *verifyFixture) profileOf(k testKey, name string) *nip01.Event {
+	ev := &nip01.Event{PubKey: k.pub, CreatedAt: uint64(f.now.Unix()), Kind: 0, Content: `{"name":"` + name + `"}`}
+	require.NoError(f.t, ev.Sign(k.priv))
+	return ev
 }
 
 func (f *verifyFixture) profile(content map[string]string) *nip01.Event {
@@ -347,35 +353,32 @@ func TestVerification_VerifyNowForcesFetch(t *testing.T) {
 	assert.ErrorIs(t, err, ErrEventNotFound)
 }
 
-func TestVerification_FullQueueIsCheckedLater(t *testing.T) {
+func TestVerification_FeedQueuesEveryStoredProfile(t *testing.T) {
 	f := newVerifyFixture(t, VerificationConfig{})
-	f.web.set("example.com", nip05JSON(map[string]string{"bob": publicKey}))
+	require.NoError(t, f.store.EnsureFeed(ChecksFeed))
 	ev := f.profile(map[string]string{"nip05": "bob@example.com"})
-	InsertTestEvents(t, f.store, []*nip01.Event{ev})
+	InsertTestEvents(t, f.store, []*nip01.Event{ev, f.profileOf(newTestKey(t, 3), "x")})
 
-	f.w.jobChan = make(chan VerificationJob) // always full
-	f.w.QueueJob(ev)
-	assert.Equal(t, uint64(1), f.w.TotalDropped.Load())
-
-	f.w.jobChan = make(chan VerificationJob, 10)
-	f.w.sweep()
-	m, err := f.store.GetProfileMetrics(publicKey)
+	f.w.jobChan = make(chan VerificationJob) // no room
+	assert.False(t, f.w.feed())
+	st, err := f.store.FeedStatus(ChecksFeed.Name)
 	require.NoError(t, err)
-	assert.Equal(t, f.now.Unix(), m.RequeueAt)
+	assert.Zero(t, st.Watermark, "nothing taken, nothing acknowledged")
 
-	require.Len(t, f.w.jobChan, 1, "the sweep queues the stored kind 0")
-	job := <-f.w.jobChan
-	f.w.processJob(context.Background(), job)
-	f.w.done(job.Pubkey)
-	m, _ = f.store.GetProfileMetrics(publicKey)
-	assert.Equal(t, CheckOK, m.Nip05.Status)
-	assert.Equal(t, int64(0), m.RequeueAt)
+	f.w.jobChan = make(chan VerificationJob, 2) // room for one: cap/2
+	assert.True(t, f.w.feed(), "took what fit")
+	assert.False(t, f.w.feed(), "then no room")
+	require.Len(t, f.w.jobChan, 1)
+	assert.Equal(t, publicKey, (<-f.w.jobChan).Pubkey)
+	st, _ = f.store.FeedStatus(ChecksFeed.Name)
+	assert.Equal(t, uint64(1), st.Watermark, "acknowledged up to the profile it queued")
 
-	due, err := f.store.DueVerifications(f.now.Unix(), 10, nil)
-	require.NoError(t, err)
-	assert.Empty(t, due, "nothing is due until the TTL")
-	due, _ = f.store.DueVerifications(f.now.Add(DefaultVerificationTTL).Unix(), 10, nil)
-	assert.Equal(t, []string{publicKey}, due)
+	f.w.done(publicKey)
+	assert.True(t, f.w.feed())
+	require.Len(t, f.w.jobChan, 1)
+	st, _ = f.store.FeedStatus(ChecksFeed.Name)
+	assert.Equal(t, uint64(2), st.Watermark)
+	assert.Zero(t, st.Behind)
 }
 
 func TestVerification_Backoff(t *testing.T) {
@@ -445,28 +448,29 @@ func TestScheduleLegacyVerificationMigration(t *testing.T) {
 	assert.Equal(t, []string{"zero"}, due)
 }
 
-func TestVerification_PushedScoreKeepsBase(t *testing.T) {
+func TestVerification_SearchScoreKeepsBase(t *testing.T) {
 	f := newVerifyFixture(t, VerificationConfig{})
-	var pushed int64
-	f.w.searchService = &MockSearchService{UpdateScoreFunc: func(_ context.Context, _ string, score int64) error {
-		pushed = score
-		return nil
-	}}
+	w := &fakeSearchWriter{}
+	x, err := NewSearchIndexer(f.store, w)
+	require.NoError(t, err)
 	f.web.set("example.com", nip05JSON(map[string]string{"bob": publicKey}))
 	f.web.set("img.example.com", statusHandler(http.StatusOK, ""))
 	profile := map[string]string{
 		"name": "bob", "about": "a bio longer than fifteen characters",
 		"picture": "https://img.example.com/a.png", "nip05": "bob@example.com",
 	}
+	InsertTestEvents(t, f.store, []*nip01.Event{f.profile(profile)})
 
 	m := f.run(profile, false)
 	// Base 10+10+30, NIP-05 +50; a good picture isn't counted twice.
 	assert.Equal(t, int64(50), m.BaseScore)
-	assert.Equal(t, int64(100), pushed)
+	drain(t, x)
+	assert.Equal(t, int64(100), w.doc(publicKey).Score)
 
 	f.web.set("img.example.com", statusHandler(http.StatusNotFound, ""))
 	f.run(profile, true)
-	assert.Equal(t, int64(70), pushed, "a broken picture takes its bonus back")
+	drain(t, x)
+	assert.Equal(t, int64(70), w.doc(publicKey).Score, "a broken picture takes its bonus back")
 }
 
 func TestVerification_ScoreFollowsConfigWithoutFetching(t *testing.T) {

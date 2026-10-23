@@ -1,30 +1,19 @@
+// Package search maps profiles (kind 0) to search documents and defines
+// the search engine a relay queries for NIP-50 and keeps in sync
+// (relay.SearchIndexer).
 package search
 
 import "context"
 
-// Indexer defines how we send data to the search engine.
-// R1 Implementation: Direct HTTP calls to the search backend via a Go Channel buffer.
-type Indexer interface {
-	IndexProfile(ctx context.Context, profile *ProfileDocument) error
-	UpdateScore(ctx context.Context, pubkey string, score int64) error
-	// IndexProfileWithMetrics calculates total score using existing BoltDB metrics.
-	IndexProfileWithMetrics(ctx context.Context, profile *ProfileDocument, getMetricsFunc func(pubkey string) (int64, error)) error
-	// DeleteProfile removes a single profile's document from the index.
-	DeleteProfile(ctx context.Context, pubkey string) error
-}
-
-// Searcher defines how we query data.
-// R1 Implementation: HTTP GET to the search backend.
+// Searcher answers profile queries.
 type Searcher interface {
 	FindProfiles(ctx context.Context, query string, limit int) ([]string, error)
 }
 
-// Service combines both for the Relay to use.
-type Service interface {
-	Indexer
-	Searcher
-	// Initialize ensures the index exists with correct settings
-	Initialize(ctx context.Context) error
-	Shutdown(ctx context.Context) error
-	DeleteIndex(ctx context.Context) error
+// Writer changes the search engine's documents. Each call returns once the
+// engine applied the change, so a caller that acknowledges after it never
+// loses one.
+type Writer interface {
+	Upsert(ctx context.Context, docs []*ProfileDocument) error
+	Delete(ctx context.Context, pubkeys []string) error
 }

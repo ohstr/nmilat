@@ -109,10 +109,15 @@ func TestIndexes_RebuildOnOpenToRecordCoins(t *testing.T) {
 				return err
 			}
 		}
-		if err := tx.Bucket(zapMeta).Delete(coinsKey); err != nil {
-			return err
+		// An index from before coins is one from before index states too.
+		for _, m := range [][]byte{zapMeta, socialMeta} {
+			for _, k := range [][]byte{coinsKey, keyState, keyManifest} {
+				if err := tx.Bucket(m).Delete(k); err != nil {
+					return err
+				}
+			}
 		}
-		return tx.Bucket(socialMeta).Delete(coinsKey)
+		return tx.Bucket(storeMeta).Delete(seqKey)
 	}))
 	assert.Equal(t, []Coin{CoinUnknown, CoinUnknown}, storedCoins(t, store))
 	store.Close()
@@ -122,14 +127,22 @@ func TestIndexes_RebuildOnOpenToRecordCoins(t *testing.T) {
 	t.Cleanup(reopened.Close)
 	require.Eventually(t, func() bool { return hasCoinsFlags(reopened) }, 5*time.Second, 10*time.Millisecond)
 	assert.ElementsMatch(t, []Coin{CoinSats, CoinLoki}, storedCoins(t, reopened))
-	assert.False(t, reopened.ZapIndexRebuilding())
-	assert.False(t, reopened.SocialIndexRebuilding())
+	require.Eventually(t, func() bool {
+		z, _ := reopened.IndexStatus(IndexZaps)
+		s, _ := reopened.IndexStatus(IndexSocial)
+		return z.Running == "" && s.Running == ""
+	}, 5*time.Second, 10*time.Millisecond)
 }
 
 func TestIndexes_EmptyStoreNeedsNoRebuild(t *testing.T) {
 	store := newIndexedStore(t)
 	assert.True(t, hasCoinsFlags(store))
-	assert.True(t, store.SocialIndexBuilt())
+	for _, name := range []string{IndexZaps, IndexSocial} {
+		st, err := store.IndexStatus(name)
+		require.NoError(t, err)
+		assert.Equal(t, StateReady, st.State, name)
+		assert.Empty(t, st.Action, name)
+	}
 }
 
 func truncateValues(b *bolt.Bucket, n int) error {

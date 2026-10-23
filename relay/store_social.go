@@ -13,40 +13,45 @@ import (
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/utils"
 	bolt "go.etcd.io/bbolt"
-	bolterrors "go.etcd.io/bbolt/errors"
 )
 
 // The social index holds, per profile, the zap receipts it received and
 // sent and its follow edges from kind 3 contact lists. Like the zap index
 // it lives in a generation bucket named by socialMeta's "active" key, so
-// RebuildSocialIndex swaps a new one in without an empty window.
+// RebuildIndex swaps a new one in without an empty window.
 //
 // Inside a generation:
 //
 //	zr: receiver(32) + created_at(8) + evsid(8) -> zapEntry (Other = sender)
 //	zs: sender(32)   + created_at(8) + evsid(8) -> zapEntry (Other = receiver)
-//	fe: followed(32) + follower(32)             -> 1
+//	fe: followed(32) + follower(32)             -> evsid of the list (8)
 //	fc: followed(32) -> followers (8)
 //	fg: author(32)   -> following (8)
+//	fo: author(32)   -> evsid of the list fg counts (8)
 var (
 	socialMeta    = []byte{17, 'm'}
 	socialDefault = []byte{17}
 	socialBuiltAt = []byte("built")
+
+	// socialRescoreKey holds why every social score is to be recomputed.
+	socialRescoreKey = []byte("rescore")
+	// socialRescoreAfter is the last profile a rescore stored.
+	socialRescoreAfter = []byte("rescore-after")
+	// socialDirtyKey is the queue of profiles whose score is stale.
+	socialDirtyKey = []byte("dirty")
+	// socialScoringKey fingerprints the scoring settings scores were
+	// computed with.
+	socialScoringKey = []byte("scoring")
 
 	subZapsRecd    = []byte("zr")
 	subZapsSent    = []byte("zs")
 	subFollowEdges = []byte("fe")
 	subFollowers   = []byte("fc")
 	subFollowing   = []byte("fg")
+	subFollowOwner = []byte("fo")
 )
 
-// ErrSocialRebuildInProgress is returned by RebuildSocialIndex and
-// ClearSocialIndex while another of them is running.
-var ErrSocialRebuildInProgress = errors.New("social index rebuild already in progress")
-
 const kindContacts = 3
-
-func isSocialKind(kind int) bool { return kind == kindContacts || isZapKind(kind) }
 
 func activeSocialBucket(tx *bolt.Tx) []byte {
 	if m := tx.Bucket(socialMeta); m != nil {
@@ -57,67 +62,33 @@ func activeSocialBucket(tx *bolt.Tx) []byte {
 	return socialDefault
 }
 
-func buildingSocialBucket(tx *bolt.Tx) []byte {
-	if m := tx.Bucket(socialMeta); m != nil {
-		if v := m.Get(zapBuildingKey); v != nil {
-			return append([]byte(nil), v...)
-		}
+// applySocialGen adds (or removes) one event in a social generation.
+func applySocialGen(_ *EventStore, tx *bolt.Tx, name []byte, ev *nip01.Event, evsid uint64, add bool) (int64, []string, error) {
+	gen, err := tx.CreateBucketIfNotExists(name)
+	if err != nil {
+		return 0, nil, err
 	}
-	return nil
+	return applySocialTo(gen, ev, evsid, add)
 }
 
-// indexSocial adds an event to the social index (and to a rebuild in
-// progress), marking the profiles it touches for a score refresh.
-func (s *EventStore) indexSocial(tx *bolt.Tx, ev *nip01.Event, evsid uint64) error {
-	return s.applySocial(tx, ev, evsid, true)
-}
-
-// unindexSocial removes what indexSocial added for a deleted event.
-func (s *EventStore) unindexSocial(tx *bolt.Tx, ev *nip01.Event, evsid uint64) error {
-	return s.applySocial(tx, ev, evsid, false)
-}
-
-func (s *EventStore) applySocial(tx *bolt.Tx, ev *nip01.Event, evsid uint64, add bool) error {
-	if !isSocialKind(ev.Kind) {
-		return nil
-	}
-	if !s.social.enabled {
-		return s.social.skip(tx)
-	}
-	for _, name := range [][]byte{activeSocialBucket(tx), buildingSocialBucket(tx)} {
-		if name == nil {
-			continue
-		}
-		gen, err := tx.CreateBucketIfNotExists(name)
-		if err != nil {
-			return err
-		}
-		touched, err := applySocialTo(gen, ev, evsid, add)
-		if err != nil {
-			return err
-		}
-		s.markSocialDirty(touched...)
-	}
-	return nil
-}
-
-// applySocialTo adds (or removes) one event in a generation bucket and
-// returns the profiles whose stats changed.
-func applySocialTo(gen *bolt.Bucket, ev *nip01.Event, evsid uint64, add bool) ([]string, error) {
+// applySocialTo adds (or removes) one event in a generation bucket. It
+// returns the change in followed profiles and the profiles whose stats
+// changed.
+func applySocialTo(gen *bolt.Bucket, ev *nip01.Event, evsid uint64, add bool) (int64, []string, error) {
 	if ev.Kind == kindContacts {
-		return applyFollows(gen, ev, add)
+		return applyFollows(gen, ev, evsid, add)
 	}
 	f, err := parseZapFact(ev)
 	if err != nil {
-		return nil, nil // nothing to credit
+		return 0, nil, nil // nothing to credit
 	}
 	recd, err := gen.CreateBucketIfNotExists(subZapsRecd)
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 	sent, err := gen.CreateBucketIfNotExists(subZapsSent)
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 	entry := zapEntry{Amount: f.Amount, Signer: f.Signer, PaymentHash: f.PaymentHash, Valid: f.Valid, Coin: f.Coin}
 	touched := []string{f.Receiver}
@@ -141,17 +112,17 @@ func applySocialTo(gen *bolt.Bucket, ev *nip01.Event, evsid uint64, add bool) ([
 		}
 		if !add {
 			if err := k.b.Delete(key); err != nil {
-				return nil, err
+				return 0, nil, err
 			}
 			continue
 		}
 		e := entry
 		e.Other = k.other
 		if err := k.b.Put(key, e.encode()); err != nil {
-			return nil, err
+			return 0, nil, err
 		}
 	}
-	return touched, nil
+	return 0, touched, nil
 }
 
 func socialZapKey(party string, createdAt uint64, evsid uint64) []byte {
@@ -163,55 +134,109 @@ func socialZapKey(party string, createdAt uint64, evsid uint64) []byte {
 }
 
 // applyFollows records (or removes) the follow edges of a contact list.
-func applyFollows(gen *bolt.Bucket, ev *nip01.Event, add bool) ([]string, error) {
+// Each edge, and the author's following count (subFollowOwner), names the
+// list that set it, and only that list removes it: a newer list that
+// already replaced it keeps the edges both share, whatever order the two
+// are applied in. An edge from before owners were recorded matches any.
+func applyFollows(gen *bolt.Bucket, ev *nip01.Event, evsid uint64, add bool) (int64, []string, error) {
 	author, err := hex.DecodeString(ev.PubKey)
 	if err != nil || len(author) != 32 {
-		return nil, nil
+		return 0, nil, nil
 	}
 	edges, err := gen.CreateBucketIfNotExists(subFollowEdges)
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 	counts, err := gen.CreateBucketIfNotExists(subFollowers)
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 	following, err := gen.CreateBucketIfNotExists(subFollowing)
 	if err != nil {
-		return nil, err
+		return 0, nil, err
+	}
+	owners, err := gen.CreateBucketIfNotExists(subFollowOwner)
+	if err != nil {
+		return 0, nil, err
 	}
 
+	owner := itob(evsid)
 	targets := followedPubkeys(ev)
 	touched := []string{ev.PubKey}
+	var delta int64
 	for _, t := range targets {
 		target, _ := hex.DecodeString(t)
 		key := append(append([]byte(nil), target...), author...)
-		exists := edges.Get(key) != nil
+		cur := edges.Get(key)
 		switch {
-		case add && !exists:
-			// Not nil: bolt reads a nil value back as missing until commit.
-			if err := edges.Put(key, []byte{1}); err != nil {
-				return nil, err
+		case add && cur == nil:
+			if err := edges.Put(key, owner); err != nil {
+				return 0, nil, err
 			}
-			if err := addCount(counts, target, 1); err != nil {
-				return nil, err
+			d, err := addFollowers(counts, target, 1)
+			if err != nil {
+				return 0, nil, err
 			}
-		case !add && exists:
+			delta += d
+		case add:
+			if !bytes.Equal(cur, owner) {
+				if err := edges.Put(key, owner); err != nil {
+					return 0, nil, err
+				}
+			}
+			continue
+		case cur != nil && ownedBy(cur, owner):
 			if err := edges.Delete(key); err != nil {
-				return nil, err
+				return 0, nil, err
 			}
-			if err := addCount(counts, target, -1); err != nil {
-				return nil, err
+			d, err := addFollowers(counts, target, -1)
+			if err != nil {
+				return 0, nil, err
 			}
+			delta += d
 		default:
 			continue
 		}
 		touched = append(touched, t)
 	}
 	if add {
-		return touched, following.Put(author, itob(uint64(len(targets))))
+		if err := owners.Put(author, owner); err != nil {
+			return 0, nil, err
+		}
+		return delta, touched, following.Put(author, itob(uint64(len(targets))))
 	}
-	return touched, following.Delete(author)
+	if cur := owners.Get(author); cur == nil || bytes.Equal(cur, owner) {
+		if err := owners.Delete(author); err != nil {
+			return 0, nil, err
+		}
+		if err := following.Delete(author); err != nil {
+			return 0, nil, err
+		}
+	}
+	return delta, touched, nil
+}
+
+// ownedBy reports whether an edge value names owner; a value from before
+// owners were recorded names any.
+func ownedBy(v, owner []byte) bool { return len(v) != 8 || bytes.Equal(v, owner) }
+
+// addFollowers moves a profile's follower count and returns the change in
+// profiles with followers.
+func addFollowers(b *bolt.Bucket, key []byte, delta int64) (int64, error) {
+	var n int64
+	if v := b.Get(key); len(v) == 8 {
+		n = int64(btoi(v))
+	}
+	if err := addCount(b, key, delta); err != nil {
+		return 0, err
+	}
+	switch before, after := n > 0, n+delta > 0; {
+	case after && !before:
+		return 1, nil
+	case before && !after:
+		return -1, nil
+	}
+	return 0, nil
 }
 
 // followedPubkeys is a contact list's distinct, valid "p" pubkeys, not
@@ -245,40 +270,56 @@ func addCount(b *bolt.Bucket, key []byte, delta int64) error {
 	return b.Put(key, itob(uint64(n)))
 }
 
-// markSocialDirty queues profiles for a social score refresh.
-func (s *EventStore) markSocialDirty(pubkeys ...string) {
+// markSocialDirty queues profiles for a social score refresh. The queue
+// is kept in the store, so a restart loses none.
+func (s *EventStore) markSocialDirty(tx *bolt.Tx, pubkeys ...string) error {
 	if len(pubkeys) == 0 {
-		return
+		return nil
 	}
-	s.socialMu.Lock()
-	defer s.socialMu.Unlock()
-	if s.socialDirty == nil {
-		s.socialDirty = map[string]bool{}
+	m, err := tx.CreateBucketIfNotExists(socialMeta)
+	if err != nil {
+		return err
+	}
+	b, err := m.CreateBucketIfNotExists(socialDirtyKey)
+	if err != nil {
+		return err
 	}
 	for _, pk := range pubkeys {
-		if len(s.socialDirty) >= maxSocialDirty {
-			return
+		if err := b.Put([]byte(pk), []byte{1}); err != nil {
+			return err
 		}
-		s.socialDirty[pk] = true
 	}
+	return nil
 }
 
-// maxSocialDirty bounds the pending score refreshes; a rebuild rescores
-// anything dropped.
-const maxSocialDirty = 200_000
-
-// TakeSocialDirty returns up to limit profiles whose social stats changed
-// since the last call.
+// TakeSocialDirty returns, and removes from the queue, up to limit profiles
+// whose social stats changed.
 func (s *EventStore) TakeSocialDirty(limit int) []string {
-	s.socialMu.Lock()
-	defer s.socialMu.Unlock()
 	var out []string
-	for pk := range s.socialDirty {
-		if len(out) >= limit {
-			break
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		out = nil
+		m := tx.Bucket(socialMeta)
+		if m == nil {
+			return nil
 		}
-		out = append(out, pk)
-		delete(s.socialDirty, pk)
+		b := m.Bucket(socialDirtyKey)
+		if b == nil {
+			return nil
+		}
+		c := b.Cursor()
+		for k, _ := c.First(); k != nil && len(out) < limit; k, _ = c.Next() {
+			out = append(out, string(k))
+		}
+		for _, pk := range out {
+			if err := b.Delete([]byte(pk)); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		s.logger.Warn().Err(err).Msg("failed to read the social score queue")
+		return nil
 	}
 	return out
 }
@@ -470,137 +511,135 @@ func (k lnurlKeys) get(pubkey string) string {
 	return key
 }
 
-// SocialIndexBuilt reports whether the social index has been backfilled
-// from the stored events at least once.
-func (s *EventStore) SocialIndexBuilt() bool {
-	built := false
-	_ = s.db.View(func(tx *bolt.Tx) error {
-		if m := tx.Bucket(socialMeta); m != nil {
-			built = m.Get(socialBuiltAt) != nil
-		}
-		return nil
-	})
-	return built
+// rescorePending returns why every profile's social score is to be
+// recomputed, or "" when it isn't.
+func (s *EventStore) rescorePending(tx *bolt.Tx, d *derivedIndex) string {
+	if d != s.social || !d.enabled {
+		return ""
+	}
+	v := metaValue(tx, socialMeta, socialRescoreKey)
+	if v == nil {
+		return ""
+	}
+	if len(v) == 1 {
+		return "after a rebuild"
+	}
+	return string(v)
 }
 
-// CountSocialProfiles returns how many profiles have zaps or followers in
-// the social index (approximate: it counts index keys, not distinct
-// profiles across both).
-func (s *EventStore) CountSocialProfiles() int64 {
-	var n int
+// rescoreBatch is how many profiles one rescore step scores.
+var rescoreBatch = 500
+
+// RescoreIndex recomputes every profile's social score (each kind 0
+// author), after a social rebuild or a change to the scoring settings. It
+// stores its position, so a restart resumes it.
+func (s *EventStore) RescoreIndex(ctx context.Context, name string, progress func(IndexProgress)) (IndexResult, error) {
+	d, err := s.index(name)
+	if err != nil {
+		return IndexResult{}, err
+	}
+	if d != s.social {
+		return IndexResult{}, ErrNothingToDo
+	}
+	if !d.enabled {
+		return IndexResult{}, ErrIndexDisabled
+	}
+	if err := d.start(ActionRescore); err != nil {
+		return IndexResult{}, err
+	}
+	defer d.finish()
+	var res IndexResult
+	pending := false
 	_ = s.db.View(func(tx *bolt.Tx) error {
-		gen := tx.Bucket(activeSocialBucket(tx))
-		if gen == nil {
+		pending = s.rescorePending(tx, d) != ""
+		return nil
+	})
+	if !pending {
+		return res, ErrNothingToDo
+	}
+	total := int64(s.Counts().Kind(0))
+	for {
+		if err := ctx.Err(); err != nil {
+			return res, err
+		}
+		var batch []string
+		var last []byte
+		done := false
+		_ = s.db.View(func(tx *bolt.Tx) error {
+			batch, last, done = profilesAfter(tx, metaValue(tx, socialMeta, socialRescoreAfter), rescoreBatch)
 			return nil
-		}
-		if b := gen.Bucket(subFollowers); b != nil {
-			n = b.Stats().KeyN
-		}
-		return nil
-	})
-	return int64(n)
-}
-
-// ClearSocialIndex deletes the social index without touching the stored
-// events, enabled or not; an enabled one is rebuilt on the next open.
-func (s *EventStore) ClearSocialIndex(ctx context.Context) error {
-	return s.clearIndex(ctx, s.social, ErrSocialRebuildInProgress)
-}
-
-// RebuildSocialIndex rebuilds the social index from every stored event
-// into a new generation and swaps it in once complete. Events stored
-// meanwhile land in both. progress, if set, gets events scanned and
-// indexed after each batch; cancelling ctx discards the new generation.
-func (s *EventStore) RebuildSocialIndex(ctx context.Context, progress func(scanned, indexed int)) (int, error) {
-	if !s.social.enabled {
-		return 0, ErrIndexDisabled
-	}
-	if !s.social.rebuilding.CompareAndSwap(false, true) {
-		return 0, ErrSocialRebuildInProgress
-	}
-	defer s.social.rebuilding.Store(false)
-
-	var next []byte
-	err := s.db.Update(func(tx *bolt.Tx) error {
-		m, err := tx.CreateBucketIfNotExists(socialMeta)
-		if err != nil {
-			return err
-		}
-		if stale := m.Get(zapBuildingKey); stale != nil {
-			if err := tx.DeleteBucket(stale); err != nil && !errors.Is(err, bolterrors.ErrBucketNotFound) {
-				return err
+		})
+		scores := make(map[string]int64, len(batch))
+		for _, pk := range batch {
+			if score, err := s.ComputeSocialScore(pk); err == nil {
+				scores[pk] = score
 			}
 		}
-		var gen uint64
-		if v := m.Get(zapGenKey); len(v) == 8 {
-			gen = btoi(v)
-		}
-		gen++
-		next = append([]byte{17, 'g'}, itob(gen)...)
-		if _, err := tx.CreateBucket(next); err != nil {
-			return err
-		}
-		if err := m.Put(zapGenKey, itob(gen)); err != nil {
-			return err
-		}
-		return m.Put(zapBuildingKey, next)
-	})
-	if err != nil {
-		return 0, err
-	}
-
-	_, indexed, err := s.scanEventsInto(ctx, isSocialKind, func(tx *bolt.Tx, ev *nip01.Event, evsid uint64) error {
-		gen, err := tx.CreateBucketIfNotExists(next)
-		if err != nil {
-			return err
-		}
-		_, err = applySocialTo(gen, ev, evsid, true)
-		return err
-	}, progress)
-	if err != nil {
-		if dropErr := s.db.Update(func(tx *bolt.Tx) error {
-			if err := tx.DeleteBucket(next); err != nil && !errors.Is(err, bolterrors.ErrBucketNotFound) {
+		start := time.Now()
+		var changed int64
+		err := s.db.Update(func(tx *bolt.Tx) error {
+			changed = 0
+			for pk, score := range scores {
+				err := s.updateProfileMetrics(tx, []byte(pk), func(m *ProfileMetrics) {
+					if m.SocialScore != score {
+						m.SocialScore = score
+						changed++
+					}
+				})
+				if err != nil {
+					return err
+				}
+			}
+			m, err := tx.CreateBucketIfNotExists(socialMeta)
+			if err != nil {
 				return err
 			}
-			return tx.Bucket(socialMeta).Delete(zapBuildingKey)
-		}); dropErr != nil {
-			s.logger.Warn().Err(dropErr).Msg("failed to discard an unfinished social index rebuild")
+			if done {
+				if err := m.Delete(socialRescoreKey); err != nil {
+					return err
+				}
+				return m.Delete(socialRescoreAfter)
+			}
+			return m.Put(socialRescoreAfter, last)
+		})
+		s.observer().IndexBatchCommitted(d.name, time.Since(start))
+		if err != nil {
+			return res, err
 		}
-		return indexed, err
+		res.Scanned += int64(len(batch))
+		res.Applied += changed
+		if progress != nil {
+			progress(IndexProgress{Phase: "rescore", Done: res.Scanned, Total: max(total, res.Scanned), Applied: res.Applied})
+		}
+		if done {
+			return res, nil
+		}
+		if err := s.yield(ctx); err != nil {
+			return res, err
+		}
 	}
-
-	err = s.db.Update(func(tx *bolt.Tx) error {
-		old := activeSocialBucket(tx)
-		m := tx.Bucket(socialMeta)
-		if err := m.Put(zapActiveKey, next); err != nil {
-			return err
-		}
-		if err := m.Delete(zapBuildingKey); err != nil {
-			return err
-		}
-		if err := m.Put(socialBuiltAt, itob(uint64(time.Now().Unix()))); err != nil {
-			return err
-		}
-		if err := m.Put(coinsKey, []byte{1}); err != nil {
-			return err
-		}
-		// The rebuild marks nothing dirty; TakeSocialRescore rescores all.
-		if err := m.Put(socialRescoreKey, []byte{1}); err != nil {
-			return err
-		}
-		if err := tx.DeleteBucket(old); err != nil && !errors.Is(err, bolterrors.ErrBucketNotFound) {
-			return err
-		}
-		return nil
-	})
-	if err == nil {
-		s.socialMu.Lock()
-		s.rescoreAfter = nil
-		s.socialMu.Unlock()
-	}
-	return indexed, err
 }
 
-// SocialIndexRebuilding reports whether a social index rebuild or clear is
-// running.
-func (s *EventStore) SocialIndexRebuilding() bool { return s.social.rebuilding.Load() }
+// profilesAfter lists up to limit kind 0 authors after the one given, in
+// key order; done is true when the walk reached the end.
+func profilesAfter(tx *bolt.Tx, after []byte, limit int) (out []string, last []byte, done bool) {
+	b := tx.Bucket(indexKindPubkey)
+	if b == nil {
+		return nil, nil, true
+	}
+	kind0 := make([]byte, 8)
+	seek := kind0
+	if after != nil {
+		seek = append(append(append([]byte(nil), kind0...), after...), bytes.Repeat([]byte{0xFF}, 16)...)
+	}
+	c := b.Cursor()
+	k, _ := c.Seek(seek)
+	for ; k != nil && bytes.HasPrefix(k, kind0) && len(out) < limit; k, _ = c.Next() {
+		if len(k) != profileKeyLen || bytes.Equal(k[8:40], last) {
+			continue
+		}
+		last = append(last[:0], k[8:40]...)
+		out = append(out, hex.EncodeToString(last))
+	}
+	return out, last, k == nil || !bytes.HasPrefix(k, kind0)
+}

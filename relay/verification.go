@@ -26,9 +26,8 @@ import (
 // servers return their whole names map.
 const maxCheckBody = 2 << 20
 
-// maxDeferred bounds the pubkeys remembered for a later check when the
-// queue was full.
-const maxDeferred = 100_000
+// ChecksFeed is the feed the profile checks follow: every stored kind 0.
+var ChecksFeed = Feed{Name: "checks", Kinds: []int{0}}
 
 type VerificationJob struct {
 	Pubkey  string
@@ -46,28 +45,23 @@ type VerificationJob struct {
 // NextCheckAt comes (TTL or retry), or when forced; everything else reuses
 // the stored result.
 type ProfileVerificationWorker struct {
-	store         *EventStore
-	searchService search.Service
-	cfg           VerificationConfig
-	hosts         *hostLimiter
-	jobChan       chan VerificationJob
-	wg            sync.WaitGroup
-	sweepWG       sync.WaitGroup
-	ctx           context.Context
-	cancel        context.CancelFunc
-	logger        zerolog.Logger
-	now           func() time.Time
+	store   *EventStore
+	cfg     VerificationConfig
+	hosts   *hostLimiter
+	jobChan chan VerificationJob
+	wg      sync.WaitGroup
+	sweepWG sync.WaitGroup
+	ctx     context.Context
+	cancel  context.CancelFunc
+	logger  zerolog.Logger
+	now     func() time.Time
 
 	mu       sync.Mutex
 	inflight map[string]bool
-	deferred map[string]bool
 
 	TotalProcessed atomic.Uint64
 	TotalErrors    atomic.Uint64
 	TotalEnqueued  atomic.Uint64
-	// TotalDropped counts jobs that found the queue full; each is checked
-	// later from the due queue rather than lost.
-	TotalDropped atomic.Uint64
 	// TotalFetches counts HTTP checks made.
 	TotalFetches atomic.Uint64
 	StartTime    time.Time
@@ -75,33 +69,36 @@ type ProfileVerificationWorker struct {
 
 // NewProfileVerificationWorker inherits its logger from store, which already
 // carries whatever WithEventStoreLogger the caller configured on it.
-func NewProfileVerificationWorker(store *EventStore, searchService search.Service, cfg VerificationConfig) *ProfileVerificationWorker {
+func NewProfileVerificationWorker(store *EventStore, cfg VerificationConfig) *ProfileVerificationWorker {
 	ctx, cancel := context.WithCancel(context.Background())
 	cfg = cfg.withDefaults()
 	return &ProfileVerificationWorker{
-		store:         store,
-		searchService: searchService,
-		cfg:           cfg,
-		hosts:         newHostLimiter(cfg.PerHostInterval),
-		jobChan:       make(chan VerificationJob, 1000),
-		ctx:           ctx,
-		cancel:        cancel,
-		logger:        store.logger,
-		now:           time.Now,
-		inflight:      map[string]bool{},
-		deferred:      map[string]bool{},
-		StartTime:     time.Now(),
+		store:     store,
+		cfg:       cfg,
+		hosts:     newHostLimiter(cfg.PerHostInterval),
+		jobChan:   make(chan VerificationJob, 1000),
+		ctx:       ctx,
+		cancel:    cancel,
+		logger:    store.logger,
+		now:       time.Now,
+		inflight:  map[string]bool{},
+		StartTime: time.Now(),
 	}
 }
 
-// Start runs count workers and the sweeper that picks up due checks.
+// Start runs count workers, the feeder that queues every stored kind 0
+// (ChecksFeed), and the sweeper that picks up due checks.
 func (w *ProfileVerificationWorker) Start(count int) {
+	if err := w.store.EnsureFeed(ChecksFeed); err != nil {
+		w.logger.Error().Err(err).Msg("failed to register the profile checks feed")
+	}
 	for i := 0; i < count; i++ {
 		w.wg.Add(1)
 		go w.worker()
 	}
-	w.sweepWG.Add(1)
+	w.sweepWG.Add(2)
 	go w.sweeper()
+	go w.feeder()
 }
 
 func (w *ProfileVerificationWorker) Stop() {
@@ -111,21 +108,53 @@ func (w *ProfileVerificationWorker) Stop() {
 	w.wg.Wait()
 }
 
-// QueueJob queues a check of a kind 0. When the queue is full the profile
-// is remembered and checked later instead of dropped.
-func (w *ProfileVerificationWorker) QueueJob(event *nip01.Event) {
-	job, ok := jobFromEvent(event)
-	if !ok {
-		return
-	}
-	if !w.enqueue(job) {
-		w.TotalDropped.Add(1)
-		w.mu.Lock()
-		if len(w.deferred) < maxDeferred {
-			w.deferred[job.Pubkey] = true
+// feeder queues a check of every kind 0 the store keeps, as ChecksFeed
+// delivers them: only as many as the queue has room for, acknowledging
+// what it queued, so none is lost and live checks are never crowded out.
+func (w *ProfileVerificationWorker) feeder() {
+	defer w.sweepWG.Done()
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	for {
+		wake := w.store.CommitSignal()
+		for w.feed() {
 		}
-		w.mu.Unlock()
+		select {
+		case <-w.ctx.Done():
+			return
+		case <-wake:
+		case <-tick.C:
+		}
 	}
+}
+
+// feed queues one batch from ChecksFeed; true when there may be more.
+func (w *ProfileVerificationWorker) feed() bool {
+	room := cap(w.jobChan)/2 - len(w.jobChan)
+	if room <= 0 || w.ctx.Err() != nil {
+		return false
+	}
+	batch, err := w.store.FeedChanges(ChecksFeed.Name, room, 0)
+	if err != nil {
+		w.logger.Error().Err(err).Msg("failed to read the profile checks feed")
+		return false
+	}
+	if batch.Through == 0 {
+		return false
+	}
+	n := 0
+	for _, ev := range batch.Events {
+		job, ok := jobFromEvent(ev)
+		if ok && !w.enqueue(job) {
+			break
+		}
+		n++
+	}
+	if err := w.store.AckFeed(ChecksFeed.Name, batch.Upto(n)); err != nil {
+		w.logger.Error().Err(err).Msg("failed to record the profile checks feed")
+		return false
+	}
+	return n == len(batch.Events)
 }
 
 func jobFromEvent(event *nip01.Event) (VerificationJob, bool) {
@@ -228,9 +257,6 @@ var maxSocialRefresh = 5000
 // a social rebuild left to rescore, and pushes any changed score to search.
 func (w *ProfileVerificationWorker) refreshSocial() {
 	pubkeys := w.store.TakeSocialDirty(maxSocialRefresh)
-	if n := maxSocialRefresh - len(pubkeys); n > 0 {
-		pubkeys = append(pubkeys, w.store.TakeSocialRescore(n)...)
-	}
 	if len(pubkeys) == 0 {
 		return
 	}
@@ -240,42 +266,15 @@ func (w *ProfileVerificationWorker) refreshSocial() {
 			scores[pk] = score
 		}
 	}
-	changed, err := w.store.SetSocialScores(scores)
-	if err != nil {
+	if _, err := w.store.SetSocialScores(scores); err != nil {
 		w.logger.Error().Err(err).Msg("failed to store social scores")
-		return
-	}
-	if w.searchService == nil {
-		return
-	}
-	for pk, m := range changed {
-		_ = w.searchService.UpdateScore(context.Background(), pk, m.TotalScore())
 	}
 }
 
 func (w *ProfileVerificationWorker) sweep() {
 	w.refreshSocial()
 
-	w.mu.Lock()
-	var deferred []string
-	for pk := range w.deferred {
-		deferred = append(deferred, pk)
-	}
-	w.deferred = map[string]bool{}
-	w.mu.Unlock()
-
 	now := w.now().Unix()
-	if len(deferred) > 0 {
-		err := w.store.UpdateProfileMetricsBatch(deferred, func(m *ProfileMetrics) {
-			if m.RequeueAt == 0 || m.RequeueAt > now {
-				m.RequeueAt = now
-			}
-		})
-		if err != nil {
-			w.logger.Error().Err(err).Msg("failed to defer profile checks")
-		}
-	}
-
 	// Fill at most half the queue so live kind 0s still fit.
 	pubkeys, err := w.store.DueVerifications(now, cap(w.jobChan)/2, w.isInflight)
 	if err != nil {
@@ -419,13 +418,6 @@ func (w *ProfileVerificationWorker) processJob(ctx context.Context, job Verifica
 	if err := w.store.UpdateProfileMetrics(job.Pubkey, update); err != nil {
 		w.logger.Error().Err(err).Msg("failed to update profile metrics")
 		w.TotalErrors.Add(1)
-		return
-	}
-
-	if w.searchService != nil {
-		if updated, err := w.store.GetProfileMetrics(job.Pubkey); err == nil {
-			_ = w.searchService.UpdateScore(context.Background(), job.Pubkey, updated.TotalScore())
-		}
 	}
 }
 
@@ -725,7 +717,6 @@ func (w *ProfileVerificationWorker) GetStats() map[string]interface{} {
 		"pending_jobs":    pending,
 		"total_enqueued":  enqueued,
 		"total_processed": processed,
-		"total_dropped":   w.TotalDropped.Load(),
 		"total_fetches":   w.TotalFetches.Load(),
 		"total_errors":    errs,
 		"items_per_sec":   fmt.Sprintf("%.1f", itemsPerSec),

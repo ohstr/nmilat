@@ -41,7 +41,7 @@ func (s *EventStore) SetSocialScores(scores map[string]int64) (map[string]*Profi
 	changed := map[string]*ProfileMetrics{}
 	err := s.db.Update(func(tx *bolt.Tx) error {
 		for pk, score := range scores {
-			err := updateProfileMetrics(tx, []byte(pk), func(m *ProfileMetrics) {
+			err := s.updateProfileMetrics(tx, []byte(pk), func(m *ProfileMetrics) {
 				if m.SocialScore != score {
 					m.SocialScore = score
 					copied := *m

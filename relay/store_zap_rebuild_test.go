@@ -93,13 +93,12 @@ func TestRebuildZapIndex_ReplacesStaleIndexAtomically(t *testing.T) {
 		t.Fatalf("stale entry missing before rebuild: %v", got)
 	}
 
-	var lastScanned int
-	indexed, err := store.RebuildZapIndex(context.Background(), func(scanned, _ int) { lastScanned = scanned })
+	res, err := store.RebuildIndex(context.Background(), IndexZaps, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if indexed != 2 || lastScanned != 3 {
-		t.Fatalf("indexed=%d scanned=%d, want 2 and 3", indexed, lastScanned)
+	if res.Applied != 2 || res.Scanned != 3 || res.EntriesAfter != 2 {
+		t.Fatalf("result = %+v, want 2 applied of 3 scanned, 2 entries", res)
 	}
 
 	got := topZapped(t, store)
@@ -108,11 +107,14 @@ func TestRebuildZapIndex_ReplacesStaleIndexAtomically(t *testing.T) {
 		t.Fatalf("top zapped = %v, want %v", got, want)
 	}
 
+	if _, err := store.ReapIndex(context.Background(), IndexZaps, nil); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.db.View(func(tx *bolt.Tx) error {
 		if tx.Bucket(indexZaps) != nil {
-			t.Error("old index bucket still present")
+			t.Error("old index bucket still present after the reap")
 		}
-		if buildingZapBucket(tx) != nil {
+		if store.zaps.building(tx) != nil {
 			t.Error("building pointer left set")
 		}
 		return nil
@@ -127,7 +129,7 @@ func TestRebuildZapIndex_KeepsZapsStoredDuringRebuild(t *testing.T) {
 
 	live := rawZap(t, 9735, zapReceiverB, "5000", uint64(time.Now().Unix()))
 	inserted := false
-	_, err := store.RebuildZapIndex(context.Background(), func(int, int) {
+	_, err := store.RebuildIndex(context.Background(), IndexZaps, func(IndexProgress) {
 		if !inserted {
 			inserted = true
 			InsertTestEvents(t, store, []*nip01.Event{live})
@@ -146,20 +148,20 @@ func TestRebuildZapIndex_RefusesConcurrentRebuild(t *testing.T) {
 	putRawEvents(t, store, 1, rawZap(t, 9735, zapReceiverA, "1000", 100))
 
 	var second error
-	_, err := store.RebuildZapIndex(context.Background(), func(int, int) {
+	_, err := store.RebuildIndex(context.Background(), IndexZaps, func(IndexProgress) {
 		if second == nil {
-			_, second = store.RebuildZapIndex(context.Background(), nil)
+			_, second = store.RebuildIndex(context.Background(), IndexZaps, nil)
 		}
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !errors.Is(second, ErrZapRebuildInProgress) {
-		t.Fatalf("second rebuild err = %v, want ErrZapRebuildInProgress", second)
+	if !errors.Is(second, ErrIndexBusy) {
+		t.Fatalf("second rebuild err = %v, want ErrIndexBusy", second)
 	}
 }
 
-func TestRebuildZapIndex_CancelKeepsOldIndex(t *testing.T) {
+func TestRebuildZapIndex_CancelKeepsOldIndexAndPausesTheBuild(t *testing.T) {
 	store := newIndexedStore(t)
 	// More than one scan batch, so the rebuild checks ctx between them.
 	events := make([]*nip01.Event, 0, 1500)
@@ -168,28 +170,24 @@ func TestRebuildZapIndex_CancelKeepsOldIndex(t *testing.T) {
 	}
 	next := putRawEvents(t, store, 1, events...)
 	putRawEvents(t, store, next, rawZap(t, 9735, zapReceiverA, "1000", 100))
-	if _, err := store.ReindexZaps(context.Background(), nil); err != nil {
+	if _, err := store.RebuildIndex(context.Background(), IndexZaps, nil); err != nil {
 		t.Fatal(err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	_, err := store.RebuildZapIndex(ctx, func(int, int) { cancel() })
+	_, err := store.RebuildIndex(ctx, IndexZaps, func(IndexProgress) { cancel() })
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
 	if got := topZapped(t, store); got[zapReceiverA] != 1000 {
 		t.Fatalf("old index lost after cancel: %v", got)
 	}
-	if err := store.db.View(func(tx *bolt.Tx) error {
-		if buildingZapBucket(tx) != nil {
-			t.Error("building pointer left set after cancel")
-		}
-		if tx.Bucket(append([]byte{9, 'g'}, itob(1)...)) != nil {
-			t.Error("unfinished bucket left behind after cancel")
-		}
-		return nil
-	}); err != nil {
+	st, err := store.IndexStatus(IndexZaps)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if st.Build == nil || st.Action != ActionResume {
+		t.Fatalf("status after cancel = %+v, want a paused build to resume", st)
 	}
 }
 
@@ -205,7 +203,7 @@ func TestRebuildZapIndex_SurvivesReopen(t *testing.T) {
 
 	store := open()
 	putRawEvents(t, store, 1, rawZap(t, 9735, zapReceiverA, "1000", 100))
-	if _, err := store.RebuildZapIndex(context.Background(), nil); err != nil {
+	if _, err := store.RebuildIndex(context.Background(), IndexZaps, nil); err != nil {
 		t.Fatal(err)
 	}
 	store.Close()

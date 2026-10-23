@@ -25,6 +25,7 @@ func TestBucketIDsAreUnique(t *testing.T) {
 		"socialMeta":           socialMeta,
 		"socialDefault":        socialDefault,
 		"indexCounters":        indexCounters,
+		"storeMeta":            storeMeta,
 	}
 	seen := map[string]string{}
 	for name, id := range buckets {
