@@ -11,15 +11,19 @@ privacy and performance fixes.
 - Adds `EventStore.IndexStatus`: each derived index's state (`ready`,
   `behind`, `needs_rebuild`, ...), the action that brings it current and why,
   its exact entries, and a paused rebuild's position.
+  ([#173](https://github.com/ohstr/nmilat/pull/173))
 - Adds `RebuildIndex` (resumes where a restart stopped it), `CatchUpIndex`,
   `RescoreIndex`, `ClearIndex`, `ReapIndex` and `RunIndexAction`;
   `WithEventStoreIndexMaintenance(MaintenanceManual)` leaves running them to
   the embedder.
+  ([#173](https://github.com/ohstr/nmilat/pull/173))
 - Adds durable feeds (`WithEventStoreFeeds`, `FeedChanges`, `AckFeed`,
   `FeedStatus`) and `SearchIndexer`, which keeps a search engine in step with
   stored profiles, their deletions and score changes.
+  ([#173](https://github.com/ohstr/nmilat/pull/173))
 - Adds `StoreObserver.IndexBatchCommitted`, one call per index operation
   transaction.
+  ([#173](https://github.com/ohstr/nmilat/pull/173))
 - Adds the `zap-ranking` cache action: receivers ranked by counted zaps in
   one coin over one window, as a relay-signed kind 25521 tagged `window`,
   `coin` and `limit`. `SessionConfig.Zaps` lists the windows (`all` is all
@@ -234,19 +238,24 @@ privacy and performance fixes.
 - Changes a derived index that missed writes while off to catch up from
   where it stopped instead of rebuilding. Too many deletes meanwhile, a
   layout change or writes by another program still mean a rebuild.
+  ([#173](https://github.com/ohstr/nmilat/pull/173))
 - Changes index operations to hold the writer at most 25 ms or 256 events
   per transaction; a swap or clear only moves a pointer and the old data is
   freed in chunks.
+  ([#173](https://github.com/ohstr/nmilat/pull/173))
 - Changes search indexing and profile checks to follow stored profiles
   through feeds instead of the EVENT path, so none is lost to a full queue, a
   restart or the feature being off. `search.Searcher` and `search.Writer`
   replace `search.Service`, `ServiceImpl` and `ReadOnlyService`.
+  ([#173](https://github.com/ohstr/nmilat/pull/173))
 - Changes the social score queue and a rescore's position to be kept in the
   store; a change to `search.social` rescores every profile.
+  ([#173](https://github.com/ohstr/nmilat/pull/173))
 - Removes `RebuildZapIndex`, `ReindexZaps`, `ClearZapIndex`,
   `RebuildSocialIndex`, `ClearSocialIndex`, `ZapIndexState`,
   `SocialIndexState`, `TakeSocialRescore`, `ProfileVerificationWorker.QueueJob`
   and `TotalDropped`, in favour of the calls above.
+  ([#173](https://github.com/ohstr/nmilat/pull/173))
 - Changes the zap and social indexes to opt-in with `WithEventStoreIndexes`:
   a store opened without one neither writes nor rebuilds it, and its readers
   return `ErrIndexDisabled`. A disabled index keeps its data, marked stale
@@ -342,9 +351,12 @@ privacy and performance fixes.
 ### Fixed
 
 - Fixes a rebuild putting back an event deleted while it ran.
+  ([#173](https://github.com/ohstr/nmilat/pull/173))
 - Fixes a contact list losing the follows it shares with an older one
   removed after it.
+  ([#173](https://github.com/ohstr/nmilat/pull/173))
 - Fixes a profile the store rejected as older still reaching search.
+  ([#173](https://github.com/ohstr/nmilat/pull/173))
 - Fixes follower counts doubling when a contact list and its replacement
   were written in the same batch.
   ([#171](https://github.com/ohstr/nmilat/pull/171))
