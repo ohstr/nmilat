@@ -149,13 +149,19 @@ func (x *SearchIndexer) fail(err error) error {
 	return err
 }
 
-// document builds a profile's search document with its stored score.
 func (x *SearchIndexer) document(ev *nip01.Event) *search.ProfileDocument {
+	return SearchDocument(x.store, ev)
+}
+
+// SearchDocument builds a profile's search document, scored with what the
+// store knows of it (check results and social score); nil for an event
+// that isn't a profile.
+func SearchDocument(store *EventStore, ev *nip01.Event) *search.ProfileDocument {
 	doc := search.FromEvent(ev)
 	if doc == nil {
 		return nil
 	}
-	if m, err := x.store.GetProfileMetrics(ev.PubKey); err == nil && m != nil {
+	if m, err := store.GetProfileMetrics(ev.PubKey); err == nil && m != nil {
 		doc.Score += m.CheckScore() + m.SocialScore
 	}
 	return doc
