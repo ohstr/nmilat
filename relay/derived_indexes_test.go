@@ -651,6 +651,97 @@ func TestDerivedIndexes_OperationsHoldTheWriterBriefly(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNothingToDo)
 }
 
+// within fails the test if fn doesn't return in time, so a livelock fails
+// instead of hanging the suite.
+func within(t *testing.T, d time.Duration, fn func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() { defer close(done); fn() }()
+	select {
+	case <-done:
+	case <-time.After(d):
+		t.Fatalf("no progress within %s", d)
+	}
+}
+
+// hogWriter holds the store's single writer for hold at a time until the
+// test ends, as heavy ingest does.
+func hogWriter(t *testing.T, s *EventStore, hold time.Duration) {
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			_ = s.db.Update(func(*bolt.Tx) error { time.Sleep(hold); return nil })
+		}
+	}()
+	t.Cleanup(func() { close(stop); <-done })
+}
+
+// Waiting for the writer longer than applyBudget used to panic the scan
+// (index out of range [-1]) and spin the reap without deleting anything.
+func TestDerivedIndexes_ProgressWhenTheWriterWaitExceedsTheBudget(t *testing.T) {
+	oldMax, oldBudget, oldChunk := applyMax, applyBudget, reapChunk
+	applyMax, applyBudget, reapChunk = 4, 0, 7
+	t.Cleanup(func() { applyMax, applyBudget, reapChunk = oldMax, oldBudget, oldChunk })
+
+	f := newManualIndexFixture(t, bothIndexes)
+	old := f.zap(f.bob.pub, f.alice.pub, 1)
+	evs := []*nip01.Event{old}
+	for i := range 40 {
+		evs = append(evs, f.zap(f.bob.pub, f.alice.pub, int64(1_000+i)))
+	}
+	f.insert(evs...)
+	var err error
+	within(t, 10*time.Second, func() { _, err = f.store.RebuildIndex(context.Background(), IndexZaps, nil) })
+	require.NoError(t, err)
+	assert.Equal(t, int64(41), f.status(IndexZaps).Entries)
+
+	var res IndexResult
+	within(t, 10*time.Second, func() { res, err = f.store.ReapIndex(context.Background(), IndexZaps, nil) })
+	require.NoError(t, err)
+	assert.Equal(t, int64(41), res.Applied)
+	assert.Zero(t, f.status(IndexZaps).Retired)
+
+	f.reopen(noIndexes)
+	f.insert(f.deletion(f.provider, old.ID))
+	f.reopen(bothIndexes)
+	within(t, 10*time.Second, func() { _, err = f.store.CatchUpIndex(context.Background(), IndexZaps, nil) })
+	require.NoError(t, err)
+	assert.Equal(t, int64(40), f.status(IndexZaps).Entries)
+	assert.Zero(t, f.status(IndexZaps).Tombstones)
+}
+
+func TestDerivedIndexes_ProgressUnderWriterContention(t *testing.T) {
+	oldMax, oldChunk := applyMax, reapChunk
+	applyMax, reapChunk = 4, 7
+	t.Cleanup(func() { applyMax, reapChunk = oldMax, oldChunk })
+
+	f := newManualIndexFixture(t, bothIndexes)
+	var evs []*nip01.Event
+	for i := range 40 {
+		evs = append(evs, f.zap(f.bob.pub, f.alice.pub, int64(1_000+i)))
+	}
+	f.insert(evs...)
+	hogWriter(t, f.store, 2*applyBudget)
+	var rebuildErr, reapErr error
+	var res IndexResult
+	within(t, 30*time.Second, func() {
+		_, rebuildErr = f.store.RebuildIndex(context.Background(), IndexZaps, nil)
+		res, reapErr = f.store.ReapIndex(context.Background(), IndexZaps, nil)
+	})
+	require.NoError(t, rebuildErr)
+	require.NoError(t, reapErr)
+	assert.Equal(t, int64(40), res.Applied)
+	assert.Equal(t, int64(40), f.status(IndexZaps).Entries)
+	assert.Zero(t, f.status(IndexZaps).Retired)
+}
+
 func TestDerivedIndexes_EmptyStoreMarksOnlyEnabled(t *testing.T) {
 	f := newIndexFixture(t, DerivedIndexes{Zaps: true})
 	assert.Equal(t, StateReady, f.status(IndexZaps).State)

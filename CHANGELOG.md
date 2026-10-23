@@ -350,6 +350,10 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes an index rebuild or catch-up panicking (index out of range [-1]), and
+  freeing old index data spinning without progress, when waiting for a busy
+  store's writer took longer than the 25 ms batch budget.
+  ([#175](https://github.com/ohstr/nmilat/pull/175))
 - Fixes a rebuild putting back an event deleted while it ran.
   ([#173](https://github.com/ohstr/nmilat/pull/173))
 - Fixes a contact list losing the follows it shares with an older one

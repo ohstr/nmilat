@@ -88,6 +88,8 @@ type IndexResult struct {
 
 // Batch bounds: an operation holds the writer for at most applyBudget or
 // applyMax events per transaction, so ingest never waits long behind it.
+// The budget counts from inside the transaction, not the wait for the
+// writer, and each transaction makes progress however long that wait was.
 var (
 	scanBatch   = 1000
 	applyMax    = 256
@@ -394,8 +396,7 @@ func (s *EventStore) applyTombstones(ctx context.Context, d *derivedIndex, progr
 	var done int64
 	for {
 		finished := false
-		start := time.Now()
-		err := s.db.Update(func(tx *bolt.Tx) error {
+		err := s.indexTx(d, func(tx *bolt.Tx, start time.Time) error {
 			man := d.manifest(tx)
 			if man.Tomb == nil {
 				finished = true
@@ -451,7 +452,6 @@ func (s *EventStore) applyTombstones(ctx context.Context, d *derivedIndex, progr
 			}
 			return addCounter(m, keyTombB, -bytesGone)
 		})
-		s.observer().IndexBatchCommitted(d.name, time.Since(start))
 		if err != nil {
 			return done, err
 		}
@@ -551,8 +551,7 @@ func (s *EventStore) ReapIndex(ctx context.Context, name string, progress func(I
 		for {
 			var gone int64
 			empty := false
-			start := time.Now()
-			err := s.db.Update(func(tx *bolt.Tx) error {
+			err := s.indexTx(d, func(tx *bolt.Tx, start time.Time) error {
 				b := tx.Bucket(target)
 				if b == nil {
 					empty = true
@@ -586,7 +585,6 @@ func (s *EventStore) ReapIndex(ctx context.Context, name string, progress func(I
 				}
 				return d.putManifest(tx, man)
 			})
-			s.observer().IndexBatchCommitted(d.name, time.Since(start))
 			if err != nil {
 				return res, err
 			}
@@ -606,8 +604,9 @@ func (s *EventStore) ReapIndex(ctx context.Context, name string, progress func(I
 
 // drainBucket deletes keys from b, descending into nested buckets, until
 // it is empty or the budget (keys, and applyBudget since start) runs out.
+// It always takes one round of keys, so a late start still makes progress.
 func drainBucket(b *bolt.Bucket, budget *int, start time.Time) (bool, error) {
-	for *budget > 0 && time.Since(start) < applyBudget {
+	for first := true; *budget > 0 && (first || time.Since(start) < applyBudget); first = false {
 		var keys, nested [][]byte
 		c := b.Cursor()
 		for k, v := c.First(); k != nil && len(keys)+len(nested) < *budget; k, v = c.Next() {
@@ -685,12 +684,11 @@ func (s *EventStore) scanIndex(ctx context.Context, d *derivedIndex, from uint64
 		// so a scan through other kinds still records its position.
 		i := 0
 		for i < len(matched) || time.Since(lastCheckpoint) >= time.Second {
-			start := time.Now()
 			var got int64
 			mark := last
-			err := s.db.Update(func(tx *bolt.Tx) error {
+			err := s.indexTx(d, func(tx *bolt.Tx, start time.Time) error {
 				events := tx.Bucket(indexEvents)
-				for i < len(matched) && (got < int64(applyMax)) && time.Since(start) < applyBudget {
+				for first := i; i < len(matched) && got < int64(applyMax) && (i == first || time.Since(start) < applyBudget); {
 					evsid := matched[i]
 					i++
 					raw := events.Get(itob(evsid))
@@ -713,12 +711,11 @@ func (s *EventStore) scanIndex(ctx context.Context, d *derivedIndex, from uint64
 						got++
 					}
 				}
-				if i < len(matched) {
+				if i > 0 && i < len(matched) {
 					mark = matched[i-1]
 				}
 				return checkpoint(tx, mark, scanned+int64(n), got)
 			})
-			s.observer().IndexBatchCommitted(d.name, time.Since(start))
 			if err != nil {
 				return scanned, applied, err
 			}
@@ -743,6 +740,21 @@ func (s *EventStore) scanIndex(ctx context.Context, d *derivedIndex, from uint64
 			return scanned, applied, err
 		}
 	}
+}
+
+// indexTx runs one bounded write transaction of an index operation. start
+// is when fn got the writer, so waiting for it never counts against the
+// budget, and the time it held the writer is reported.
+func (s *EventStore) indexTx(d *derivedIndex, fn func(tx *bolt.Tx, start time.Time) error) error {
+	var start time.Time
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		start = time.Now()
+		return fn(tx, start)
+	})
+	if !start.IsZero() {
+		s.observer().IndexBatchCommitted(d.name, time.Since(start))
+	}
+	return err
 }
 
 // yield lets queued writes through between an operation's transactions.
