@@ -74,6 +74,10 @@ const (
 	// without a cap one pass could pull the entire store onto the heap
 	// inside a single read transaction.
 	maxCursorChunk = 4096
+
+	// rangeProbeCap bounds how many index entries newStoreScan counts per
+	// candidate when picking which index range drives a scan.
+	rangeProbeCap = 1024
 )
 
 //////
@@ -1696,6 +1700,8 @@ type storeScan struct {
 	hasWatermark bool
 	// capped is set when a scan stopped at its filter's limit.
 	capped bool
+	// scanned totals the index entries this scan's cursors have examined.
+	scanned int
 	*scanContext
 }
 
@@ -1726,8 +1732,7 @@ func newStoreScan(store *EventStore, filter *nip01.SubscriptionFilter, sentEvent
 		ss.index = indexID
 		ss.cursors, err = createCursorsByID(filter.IDs)
 	case len(filter.Tags) > 0:
-		ss.index = indexTag
-		ss.cursors, err = createCursorsByTags(filter.Tags)
+		ss.index, ss.cursors, err = store.chooseTagScan(filter)
 	case len(filter.Authors) > 0 && len(filter.Kinds) > 0:
 		ss.index = indexKindPubkey
 		ss.cursors, err = createCursorsByKindsAndAuthors(filter.Kinds, filter.Authors)
@@ -1868,6 +1873,7 @@ func (ss *storeScan) scan(ctx context.Context, tx *bolt.Tx, potEvents chan<- *Po
 				resumeKeys[ci] = bytes.Clone(res.ResumeKey)
 				exhausted[ci] = res.Exhausted
 
+				ss.scanned += res.Scanned
 				if res.Scanned > 0 {
 					progressed = true
 				}
@@ -2429,6 +2435,101 @@ func createCursorsByTags(tags map[string][]string) ([]*storeCursor, error) {
 		}
 	}
 	return cursors, nil
+}
+
+// chooseTagScan picks the index and cursors for a filter with tag
+// constraints. A single tag name's range drives the scan -- the smallest,
+// by a capped count of its entries -- and every other constraint is left
+// to filter.Match in collectBatch. Opening a cursor per value of every
+// name instead walks the whole range of a common tag such as #l even when
+// a #d next to it narrows the result to a handful of events.
+//
+// If even the smallest tag range reaches the probe cap and the filter has
+// kinds and authors, the kind+pubkey index is probed too and used when it
+// is smaller.
+func (s *EventStore) chooseTagScan(filter *nip01.SubscriptionFilter) ([]byte, []*storeCursor, error) {
+	names := make([]string, 0, len(filter.Tags))
+	for name, values := range filter.Tags {
+		// A name with a value that can't be indexed can't drive the scan:
+		// its range would miss events carrying that value.
+		indexable := len(values) > 0
+		for _, v := range values {
+			if _, ok := tagIndexPrefix(name, v); !ok {
+				indexable = false
+				break
+			}
+		}
+		if indexable {
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		cursors, err := createCursorsByTags(filter.Tags)
+		return indexTag, cursors, err
+	}
+	sort.Strings(names)
+
+	plans := make([][]*storeCursor, len(names))
+	for i, name := range names {
+		cursors, err := createCursorsByTags(map[string][]string{name: filter.Tags[name]})
+		if err != nil {
+			return nil, nil, err
+		}
+		plans[i] = cursors
+	}
+	useKindPubkey := len(filter.Kinds) > 0 && len(filter.Authors) > 0
+	if len(plans) == 1 && !useKindPubkey {
+		return indexTag, plans[0], nil
+	}
+
+	var kindPubkey []*storeCursor
+	if useKindPubkey {
+		var err error
+		if kindPubkey, err = createCursorsByKindsAndAuthors(filter.Kinds, filter.Authors); err != nil {
+			return nil, nil, err
+		}
+	}
+
+	index, best := indexTag, plans[0]
+	err := s.db.View(func(tx *bolt.Tx) error {
+		bestCount := countRanges(tx.Bucket(indexTag), plans[0], rangeProbeCap)
+		for _, plan := range plans[1:] {
+			// Count only up to the best so far: anything that reaches it
+			// loses the tie to the earlier name anyway.
+			if n := countRanges(tx.Bucket(indexTag), plan, bestCount); n < bestCount {
+				best, bestCount = plan, n
+			}
+		}
+		if useKindPubkey && bestCount >= rangeProbeCap {
+			if n := countRanges(tx.Bucket(indexKindPubkey), kindPubkey, rangeProbeCap); n < bestCount {
+				index, best = indexKindPubkey, kindPubkey
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return index, best, nil
+}
+
+// countRanges counts the entries under the cursors' ranges in b, stopping
+// once it reaches limit.
+func countRanges(b *bolt.Bucket, cursors []*storeCursor, limit int) int {
+	if b == nil {
+		return 0
+	}
+	var n int
+	for _, sc := range cursors {
+		c := b.Cursor()
+		c.Seek(sc.maxKey)
+		for k, _ := c.Prev(); k != nil && sc.matchKey(k); k, _ = c.Prev() {
+			if n++; n >= limit {
+				return n
+			}
+		}
+	}
+	return n
 }
 
 // Helper to handle creation of cursors by authors

@@ -350,6 +350,9 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes a filter with several tag names walking every tag's index range, so
+  `#d` lookups plus a common tag such as `#l` took seconds. The scan now
+  follows the smallest range and checks the other tags per event.
 - Fixes an index rebuild or catch-up panicking (index out of range [-1]), and
   freeing old index data spinning without progress, when waiting for a busy
   store's writer took longer than the 25 ms batch budget.
