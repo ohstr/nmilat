@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	bolt "go.etcd.io/bbolt"
+
 	"github.com/ohstr/nmilat/nip01"
 )
 
@@ -89,6 +91,33 @@ func TestTagScanFallsBackToKindPubkey(t *testing.T) {
 	assertIDsInOrder(t, readEventsCollecting(t, q, false), want)
 	if got := q.scanners[0].scanned; got > 3 {
 		t.Errorf("scanned %d index entries, want at most author A's 3", got)
+	}
+}
+
+// A candidate queued on one pass can be deleted before the next pass loads
+// it; the scan skips it rather than failing the whole query.
+func TestCollectBatchSkipsVanishedEvent(t *testing.T) {
+	store := newStore(t)
+	ev := signEventAt(t, probeKeyA, 1, uint64(time.Now().Unix()), "kept", []string{"t", "x"})
+	InsertTestEvents(t, store, []*nip01.Event{ev})
+
+	ss, err := newStoreScan(store, &nip01.SubscriptionFilter{Tags: map[string][]string{"t": {"x"}}}, map[uint64]bool{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ss.queueEvents.AddEvent(&PotentialEvent{Evsid: 1 << 40, CreatedAt: ev.CreatedAt + 1})
+
+	var batch []*PotentialEvent
+	err = store.db.View(func(tx *bolt.Tx) error {
+		var err error
+		batch, _, err = ss.collectBatch(tx, nil, false, 0, -1)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("collectBatch: %v", err)
+	}
+	if len(batch) != 0 {
+		t.Fatalf("got %d events from a vanished evsid, want 0", len(batch))
 	}
 }
 

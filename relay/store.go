@@ -2146,6 +2146,11 @@ func (ss *storeScan) collectBatch(tx *bolt.Tx, batch []*PotentialEvent, fetchUnt
 
 		potEvent := ss.queueEvents.PopEvent()
 		event, bytes, err := ss.store.findEventAndBytesUsingTx(tx, potEvent.Evsid)
+		if errors.Is(err, ErrEventNotFound) {
+			// Queued on an earlier pass, then deleted or replaced before
+			// this pass's transaction opened.
+			continue
+		}
 		if err != nil {
 			return batch, added, err
 		}
