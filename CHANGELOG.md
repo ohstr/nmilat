@@ -12,6 +12,7 @@ privacy and performance fixes.
   it is unusable and reports ids never sent or answered twice, and the error
   `detail` field (`ResultError.Detail`). A reply that omits every item now
   carries `"results": []`.
+  ([#181](https://github.com/ohstr/nmilat/pull/181))
 - Adds `WithSearchBatch` and `WithSearchInFlight`: `SearchIndexer` keeps
   several batches enqueued with a `search.Enqueuer` engine and acknowledges
   them in order, only past what was applied. A large relay's search can then
@@ -253,6 +254,7 @@ privacy and performance fixes.
   result whose `result_type` is not the item's method is never read as a
   result, and an envelope that got no reply is unanswered rather than not
   served. A `switch` over `OutcomeState` needs a default branch.
+  ([#181](https://github.com/ohstr/nmilat/pull/181))
 - Changes a derived index that missed writes while off to catch up from
   where it stopped instead of rebuilding. Too many deletes meanwhile, a
   layout change or writes by another program still mean a rebuild.
@@ -372,6 +374,7 @@ privacy and performance fixes.
   discards outcomes already decided, including a new bill's only token. An item
   answered twice, or answered beside an envelope-level error, is reported on its
   own as `OutcomeConflict`, and the reply as `ErrReplyConflict`.
+  ([#181](https://github.com/ohstr/nmilat/pull/181))
 - Fixes a filter with several tag names walking every tag's index range, so
   `#d` lookups plus a common tag such as `#l` took seconds. The scan now
   follows the smallest range and checks the other tags per event.
