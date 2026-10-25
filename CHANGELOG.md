@@ -8,6 +8,11 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds the `nipcash/conformance` suite, which runs the spec's Hub scenarios
+  against any Hub through `HubUnderTest` and optional `Clocked`, `Faulty`,
+  `Admin`, `HubDeleter`, `OrderPayer`, `PowRelay` and `Lister` adapters; this
+  first set covers envelope serving and connection scope (CT-ENV-01, 02, 03,
+  10, 11, 14, 15 and CT-SCOPE-03).
 - Adds `transport.DecodeResponseChunk`, which refuses a reply chunk only when
   it is unusable and reports ids never sent or answered twice, and the error
   `detail` field (`ResultError.Detail`). A reply that omits every item now
