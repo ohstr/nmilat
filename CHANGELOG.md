@@ -8,6 +8,10 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `transport.DecodeResponseChunk`, which refuses a reply chunk only when
+  it is unusable and reports ids never sent or answered twice, and the error
+  `detail` field (`ResultError.Detail`). A reply that omits every item now
+  carries `"results": []`.
 - Adds `WithSearchBatch` and `WithSearchInFlight`: `SearchIndexer` keeps
   several batches enqueued with a `search.Enqueuer` engine and acknowledges
   them in order, only past what was applied. A large relay's search can then
