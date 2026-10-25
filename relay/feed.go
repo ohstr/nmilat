@@ -305,6 +305,80 @@ func (s *EventStore) FeedChanges(name string, maxEvents, maxDirty int) (FeedBatc
 	return out, err
 }
 
+// FeedCursor is how far a consumer has read past its watermark: the last
+// event read, and the last queued author read.
+type FeedCursor struct {
+	After      uint64
+	DirtyAfter string
+}
+
+// FeedChangesFrom is FeedChanges for a consumer with batches still in
+// flight: it reads past from (or the watermark, when further), in read
+// transactions of bounded length until maxEvents are found or the store
+// ends, and queued authors after from.DirtyAfter only. It returns where
+// the next read starts. A consumer that has acknowledged everything starts
+// again from a zero FeedCursor, which reads queued authors from the start.
+func (s *EventStore) FeedChangesFrom(name string, from FeedCursor, maxEvents, maxDirty int) (FeedBatch, FeedCursor, error) {
+	var out FeedBatch
+	next := from
+	dirtyDone := false
+	for {
+		read := 0
+		err := s.db.View(func(tx *bolt.Tx) error {
+			b := feedBucket(tx, name)
+			if b == nil {
+				return ErrUnknownFeed
+			}
+			var f Feed
+			_ = json.Unmarshal(b.Get(feedDefKey), &f)
+			if v := b.Get(feedWKey); len(v) == 8 {
+				next.After = max(next.After, btoi(v))
+			}
+			c := tx.Bucket(indexEvents).Cursor()
+			for k, v := c.Seek(itob(next.After + 1)); k != nil && read < scanBatch*5 && len(out.Events) < maxEvents; k, v = c.Next() {
+				read++
+				evsid := binary.BigEndian.Uint64(k)
+				next.After, out.Through = evsid, evsid
+				if kind, ok := peekKind(v); ok && !f.takes(kind) {
+					continue
+				}
+				var ev nip01.Event
+				if err := json.Unmarshal(v, &ev); err != nil || !f.takes(ev.Kind) {
+					continue
+				}
+				out.Events = append(out.Events, &ev)
+				out.Evsids = append(out.Evsids, evsid)
+			}
+			if dirtyDone {
+				return nil
+			}
+			dirtyDone = true
+			if d := b.Bucket(feedDirty); d != nil {
+				dc := d.Cursor()
+				k, v := dc.First()
+				if next.DirtyAfter != "" {
+					k, v = dc.Seek([]byte(next.DirtyAfter))
+					if k != nil && string(k) == next.DirtyAfter {
+						k, v = dc.Next()
+					}
+				}
+				for ; k != nil && len(out.Dirty) < maxDirty; k, v = dc.Next() {
+					out.Dirty = append(out.Dirty, string(k))
+					out.seqs = append(out.seqs, btoi(v))
+					next.DirtyAfter = string(k)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return FeedBatch{}, from, err
+		}
+		if read < scanBatch*5 || len(out.Events) >= maxEvents {
+			return out, next, nil
+		}
+	}
+}
+
 // AckFeed records that the consumer applied a batch: the watermark moves to
 // its Through, and each queued author leaves the queue unless queued again
 // since the batch was read.

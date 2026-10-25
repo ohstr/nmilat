@@ -8,6 +8,15 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `WithSearchBatch` and `WithSearchInFlight`: `SearchIndexer` keeps
+  several batches enqueued with a `search.Enqueuer` engine and acknowledges
+  them in order, only past what was applied. A large relay's search can then
+  keep up, since the engine merges queued batches.
+  ([#179](https://github.com/ohstr/nmilat/pull/179))
+- Adds `EventStore.EachProfile`: every author's newest profile, read through
+  the kind index instead of every stored event, so a search rebuild reads
+  only profiles.
+  ([#179](https://github.com/ohstr/nmilat/pull/179))
 - Adds `EventStore.IndexStatus`: each derived index's state (`ready`,
   `behind`, `needs_rebuild`, ...), the action that brings it current and why,
   its exact entries, and a paused rebuild's position.
