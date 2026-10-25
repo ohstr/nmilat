@@ -72,11 +72,7 @@ func TestAuditC_SecA_CrossChunkDuplicateIDs_ArrivalOrderDecides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := packedEnvelope{
-		Envelope: transport.Envelope{Version: transport.EnvelopeVersion, Nonce: nonce},
-		// Two items so total: 2 is within bounds; bill-2 is never answered.
-		ItemIDs: []string{"bill-1", "bill-2"},
-	}
+	p := statusPacked(nonce, 0, "bill-1", "bill-2")
 	var replyKey [32]byte
 	copy(replyKey[:], strings.Repeat("k", 32))
 	s := hostileSession(limits, strings.Repeat("b", 64))
@@ -107,31 +103,28 @@ func TestAuditC_SecA_CrossChunkDuplicateIDs_ArrivalOrderDecides(t *testing.T) {
 	t.Logf("rich-then-gone -> err=%v outcomes=%d", richErr, len(richOutcomes))
 	t.Logf("gone-then-rich -> err=%v outcomes=%d", goneErr, len(goneOutcomes))
 
-	// The security property: a duplicate item id is malformed inside one chunk, so it
-	// must be malformed across chunks of the SAME reply too.
-	//
-	// Asserted as a REFUSAL in both orders, not merely as order-independence. Sorting
-	// by seq would also have made the outcome order-independent, and would still have
-	// let the hub choose which answer won by deciding which chunk to number first — the
-	// relay loses its say, the hub keeps it. Refusing leaves neither party a choice: a
-	// hub that answers one item twice with different content has contradicted itself,
-	// and there is no reading of that reply a client should act on.
-	if richErr == nil || goneErr == nil {
-		t.Errorf("AUDITC-SECA-F3 BUG PRESENT: a contradictory duplicate was ACCEPTED in at "+
-			"least one arrival order (rich-first err=%v, gone-first err=%v). A relay that "+
-			"reorders two chunks it cannot decrypt then chooses which answer the client "+
-			"adopts, and DecodeResponse's own duplicate-id rule does not survive chunking.",
-			richErr, goneErr)
-		return
+	// The security property (NIP-CASH §Chunked Replies): an id answered more than once
+	// is not accepted, whether within one chunk or across chunks, and the conflict is
+	// not resolved by arrival order or seq. That item is indeterminate in BOTH orders;
+	// the reply says so with ErrReplyConflict; the other item keeps its own outcome.
+	for name, run := range map[string]struct {
+		got []ItemOutcome
+		err error
+	}{"rich-first": {richOutcomes, richErr}, "gone-first": {goneOutcomes, goneErr}} {
+		if !errors.Is(run.err, ErrReplyConflict) || !errors.Is(run.err, ErrIncompleteReply) {
+			t.Errorf("%s: err = %v, want ErrReplyConflict (an ErrIncompleteReply)", name, run.err)
+		}
+		if len(run.got) != 2 {
+			t.Fatalf("%s: %d outcomes, want one per item", name, len(run.got))
+		}
+		if run.got[0].State != OutcomeConflict {
+			t.Errorf("%s: bill-1 state = %v, want conflict: a relay reordering two chunks "+
+				"must not choose which answer the client adopts", name, run.got[0].State)
+		}
+		if run.got[1].State != OutcomeNotServed {
+			t.Errorf("%s: bill-2 state = %v, want not served (complete reply, omitted)", name, run.got[1].State)
+		}
 	}
-	if !errors.Is(richErr, transport.ErrResponseMalformed) || !errors.Is(goneErr, transport.ErrResponseMalformed) {
-		t.Errorf("both orders must be refused AS MALFORMED, not by some incidental failure: "+
-			"rich-first=%v gone-first=%v",
-			richErr, goneErr)
-		return
-	}
-	t.Log("both arrival orders refused the contradictory duplicate as malformed, so neither " +
-		"the relay nor the hub can choose which answer the client believes")
 }
 
 // --- F4: an envelope-level rejection is collected and then thrown away -----
@@ -152,10 +145,7 @@ func TestAuditC_SecA_EnvelopeLevelErrorIsDiscarded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := packedEnvelope{
-		Envelope: transport.Envelope{Version: transport.EnvelopeVersion, Nonce: nonce},
-		ItemIDs:  []string{"redeem-1", "redeem-2"},
-	}
+	p := statusPacked(nonce, 0, "redeem-1", "redeem-2")
 	var replyKey [32]byte
 	copy(replyKey[:], strings.Repeat("q", 32))
 	s := hostileSession(limits, strings.Repeat("b", 64))
@@ -224,7 +214,7 @@ func TestAuditC_SecA_OverstatedTotalHasNoReplyDeadline(t *testing.T) {
 	ch := make(chan *nip01.Event, 1)
 	ch <- sealChunk(t, replyKey, limits, transport.ResponseEnvelope{
 		Version: transport.EnvelopeVersion, ReqNonce: nonce, Seq: 1, Total: 2,
-		Results: []transport.Result{{ID: "x1", Result: []byte(`{}`)}},
+		Results: []transport.Result{{ID: "x1", ResultType: "cash_status", Result: []byte(`{}`)}},
 	})
 
 	done := make(chan struct{})
@@ -260,10 +250,7 @@ func TestAuditC_SecA_UnderstatedTotalNeverReadsAsWhole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := packedEnvelope{
-		Envelope: transport.Envelope{Version: transport.EnvelopeVersion, Nonce: nonce},
-		ItemIDs:  []string{"a", "b", "c"},
-	}
+	p := statusPacked(nonce, 0, "a", "b", "c")
 	var replyKey [32]byte
 	copy(replyKey[:], strings.Repeat("u", 32))
 	s := hostileSession(limits, strings.Repeat("b", 64))
@@ -272,7 +259,7 @@ func TestAuditC_SecA_UnderstatedTotalNeverReadsAsWhole(t *testing.T) {
 	// "1 of 1", but only one of the three requested items is answered.
 	ch <- sealChunk(t, replyKey, limits, transport.ResponseEnvelope{
 		Version: transport.EnvelopeVersion, ReqNonce: nonce, Seq: 1, Total: 1,
-		Results: []transport.Result{{ID: "a", Result: []byte(`{}`)}},
+		Results: []transport.Result{{ID: "a", ResultType: "cash_status", Result: []byte(`{}`)}},
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

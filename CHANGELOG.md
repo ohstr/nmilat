@@ -248,6 +248,11 @@ privacy and performance fixes.
 
 ### Changed
 
+- Changes `ItemOutcome` so a reply split into chunks reports unanswered and
+  contradicted items separately (`OutcomeUnanswered`, `OutcomeConflict`), a
+  result whose `result_type` is not the item's method is never read as a
+  result, and an envelope that got no reply is unanswered rather than not
+  served. A `switch` over `OutcomeState` needs a default branch.
 - Changes a derived index that missed writes while off to catch up from
   where it stopped instead of rebuilding. Too many deletes meanwhile, a
   layout change or writes by another program still mean a rebuild.
@@ -363,6 +368,10 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes chunked private replies so a chunk that contradicts another no longer
+  discards outcomes already decided, including a new bill's only token. An item
+  answered twice, or answered beside an envelope-level error, is reported on its
+  own as `OutcomeConflict`, and the reply as `ErrReplyConflict`.
 - Fixes a filter with several tag names walking every tag's index range, so
   `#d` lookups plus a common tag such as `#l` took seconds. The scan now
   follows the smallest range and checks the other tags per event.

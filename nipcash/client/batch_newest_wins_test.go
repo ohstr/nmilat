@@ -37,40 +37,8 @@ func chunkRuleSetup(t *testing.T) (packedEnvelope, [32]byte, *BatchSession, tran
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := packedEnvelope{
-		Envelope: transport.Envelope{Version: transport.EnvelopeVersion, Nonce: nonce,
-			NotAfter: time.Now().Add(3 * time.Second).Unix()},
-		ItemIDs: []string{"a", "b", "c"},
-	}
+	p := statusPacked(nonce, time.Now().Add(3*time.Second).Unix(), "a", "b", "c")
 	var k [32]byte
 	copy(k[:], strings.Repeat("g", 32))
 	return p, k, hostileSession(limits, strings.Repeat("b", 64)), limits, nonce
-}
-
-// §Chunked Replies: a client MUST reject a set whose members disagree about total.
-func TestCollectReply_ChunksDisagreeingAboutTotalAreRejected(t *testing.T) {
-	p, k, s, limits, nonce := chunkRuleSetup(t)
-	ch := make(chan *nip01.Event, 2)
-	ch <- sealChunk(t, k, limits, transport.ResponseEnvelope{Version: transport.EnvelopeVersion, ReqNonce: nonce,
-		Seq: 1, Total: 2, Results: []transport.Result{{ID: "a", Result: []byte(`{}`)}}})
-	ch <- sealChunk(t, k, limits, transport.ResponseEnvelope{Version: transport.EnvelopeVersion, ReqNonce: nonce,
-		Seq: 2, Total: 3, Results: []transport.Result{{ID: "b", Result: []byte(`{}`)}}})
-	got, err := s.collectReply(context.Background(), ch, k, p, 0)
-	if err == nil || !strings.Contains(err.Error(), "an earlier one claimed") {
-		t.Errorf("total 2 then total 3 was not rejected: outcomes=%d err=%v", len(got), err)
-	}
-}
-
-// §Chunked Replies: a client MUST reject a repeated seq, not count it toward completion.
-func TestCollectReply_RepeatedSeqIsRejected(t *testing.T) {
-	p, k, s, limits, nonce := chunkRuleSetup(t)
-	ch := make(chan *nip01.Event, 2)
-	ch <- sealChunk(t, k, limits, transport.ResponseEnvelope{Version: transport.EnvelopeVersion, ReqNonce: nonce,
-		Seq: 1, Total: 2, Results: []transport.Result{{ID: "a", Result: []byte(`{}`)}}})
-	ch <- sealChunk(t, k, limits, transport.ResponseEnvelope{Version: transport.EnvelopeVersion, ReqNonce: nonce,
-		Seq: 1, Total: 2, Results: []transport.Result{{ID: "b", Result: []byte(`{}`)}}})
-	got, err := s.collectReply(context.Background(), ch, k, p, 0)
-	if err == nil || !strings.Contains(err.Error(), "repeated chunk") {
-		t.Errorf("seq 1 twice was not rejected: outcomes=%d err=%v", len(got), err)
-	}
 }

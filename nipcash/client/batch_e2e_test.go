@@ -468,7 +468,7 @@ func TestBatch_EndToEnd_ChunkedReplyReassembles(t *testing.T) {
 // hub said nothing about work it may well have performed. For cash_redeem that is a
 // redemption the caller is told nothing about — and since an omission is never safe to
 // resend, they would be stuck. So the answers that arrived are kept, the rest are
-// NotServed, and ErrIncompleteReply says plainly that this is ignorance rather than the
+// unanswered, and ErrIncompleteReply says plainly that this is ignorance rather than the
 // hub's final word.
 func TestBatch_EndToEnd_LostChunkIsIncompleteNotOmitted(t *testing.T) {
 	hub := newTestHub(t, alwaysSucceed)
@@ -507,7 +507,7 @@ func TestBatch_EndToEnd_LostChunkIsIncompleteNotOmitted(t *testing.T) {
 		switch o.State {
 		case OutcomeResult:
 			served++
-		case OutcomeNotServed:
+		case OutcomeUnanswered:
 			unknown++
 		}
 	}
@@ -515,7 +515,7 @@ func TestBatch_EndToEnd_LostChunkIsIncompleteNotOmitted(t *testing.T) {
 		t.Error("every answer was discarded; the chunks that DID arrive carry real results")
 	}
 	if unknown == 0 {
-		t.Error("the dropped chunk's items must be NotServed, not silently successful")
+		t.Error("the dropped chunk's items must be unanswered, neither successful nor omitted")
 	}
 	if served+unknown != 6 {
 		t.Errorf("served=%d unknown=%d, want 6 total", served, unknown)

@@ -2,7 +2,9 @@ package client
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/ohstr/nmilat/nipcash/transport"
 )
@@ -33,6 +35,20 @@ const (
 	// something, and a circle join refused for non-membership or rate limiting MUST
 	// arrive this way rather than as silence (NIP-CW §Private Join).
 	OutcomeError
+	// OutcomeUnanswered means the reply was incomplete and no chunk that did arrive
+	// mentions this item: some chunks never came, or nothing came at all.
+	//
+	// Not an omission. An omission is the hub's final word; this is the client not
+	// having heard it (NIP-CASH §Chunked Replies: "ask again"). The item may have
+	// run, so it is not safe to resend.
+	OutcomeUnanswered
+	// OutcomeConflict means the hub answered this item more than once (within one
+	// chunk or across chunks, identical or not), answered it with a result while
+	// another chunk said no item ran, or sent a result whose result_type is not the
+	// item's method. The item has no decided outcome and is indeterminate: the
+	// spec forbids picking one answer by arrival order or seq. The other items keep
+	// theirs. Not safe to resend.
+	OutcomeConflict
 )
 
 func (s OutcomeState) String() string {
@@ -43,6 +59,10 @@ func (s OutcomeState) String() string {
 		return "error"
 	case OutcomeNotServed:
 		return "not served"
+	case OutcomeUnanswered:
+		return "unanswered"
+	case OutcomeConflict:
+		return "conflict"
 	default:
 		return fmt.Sprintf("OutcomeState(%d)", int(s))
 	}
@@ -98,91 +118,201 @@ func (o ItemOutcome) Succeeded() bool { return o.State == OutcomeResult }
 // Nor is a success this client could not decode (Undecodable): the hub ran it.
 func (o ItemOutcome) SafeToResend() bool { return o.State == OutcomeError && !o.Undecodable }
 
-// joinOutcomes pairs a decoded response with the ids that were sent, so every
-// requested item gets exactly one outcome.
+// ErrReplyConflict means the chunks of one reply contradict each other: they
+// disagree about total, two different events carry one seq, a seq lies outside 1 to
+// total, or an item was answered more than once. It wraps ErrIncompleteReply,
+// because a contradictory reply is incomplete, not void (NIP-CASH §Chunked Replies):
+// every outcome a chunk decided is still returned beside it.
+var ErrReplyConflict = fmt.Errorf("%w: chunks contradict each other", ErrIncompleteReply)
+
+// replyState gathers the chunks of one envelope's reply and decides, per item, what
+// the reply as a whole says.
 //
-// requestedIDs drives the loop rather than the response's results, which is what
-// makes an omission representable at all: iterating the results could only ever
-// produce outcomes for items the hub chose to answer.
-func joinOutcomes(requestedIDs []string, resp *transport.ResponseEnvelope, envelope int) []ItemOutcome {
-	byID := make(map[string]transport.Result, len(requestedIDs))
-	if resp != nil {
-		for _, r := range resp.Results {
-			byID[r.ID] = r
-		}
-	}
-
-	// An ENVELOPE-level error applies to every item in it, and it was being collected
-	// and then never read — joinOutcomes walked Results only.
-	//
-	// The direction was fail-safe but it discarded the one thing that makes a spend
-	// safe to retry. A hub replying envelope-level RATE_LIMITED means "no item ran",
-	// which is exactly the fact a caller needs before resending a cash_redeem;
-	// dropping it produced err=nil with every item merely "not served", i.e. the
-	// indeterminate state a caller is told never to retry from. So a hub could strand
-	// a caller permanently having done nothing at all.
-	//
-	// Surfaced per item rather than only on the envelope, because that is where every
-	// caller already looks, and it keeps ResultError's documented envelope-level
-	// contract working for honest hubs too.
-	//
-	// Note what this makes true: State becomes OutcomeError, and SafeToResend() is
-	// exactly State == OutcomeError — so a caller WILL resend a spend on the strength
-	// of this. That is deliberate, and it rests on two facts rather than on trusting
-	// the hub:
-	//
-	//   - only the HUB can author this reply. It is authenticated by the reply key,
-	//     derived from a per-envelope ephemeral ECDH, so a relay cannot forge one and
-	//     a co-holder of the bill's connection secret cannot either.
-	//   - a resend cannot double-spend even if the hub lied about nothing having run.
-	//     Every money method carries its own idempotency guard — a redeem marks the
-	//     slice claimed_at, a transfer burns a single-use proof row — so a second
-	//     application finds nothing left to take. That is round 1's R1/R2 refutation,
-	//     and this fix depends on it: if a bill method were ever added without such a
-	//     guard, a lying envelope-level error would become a way to induce a double
-	//     application, and this would have to become conservative again.
-	var envelopeErr *transport.ResultError
-	if resp != nil {
-		envelopeErr = resp.Error
-	}
-
-	out := make([]ItemOutcome, 0, len(requestedIDs))
-	for _, id := range requestedIDs {
-		outcome := ItemOutcome{ID: id, Envelope: envelope, State: OutcomeNotServed}
-		if envelopeErr != nil {
-			// A decided refusal of the whole envelope, not an omission: the hub said
-			// why, and it said it about everything inside.
-			outcome.State = OutcomeError
-			outcome.Error = envelopeErr
-		}
-		if r, ok := byID[id]; ok {
-			switch {
-			case r.Error != nil:
-				outcome.State = OutcomeError
-				outcome.Error = r.Error
-			default:
-				// A served item with neither error nor result is still a served
-				// item: some methods answer with an empty body. Treating it as
-				// omitted would report "the hub said nothing" when it did answer.
-				outcome.State = OutcomeResult
-				outcome.Result = r.Result
-			}
-		}
-		out = append(out, outcome)
-	}
-	return out
+// It keeps every answer to every id rather than the latest, because the decision
+// cannot be made per chunk: an item answered twice is indeterminate whichever answer
+// came first (NIP-CASH §Chunked Replies forbids resolving it by arrival order or
+// seq), and an omission is only final once every chunk is in. Nothing a validly
+// decrypted chunk decided is ever dropped for a later chunk's fault.
+type replyState struct {
+	ids     []string
+	methods map[string]string
+	answers map[string][]transport.Result
+	// envErrs are the envelope-level errors of the chunks that carried one.
+	envErrs []*transport.ResultError
+	// seqEvent maps each in-range seq to the event that carried it, so two different
+	// events with one seq are told from the same event heard twice.
+	seqEvent map[int]string
+	declared int
+	// conflicts are reply-level contradictions; gaps are reasons the reply is
+	// incomplete without contradicting itself (a chunk that decided nothing).
+	conflicts, gaps []string
+	decoded         int
+	decodeErrs      []error
 }
 
-// notServedOutcomes marks a whole envelope's items unserved, for when the envelope
-// itself never got an answer — it could not be published, or no response arrived.
+func newReplyState(p packedEnvelope) *replyState {
+	methods := make(map[string]string, len(p.Envelope.Items))
+	for _, item := range p.Envelope.Items {
+		methods[item.ID] = item.Method
+	}
+	return &replyState{
+		ids:      p.ItemIDs,
+		methods:  methods,
+		answers:  map[string][]transport.Result{},
+		seqEvent: map[int]string{},
+	}
+}
+
+// add folds one decoded chunk in. eventKey identifies the event that carried it.
+func (r *replyState) add(eventKey string, c *transport.DecodedChunk) {
+	r.decoded++
+	switch {
+	case c.Total < 1 || c.Seq < 1 || c.Seq > c.Total:
+		r.conflicts = append(r.conflicts, fmt.Sprintf("seq %d of %d is not a position in a reply", c.Seq, c.Total))
+	default:
+		if prev, ok := r.seqEvent[c.Seq]; ok && prev != eventKey {
+			r.conflicts = append(r.conflicts, fmt.Sprintf("two events carry seq %d", c.Seq))
+		} else {
+			r.seqEvent[c.Seq] = eventKey
+		}
+	}
+	if c.Total >= 1 {
+		if r.declared == 0 {
+			r.declared = c.Total
+		} else if c.Total != r.declared {
+			r.conflicts = append(r.conflicts, fmt.Sprintf("one chunk claims %d chunks, another %d", c.Total, r.declared))
+		}
+	}
+	if c.DecidesNothing() {
+		r.gaps = append(r.gaps, fmt.Sprintf("chunk %d carries neither results nor an error", c.Seq))
+	}
+	if c.Error != nil {
+		r.envErrs = append(r.envErrs, c.Error)
+	}
+	for _, res := range c.Results {
+		r.answers[res.ID] = append(r.answers[res.ID], res)
+	}
+}
+
+// total is the hub's declared total bounded by the items requested (NIP-CASH
+// §Chunked Replies: a client MUST bound total by the number of items it requested).
+func (r *replyState) total() int { return min(r.declared, len(r.ids)) }
+
+// malformed reports a reply that can no longer become complete, however many more
+// chunks arrive.
+func (r *replyState) malformed() bool { return len(r.conflicts) > 0 || len(r.gaps) > 0 }
+
+// complete reports whether every chunk 1 to total has arrived and nothing about the
+// set is malformed. Only then is an unanswered item an omission.
+func (r *replyState) complete() bool {
+	total := r.total()
+	if total < 1 || r.malformed() {
+		return false
+	}
+	for seq := 1; seq <= total; seq++ {
+		if _, ok := r.seqEvent[seq]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// outcomes decides one outcome per requested item, in request order, and says what
+// was wrong with the reply as a whole. Decided outcomes and the reply's error are
+// independent facts, and both are returned (NIP-CASH §Chunked Replies).
+func (r *replyState) outcomes(envelope int) ([]ItemOutcome, error) {
+	complete := r.complete()
+	out := make([]ItemOutcome, 0, len(r.ids))
+	var conflicted []string
+	for _, id := range r.ids {
+		o := ItemOutcome{ID: id, Envelope: envelope}
+		rs := r.answers[id]
+		switch {
+		case len(rs) > 1:
+			// Identical or not: the spec forbids accepting an id answered twice.
+			o.State = OutcomeConflict
+		case len(rs) == 1 && len(r.envErrs) > 0:
+			// A result for an item another chunk said never ran.
+			o.State = OutcomeConflict
+		case len(rs) == 1:
+			o = r.decide(o, rs[0])
+		case len(r.envErrs) == 1:
+			// An envelope-level error means no item ran, and it is surfaced for every
+			// item the reply did not answer otherwise (§Chunked Replies). It decides
+			// these items even when another chunk is missing.
+			o.State = OutcomeError
+			o.Error = r.envErrs[0]
+		case len(r.envErrs) > 1:
+			o.State = OutcomeConflict
+		case complete:
+			o.State = OutcomeNotServed
+		default:
+			o.State = OutcomeUnanswered
+		}
+		if o.State == OutcomeConflict {
+			conflicted = append(conflicted, id)
+		}
+		out = append(out, o)
+	}
+
+	reasons := append([]string(nil), r.conflicts...)
+	if len(conflicted) > 0 {
+		reasons = append(reasons, fmt.Sprintf("items %q have no single answer", conflicted))
+	}
+	if len(r.envErrs) > 1 {
+		reasons = append(reasons, fmt.Sprintf("%d chunks carry an envelope-level error", len(r.envErrs)))
+	}
+	var err error
+	switch {
+	case len(reasons) > 0:
+		err = fmt.Errorf("%w: %s", ErrReplyConflict, strings.Join(reasons, "; "))
+	case !complete:
+		why := fmt.Sprintf("got %d of %d chunks", len(r.seqEvent), r.total())
+		if len(r.gaps) > 0 {
+			why = strings.Join(r.gaps, "; ")
+		}
+		err = fmt.Errorf("%w: %s", ErrIncompleteReply, why)
+	}
+	if err != nil && len(r.decodeErrs) > 0 {
+		err = errors.Join(append([]error{err}, r.decodeErrs...)...)
+	}
+	return out, err
+}
+
+// decide reads the one answer an item got.
 //
-// Deliberately the same state a per-item omission produces, because from the bills'
-// point of view it is the same fact: nothing is known about them. The Envelope field
-// is what lets a caller notice the correlation.
-func notServedOutcomes(requestedIDs []string, envelope int) []ItemOutcome {
+// A result is only a result when its result_type is the item's method (NIP-CASH
+// §Responses (kind 23191)): a missing or different one is malformed, so the item has
+// no decided outcome. An error object needs no result_type.
+func (r *replyState) decide(o ItemOutcome, res transport.Result) ItemOutcome {
+	switch {
+	case res.HasBoth():
+		o.State = OutcomeConflict
+	case res.Error != nil:
+		o.State = OutcomeError
+		o.Error = res.Error
+	case res.ResultType == "" || res.ResultType != r.methods[o.ID]:
+		o.State = OutcomeConflict
+	default:
+		// A served item with an empty body is still a served item: some methods
+		// answer with nothing more.
+		o.State = OutcomeResult
+		o.Result = res.Result
+	}
+	return o
+}
+
+// unansweredOutcomes marks a whole envelope's items unanswered, for when the
+// envelope itself never got an answer — it could not be published, or no chunk
+// arrived.
+//
+// Not "not served": that is a complete reply's omission, a final answer, and here
+// the client heard no reply at all. The Envelope field is what lets a caller notice
+// the correlation.
+func unansweredOutcomes(requestedIDs []string, envelope int) []ItemOutcome {
 	out := make([]ItemOutcome, 0, len(requestedIDs))
 	for _, id := range requestedIDs {
-		out = append(out, ItemOutcome{ID: id, Envelope: envelope, State: OutcomeNotServed})
+		out = append(out, ItemOutcome{ID: id, Envelope: envelope, State: OutcomeUnanswered})
 	}
 	return out
 }

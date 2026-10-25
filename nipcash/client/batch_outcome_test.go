@@ -22,13 +22,13 @@ func TestJoinOutcomes_OmissionIsItsOwnState(t *testing.T) {
 	requested := []string{"a", "b", "c"}
 	resp := &transport.ResponseEnvelope{
 		Results: []transport.Result{
-			{ID: "a", Result: json.RawMessage(`{"ok":true}`)},
+			{ID: "a", ResultType: "cash_status", Result: json.RawMessage(`{"ok":true}`)},
 			{ID: "c", Error: &transport.ResultError{Code: "NOT_FOUND", Message: "gone"}},
 			// "b" is absent — omitted.
 		},
 	}
 
-	got := joinOutcomes(requested, resp, 0)
+	got := joinOutcomes(t, requested, resp)
 	if len(got) != 3 {
 		t.Fatalf("got %d outcomes for 3 requested items", len(got))
 	}
@@ -54,8 +54,8 @@ func TestJoinOutcomes_OmissionIsItsOwnState(t *testing.T) {
 func TestJoinOutcomes_EveryRequestedItemGetsExactlyOneOutcome(t *testing.T) {
 	requested := []string{"a", "b", "c", "d"}
 
-	// A hub that answers nothing at all.
-	got := joinOutcomes(requested, &transport.ResponseEnvelope{}, 0)
+	// A hub that answers nothing at all, in a complete reply.
+	got := joinOutcomes(t, requested, &transport.ResponseEnvelope{Results: []transport.Result{}})
 	if len(got) != len(requested) {
 		t.Fatalf("got %d outcomes, want %d", len(got), len(requested))
 	}
@@ -68,9 +68,11 @@ func TestJoinOutcomes_EveryRequestedItemGetsExactlyOneOutcome(t *testing.T) {
 		}
 	}
 
-	// A nil response — no reply arrived — must behave the same way, not panic.
-	if got := joinOutcomes(requested, nil, 0); len(got) != len(requested) {
-		t.Errorf("nil response produced %d outcomes, want %d", len(got), len(requested))
+	// No reply at all: one outcome each, unanswered rather than omitted.
+	for _, o := range unansweredOutcomes(requested, 0) {
+		if o.State != OutcomeUnanswered {
+			t.Errorf("%s: state = %v, want unanswered", o.ID, o.State)
+		}
 	}
 }
 
@@ -80,12 +82,12 @@ func TestJoinOutcomes_EveryRequestedItemGetsExactlyOneOutcome(t *testing.T) {
 func TestJoinOutcomes_IgnoresResultsForUnrequestedIDs(t *testing.T) {
 	resp := &transport.ResponseEnvelope{
 		Results: []transport.Result{
-			{ID: "a", Result: json.RawMessage(`{"ok":true}`)},
-			{ID: "never-sent", Result: json.RawMessage(`{"ok":true}`)},
+			{ID: "a", ResultType: "cash_status", Result: json.RawMessage(`{"ok":true}`)},
+			{ID: "never-sent", ResultType: "cash_status", Result: json.RawMessage(`{"ok":true}`)},
 		},
 	}
 
-	got := joinOutcomes([]string{"a"}, resp, 0)
+	got := joinOutcomes(t, []string{"a"}, resp)
 	if len(got) != 1 {
 		t.Fatalf("got %d outcomes, want 1 — only requested ids may appear", len(got))
 	}
@@ -107,6 +109,8 @@ func TestOutcome_SafeToResend_OnlyForExplicitErrors(t *testing.T) {
 	}{
 		{ItemOutcome{State: OutcomeError, Error: &transport.ResultError{Code: "RATE_LIMITED"}}, true},
 		{ItemOutcome{State: OutcomeNotServed}, false},
+		{ItemOutcome{State: OutcomeUnanswered}, false},
+		{ItemOutcome{State: OutcomeConflict}, false},
 		{ItemOutcome{State: OutcomeResult, Result: json.RawMessage(`{}`)}, false},
 	}
 	for _, tc := range cases {
@@ -131,17 +135,62 @@ func TestOutcome_ZeroValueIsNotServed(t *testing.T) {
 	}
 }
 
-// TestNotServedOutcomes_MarksAWholeEnvelope: when an envelope never got an answer,
-// every item in it is unserved for one shared reason. The Envelope field is what lets a
-// caller notice that correlation instead of reading N independent omissions.
-func TestNotServedOutcomes_MarksAWholeEnvelope(t *testing.T) {
-	got := notServedOutcomes([]string{"a", "b"}, 2)
+// TestUnansweredOutcomes_MarksAWholeEnvelope: when an envelope never got an answer,
+// every item in it is unanswered for one shared reason. The Envelope field is what lets a
+// caller notice that correlation instead of reading N independent failures.
+func TestUnansweredOutcomes_MarksAWholeEnvelope(t *testing.T) {
+	got := unansweredOutcomes([]string{"a", "b"}, 2)
 	for _, o := range got {
-		if o.State != OutcomeNotServed {
-			t.Errorf("%s: state = %v, want not served", o.ID, o.State)
+		if o.State != OutcomeUnanswered {
+			t.Errorf("%s: state = %v, want unanswered", o.ID, o.State)
 		}
 		if o.Envelope != 2 {
 			t.Errorf("%s: envelope = %d, want 2", o.ID, o.Envelope)
 		}
+	}
+}
+
+// joinOutcomes runs one single-chunk reply through replyState, every item sent as
+// cash_status.
+func joinOutcomes(t *testing.T, ids []string, resp *transport.ResponseEnvelope) []ItemOutcome {
+	t.Helper()
+	resp.Seq, resp.Total = 1, 1
+	st := newReplyState(statusPacked("", 0, ids...))
+	alien := []string{}
+	known := map[string]bool{}
+	for _, id := range ids {
+		known[id] = true
+	}
+	kept := resp.Results
+	if kept != nil {
+		kept = []transport.Result{}
+		for _, r := range resp.Results {
+			if !known[r.ID] {
+				alien = append(alien, r.ID)
+				continue
+			}
+			kept = append(kept, r)
+		}
+	}
+	resp.Results = kept
+	st.add("e1", &transport.DecodedChunk{ResponseEnvelope: resp, AlienIDs: alien})
+	out, _ := st.outcomes(0)
+	return out
+}
+
+// statusPacked is a packed envelope of cash_status items, for driving collectReply
+// and replyState without building real items.
+func statusPacked(nonce string, notAfter int64, ids ...string) packedEnvelope {
+	return methodPacked(nonce, notAfter, "cash_status", ids...)
+}
+
+func methodPacked(nonce string, notAfter int64, method string, ids ...string) packedEnvelope {
+	items := make([]transport.Item, 0, len(ids))
+	for _, id := range ids {
+		items = append(items, transport.Item{ID: id, Method: method})
+	}
+	return packedEnvelope{
+		Envelope: transport.Envelope{Version: transport.EnvelopeVersion, Nonce: nonce, NotAfter: notAfter, Items: items},
+		ItemIDs:  ids,
 	}
 }

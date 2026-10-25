@@ -21,11 +21,7 @@ func TestCollectReply_TotalIsBoundedByItemsRequested(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := packedEnvelope{
-		Envelope: transport.Envelope{Version: transport.EnvelopeVersion, Nonce: nonce,
-			NotAfter: time.Now().Add(3 * time.Second).Unix()},
-		ItemIDs: []string{"only"},
-	}
+	p := statusPacked(nonce, time.Now().Add(3*time.Second).Unix(), "only")
 	var replyKey [32]byte
 	copy(replyKey[:], strings.Repeat("t", 32))
 	s := hostileSession(limits, strings.Repeat("b", 64))
@@ -33,7 +29,7 @@ func TestCollectReply_TotalIsBoundedByItemsRequested(t *testing.T) {
 	ch := make(chan *nip01.Event, 1)
 	ch <- sealChunk(t, replyKey, limits, transport.ResponseEnvelope{
 		Version: transport.EnvelopeVersion, ReqNonce: nonce, Seq: 1, Total: 1000,
-		Results: []transport.Result{{ID: "only", Result: []byte(`{}`)}},
+		Results: []transport.Result{{ID: "only", ResultType: "cash_status", Result: []byte(`{}`)}},
 	})
 
 	start := time.Now()
@@ -72,11 +68,7 @@ func TestCollectReply_LaterBadChunkKeepsEarlierOutcomes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := packedEnvelope{
-		Envelope: transport.Envelope{Version: transport.EnvelopeVersion, Nonce: nonce,
-			NotAfter: time.Now().Add(5 * time.Second).Unix()},
-		ItemIDs: []string{"x1", "x2"},
-	}
+	p := statusPacked(nonce, time.Now().Add(5*time.Second).Unix(), "x1", "x2")
 	var replyKey [32]byte
 	copy(replyKey[:], strings.Repeat("w", 32))
 	s := hostileSession(limits, strings.Repeat("b", 64))
@@ -84,11 +76,16 @@ func TestCollectReply_LaterBadChunkKeepsEarlierOutcomes(t *testing.T) {
 	ch := make(chan *nip01.Event, 2)
 	ch <- sealChunk(t, replyKey, limits, transport.ResponseEnvelope{
 		Version: transport.EnvelopeVersion, ReqNonce: nonce, Seq: 1, Total: 2,
-		Results: []transport.Result{{ID: "x1", Result: []byte(`{"new_wallet_token":"only-copy"}`)}},
+		Results: []transport.Result{{ID: "x1", ResultType: "cash_status", Result: []byte(`{"new_wallet_token":"only-copy"}`)}},
 	})
+	// Chunk 2 answers another request: unusable as a whole, so it decides nothing.
+	other, err := transport.NewNonce()
+	if err != nil {
+		t.Fatal(err)
+	}
 	ch <- sealChunk(t, replyKey, limits, transport.ResponseEnvelope{
-		Version: transport.EnvelopeVersion, ReqNonce: nonce, Seq: 2, Total: 2,
-		Results: []transport.Result{{ID: "never-sent", Result: []byte(`{}`)}},
+		Version: transport.EnvelopeVersion, ReqNonce: other, Seq: 2, Total: 2,
+		Results: []transport.Result{{ID: "x2", ResultType: "cash_status", Result: []byte(`{}`)}},
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

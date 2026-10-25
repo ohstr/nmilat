@@ -27,9 +27,9 @@ const defaultNotAfterWindow = 60 * time.Second
 // the items that asked.
 //
 // One outcome per requested item, always, whatever happened. An envelope that could not
-// be published, or got no reply, yields NotServed for everything it carried — the same
-// state a per-item omission produces, because from those bills' point of view it is the
-// same fact: nothing is known. The Envelope field on each outcome is what lets a caller
+// be published, or got no reply, yields OutcomeUnanswered for everything it carried:
+// nothing is known about those bills, and unlike an omission it is not the hub's final
+// word. The Envelope field on each outcome is what lets a caller
 // notice the correlation rather than read N independent omissions.
 //
 // Nothing here retries. cash_redeem has no idempotency key and a double redemption is
@@ -80,7 +80,7 @@ func (s *BatchSession) sendBatch(ctx context.Context, builders []itemBuilder) ([
 		if err != nil {
 			// Nothing came back at all: everything this envelope carried is unknown,
 			// which is not the same as failed.
-			outcomes = append(outcomes, notServedOutcomes(p.ItemIDs, i)...)
+			outcomes = append(outcomes, unansweredOutcomes(p.ItemIDs, i)...)
 			incomplete = append(incomplete, err)
 			continue
 		}
@@ -145,6 +145,12 @@ var ErrIncompleteReply = errors.New("nipcash/client: reply arrived in fewer chun
 // terminate: a client cannot instead collect until every id is answered, because an
 // omitted item is never answered and that is indistinguishable from a chunk still in
 // flight.
+//
+// Nothing a validly decrypted chunk decided is ever thrown away. A reply whose chunks
+// contradict each other is incomplete, not void: collection continues until not_after
+// (a later chunk may still hold a new bill's only token), and every decided outcome is
+// returned beside ErrReplyConflict. An item answered twice is OutcomeConflict on its
+// own; its siblings keep their answers.
 func (s *BatchSession) collectReply(
 	ctx context.Context,
 	replies <-chan *nip01.Event,
@@ -152,27 +158,16 @@ func (s *BatchSession) collectReply(
 	p packedEnvelope,
 	index int,
 ) ([]ItemOutcome, error) {
-	merged := &transport.ResponseEnvelope{Version: transport.EnvelopeVersion, ReqNonce: p.Envelope.Nonce}
-	seen := map[int]struct{}{}
+	state := newReplyState(p)
 	seenEvents := map[string]struct{}{}
-	answered := map[string]struct{}{}
-	// declared is the hub's own total; total is that, bounded by the items asked.
-	declared, total := 0, 0
+	maxBytes := s.Limits().MaxEnvelopeBytes
 
 	// Bound the wait by the envelope's OWN not_after, which was already computed and
-	// signed before it was sent.
-	//
-	// Without this the only exits were completion, the relay closing, a fatal decode,
-	// and the caller's context — so a hub declaring total: 2 and sending one chunk left
-	// a client waiting for the caller's full deadline on a reply that will never come,
-	// even when the envelope it is a reply TO expired minutes ago. A hub cannot be
-	// trusted to bound a client's wait, and the client already knows the answer: past
-	// not_after the hub is contractually done with this envelope, so nothing further is
-	// coming.
-	//
-	// Derived from the envelope rather than a constant, because it is the same value
-	// both sides already agreed on, and a caller who set a shorter deadline still wins —
-	// this only ever tightens.
+	// signed before it was sent (NIP-CASH §Chunked Replies). A hub cannot be trusted
+	// to bound a client's wait: one declaring total 2 and sending one chunk would
+	// otherwise hold the caller for its whole deadline. Past not_after the hub is done
+	// with this envelope, so nothing further is coming. This only ever tightens a
+	// caller's own deadline.
 	if p.Envelope.NotAfter > 0 {
 		deadline := time.Unix(p.Envelope.NotAfter, 0)
 		var cancel context.CancelFunc
@@ -180,115 +175,63 @@ func (s *BatchSession) collectReply(
 		defer cancel()
 	}
 
+	finish := func(cause error) ([]ItemOutcome, error) {
+		if state.decoded == 0 {
+			// Nothing usable arrived: the caller marks every item unanswered.
+			if len(state.decodeErrs) > 0 {
+				return nil, fmt.Errorf("envelope %d: %w", index, errors.Join(append([]error{cause}, state.decodeErrs...)...))
+			}
+			return nil, fmt.Errorf("envelope %d: %w", index, cause)
+		}
+		out, err := state.outcomes(index)
+		if err != nil {
+			err = fmt.Errorf("envelope %d: %w", index, err)
+		}
+		return out, err
+	}
+
 	for {
 		select {
 		case ev, ok := <-replies:
 			if !ok {
-				// The relay closed on us. Treated exactly like a timeout rather than as
-				// a distinct failure, because it is the same fact: some chunks arrived
-				// and the rest never will.
-				//
-				// This path used to discard the partial results and report no error at
-				// all, which made a dropped connection indistinguishable from a hub
-				// omitting every item — the worst possible confusion, since an omission
-				// is final and this is not.
-				if total > 0 && len(seen) > 0 {
-					return joinOutcomes(p.ItemIDs, merged, index),
-						fmt.Errorf("%w: envelope %d: got %d of %d chunks before the relay closed",
-							ErrIncompleteReply, index, len(seen), total)
-				}
-				return nil, fmt.Errorf("reply channel closed for envelope %d", index)
+				// The relay closed on us: the same fact as a timeout. Some chunks may
+				// have arrived and the rest never will.
+				return finish(errors.New("reply channel closed"))
 			}
 			// The same event from two relays is one chunk, not a repeat (NIP-CASH
-			// §Chunked Replies): a hub may publish its reply on several of its relays,
-			// and this client may be listening on more than one.
-			if ev.ID != "" {
-				if _, dup := seenEvents[ev.ID]; dup {
-					continue
-				}
-				seenEvents[ev.ID] = struct{}{}
+			// §Chunked Replies). An event without an id is keyed by its content, so a
+			// copy is still recognised as one.
+			key := ev.ID
+			if key == "" {
+				key = "content:" + ev.Content
 			}
+			if _, dup := seenEvents[key]; dup {
+				continue
+			}
+			seenEvents[key] = struct{}{}
 			plaintext, err := nip44.Decrypt(ev.Content, replyKey[:])
 			if err != nil {
 				// Addressed to us but not written by the hub. The p-tag addresses a
-				// response; it does not authenticate one, since anyone can publish an
-				// event carrying a tag they observed. Only the derived key proves
-				// authorship — so this is discarded rather than fatal, and the real
-				// reply may still arrive.
+				// response; it does not authenticate one. Only the derived key proves
+				// authorship (the author is never checked, §The Reply Key), so this is
+				// discarded and the real reply may still arrive.
 				continue
 			}
-			chunk, err := transport.DecodeResponse([]byte(plaintext), p.Envelope.Nonce, p.ItemIDs, s.Limits())
+			chunk, err := transport.DecodeResponseChunk([]byte(plaintext), p.Envelope.Nonce, p.ItemIDs, maxBytes)
 			if err != nil {
-				err = fmt.Errorf("decode reply for envelope %d: %w", index, err)
-				// A bad later chunk does not unsay the earlier ones: they are the hub's
-				// authenticated answers, and for a carve the only copy of a new bill's
-				// token (NIP-CASH §Chunked Replies). Keep them and report the error.
-				if len(seen) > 0 {
-					return joinOutcomes(p.ItemIDs, merged, index), err
-				}
-				return nil, err
+				// Unusable as a whole (bad JSON, another request's nonce, oversized):
+				// it decides nothing. The chunk it should have been stays missing, so
+				// the reply cannot complete without it, and the reason is reported.
+				state.decodeErrs = append(state.decodeErrs, fmt.Errorf("decode reply chunk: %w", err))
+				continue
 			}
-
-			if declared == 0 {
-				declared = chunk.Total
-				// NIP-CASH §Chunked Replies: a client MUST bound total by the number
-				// of items it requested. Unbounded, an inflated total makes a complete
-				// answer wait until not_after and then read as incomplete.
-				total = min(declared, len(p.ItemIDs))
-			} else if chunk.Total != declared {
-				// Chunks disagreeing about the total cannot be one reply, and picking
-				// either would mean guessing when to stop.
-				return nil, fmt.Errorf("%w: envelope %d: chunk claims %d chunks, an earlier one claimed %d",
-					transport.ErrResponseMalformed, index, chunk.Total, declared)
-			}
-			if _, dup := seen[chunk.Seq]; dup {
-				return nil, fmt.Errorf("%w: envelope %d: repeated chunk %d",
-					transport.ErrResponseMalformed, index, chunk.Seq)
-			}
-			seen[chunk.Seq] = struct{}{}
-
-			if chunk.Error != nil && merged.Error == nil {
-				merged.Error = chunk.Error
-			}
-			// Refuse a second answer for an id already answered, rather than letting the
-			// later one overwrite the earlier.
-			//
-			// A duplicate id WITHIN one chunk is already rejected, but across chunks the
-			// results were appended blind and the outcome map is last-wins — so two
-			// contradictory statements about the same bill were resolved by ARRIVAL
-			// ORDER. Only the hub can produce them (it holds the reply key), but a relay
-			// holding no key at all decides which one the client believes, simply by
-			// reordering two events: NOT_FOUND becomes a live million-millis bill, or the
-			// reverse.
-			//
-			// Sorting by seq would make the outcome deterministic and still let the hub
-			// choose it by construction. Refusing is the answer that leaves no room for
-			// either party to pick: a hub that answers one item twice with different
-			// content has contradicted itself, and there is no reading of that reply a
-			// client should act on.
-			for _, r := range chunk.Results {
-				if _, already := answered[r.ID]; already {
-					return nil, fmt.Errorf("%w: envelope %d: item %q answered in more than one chunk",
-						transport.ErrResponseMalformed, index, r.ID)
-				}
-				answered[r.ID] = struct{}{}
-			}
-			merged.Results = append(merged.Results, chunk.Results...)
-
-			if len(seen) == total {
-				return joinOutcomes(p.ItemIDs, merged, index), nil
+			state.add(key, chunk)
+			if state.complete() {
+				return state.outcomes(index)
 			}
 
 		case <-ctx.Done():
-			if total > 0 && len(seen) > 0 {
-				// Partial: return what did arrive rather than discarding it, but say
-				// plainly that the picture is incomplete. Items in the missing chunks
-				// come back NotServed, which is honest — we do not know — while the
-				// error tells the caller that is ignorance rather than the hub's answer.
-				return joinOutcomes(p.ItemIDs, merged, index),
-					fmt.Errorf("%w: envelope %d: got %d of %d chunks", ErrIncompleteReply, index, len(seen), total)
-			}
-			return nil, ctx.Err()
+			return finish(ctx.Err())
 		}
 	}
 }
