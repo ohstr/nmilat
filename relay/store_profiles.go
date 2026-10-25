@@ -92,3 +92,67 @@ func (s *EventStore) FetchProfileEvents(ctx context.Context, pubkeys []string) (
 
 	return events, err
 }
+
+// profileScanChunk is how many authors one EachProfile read transaction
+// covers.
+var profileScanChunk = 1000
+
+// EachProfile calls fn with every author's newest stored profile (kind 0),
+// in pubkey order. It walks the kind+pubkey index, so it reads profiles
+// only, never the rest of the store, in read transactions of
+// profileScanChunk authors; fn runs outside them. Count with
+// Counts().Kind(0) for progress.
+func (s *EventStore) EachProfile(ctx context.Context, fn func(*nip01.Event) error) error {
+	start := make([]byte, 8) // kind 0
+	for {
+		if err := ctx.Err(); err != nil {
+			return context.Cause(ctx)
+		}
+		var found []*nip01.Event
+		var next []byte
+		err := s.db.View(func(tx *bolt.Tx) error {
+			b := tx.Bucket(indexKindPubkey)
+			if b == nil {
+				return nil
+			}
+			c := b.Cursor()
+			var last []byte // the current author's newest key so far
+			flush := func() {
+				if last == nil {
+					return
+				}
+				if ev, err := s.findEventUsingTx(tx, binary.BigEndian.Uint64(last[profilePrefixLen+8:])); err == nil {
+					found = append(found, ev)
+				}
+				last = nil
+			}
+			for k, _ := c.Seek(start); k != nil && bytes.Equal(k[:8], start[:8]); k, _ = c.Next() {
+				if len(k) != profileKeyLen {
+					continue
+				}
+				if last != nil && !bytes.Equal(k[:profilePrefixLen], last[:profilePrefixLen]) {
+					flush()
+					if len(found) >= profileScanChunk {
+						next = append([]byte(nil), k[:profilePrefixLen]...)
+						return nil
+					}
+				}
+				last = append(last[:0], k...)
+			}
+			flush()
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		for _, ev := range found {
+			if err := fn(ev); err != nil {
+				return err
+			}
+		}
+		if next == nil {
+			return nil
+		}
+		start = next
+	}
+}
