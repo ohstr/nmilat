@@ -205,7 +205,15 @@ func TestItemProof_FreshnessWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	signedAt := time.Now()
+	// The proof's own created_at, in whole seconds: time.Now() here may
+	// already be a second later.
+	var signed struct {
+		CreatedAt int64 `json:"created_at"`
+	}
+	if err := json.Unmarshal(proof, &signed); err != nil {
+		t.Fatal(err)
+	}
+	signedAt := time.Unix(signed.CreatedAt, 0)
 
 	// Just inside both edges.
 	for _, now := range []time.Time{
