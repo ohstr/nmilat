@@ -129,6 +129,28 @@ what [`ncli`](https://github.com/ohstr/ncli) does internally. Optional
 NIPs opt in by `relayreg` blank-import (above), not by the relay package
 importing them.
 
+### Keeping a search engine in step
+
+`relay.NewSearchIndexer(store, w, opts...)` follows the store's profiles
+(kind 0), their deletions and score changes, and writes them to a
+`search.Writer`. It acknowledges only what the engine applied, so nothing
+is lost while the engine is down. When `w` is a `search.Enqueuer`, up to
+`WithSearchInFlight` batches (default 4) of up to `WithSearchBatch`
+profiles (default 10,000) stay enqueued, so an engine that merges queued
+writes, like Meilisearch, indexes them in one pass. They are acknowledged in
+order, and the last write for a profile always wins. To rebuild an index
+from scratch, `EventStore.EachProfile` returns each author's newest profile
+through the kind index, and `Counts().Kind(0)` gives the total.
+
+```go
+x, err := relay.NewSearchIndexer(store, engine,
+	relay.WithSearchBatch(10_000), relay.WithSearchInFlight(4))
+if err != nil {
+	log.Fatal(err)
+}
+go x.Run(ctx)
+```
+
 ### Hosting NIP-29 groups
 
 With `nip29/relayreg` blank-imported, `SessionHandler.Groups()` hosts
