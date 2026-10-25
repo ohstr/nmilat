@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/ohstr/nmilat/nip11"
@@ -114,8 +115,13 @@ func TestProcessAuth_InvalidSignature(t *testing.T) {
 	if err := ev.Sign(authTestPrivKey); err != nil {
 		t.Fatalf("sign: %v", err)
 	}
-	// Corrupt the signature only, so Verify() is what fails.
-	ev.Sig = "00" + ev.Sig[2:]
+	// Corrupt the signature only, so Verify() is what fails; a signature
+	// already starting 00 would be left unchanged.
+	if strings.HasPrefix(ev.Sig, "00") {
+		ev.Sig = "ff" + ev.Sig[2:]
+	} else {
+		ev.Sig = "00" + ev.Sig[2:]
+	}
 
 	if err := sess.processAuth(context.Background(), &wire.AuthPacket{Event: ev}); err != nil {
 		t.Fatalf("processAuth: %v", err)
