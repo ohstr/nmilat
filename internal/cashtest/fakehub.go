@@ -420,11 +420,6 @@ func (h *FakeHub) chunks(replyKey [32]byte, replyTo string, r transport.Response
 		part := r
 		part.Results, part.Seq, part.Total = results, seq, len(parts)
 		encoded, err := part.EncodeResponse(h.Limits)
-		if err != nil && !isLowerHex64(part.ReqNonce) {
-			// An E4 refusal of a malformed nonce echoes it as sent, which
-			// EncodeResponse will not write; the refusal goes out unpadded.
-			encoded, err = json.Marshal(part)
-		}
 		if err != nil {
 			h.t.Errorf("cashtest: encode reply chunk %d: %v", seq, err)
 			return nil

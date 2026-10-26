@@ -92,3 +92,25 @@ func TestResultError_Detail(t *testing.T) {
 		t.Errorf("an empty detail is omitted: %s", b)
 	}
 }
+
+// An E4 refusal echoes a malformed nonce as sent; nothing else may carry one.
+func TestEncodeResponse_RefusalEchoesAMalformedNonce(t *testing.T) {
+	bad := strings.ToUpper(strings.Repeat("ab", 32))
+	refusal := ResponseEnvelope{Version: EnvelopeVersion, ReqNonce: bad, Error: &ResultError{Code: "BAD_REQUEST"}}
+	enc, err := refusal.EncodeResponse(DefaultLimits())
+	if err != nil {
+		t.Fatalf("refusal: %v", err)
+	}
+	if c, err := DecodeResponseChunk(enc, bad, nil, 0); err != nil || c.Error.Code != "BAD_REQUEST" {
+		t.Fatalf("decode: %v", err)
+	}
+	results := ResponseEnvelope{Version: EnvelopeVersion, ReqNonce: bad, Results: []Result{}}
+	if _, err := results.EncodeResponse(DefaultLimits()); !errors.Is(err, ErrResponseMalformed) {
+		t.Fatalf("a results reply with a malformed nonce: %v", err)
+	}
+	empty := refusal
+	empty.ReqNonce = ""
+	if _, err := empty.EncodeResponse(DefaultLimits()); !errors.Is(err, ErrResponseMalformed) {
+		t.Fatalf("an empty nonce: %v", err)
+	}
+}

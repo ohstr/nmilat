@@ -203,7 +203,12 @@ func (r ResponseEnvelope) EncodeResponse(limits Limits) ([]byte, error) {
 	if r.Version != EnvelopeVersion {
 		return nil, fmt.Errorf("%w: %d", ErrEnvelopeVersion, r.Version)
 	}
-	if len(r.ReqNonce) != keyHexLen || !isLowerHex(r.ReqNonce) {
+	// A reply echoes the request's nonce as sent. Only an envelope-level refusal
+	// can answer a malformed one: NIP-CASH §Serving an Envelope E4 refuses an
+	// envelope whose nonce is not 64 lowercase hex with BAD_REQUEST, and that
+	// reply must still name the nonce the client sent.
+	refusal := r.Error != nil && len(r.Results) == 0
+	if (len(r.ReqNonce) != keyHexLen || !isLowerHex(r.ReqNonce)) && !(refusal && r.ReqNonce != "") {
 		return nil, fmt.Errorf("%w: req_nonce must be %d lowercase hex characters",
 			ErrResponseMalformed, keyHexLen)
 	}
