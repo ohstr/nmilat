@@ -14,6 +14,7 @@ privacy and performance fixes.
   to issue a token whose signature does not recover to the node key,
   `LocalMintSigner`, `IsReservedSignText`, and the online check
   (`OnlineCheck`, `HubIdentityEqual`).
+  ([#184](https://github.com/ohstr/nmilat/pull/184))
 - Adds signed connection strings: `cashhub1` carries the Hub identity, a
   node signature and the chain (TLV 4, 5, 6), with `SignCashHubConnection`,
   `CashHubConnection.Verify`, `ConnSignedText`, `SignConnection`,
@@ -402,6 +403,7 @@ privacy and performance fixes.
 
 - Removes `nipcash.MintPayload` and the `lokicash-mint:v1` payload: a token
   signed over it carries no valid provenance.
+  ([#184](https://github.com/ohstr/nmilat/pull/184))
 
 ### Fixed
 
