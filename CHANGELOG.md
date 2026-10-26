@@ -12,8 +12,10 @@ privacy and performance fixes.
   node signature and the chain (TLV 4, 5, 6), with `SignCashHubConnection`,
   `CashHubConnection.Verify`, `ConnSignedText`, `SignConnection`,
   `VerifyConnection`, `LocalChainSigner`, `RelayHash` and `QRForm`.
+  ([#183](https://github.com/ohstr/nmilat/pull/183))
 - Adds TLV 8, the token's signature scheme (`Token.Scheme`), and
   `Token.UsableRelays`.
+  ([#183](https://github.com/ohstr/nmilat/pull/183))
 - Adds the `nipcash/conformance` suite, which runs the spec's Hub scenarios
   against any Hub through `HubUnderTest` and optional `Clocked`, `Faulty`,
   `Admin`, `HubDeleter`, `OrderPayer`, `PowRelay` and `Lister` adapters; this
@@ -266,9 +268,11 @@ privacy and performance fixes.
   string that mixes upper and lower case (`ErrMixedCase`); an all-uppercase
   string decodes. A token whose TLV 5/6 come without a valid TLV 8 now has no
   provenance.
+  ([#183](https://github.com/ohstr/nmilat/pull/183))
 - Changes `CashHubConnection` to `{Pubkey, Relays, Secret, Label, HasLabel,
   HubIdentity, Signature, Chain}`; `EncodeCashHubConnection` refuses an
   unsigned connection and `DecodeCashHubConnection` one missing TLV 4, 5 or 6.
+  ([#183](https://github.com/ohstr/nmilat/pull/183))
 - Changes `ItemOutcome` so a reply split into chunks reports unanswered and
   contradicted items separately (`OutcomeUnanswered`, `OutcomeConflict`), a
   result whose `result_type` is not the item's method is never read as a
