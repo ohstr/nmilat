@@ -14,31 +14,40 @@ import (
 // test, so a change to a prefix, separator, payload scheme or kind number turns
 // these red instead of moving both sides of a round trip together.
 
-// Private key 0x11 repeated 32 times; its compressed pubkey is the minter.
-const (
-	katMinter = "034f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa"
-	// MintPayload(hrp, 0x22 x 32, 21000) signed under each backend's prefix.
-	katLokicashSig = "20c72cfbb8e8566000d6d90904c0c04fd047ce066dd599ede34c84dfb314f3126709ad9a50800f285c90a9683f8282b268a8bb85f8b7a9599f9b4482cbfd83b508"
-	katSatscashSig = "1fcae9f6586ffbf8b1ee7e71eb3a531fc605573f2e04934899040d5237ef7280ad0a75647a2ebf91a982a93aaeaba324768e8b3a28e137bec9570d7f7e9d559b6c"
-)
-
-// NIP-CASH §Mint Provenance: pins the payload scheme, flnd's and lnd's prefixes,
-// and the double-SHA256 digest.
-func TestKAT_MintProvenance(t *testing.T) {
+// T04-05: a signature over the removed lokicash-mint:v1:<hrp>:<wallet>:<amount>
+// payload carries no provenance: without TLV 8 the decoder marks the set
+// malformed, and with TLV 8 = 1 it is a signature over another text.
+func TestT04_05_RemovedPayloadHasNoProvenance(t *testing.T) {
 	wallet := hex.EncodeToString(bytes.Repeat([]byte{0x22}, 32))
 	amount := uint64(21000)
-	if got, want := MintPayload("lokicash", wallet, amount), "lokicash-mint:v1:lokicash:"+wallet+":21000"; got != want {
-		t.Fatalf("MintPayload = %q, want %q", got, want)
+	sign, err := LocalMintSigner(hex.EncodeToString(bytes.Repeat([]byte{0x11}, 32)), "lokicash")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for hrp, sigHex := range map[string]string{"lokicash": katLokicashSig, "satscash": katSatscashSig} {
-		sig, err := hex.DecodeString(sigHex)
-		if err != nil {
-			t.Fatal(err)
-		}
-		got, ok := VerifyProvenance(Token{HRP: hrp, WalletPubkey: wallet, MintSignature: sig, AttestedAmountMillis: &amount, Scheme: SchemeMintV1})
-		if !ok || got != katMinter {
-			t.Errorf("%s vector: VerifyProvenance = (%s, %v), want (%s, true)", hrp, got, ok, katMinter)
-		}
+	sig, err := sign("lokicash-mint:v1:lokicash:" + wallet + ":21000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok := Token{HRP: "lokicash", WalletPubkey: wallet, Secret: hex.EncodeToString(bytes.Repeat([]byte{0x33}, 32)),
+		RelayURLs: []string{"wss://r.example"}, MintSignature: sig, AttestedAmountMillis: &amount, Scheme: SchemeMintV1}
+	minter := "034f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa" // key 0x11 x 32
+	if m, _ := VerifyProvenance(tok); m == minter {
+		t.Fatal("a signature over the removed payload recovered the minter under cash-mint:v1")
+	}
+	var buf bytes.Buffer
+	pub, _ := hex.DecodeString(wallet)
+	sec, _ := hex.DecodeString(tok.Secret)
+	writeTLV(&buf, tlvWalletPubkey, pub)
+	writeTLV(&buf, tlvRelay, []byte("wss://r.example"))
+	writeTLV(&buf, tlvSecret, sec)
+	writeTLV(&buf, tlvMintSignature, sig)
+	amt := []byte{0, 0, 0, 0, 0, 0, 0x52, 0x08}
+	writeTLV(&buf, tlvAttestedAmount, amt)
+	bits5, _ := bech32.ConvertBits(buf.Bytes(), 8, 5, true)
+	s, _ := bech32.Encode("lokicash", bits5)
+	got, err := Decode(s)
+	if err != nil || got.Scheme != SchemeMalformed || got.HasProvenance() {
+		t.Fatalf("no TLV 8: scheme %d err %v", got.Scheme, err)
 	}
 }
 

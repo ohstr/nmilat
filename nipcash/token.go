@@ -125,16 +125,14 @@ type Token struct {
 
 	IdentityRequired *bool
 
-	// MintSignature and AttestedAmountMillis are the optional mint-
-	// provenance pair (NIP-CASH §Mint Provenance): a recoverable ECDSA
-	// signature (raw mintSigLen bytes) by the minting node's Lightning
-	// identity key over MintPayload(HRP, WalletPubkey,
-	// *AttestedAmountMillis), and the amount that payload commits to. Both
-	// nil = no provenance; both set = provenance present. Decode enforces
-	// both-or-neither by dropping a lone one (never a decode failure — both
-	// are optional). Verify with VerifyProvenance, which recovers the
-	// signer pubkey; a bare signature proves origin and denomination but is
-	// NEVER a spending credential.
+	// MintSignature and AttestedAmountMillis are the mint-provenance pair
+	// (NIP-CASH §Mint Provenance): a 65-byte compact recoverable signature by
+	// the minting node's identity key over the payload Scheme names
+	// (ProvenancePayload), and the amount it commits to. An encoder requires
+	// both; a decoder drops a faulty pair and marks Scheme SchemeMalformed.
+	// VerifyProvenance or VerifyZapProvenance recovers the signer; the
+	// signature proves origin and denomination and is NEVER a spending
+	// credential.
 	MintSignature        []byte
 	AttestedAmountMillis *uint64
 

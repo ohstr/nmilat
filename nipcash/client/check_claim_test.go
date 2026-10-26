@@ -2,7 +2,6 @@ package client
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"strings"
 	"testing"
@@ -26,17 +25,21 @@ func TestCheckClaim_TombstoneIsSpent(t *testing.T) {
 	}
 }
 
-// signedKATToken is nipcash's frozen lokicash provenance vector: wallet 0x22 x 32,
-// 21000 millis, signed by private key 0x11 x 32 (minter katMinter).
+// signedKATToken is a lokicash bill of wallet 0x22 x 32 and 21000 millis, signed
+// under cash-mint:v1 by private key 0x11 x 32 (minter katMinter).
 func signedKATToken(t *testing.T) nipcash.Token {
 	t.Helper()
-	sig, err := hex.DecodeString("20c72cfbb8e8566000d6d90904c0c04fd047ce066dd599ede34c84dfb314f3126709ad9a50800f285c90a9683f8282b268a8bb85f8b7a9599f9b4482cbfd83b508")
+	amount := uint64(21000)
+	sign, err := nipcash.LocalMintSigner(strings.Repeat("11", 32), "lokicash")
 	if err != nil {
 		t.Fatal(err)
 	}
-	amount := uint64(21000)
-	return nipcash.Token{HRP: "lokicash", WalletPubkey: strings.Repeat("22", 32), Secret: strings.Repeat("33", 32),
-		RelayURLs: []string{"wss://r.example"}, MintSignature: sig, AttestedAmountMillis: &amount, Scheme: nipcash.SchemeMintV1}
+	tok, err := nipcash.SignToken(nipcash.Token{HRP: "lokicash", WalletPubkey: strings.Repeat("22", 32), Secret: strings.Repeat("33", 32),
+		RelayURLs: []string{"wss://r.example"}, AttestedAmountMillis: &amount}, nipcash.SchemeMintV1, nil, katMinter[2:], sign)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tok
 }
 
 const katMinter = "034f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa"

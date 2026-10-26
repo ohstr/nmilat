@@ -241,11 +241,11 @@ func normalizeRecovery(sig []byte) ([]byte, bool) {
 // recoverXOnly recovers the signer of text under prefix and returns its x-only key
 // as 64 lowercase hex. sig carries a compressed-key header.
 func recoverXOnly(sig []byte, prefix, text string) (string, bool) {
-	pub, _, err := ecdsa.RecoverCompact(sig, doubleSHA256([]byte(prefix+text)))
-	if err != nil {
+	compressed, ok := recoverCompressed(sig, prefix, text)
+	if !ok {
 		return "", false
 	}
-	return hex.EncodeToString(pub.SerializeCompressed()[1:]), true
+	return compressed[2:], true
 }
 
 func lowerKeyHex(s, field string) (string, error) {

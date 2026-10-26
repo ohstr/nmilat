@@ -8,6 +8,12 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds the `cash-mint:v1` and `cash-zap:v1` mint signatures with
+  `relay_hash` (`MintPayloadV1`, `ZapPayloadV1`, `ProvenancePayload`,
+  `VerifyZapProvenance`, `MinterXOnly`), `nipcash.SignToken`, which refuses
+  to issue a token whose signature does not recover to the node key,
+  `LocalMintSigner`, `IsReservedSignText`, and the online check
+  (`OnlineCheck`, `HubIdentityEqual`).
 - Adds signed connection strings: `cashhub1` carries the Hub identity, a
   node signature and the chain (TLV 4, 5, 6), with `SignCashHubConnection`,
   `CashHubConnection.Verify`, `ConnSignedText`, `SignConnection`,
@@ -391,6 +397,11 @@ privacy and performance fixes.
   NIP. ([#38](https://github.com/ohstr/nmilat/pull/38))
 - Takes the `*GroupsService` in `NewQueryHandler`, so `POST /query` applies
   REQ's NIP-29 visibility. ([#74](https://github.com/ohstr/nmilat/pull/74))
+
+### Removed
+
+- Removes `nipcash.MintPayload` and the `lokicash-mint:v1` payload: a token
+  signed over it carries no valid provenance.
 
 ### Fixed
 
@@ -793,6 +804,8 @@ Full Blossom support.
 
 ### Removed
 
+- Removes `nipcash.MintPayload` and the `lokicash-mint:v1` payload: a token
+  signed over it carries no valid provenance.
 - Removes the unused `nip11.DelegationConfig`. ([781d85b](https://github.com/ohstr/nmilat/commit/781d85b))
 
 ## [0.2.3]
