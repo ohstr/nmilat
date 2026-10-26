@@ -258,7 +258,7 @@ func TestT02_06_FakeNWC(t *testing.T) {
 		t.Fatal(err)
 	}
 	nwc, err := relayclient.NewNWCClient(context.Background(), &nip47.PairingInfo{
-		WalletPubkey: conn.WalletPubkey, RelayURLs: conn.RelayURLs, Secret: conn.Secret}, nip47.EncryptionNIP44V2)
+		WalletPubkey: conn.Pubkey, RelayURLs: conn.Relays, Secret: conn.Secret}, nip47.EncryptionNIP44V2)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -5,10 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 
-	"github.com/flokiorg/go-flokicoin/chainutil/bech32"
+	"github.com/ohstr/nmilat/internal/credcodec"
 )
 
 // TLV type numbers within a cash-token-family bech32 string (NIP-CASH §The
@@ -26,6 +28,42 @@ const (
 	tlvMintSignature    uint8 = 5
 	tlvAttestedAmount   uint8 = 6
 	tlvHubGroup         uint8 = 7
+	tlvSignatureScheme  uint8 = 8
+)
+
+// SignatureScheme is a token's TLV 8: which payload its mint signature signs
+// (NIP-CASH §Mint Provenance).
+type SignatureScheme uint8
+
+const (
+	// SchemeNone is a token with no provenance at all.
+	SchemeNone SignatureScheme = 0
+	// SchemeMintV1 signs "cash-mint:v1:...".
+	SchemeMintV1 SignatureScheme = 1
+	// SchemeZapV1 signs "cash-zap:v1:..." (a bill created by a zap transfer).
+	SchemeZapV1 SignatureScheme = 2
+	// SchemeMalformed is a decoded token whose provenance fields are present but
+	// unusable: TLV 8 absent beside 5/6, wrong-length, repeated or unknown, or
+	// 5/6 themselves wrong-length, repeated or unpaired. The token decodes with no
+	// valid provenance; an encoder never writes it.
+	SchemeMalformed SignatureScheme = 0xFF
+)
+
+var (
+	// ErrTokenUnsigned is a token Encode was asked to write without a complete
+	// provenance: a 65-byte mint signature, an attested amount and a scheme of
+	// SchemeMintV1 or SchemeZapV1. A Hub never issues an unsigned token.
+	ErrTokenUnsigned = errors.New("nipcash: a token must carry its mint signature, attested amount and signature scheme")
+	// ErrBlankRelayHint is an empty or whitespace-only relay hint Encode was asked
+	// to write; it is refused, never skipped, so relay_hash covers what is written.
+	ErrBlankRelayHint = credcodec.ErrBlankRelayHint
+	// ErrNonASCIIRelayHint is a relay hint with a non-ASCII byte.
+	ErrNonASCIIRelayHint = credcodec.ErrNonASCIIRelayHint
+	// ErrHRPCase is an HRP Encode was asked to write that is not lowercase.
+	ErrHRPCase = errors.New("nipcash: a token's hrp must be lowercase")
+	// ErrMixedCase is a bech32 credential that mixes upper and lower case, which
+	// every decoder here refuses, as BIP-173 requires (NIP-CASH §Wire Format).
+	ErrMixedCase = credcodec.ErrMixedCase
 )
 
 // HubGroupLen is the byte length of the hub-group fingerprint (TLV type 7): a
@@ -114,6 +152,29 @@ type Token struct {
 	// and the Hub to refuse, which costs a retry and never moves value. Compare with
 	// HasProvenance, which IS verifiable and does identify the minter.
 	HubGroup []byte
+
+	// Scheme is TLV 8, which payload MintSignature signs. Decode sets
+	// SchemeMalformed, and drops the signature and amount, when the provenance
+	// fields are present but unusable.
+	Scheme SignatureScheme
+}
+
+// UsableRelays are the relay hints a client dials: in encoded order, those that
+// are non-empty once ASCII whitespace is trimmed and parse as ws:// or wss:// URLs.
+// RelayURLs keeps every entry as encoded, since relay_hash covers them all.
+func (t Token) UsableRelays() []string {
+	var out []string
+	for _, r := range t.RelayURLs {
+		if credcodec.IsBlankHint(r) {
+			continue
+		}
+		u, err := url.Parse(strings.Trim(r, " \t\n\r\f\v"))
+		if err != nil || (u.Scheme != "ws" && u.Scheme != "wss") || u.Host == "" {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 // SameHubGroup reports whether two tokens carry the same hub fingerprint, i.e.
@@ -140,14 +201,26 @@ func HubGroupFor(hubPubkeyHex string) []byte {
 	return sum[:HubGroupLen]
 }
 
-// HasProvenance reports whether t carries a complete mint-provenance pair.
+// HasProvenance reports whether t carries a complete mint-provenance set: the
+// signature, the attested amount and a known scheme.
 func (t Token) HasProvenance() bool {
-	return t.MintSignature != nil && t.AttestedAmountMillis != nil
+	return t.MintSignature != nil && t.AttestedAmountMillis != nil &&
+		(t.Scheme == SchemeMintV1 || t.Scheme == SchemeZapV1)
 }
 
-// Encode packages t into a cash-token-family bech32 token under t.HRP.
-// WalletPubkey and Secret MUST each be a 32-byte hex string.
+// Encode packages t into a cash-token-family bech32 token under t.HRP, in
+// lowercase, entries in ascending type order: 0, 1..., 2, 3, 5, 6, 7, 8.
+//
+// It refuses an unsigned token (ErrTokenUnsigned: a 65-byte MintSignature, an
+// AttestedAmountMillis and a Scheme of SchemeMintV1 or SchemeZapV1 are required),
+// a hint that is empty or whitespace-only (ErrBlankRelayHint), non-ASCII
+// (ErrNonASCIIRelayHint) or over 255 bytes, a token with no hint, a non-lowercase
+// HRP (ErrHRPCase) and a wrong-length hub group. Every hint is written as given,
+// never skipped, so the relay_hash a signer computed over RelayURLs matches.
 func Encode(t Token) (string, error) {
+	if t.HRP == "" || strings.ToLower(t.HRP) != t.HRP {
+		return "", fmt.Errorf("%w: %q", ErrHRPCase, t.HRP)
+	}
 	pubkey, err := decodeKeyHex(t.WalletPubkey, "wallet pubkey")
 	if err != nil {
 		return "", err
@@ -156,23 +229,25 @@ func Encode(t Token) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// A cash token is reached only through its own relay hints — there is no
-	// discovery path for a bill's wallet pubkey, which is published nowhere, and
-	// no client-side fallback. So at least one usable hint is REQUIRED, exactly as
-	// for a hub connection (NIP-CASH §The Cash Token).
-	if countUsableRelays(t.RelayURLs) == 0 {
-		return "", fmt.Errorf("nipcash: a cash token needs at least one non-empty relay url, or nobody can reach the wallet")
+	// A cash token is reached only through its own relay hints: a bill's wallet
+	// pubkey is published nowhere, so at least one hint is REQUIRED (NIP-CASH
+	// §Relay Hints Are Mandatory).
+	if len(t.RelayURLs) == 0 {
+		return "", fmt.Errorf("nipcash: a cash token needs at least one relay url, or nobody can reach the wallet")
 	}
-	for _, url := range t.RelayURLs {
-		if len(url) > maxTLVValueLen {
-			return "", fmt.Errorf("nipcash: relay url exceeds %d bytes: %q", maxTLVValueLen, url)
+	for _, u := range t.RelayURLs {
+		switch {
+		case credcodec.IsBlankHint(u):
+			return "", fmt.Errorf("%w: %q", ErrBlankRelayHint, u)
+		case !credcodec.IsASCII(u):
+			return "", fmt.Errorf("%w: %q", ErrNonASCIIRelayHint, u)
+		case len(u) > maxTLVValueLen:
+			return "", fmt.Errorf("nipcash: relay url exceeds %d bytes: %q", maxTLVValueLen, u)
 		}
 	}
-	if (t.MintSignature == nil) != (t.AttestedAmountMillis == nil) {
-		return "", fmt.Errorf("nipcash: mint signature and attested amount must be set together")
-	}
-	if t.MintSignature != nil && len(t.MintSignature) != mintSigLen {
-		return "", fmt.Errorf("nipcash: mint signature must be %d bytes, got %d", mintSigLen, len(t.MintSignature))
+	if len(t.MintSignature) != mintSigLen || t.AttestedAmountMillis == nil ||
+		(t.Scheme != SchemeMintV1 && t.Scheme != SchemeZapV1) {
+		return "", ErrTokenUnsigned
 	}
 	if t.HubGroup != nil && len(t.HubGroup) != HubGroupLen {
 		return "", fmt.Errorf("nipcash: hub group must be %d bytes, got %d", HubGroupLen, len(t.HubGroup))
@@ -180,7 +255,9 @@ func Encode(t Token) (string, error) {
 
 	buf := &bytes.Buffer{}
 	writeTLV(buf, tlvWalletPubkey, pubkey)
-	writeRelayTLVs(buf, t.RelayURLs)
+	for _, u := range t.RelayURLs {
+		writeTLV(buf, tlvRelay, []byte(u))
+	}
 	writeTLV(buf, tlvSecret, secret)
 	if t.IdentityRequired != nil {
 		var b byte
@@ -189,35 +266,35 @@ func Encode(t Token) (string, error) {
 		}
 		writeTLV(buf, tlvIdentityRequired, []byte{b})
 	}
-	if t.MintSignature != nil {
-		var amountBytes [attestedAmountLen]byte
-		binary.BigEndian.PutUint64(amountBytes[:], *t.AttestedAmountMillis)
-		writeTLV(buf, tlvMintSignature, t.MintSignature)
-		writeTLV(buf, tlvAttestedAmount, amountBytes[:])
-	}
+	var amountBytes [attestedAmountLen]byte
+	binary.BigEndian.PutUint64(amountBytes[:], *t.AttestedAmountMillis)
+	writeTLV(buf, tlvMintSignature, t.MintSignature)
+	writeTLV(buf, tlvAttestedAmount, amountBytes[:])
 	if t.HubGroup != nil {
 		writeTLV(buf, tlvHubGroup, t.HubGroup)
 	}
-
-	bits5, err := bech32.ConvertBits(buf.Bytes(), 8, 5, true)
-	if err != nil {
-		return "", fmt.Errorf("nipcash: failed to convert bits: %w", err)
-	}
-	return bech32.Encode(t.HRP, bits5)
+	writeTLV(buf, tlvSignatureScheme, []byte{byte(t.Scheme)})
+	return credcodec.EncodeBech32(t.HRP, buf.Bytes())
 }
 
-// Decode parses a cash-token-family bech32 token (any HRP — `lokicash1...`,
-// `satscash1...`, ...) back into its pairing data. It rejects anything
-// missing either required field (wallet pubkey or secret), carrying a
-// malformed length for either, or repeating either one.
+// decodeBech32Case is Decode's one bech32 entry: it refuses a mixed-case string
+// (ErrMixedCase) and decodes the lowercase form.
+func decodeBech32Case(s string) (hrp string, data []byte, err error) {
+	return credcodec.DecodeBech32(s)
+}
+
+// Decode parses a cash-token-family bech32 token (any HRP) back into its
+// pairing data, the string all in lowercase or all in uppercase (a mixed-case
+// one is ErrMixedCase); HRP comes back lowercase. It rejects a token missing
+// TLV 0 or 2, a wrong-length fixed field other than 5-8, a repeated single field
+// other than those, truncated TLV data and a token with no usable relay hint.
+// Faulty provenance (5, 6, 8) leaves the token decodable with no valid
+// provenance and Scheme SchemeMalformed; a faulty hub group (7) is dropped.
+// RelayURLs keeps every TLV 1 entry exactly as encoded, empty ones included.
 func Decode(token string) (Token, error) {
-	hrp, bits5, err := bech32.DecodeNoLimit(token)
+	hrp, data, err := decodeBech32Case(token)
 	if err != nil {
-		return Token{}, fmt.Errorf("nipcash: invalid bech32: %w", err)
-	}
-	data, err := bech32.ConvertBits(bits5, 5, 8, false)
-	if err != nil {
-		return Token{}, fmt.Errorf("nipcash: failed to convert bits: %w", err)
+		return Token{}, fmt.Errorf("nipcash: %w", err)
 	}
 
 	result := Token{HRP: hrp}
@@ -237,6 +314,10 @@ func Decode(token string) (Token, error) {
 	// leave the token simply ungrouped rather than fail the decode.
 	var hubGroup []byte
 	hubGroupPoisoned := false
+	// TLV 8 rides with the provenance pair: anything wrong with it poisons the
+	// provenance, never the decode.
+	var scheme SignatureScheme
+	haveScheme, sawSigOrAmount := false, false
 	curr := 0
 	for curr < len(data) {
 		typ, value, ok := readTLV(data[curr:])
@@ -277,7 +358,15 @@ func Decode(token string) (Token, error) {
 			identityRequired := value[0] == 1
 			result.IdentityRequired = &identityRequired
 			haveIdentityRequired = true
+		case tlvSignatureScheme:
+			if haveScheme || len(value) != 1 || (value[0] != byte(SchemeMintV1) && value[0] != byte(SchemeZapV1)) {
+				provenancePoisoned = true
+			} else {
+				scheme = SignatureScheme(value[0])
+			}
+			haveScheme = true
 		case tlvMintSignature:
+			sawSigOrAmount = true
 			if mintSig != nil || len(value) != mintSigLen {
 				provenancePoisoned = true
 				break
@@ -294,6 +383,7 @@ func Decode(token string) (Token, error) {
 			}
 			hubGroup = append([]byte(nil), value...)
 		case tlvAttestedAmount:
+			sawSigOrAmount = true
 			if attestedAmount != nil || len(value) != attestedAmountLen {
 				provenancePoisoned = true
 				break
@@ -320,9 +410,18 @@ func Decode(token string) (Token, error) {
 		// against a bill that looks perfect.
 		return Token{}, fmt.Errorf("nipcash: token carries no usable relay url, so the wallet is unreachable")
 	}
-	if !provenancePoisoned && mintSig != nil && attestedAmount != nil {
+	switch {
+	case !sawSigOrAmount:
+		// No signature and no amount: no provenance. A lone TLV 8 is ignored.
+		result.Scheme = SchemeNone
+	case !provenancePoisoned && mintSig != nil && attestedAmount != nil && scheme != SchemeNone:
 		result.MintSignature = mintSig
 		result.AttestedAmountMillis = attestedAmount
+		result.Scheme = scheme
+	default:
+		// 5/6 present but unusable, or without a valid TLV 8: no valid provenance,
+		// the rest decodes (there is no legacy scheme).
+		result.Scheme = SchemeMalformed
 	}
 	if !hubGroupPoisoned {
 		result.HubGroup = hubGroup
@@ -359,30 +458,7 @@ func readTLV(data []byte) (typ uint8, value []byte, ok bool) {
 	return typ, data[2 : 2+length], true
 }
 
-// countUsableRelays returns how many of urls are non-empty once trimmed.
-//
-// Empty entries are counted as absent rather than as relays. That distinction is
-// the whole point: a producer whose relay config was unset can easily emit one
-// relay whose URL is "", and such a credential is exactly as unreachable as one
-// carrying no relay TLV at all — while passing any check that only counts
-// entries. Trimming catches the " " variant of the same mistake.
-// writeRelayTLVs writes one relay TLV per usable url, in order. A blank entry is
-// skipped: the wire format requires every relay entry to be non-empty, and one
-// beside a real relay would otherwise pass the count check and be written as-is.
-func writeRelayTLVs(buf *bytes.Buffer, urls []string) {
-	for _, url := range urls {
-		if strings.TrimSpace(url) != "" {
-			writeTLV(buf, tlvRelay, []byte(url))
-		}
-	}
-}
-
-func countUsableRelays(urls []string) int {
-	n := 0
-	for _, u := range urls {
-		if strings.TrimSpace(u) != "" {
-			n++
-		}
-	}
-	return n
-}
+// countUsableRelays counts the hints that are not blank. An unset relay
+// configuration typically yields one empty URL rather than none, and such a
+// credential is exactly as unreachable as one with no hint at all.
+func countUsableRelays(urls []string) int { return credcodec.CountUsableHints(urls) }

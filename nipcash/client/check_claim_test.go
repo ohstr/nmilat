@@ -36,7 +36,7 @@ func signedKATToken(t *testing.T) nipcash.Token {
 	}
 	amount := uint64(21000)
 	return nipcash.Token{HRP: "lokicash", WalletPubkey: strings.Repeat("22", 32), Secret: strings.Repeat("33", 32),
-		RelayURLs: []string{"wss://r.example"}, MintSignature: sig, AttestedAmountMillis: &amount}
+		RelayURLs: []string{"wss://r.example"}, MintSignature: sig, AttestedAmountMillis: &amount, Scheme: nipcash.SchemeMintV1}
 }
 
 const katMinter = "034f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa"

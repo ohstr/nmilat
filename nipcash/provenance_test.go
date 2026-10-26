@@ -25,7 +25,7 @@ func TestVerifyProvenance_HappyPath(t *testing.T) {
 	amount := uint64(40000)
 	sig := signProvenance(t, priv, "lokicash", walletPubkey, amount)
 
-	token := Token{HRP: "lokicash", WalletPubkey: walletPubkey, Secret: randomKeyHex(t), MintSignature: sig, AttestedAmountMillis: &amount}
+	token := Token{HRP: "lokicash", WalletPubkey: walletPubkey, Secret: randomKeyHex(t), MintSignature: sig, AttestedAmountMillis: &amount, Scheme: SchemeMintV1}
 	recovered, ok := VerifyProvenance(token)
 	if !ok {
 		t.Fatal("expected VerifyProvenance to succeed")
@@ -118,7 +118,7 @@ func TestVerifyProvenance_SatscashUsesLndPrefix(t *testing.T) {
 	want := hex.EncodeToString(serialized[:])
 	wallet := randomKeyHex(t)
 	amount := uint64(5000)
-	tok := Token{HRP: "satscash", WalletPubkey: wallet, AttestedAmountMillis: &amount,
+	tok := Token{HRP: "satscash", WalletPubkey: wallet, AttestedAmountMillis: &amount, Scheme: SchemeMintV1,
 		MintSignature: signUnder(t, priv, "Lightning Signed Message:", "satscash", wallet, amount)}
 	got, ok := VerifyProvenance(tok)
 	if !ok || got != want {

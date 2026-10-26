@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/flokiorg/go-flokicoin/chainutil/bech32"
+	"github.com/ohstr/nmilat/internal/credcodec"
 )
 
 // CircleHubConnectionHRP is the fixed bech32 prefix for a Circle Wallet
@@ -70,6 +70,9 @@ func EncodeCircleHubConnection(c CircleHubConnection) (string, error) {
 		if len(url) > maxCircleHubTLVValueLen {
 			return "", fmt.Errorf("nipcw: relay url exceeds %d bytes: %q", maxCircleHubTLVValueLen, url)
 		}
+		if strings.TrimSpace(url) != "" && !credcodec.IsASCII(url) {
+			return "", fmt.Errorf("nipcw: %w: %q", credcodec.ErrNonASCIIRelayHint, url)
+		}
 	}
 	if len(c.Label) > maxCircleHubTLVValueLen {
 		return "", fmt.Errorf("nipcw: label exceeds %d bytes", maxCircleHubTLVValueLen)
@@ -88,11 +91,7 @@ func EncodeCircleHubConnection(c CircleHubConnection) (string, error) {
 		writeCircleHubTLV(buf, circleHubTLVLabel, []byte(c.Label))
 	}
 
-	bits5, err := bech32.ConvertBits(buf.Bytes(), 8, 5, true)
-	if err != nil {
-		return "", fmt.Errorf("nipcw: failed to convert bits: %w", err)
-	}
-	return bech32.Encode(CircleHubConnectionHRP, bits5)
+	return credcodec.EncodeBech32(CircleHubConnectionHRP, buf.Bytes())
 }
 
 // DecodeCircleHubConnection parses a circlehub1... string back into its
@@ -101,18 +100,13 @@ func EncodeCircleHubConnection(c CircleHubConnection) (string, error) {
 // either one. An unrecognized TLV type is ignored rather than rejected, so
 // a future field can be added without breaking older decoders.
 func DecodeCircleHubConnection(s string) (CircleHubConnection, error) {
-	hrp, bits5, err := bech32.DecodeNoLimit(s)
+	hrp, data, err := credcodec.DecodeBech32(s)
 	if err != nil {
-		return CircleHubConnection{}, fmt.Errorf("nipcw: invalid bech32: %w", err)
+		return CircleHubConnection{}, fmt.Errorf("nipcw: %w", err)
 	}
 	if hrp != CircleHubConnectionHRP {
 		return CircleHubConnection{}, fmt.Errorf("nipcw: unexpected hrp %q, want %q", hrp, CircleHubConnectionHRP)
 	}
-	data, err := bech32.ConvertBits(bits5, 5, 8, false)
-	if err != nil {
-		return CircleHubConnection{}, fmt.Errorf("nipcw: failed to convert bits: %w", err)
-	}
-
 	var result CircleHubConnection
 	haveWalletPubkey := false
 	haveSecret := false

@@ -2,6 +2,7 @@ package nipcash
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 
@@ -44,48 +45,57 @@ var (
 
 // The structural rules shared by the cash token and the cashhub1 connection
 // (NIP-CASH §The Cash Token, §The Cash Hub Connection): 0 and 2 exactly once at 32
-// bytes, a usable relay, and no truncated entry. Each case breaks one rule.
+// bytes, a usable relay, and no truncated entry. Each case breaks one rule; the
+// two decoders word their refusals differently.
 var sharedTLVCases = []struct {
-	name    string
-	entries []tlv
-	raw     []byte
-	wantErr string
+	name             string
+	entries          []tlv
+	raw              []byte
+	wantTok, wantHub string
 }{
-	{"missing pubkey", []tlv{{1, fixURL}, {2, fixSecret}}, nil, "missing wallet pubkey"},
-	{"missing secret", []tlv{{0, fixKey}, {1, fixURL}}, nil, "missing secret"},
-	{"duplicate pubkey", []tlv{{0, fixKey}, {0, fixKey}, {1, fixURL}, {2, fixSecret}}, nil, "duplicate wallet pubkey"},
-	{"duplicate secret", []tlv{{0, fixKey}, {1, fixURL}, {2, fixSecret}, {2, fixSecret}}, nil, "duplicate secret"},
-	{"short pubkey", []tlv{{0, fixKey[:31]}, {1, fixURL}, {2, fixSecret}}, nil, "wallet pubkey must be"},
-	{"long secret", []tlv{{0, fixKey}, {1, fixURL}, {2, append(fixSecret, 0)}}, nil, "secret must be"},
-	{"no relay", []tlv{{0, fixKey}, {2, fixSecret}}, nil, "no usable relay"},
-	{"only blank relays", []tlv{{0, fixKey}, {1, []byte(" ")}, {2, fixSecret}}, nil, "no usable relay"},
+	{"missing pubkey", []tlv{{1, fixURL}, {2, fixSecret}}, nil, "missing wallet pubkey", "missing pubkey"},
+	{"missing secret", []tlv{{0, fixKey}, {1, fixURL}}, nil, "missing secret", "missing secret"},
+	{"duplicate pubkey", []tlv{{0, fixKey}, {0, fixKey}, {1, fixURL}, {2, fixSecret}}, nil, "duplicate wallet pubkey", "duplicate TLV 0"},
+	{"duplicate secret", []tlv{{0, fixKey}, {1, fixURL}, {2, fixSecret}, {2, fixSecret}}, nil, "duplicate secret", "duplicate TLV 2"},
+	{"short pubkey", []tlv{{0, fixKey[:31]}, {1, fixURL}, {2, fixSecret}}, nil, "wallet pubkey must be", "pubkey must be"},
+	{"long secret", []tlv{{0, fixKey}, {1, fixURL}, {2, append(fixSecret, 0)}}, nil, "secret must be", "secret must be"},
+	{"no relay", []tlv{{0, fixKey}, {2, fixSecret}}, nil, "no usable relay", "no usable relay"},
+	{"only blank relays", []tlv{{0, fixKey}, {1, []byte(" ")}, {2, fixSecret}}, nil, "no usable relay", "no usable relay"},
 	// The entry claims 32 bytes and carries 3. The checksum is valid, so only the
 	// TLV parser can catch it.
-	{"truncated entry", []tlv{{0, fixKey}, {1, fixURL}}, []byte{2, 32, 1, 2, 3}, "truncated TLV"},
+	{"truncated entry", []tlv{{0, fixKey}, {1, fixURL}}, []byte{2, 32, 1, 2, 3}, "truncated TLV", "truncated TLV"},
 }
 
 func TestDecode_TLVRules(t *testing.T) {
 	for _, tc := range sharedTLVCases {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := Decode(encodeTLVs(t, "lokicash", tc.entries, tc.raw...))
-			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-				t.Fatalf("err = %v, want %q", err, tc.wantErr)
+			if err == nil || !strings.Contains(err.Error(), tc.wantTok) {
+				t.Fatalf("err = %v, want %q", err, tc.wantTok)
 			}
 		})
 	}
 }
 
+// signedTail is a well-formed TLV 4/5/6 set, so the connection cases exercise the
+// rule each one breaks rather than the signature requirement.
+var signedTail = []tlv{{4, fixKey}, {5, bytes.Repeat([]byte{31}, 65)}, {6, []byte("bitcoin")}}
+
 func TestDecodeCashHubConnection_TLVRules(t *testing.T) {
 	for _, tc := range sharedTLVCases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := DecodeCashHubConnection(encodeTLVs(t, CashHubConnectionHRP, tc.entries, tc.raw...))
-			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-				t.Fatalf("err = %v, want %q", err, tc.wantErr)
+			entries := append(append([]tlv{}, tc.entries...), signedTail...)
+			if tc.raw != nil {
+				entries = append(append([]tlv{}, signedTail...), tc.entries...)
+			}
+			_, err := DecodeCashHubConnection(encodeTLVs(t, CashHubConnectionHRP, entries, tc.raw...))
+			if err == nil || !strings.Contains(err.Error(), tc.wantHub) {
+				t.Fatalf("err = %v, want %q", err, tc.wantHub)
 			}
 		})
 	}
-	dupLabel := []tlv{{0, fixKey}, {1, fixURL}, {2, fixSecret}, {3, []byte("a")}, {3, []byte("b")}}
-	if _, err := DecodeCashHubConnection(encodeTLVs(t, CashHubConnectionHRP, dupLabel)); err == nil || !strings.Contains(err.Error(), "duplicate label") {
+	dupLabel := append([]tlv{{0, fixKey}, {1, fixURL}, {2, fixSecret}, {3, []byte("a")}, {3, []byte("b")}}, signedTail...)
+	if _, err := DecodeCashHubConnection(encodeTLVs(t, CashHubConnectionHRP, dupLabel)); err == nil || !strings.Contains(err.Error(), "duplicate TLV 3") {
 		t.Fatalf("duplicate label: err = %v", err)
 	}
 }
@@ -121,7 +131,12 @@ func TestDecode_AnomalousProvenanceIsDroppedNotFatal(t *testing.T) {
 		"short amount":          {{5, sig}, {6, amt[:7]}},
 		"duplicate signature":   {{5, sig}, {5, sig}, {6, amt}},
 		"duplicate amount":      {{5, sig}, {6, amt}, {6, amt}},
-		"short hub group alone": {{5, sig}, {6, amt}, {7, []byte{1, 2, 3}}},
+		"short hub group alone": {{5, sig}, {6, amt}, {7, []byte{1, 2, 3}}, {8, []byte{1}}},
+		"no TLV 8":              {{5, sig}, {6, amt}},
+		"TLV 8 = 0":             {{5, sig}, {6, amt}, {8, []byte{0}}},
+		"TLV 8 = 3":             {{5, sig}, {6, amt}, {8, []byte{3}}},
+		"TLV 8 two bytes":       {{5, sig}, {6, amt}, {8, []byte{1, 1}}},
+		"TLV 8 twice":           {{5, sig}, {6, amt}, {8, []byte{1}}, {8, []byte{1}}},
 	} {
 		tok, err := Decode(encodeTLVs(t, "lokicash", append(append([]tlv{}, base...), extra...)))
 		if err != nil {
@@ -134,8 +149,8 @@ func TestDecode_AnomalousProvenanceIsDroppedNotFatal(t *testing.T) {
 			}
 			continue
 		}
-		if tok.HasProvenance() {
-			t.Errorf("%s: kept provenance from an anomalous pair", name)
+		if tok.HasProvenance() || tok.MintSignature != nil || tok.Scheme != SchemeMalformed {
+			t.Errorf("%s: provenance kept (scheme %d) from an anomalous set", name, tok.Scheme)
 		}
 	}
 }
@@ -146,7 +161,23 @@ func TestEncode_RefusesWrongLengthMintSignature(t *testing.T) {
 	amount := uint64(1000)
 	_, err := Encode(Token{HRP: "lokicash", WalletPubkey: randomKeyHex(t), Secret: randomKeyHex(t),
 		RelayURLs: []string{"wss://r.example"}, MintSignature: make([]byte, 64), AttestedAmountMillis: &amount})
-	if err == nil || !strings.Contains(err.Error(), "mint signature must be") {
-		t.Fatalf("err = %v, want the 65-byte refusal", err)
+	if !errors.Is(err, ErrTokenUnsigned) {
+		t.Fatalf("err = %v, want ErrTokenUnsigned", err)
+	}
+}
+
+// T03: a lone TLV 8, with no signature and no amount, is ignored (SchemeNone); a
+// clean set decodes with its scheme.
+func TestDecode_SchemeAloneAndClean(t *testing.T) {
+	base := []tlv{{0, fixKey}, {1, fixURL}, {2, fixSecret}}
+	tok, err := Decode(encodeTLVs(t, "lokicash", append(append([]tlv{}, base...), tlv{8, []byte{2}})))
+	if err != nil || tok.Scheme != SchemeNone || tok.HasProvenance() {
+		t.Fatalf("lone TLV 8: scheme %d, err %v", tok.Scheme, err)
+	}
+	sig := bytes.Repeat([]byte{1}, 65)
+	amt := []byte{0, 0, 0, 0, 0, 0, 0x52, 0x08}
+	tok, err = Decode(encodeTLVs(t, "lokicash", append(append([]tlv{}, base...), tlv{8, []byte{2}}, tlv{5, sig}, tlv{6, amt})))
+	if err != nil || tok.Scheme != SchemeZapV1 || !tok.HasProvenance() {
+		t.Fatalf("clean zap set in any order: scheme %d, err %v", tok.Scheme, err)
 	}
 }

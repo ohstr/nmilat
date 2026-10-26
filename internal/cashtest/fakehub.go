@@ -184,13 +184,24 @@ func (h *FakeHub) Announcement() *nip01.Event {
 	return ev
 }
 
-// CashHubConnection is the Hub's cashhub1 string. It is not signed yet: the
-// connection signature (TLV 4/5/6) arrives with nipcash.SignConnection, and this
-// returns the signed string from then on.
+// FakeChain is the chain the fake's connection strings name (TLV 6).
+const FakeChain = "bitcoin"
+
+// CashHubConnection is the Hub's cashhub1 string, signed by its node identity
+// through nipcash.SignCashHubConnection.
 func (h *FakeHub) CashHubConnection() string {
-	s, err := nipcash.EncodeCashHubConnection(nipcash.CashHubConnection{
-		WalletPubkey: h.walletXOnly, Secret: h.connSecret, RelayURLs: h.RelayURLs(),
-	})
+	sign, err := nipcash.LocalChainSigner(h.NodePriv, FakeChain)
+	if err != nil {
+		h.t.Fatalf("cashtest: signer: %v", err)
+	}
+	c, err := nipcash.SignCashHubConnection(nipcash.CashHubConnection{
+		Pubkey: h.walletXOnly, Secret: h.connSecret, Relays: h.RelayURLs(),
+		HubIdentity: h.nodeXOnly, Chain: FakeChain,
+	}, sign, h.nodeXOnly)
+	if err != nil {
+		h.t.Fatalf("cashtest: sign cash hub connection: %v", err)
+	}
+	s, err := nipcash.EncodeCashHubConnection(c)
 	if err != nil {
 		h.t.Fatalf("cashtest: cash hub connection: %v", err)
 	}

@@ -148,8 +148,8 @@ func TestDecodeCircleHubConnectionWrongHRP(t *testing.T) {
 	// wallet pubkey + secret) but the wrong HRP — must be rejected, not
 	// silently accepted as a circle hub connection.
 	s, err := nipcash.EncodeCashHubConnection(nipcash.CashHubConnection{
-		WalletPubkey: randomKeyHex(t), Secret: randomKeyHex(t),
-		RelayURLs: []string{"wss://r.example"},
+		Pubkey: randomKeyHex(t), Secret: randomKeyHex(t), Relays: []string{"wss://r.example"},
+		HubIdentity: randomKeyHex(t), Signature: make([]byte, 65), Chain: "bitcoin",
 	})
 	if err != nil {
 		t.Fatalf("setup error = %v", err)

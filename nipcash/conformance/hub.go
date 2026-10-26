@@ -13,7 +13,7 @@ import (
 )
 
 // suite is what every case knows about the Hub, found once from its Cash Hub
-// connection the way a client finds it: get_info names the node identity, whose
+// connection the way a client finds it: TLV 4 names the node identity, whose
 // announcement names the inbox, limits and relays.
 type suite struct {
 	h         HubUnderTest
@@ -36,7 +36,7 @@ func connect(t *testing.T, h HubUnderTest, o Options) *suite {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	nwc, err := relayclient.NewNWCClient(context.Background(), &nip47.PairingInfo{
-		WalletPubkey: conn.WalletPubkey, RelayURLs: conn.RelayURLs, Secret: conn.Secret,
+		WalletPubkey: conn.Pubkey, RelayURLs: conn.Relays, Secret: conn.Secret,
 	}, nip47.EncryptionNIP44V2)
 	if err != nil {
 		t.Fatalf("conformance: open the Cash Hub connection: %v", err)
@@ -46,12 +46,12 @@ func connect(t *testing.T, h HubUnderTest, o Options) *suite {
 	if err != nil {
 		t.Fatalf("conformance: get_info on the Cash Hub connection: %v", err)
 	}
-	session, err := client.OpenBatchSession(ctx, info.Pubkey, conn.RelayURLs)
+	session, err := client.OpenBatchSession(ctx, conn.HubIdentity, conn.Relays)
 	if err != nil {
-		t.Fatalf("conformance: the announcement of %s (get_info pubkey) did not verify: %v", info.Pubkey, err)
+		t.Fatalf("conformance: the announcement of %s (TLV 4) did not verify: %v", conn.HubIdentity, err)
 	}
 	return &suite{
-		h: h, o: o, conn: conn, nwc: nwc, info: info, nodeXOnly: info.Pubkey,
+		h: h, o: o, conn: conn, nwc: nwc, info: info, nodeXOnly: conn.HubIdentity,
 		inbox: session.Inbox(), limits: session.Limits(), relays: session.Relays(),
 	}
 }

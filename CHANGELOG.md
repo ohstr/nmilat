@@ -8,6 +8,12 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds signed connection strings: `cashhub1` carries the Hub identity, a
+  node signature and the chain (TLV 4, 5, 6), with `SignCashHubConnection`,
+  `CashHubConnection.Verify`, `ConnSignedText`, `SignConnection`,
+  `VerifyConnection`, `LocalChainSigner`, `RelayHash` and `QRForm`.
+- Adds TLV 8, the token's signature scheme (`Token.Scheme`), and
+  `Token.UsableRelays`.
 - Adds the `nipcash/conformance` suite, which runs the spec's Hub scenarios
   against any Hub through `HubUnderTest` and optional `Clocked`, `Faulty`,
   `Admin`, `HubDeleter`, `OrderPayer`, `PowRelay` and `Lister` adapters; this
@@ -255,6 +261,14 @@ privacy and performance fixes.
 
 ### Changed
 
+- Changes `nipcash.Encode` to refuse unsigned tokens and empty, blank or
+  non-ASCII relay hints, and the bech32 credential decoders to refuse a
+  string that mixes upper and lower case (`ErrMixedCase`); an all-uppercase
+  string decodes. A token whose TLV 5/6 come without a valid TLV 8 now has no
+  provenance.
+- Changes `CashHubConnection` to `{Pubkey, Relays, Secret, Label, HasLabel,
+  HubIdentity, Signature, Chain}`; `EncodeCashHubConnection` refuses an
+  unsigned connection and `DecodeCashHubConnection` one missing TLV 4, 5 or 6.
 - Changes `ItemOutcome` so a reply split into chunks reports unanswered and
   contradicted items separately (`OutcomeUnanswered`, `OutcomeConflict`), a
   result whose `result_type` is not the item's method is never read as a

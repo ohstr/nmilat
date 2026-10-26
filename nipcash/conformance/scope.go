@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +16,26 @@ import (
 var scopeCases = []ctCase{
 	{id: "CT-ENV-14", run: ctEnv14},
 	{id: "CT-SCOPE-03", run: ctScope03},
+	{id: "CT-CSIG-01", run: ctCsig01},
+}
+
+// CT-CSIG-01 (CASH-CSIG-01..03): the cashhub1 string the Hub hands out carries
+// TLV 4, 5 and 6 (it decoded, so they are there), verifies, and its TLV 4 is the
+// announcement's author. The circlehub1 and cashorder1 halves join with their
+// codecs.
+func ctCsig01(t *testing.T, s *suite) {
+	if err := s.conn.Verify(); err != nil {
+		t.Errorf("cashhub1 does not verify: %v", err)
+	}
+	// The suite found the announcement through TLV 4, so its author is TLV 4. The
+	// get_info half of the online check: its pubkey's x-only part is TLV 4.
+	got := strings.ToLower(s.info.Pubkey)
+	if len(got) == 66 && (strings.HasPrefix(got, "02") || strings.HasPrefix(got, "03")) {
+		got = got[2:]
+	}
+	if got != s.conn.HubIdentity {
+		t.Errorf("get_info pubkey %s is not TLV 4 %s", s.info.Pubkey, s.conn.HubIdentity)
+	}
 }
 
 // CT-ENV-14 (S-CASH-38, S-CASH-161): the bill methods and cash_lookup sent as

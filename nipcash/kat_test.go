@@ -35,7 +35,7 @@ func TestKAT_MintProvenance(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, ok := VerifyProvenance(Token{HRP: hrp, WalletPubkey: wallet, MintSignature: sig, AttestedAmountMillis: &amount})
+		got, ok := VerifyProvenance(Token{HRP: hrp, WalletPubkey: wallet, MintSignature: sig, AttestedAmountMillis: &amount, Scheme: SchemeMintV1})
 		if !ok || got != katMinter {
 			t.Errorf("%s vector: VerifyProvenance = (%s, %v), want (%s, true)", hrp, got, ok, katMinter)
 		}

@@ -67,6 +67,7 @@ func auditCQABillToken(t *testing.T, hubPriv, walletPubkey, connSecret, relay st
 		RelayURLs:            []string{relay},
 		MintSignature:        auditCQASignProvenance(t, hubPriv, "lokicash", walletPubkey, amount),
 		AttestedAmountMillis: &amount,
+		Scheme:               nipcash.SchemeMintV1,
 	}
 }
 

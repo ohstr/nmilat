@@ -23,19 +23,16 @@ const LNSignedMessagePrefix = "Flokicoin Lightning Signed Message:"
 // Bitcoin original. It is the prefix for satscash1... tokens.
 const LndSignedMessagePrefix = "Lightning Signed Message:"
 
-// signedMessagePrefixes maps a token HRP to its backend's signed-message prefix
-// (NIP-CASH §Mint Provenance). The prefix belongs to the minter's Lightning
-// implementation, not to NIP-CASH, so the asset the HRP names decides it.
-var signedMessagePrefixes = map[string]string{
-	"lokicash": LNSignedMessagePrefix,
-	"satscash": LndSignedMessagePrefix,
-}
-
 // SignedMessagePrefix returns the signed-message prefix a minter for hrp signs
-// under, and false for an HRP with no known prefix.
+// under, and false for an HRP with no known prefix. It reads the same table as
+// ChainSignedMessagePrefix.
 func SignedMessagePrefix(hrp string) (string, bool) {
-	prefix, ok := signedMessagePrefixes[hrp]
-	return prefix, ok
+	for _, row := range prefixTable {
+		if row.hrp == hrp {
+			return row.prefix, true
+		}
+	}
+	return "", false
 }
 
 // MintPayload returns the canonical ASCII string a mint signature commits to

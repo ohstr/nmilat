@@ -31,6 +31,7 @@ func sampleToken(t *testing.T, hubGroup []byte) Token {
 		MintSignature:        bytes.Repeat([]byte{0x01}, mintSigLen),
 		AttestedAmountMillis: &amt,
 		HubGroup:             hubGroup,
+		Scheme:               SchemeMintV1,
 	}
 }
 
@@ -180,6 +181,7 @@ func handBuiltToken(t *testing.T, hubGroup []byte, duplicate bool) string {
 	if duplicate {
 		writeTLV(buf, tlvHubGroup, hubGroup)
 	}
+	writeTLV(buf, tlvSignatureScheme, []byte{byte(SchemeMintV1)})
 
 	bits5, err := bech32.ConvertBits(buf.Bytes(), 8, 5, true)
 	if err != nil {
