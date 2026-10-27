@@ -3,7 +3,7 @@ package nipcash
 import "encoding/json"
 
 // PendingSecret is a cash secret generated for a call, written ahead with it.
-// Role is "" for the call's own cash target, "remainder" for a split's
+// Role is "" for the call's own cash target, SecretRoleRemainder for a split's
 // remainder target, SecretRoleRemint for a cancelled withdrawal's re-mint.
 type PendingSecret struct {
 	Secret string `json:"secret"`
@@ -90,7 +90,7 @@ func (p CashTransferParams) Pending(target string) (PendingCall, error) {
 	}
 	secrets := targetSecrets(p.To, "")
 	if p.RemainderTarget != nil {
-		secrets = append(secrets, PendingSecret{Secret: p.RemainderTarget.Secret(), Role: "remainder"})
+		secrets = append(secrets, PendingSecret{Secret: p.RemainderTarget.Secret(), Role: SecretRoleRemainder})
 	}
 	return PendingCall{
 		RequestID: p.RequestID, Method: MethodCashTransfer, Target: target,

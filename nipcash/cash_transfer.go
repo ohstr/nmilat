@@ -30,9 +30,37 @@ type CashTransferParams struct {
 	// and a pubkey To only.
 	ZapTarget string
 	// RemainderTarget is the fresh cash target the remainder takes on a partial
-	// split of a cash source; required then and refused otherwise.
+	// split of a cash source; required then and refused otherwise. The SDK's
+	// send paths generate one when it is nil (WithRemainder).
 	RemainderTarget *CashTarget
 	RequestID       string
+}
+
+// SecretRoleRemainder is the role of a split's remainder secret in a written-
+// ahead call.
+const SecretRoleRemainder = "remainder"
+
+// NeedsRemainder reports a partial split of a cash source: SplitAmount below
+// CurrentAmount, authorized by a cash secret. Such a call carries a
+// remainder_commitment (NIP-CASH §Transferring and Splitting a Slice).
+func (p CashTransferParams) NeedsRemainder() bool {
+	_, isCash := p.Credential.(secretCredential)
+	return isCash && p.SplitAmount != nil && *p.SplitAmount < p.CurrentAmount
+}
+
+// WithRemainder returns p with a fresh RemainderTarget when it NeedsRemainder
+// and has none; otherwise p unchanged (a caller-supplied target is kept, and
+// Request checks it).
+func (p CashTransferParams) WithRemainder() (CashTransferParams, error) {
+	if !p.NeedsRemainder() || p.RemainderTarget != nil {
+		return p, nil
+	}
+	t, err := NewCashTarget()
+	if err != nil {
+		return p, err
+	}
+	p.RemainderTarget = t
+	return p, nil
 }
 
 // cashTransferNewIdentityParam is the wire shape of new_identity.

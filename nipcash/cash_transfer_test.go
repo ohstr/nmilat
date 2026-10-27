@@ -191,3 +191,42 @@ func TestChainForHRP(t *testing.T) {
 		t.Error("cashhub has no chain")
 	}
 }
+
+// CASH-XFER-05: WithRemainder fills a missing remainder target for a partial
+// split of a cash source only, keeps a supplied one, and the result builds.
+func TestCashTransferParams_WithRemainder(t *testing.T) {
+	source, err := NewCashTarget()
+	if err != nil {
+		t.Fatal(err)
+	}
+	to, _ := NewCashTarget()
+	half, full := uint64(500), uint64(1000)
+	p := CashTransferParams{Credential: BySecret(source.Secret()), To: to, CurrentAmount: 1000, SplitAmount: &half,
+		RequestID: strings.Repeat("ab", 32)}
+	if !p.NeedsRemainder() {
+		t.Fatal("a partial cash split needs a remainder")
+	}
+	got, err := p.WithRemainder()
+	if err != nil || got.RemainderTarget == nil || CommitmentsEqual(got.RemainderTarget.Commitment(), source.Commitment()) {
+		t.Fatalf("WithRemainder = %+v, %v", got.RemainderTarget, err)
+	}
+	req, err := got.Request(strings.Repeat("cd", 32))
+	if err != nil || req.RemainderCommitment != got.RemainderTarget.Commitment() {
+		t.Fatalf("Request = %+v, %v", req, err)
+	}
+	pc, err := got.Pending(strings.Repeat("cd", 32))
+	if err != nil || len(pc.Secrets) != 2 || pc.Secrets[1].Role != SecretRoleRemainder || pc.Secrets[1].Secret != got.RemainderTarget.Secret() {
+		t.Fatalf("Pending secrets = %+v, %v", pc.Secrets, err)
+	}
+	kept, _ := got.WithRemainder()
+	if kept.RemainderTarget != got.RemainderTarget {
+		t.Fatal("a supplied remainder target was replaced")
+	}
+	p.SplitAmount = &full
+	if p.NeedsRemainder() {
+		t.Fatal("a full transfer needs no remainder")
+	}
+	if same, _ := p.WithRemainder(); same.RemainderTarget != nil {
+		t.Fatal("a full transfer got a remainder target")
+	}
+}
