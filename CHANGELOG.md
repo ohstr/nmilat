@@ -555,9 +555,11 @@ privacy and performance fixes.
   `nipcash.ConnectionKeyFromAttestation` to refuse an attestation whose `d`
   is not the ConnectionKey of its platform and user id.
   ([#208](https://github.com/ohstr/nmilat/pull/208))
-- Changes `nip44` to refuse a plaintext over 65535 bytes and the extended
-  length prefix (`MaxPlaintextSize` is 65535).
-  ([#208](https://github.com/ohstr/nmilat/pull/208))
+- Changes `nip44.json` to follow NIP-44 v2's extended length prefix: the
+  pinned upstream file's `invalid.encrypt_msg_lengths` rows of 65536 bytes and
+  more are listed as `superseded`, the NIP's extended length prefix vectors
+  (65535, 65536, 65537) are added as `extendedLengthPrefix`, and
+  `nmilatDivergences` is gone. ([#208](https://github.com/ohstr/nmilat/pull/208))
 - Changes `NormalizeAddress` to report a base58check address as
   `ErrAddressNoWitness` rather than a mixed-case error, and
   `WithdrawTerms.Validate` to refuse an empty `script_types`.
