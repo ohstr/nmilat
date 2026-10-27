@@ -8,6 +8,28 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `nipCO` (Cash Orders): the `cashorder1` codec
+  (`EncodeOrderConnection`, `DecodeOrderConnection`, `SignOrderConnection`,
+  `OrderConnection.Verify`), selling terms (`ParseOrderInfo`,
+  `Terms.Validate`, `SellsNothing`), `OrderFee`, `ConfirmationsFor`,
+  `MintSplit`, the `cash_order` request and order shapes, the buyer key
+  (`BuyerKeyFromSecret`, `NewCashOrderTarget`, `NewBuyerKey`, `NewNotify`),
+  the kind-23189 order notice, and the Hub's decisions (`CheckPlacement`,
+  `OrderStateAt`, `OrderRetained`, `OrderBlocksHubDelete`,
+  `OrderHubDeleteAt`, `UnpaidOnchainDeleteAt`, `UsedMarkDroppable`).
+  ([#195](https://github.com/ohstr/nmilat/pull/195))
+- Adds `nipCO/client`: `Connect` (verifies the string, runs the online
+  check, verifies the announcement), `OrderClient.Terms`, `Place` (written
+  ahead, private transport only, `TermsChanged`, on-chain address check),
+  `Lookup`, `Watch`, `Finished` and `EndedUnpaid`.
+  ([#195](https://github.com/ohstr/nmilat/pull/195))
+- Adds `nipcash.MethodCashOrder`, `client.BatchSession.CashOrderMany`,
+  `LookupOrderMany` and `BillCallsUsable`, and `client.ItemOutcome.Accepted`
+  and `Pending`; `Recover` and `Replace` use the new constant and a fresh
+  notify on re-placement. ([#195](https://github.com/ohstr/nmilat/pull/195))
+- Adds an Order connection and order book to the fake Hub, and conformance
+  cases CT-ORD-01, -02, -03 and -14 for Hubs implementing `OrderPayer`.
+  ([#195](https://github.com/ohstr/nmilat/pull/195))
 - Adds `nipCZ` (Cash Zaps): `ParseCashZap` and `ParseCashZapInfo` for kinds
   9522 and 10522, `VerifyClient` (rules 1-8) and `VerifyWallet` (rules 1-6,
   8 and 9, with a caller-supplied rule 9 check and the
@@ -632,6 +654,8 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes `client.AcceptedRecorder` being told item ids instead of
+  request_ids. ([#195](https://github.com/ohstr/nmilat/pull/195))
 - Fixes chunked private replies so a chunk that contradicts another no longer
   discards outcomes already decided, including a new bill's only token. An item
   answered twice, or answered beside an envelope-level error, is reported on its
