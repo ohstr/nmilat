@@ -137,3 +137,26 @@ func withoutSecrets(v any) (json.RawMessage, error) {
 	strip(tree)
 	return json.Marshal(tree)
 }
+
+// Pending is the call to write ahead for this mint over the Cash Hub
+// connection whose TLV 0 is target: the cash targets' secrets and the sum of
+// the recipients' amounts.
+func (p MintCashParams) Pending(target string) (PendingCall, error) {
+	req, err := p.Request()
+	if err != nil {
+		return PendingCall{}, err
+	}
+	raw, err := withoutSecrets(req)
+	if err != nil {
+		return PendingCall{}, err
+	}
+	var amount uint64
+	var secrets []PendingSecret
+	for _, a := range p.Recipients {
+		amount += a.AmountMillis
+		if t, ok := a.Recipient.(*CashTarget); ok && t != nil {
+			secrets = append(secrets, PendingSecret{Secret: t.Secret()})
+		}
+	}
+	return PendingCall{RequestID: p.RequestID, Method: MethodMintCash, Target: target, Secrets: secrets, Amount: amount, Params: raw}, nil
+}
