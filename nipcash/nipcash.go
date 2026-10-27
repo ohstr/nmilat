@@ -48,6 +48,22 @@ const (
 	// MethodCashOrder is NIP-CO's order call: sent on the private transport
 	// only, against an Order connection (package nipCO).
 	MethodCashOrder = "cash_order"
+	// MethodCashWithdrawQuote asks what an on-chain withdrawal of a slice would
+	// pay; it moves nothing (NIP-CASH §Quoting a Withdrawal).
+	MethodCashWithdrawQuote = "cash_withdraw_quote"
+	// MethodCashWithdraw accepts a quote and ends the slice; the Hub then owes
+	// the payout (NIP-CASH §Redeeming On-chain).
+	MethodCashWithdraw = "cash_withdraw"
+)
+
+// Kinds of the withdrawal events. Neither is ever published: each travels
+// JSON-encoded as a string inside an answer or a request.
+const (
+	// KindWithdrawQuote is a Hub's signed quote (NIP-CASH §Quoting a Withdrawal).
+	KindWithdrawQuote = 23187
+	// KindWithdrawReceipt is a Hub's signed receipt for a committed payout
+	// (NIP-CASH §Response).
+	KindWithdrawReceipt = 23188
 )
 
 // Identity type strings used on the wire (a request/response's

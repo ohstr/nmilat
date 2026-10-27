@@ -4,7 +4,7 @@ import "encoding/json"
 
 // PendingSecret is a cash secret generated for a call, written ahead with it.
 // Role is "" for the call's own cash target, "remainder" for a split's
-// remainder target, "remint" for a cancelled withdrawal's re-mint.
+// remainder target, SecretRoleRemint for a cancelled withdrawal's re-mint.
 type PendingSecret struct {
 	Secret string `json:"secret"`
 	Role   string `json:"role,omitempty"`
@@ -45,6 +45,16 @@ type PendingCall struct {
 	Notify   string `json:"notify,omitempty"`
 	// PayBy is set from an order reply that was held; 0 while none was.
 	PayBy int64 `json:"pay_by,omitempty"`
+	// LastDetail is the detail of the answer that set LastCode ("" for none).
+	LastDetail Detail `json:"last_detail,omitempty"`
+	// Quote, Address and HoldsUntil are a cash_withdraw's: the quote event as
+	// sent (a JSON string), its address and its holds_until. A call recovered
+	// from withdraw_request_id has no Quote.
+	Quote      string `json:"quote,omitempty"`
+	Address    string `json:"address,omitempty"`
+	HoldsUntil int64  `json:"holds_until,omitempty"`
+	// Receipt is a cash_withdraw's receipt, set by the caller once it verified.
+	Receipt string `json:"receipt,omitempty"`
 }
 
 // bearerSecret is the cash secret a credential presents, "" for any other.
