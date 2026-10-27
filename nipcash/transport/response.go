@@ -263,14 +263,18 @@ func (r ResponseEnvelope) EncodeResponse(limits Limits) ([]byte, error) {
 // requestedIDs is what closes a confusion vector: without it a hostile or buggy
 // hub could return results for ids the client never sent, and a client demuxing
 // by id would happily attribute them to something.
+//
+// limits.MaxEnvelopeBytes does not cap the reply: it bounds requests only. A
+// plaintext is refused as too large only past 65535 bytes, the same ceiling
+// EncodeResponse pads under.
 func DecodeResponse(plaintext []byte, reqNonce string, requestedIDs []string, limits Limits) (*ResponseEnvelope, error) {
 	if err := limits.Validate(); err != nil {
 		return nil, err
 	}
-	if len(plaintext) > limits.MaxEnvelopeBytes {
-		return nil, fmt.Errorf("%w: %d bytes, limit %d",
-			ErrEnvelopeTooLarge, len(plaintext), limits.MaxEnvelopeBytes)
-	}
+	// The reply's ceiling is NIP-44's 65535 bytes, not the request's max_bytes:
+	// a Hub pads each chunk against its own pad_bucket_bytes and 65535 (NIP-CASH
+	// §Envelopes, `pad`), exactly as EncodeResponse does, so a full reply may be
+	// larger than any request the Hub accepts. DecodeResponseChunk enforces it.
 	chunk, err := DecodeResponseChunk(plaintext, reqNonce, requestedIDs, limits.MaxEnvelopeBytes)
 	if err != nil {
 		return nil, err
