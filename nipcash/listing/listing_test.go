@@ -188,6 +188,13 @@ func TestT22_03_ParseListingSteps(t *testing.T) {
 				}
 			}
 		}, mainnet, 0},
+		{"mixed-case connection", key1, func(e *nip01.Event) {
+			for _, tg := range e.Tags {
+				if tg[0] == "connection" {
+					tg[1] = strings.ToUpper(tg[1][:3]) + tg[1][3:]
+				}
+			}
+		}, mainnet, 2},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

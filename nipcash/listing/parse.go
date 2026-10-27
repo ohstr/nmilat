@@ -41,12 +41,13 @@ var (
 
 // ParseListing runs §Wallet Rules "Before showing a listing" steps 1 to 4 in
 // order, the first failure winning (*ListingError): 1 the kind, id, signature
-// and every count; 2 the type known and connection, lowercased, of that type's
-// HRP, decoded (no other string of the listing is decoded); 3 the string signed
-// by TLV 4, TLV 4 = pubkey, TLV 0 = d, TLV 6 = n; 4 n held and network mainnet
-// unless test networks are enabled. Unknown summary values, a hint or a tag the
-// type does not take, a hint of an unknown payment kind, a non-https image and a
-// g longer than MaxGeohash are dropped, not refused.
+// and every count; 2 the type known and connection of that type's HRP, refused
+// when it mixes upper and lower case, else lowercased and decoded (no other
+// string of the listing is decoded); 3 the string signed by TLV 4, TLV 4 =
+// pubkey, TLV 0 = d, TLV 6 = n; 4 n held and network mainnet unless test
+// networks are enabled. Unknown summary values, a hint or a tag the type does
+// not take, a hint of an unknown payment kind, a non-https image and a g longer
+// than MaxGeohash are dropped, not refused.
 func ParseListing(ev *nip01.Event, o CheckOptions) (*Listing, error) {
 	return parseListing(ev, &o)
 }
@@ -156,6 +157,11 @@ func parseListing(ev *nip01.Event, o *CheckOptions) (*Listing, error) {
 	}
 	for v := range typeCounts {
 		l.Type = Type(v)
+	}
+	// A bech32 string is all one case (BIP-173): refuse one that mixes them
+	// before lowering it.
+	if l.Connection != strings.ToLower(l.Connection) && l.Connection != strings.ToUpper(l.Connection) {
+		return nil, refuse(2, "connection mixes upper and lower case")
 	}
 	conn := strings.ToLower(l.Connection)
 	l.Connection = conn
