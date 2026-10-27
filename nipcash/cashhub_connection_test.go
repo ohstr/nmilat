@@ -301,6 +301,16 @@ func TestEncodeCashHubConnection_Refusals(t *testing.T) {
 	if err != nil || s != kch1String {
 		t.Errorf("a blank hint changed the signed string: %v", err)
 	}
+	// A label set without HasLabel would be written as TLV 3 but left out of
+	// the signed text: neither signed nor encoded.
+	half := kch1(t, false)
+	half.Label = "Alice's Cash Hub"
+	if _, err := SignCashHubConnection(half, sign, kchIdentity); err == nil {
+		t.Error("a label without HasLabel was signed")
+	}
+	if _, err := EncodeCashHubConnection(half); err == nil {
+		t.Error("a label without HasLabel was encoded")
+	}
 }
 
 func mustText(t *testing.T, f ConnFields) string {

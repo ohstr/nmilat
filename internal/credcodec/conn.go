@@ -115,6 +115,9 @@ func EncodeConn(hrp string, c Conn) (string, error) {
 	if c.HasLabel && c.Label == "" {
 		return "", errors.New("an encoder never emits an empty label")
 	}
+	if !c.HasLabel && c.Label != "" {
+		return "", errors.New("a label without HasLabel would be encoded but not signed")
+	}
 	if len(c.Label) > MaxTLVValueLen {
 		return "", fmt.Errorf("label exceeds %d bytes", MaxTLVValueLen)
 	}

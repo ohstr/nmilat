@@ -162,6 +162,9 @@ func SignConnection(f ConnFields, sign MintSigner, expectedXOnly string) ([]byte
 	if f.HasLabel && f.Label == "" {
 		return nil, errors.New("nipcash: an empty label is never emitted, so it is never signed")
 	}
+	if !f.HasLabel && f.Label != "" {
+		return nil, errors.New("nipcash: a label is set without HasLabel, so TLV 3 would be encoded but not signed")
+	}
 	text, err := ConnSignedText(f)
 	if err != nil {
 		return nil, err
