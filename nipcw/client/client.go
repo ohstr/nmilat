@@ -35,8 +35,9 @@ type Client struct {
 	nwc      *relayclient.NWCClient
 	opts     Options
 
-	mu      sync.Mutex
-	session *cashclient.BatchSession
+	mu       sync.Mutex
+	session  *cashclient.BatchSession
+	lastInfo *nip47.GetInfoResult
 }
 
 // Connect dials a circlehub1 string (all lowercase or all uppercase). The string
@@ -77,6 +78,19 @@ func (c *Client) Verified() bool { return c.verified }
 // Connection is the decoded circlehub1 string.
 func (c *Client) Connection() nipcw.CircleHubConnection { return c.conn }
 
+// Info is the get_info result of the last read that passed the online check
+// (at Connect, and again at each Join), for showing the Hub's terms without
+// another round trip. The caller gets its own copy of the top-level struct.
+func (c *Client) Info() *nip47.GetInfoResult {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.lastInfo == nil {
+		return nil
+	}
+	gi := *c.lastInfo
+	return &gi
+}
+
 // info reads get_info and runs the online check on every read.
 func (c *Client) info(ctx context.Context) (*nip47.GetInfoResult, error) {
 	gi, err := c.nwc.GetInfo(ctx)
@@ -89,6 +103,9 @@ func (c *Client) info(ctx context.Context) (*nip47.GetInfoResult, error) {
 	if err := (nipcash.OnlineCheck{HubIdentity: c.conn.HubIdentity, Chain: c.conn.Chain}).Check(gi.CircleWallet.Identity, gi.Chain); err != nil {
 		return nil, err
 	}
+	c.mu.Lock()
+	c.lastInfo = gi
+	c.mu.Unlock()
 	return gi, nil
 }
 
