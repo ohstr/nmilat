@@ -20,7 +20,7 @@ func TestT20_29_CheckOrderAddress(t *testing.T) {
 	for _, ok := range []struct{ addr, network string }{
 		{p2wpkh, "mainnet"}, {p2tr, "mainnet"}, {strings.ToUpper(p2wpkh), "mainnet"}, {regtest, "regtest"},
 	} {
-		got, err := checkOrderAddress(ok.addr, "bitcoin", ok.network)
+		got, err := orderAddress(ok.addr, "bitcoin", ok.network)
 		if err != nil || got != strings.ToLower(ok.addr) {
 			t.Errorf("%s: %q %v", ok.addr, got, err)
 		}
@@ -33,9 +33,23 @@ func TestT20_29_CheckOrderAddress(t *testing.T) {
 		{"bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t5", "mainnet"},                     // checksum
 		{"bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqh2y7hd", "mainnet"}, // v1 in bech32
 	} {
-		if _, err := checkOrderAddress(bad.addr, "bitcoin", bad.network); !errors.Is(err, ErrOrderReplyInvalid) {
+		if _, err := orderAddress(bad.addr, "bitcoin", bad.network); !errors.Is(err, ErrOrderReplyInvalid) {
 			t.Errorf("%s on %s: %v", bad.addr, bad.network, err)
 		}
+	}
+	// A network with no known HRP: any of the chain's; an unknown chain: any HRP.
+	if _, err := orderAddress(regtest, "bitcoin", "othernet"); err != nil {
+		t.Errorf("chain HRPs: %v", err)
+	}
+	const zz = "zz1qw508d6qejxtdg4y5r3zarvary0c5xw7k3c49eg"
+	if _, err := orderAddress(zz, "bitcoin", "othernet"); !errors.Is(err, ErrOrderReplyInvalid) {
+		t.Errorf("zz on bitcoin: %v", err)
+	}
+	if _, err := orderAddress(zz, "othercoin", "mainnet"); err != nil {
+		t.Errorf("zz on an unknown chain: %v", err)
+	}
+	if _, err := orderAddress(" "+p2wpkh, "bitcoin", "mainnet"); !errors.Is(err, ErrOrderReplyInvalid) {
+		t.Error("a padded address accepted")
 	}
 }
 

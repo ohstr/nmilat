@@ -2,9 +2,8 @@ package client
 
 import (
 	"fmt"
-	"strings"
 
-	"github.com/flokiorg/go-flokicoin/chainutil/bech32"
+	"github.com/ohstr/nmilat/nipcash"
 )
 
 // segwitHRPs are the segwit address HRPs by chain and network, as get_info
@@ -14,32 +13,25 @@ var segwitHRPs = map[string]map[string]string{
 	"flokicoin": {"mainnet": "fc", "testnet": "tf", "regtest": "fcrt"},
 }
 
-// checkOrderAddress checks an order's on-chain address: all lowercase or all
-// uppercase (returned lowercased), a valid segwit address (version 0 bech32 with
-// a 20- or 32-byte program, versions 1 to 16 bech32m with 2 to 40 bytes) under
-// the HRP of the Hub's chain and network. A chain and network with no known HRP
-// still need a valid segwit address.
-func checkOrderAddress(addr, chain, network string) (string, error) {
-	if strings.ToLower(addr) != addr && strings.ToUpper(addr) != addr {
-		return "", fmt.Errorf("%w: the address mixes upper and lower case", ErrOrderReplyInvalid)
+// orderAddress checks an order's on-chain address with nipcash's witness
+// address rules: all lowercase or all uppercase (returned lowercased), a valid
+// witness address under the HRP of the Hub's chain and network; under any of
+// the chain's HRPs when the network has no known one; under its own HRP when
+// the chain is unknown too.
+func orderAddress(addr, chain, network string) (string, error) {
+	norm, err := nipcash.NormalizeAddress(addr)
+	if err != nil || len(norm) != len(addr) {
+		return "", fmt.Errorf("%w: the address is not single-case", ErrOrderReplyInvalid)
 	}
-	addr = strings.ToLower(addr)
-	hrp, data, version, err := bech32.DecodeGeneric(addr)
-	if err != nil || len(data) < 1 {
-		return "", fmt.Errorf("%w: the address is not a segwit address", ErrOrderReplyInvalid)
+	if hrp, ok := segwitHRPs[chain][network]; ok {
+		_, err = nipcash.ClassifyAddress(norm, hrp)
+	} else if hrps, ok := nipcash.WithdrawHRPs(chain); ok {
+		_, _, err = nipcash.ClassifyAddressAmong(norm, hrps)
+	} else {
+		_, _, err = nipcash.DecodeWitnessAddress(norm, "")
 	}
-	if want, ok := segwitHRPs[chain][network]; ok && hrp != want {
-		return "", fmt.Errorf("%w: the address is for %q, not the Hub's %s %s", ErrOrderReplyInvalid, hrp, chain, network)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", ErrOrderReplyInvalid, err)
 	}
-	witnessVersion := data[0]
-	prog, err := bech32.ConvertBits(data[1:], 5, 8, false)
-	switch {
-	case err != nil, witnessVersion > 16, len(prog) < 2, len(prog) > 40:
-		return "", fmt.Errorf("%w: malformed witness program", ErrOrderReplyInvalid)
-	case witnessVersion == 0 && (version != bech32.Version0 || (len(prog) != 20 && len(prog) != 32)):
-		return "", fmt.Errorf("%w: malformed version 0 address", ErrOrderReplyInvalid)
-	case witnessVersion > 0 && version != bech32.VersionM:
-		return "", fmt.Errorf("%w: a version %d address is bech32m", ErrOrderReplyInvalid, witnessVersion)
-	}
-	return addr, nil
+	return norm, nil
 }

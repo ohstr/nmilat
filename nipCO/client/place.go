@@ -103,7 +103,7 @@ func (c *OrderClient) Place(ctx context.Context, p nipCO.CashOrderParams, j cash
 	}
 	order := o.Result
 	if order.Payment == nipCO.PaymentOnchain {
-		addr, err := checkOrderAddress(order.Address, c.conn.Chain, c.Network())
+		addr, err := orderAddress(order.Address, c.conn.Chain, c.Network())
 		if err != nil {
 			pc, _ := o.Pending()
 			return nil, &cashclient.IndeterminateError{Call: pc, Cause: err}
