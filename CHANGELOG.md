@@ -8,6 +8,18 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `nipcash/listing` (NIP-CASH §Listing Offers): kind-31190 listings
+  built from signed `cashorder1`/`circlehub1` records (`NewListing`,
+  `ClosedListing`, `NewListingDeletion`); the wallet's checks before showing
+  (`ParseListing`, `ListingError`), `VersionBook` and the at-tap outcomes
+  (`CheckTap`, `TapCache`); operator offers (kind 11191), recommendations
+  (kind 31191), reports and curator sets; signals and ranking from trusted
+  authors only; `SanitizeText`; and the trusted and global fetch filters.
+  ([#198](https://github.com/ohstr/nmilat/pull/198))
+- Adds listings to the fake Hub (`cashtest.Lister`) and conformance cases
+  CT-LIST-01..06. ([#198](https://github.com/ohstr/nmilat/pull/198))
+- Adds the dependency `github.com/rivo/uniseg`, used to count user-perceived
+  characters. ([#198](https://github.com/ohstr/nmilat/pull/198))
 - Adds on-chain withdrawals to `nipcash` (`cash_withdraw_quote`,
   `cash_withdraw`): witness address checks (`DecodeWitnessAddress`,
   `NormalizeAddress`, `ClassifyAddress`, `WithdrawHRPs`), `WithdrawFee`, the
