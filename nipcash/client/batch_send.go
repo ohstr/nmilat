@@ -80,11 +80,6 @@ func (s *BatchSession) sendBatch(ctx context.Context, builders []itemBuilder, op
 			return outcomes, fmt.Errorf("%w: write ahead: %v", ErrNotSent, err)
 		}
 		got, accepted, err := s.sendOne(ctx, p, i)
-		if err != nil && isStalePolicy(err) && !errors.Is(err, ErrNotSent) {
-			if s.Refresh(ctx) == nil {
-				got, accepted, err = s.sendOne(ctx, p, i)
-			}
-		}
 		if !repacked && policyRefused(got) {
 			// The Hub refused the whole envelope for a limit it enforces: nothing
 			// ran, so its items without a request_id are packed again, once, under
@@ -626,15 +621,4 @@ func (s *BatchSession) refreshedPolicy(ctx context.Context, packedUnder transpor
 		return packedUnder, false
 	}
 	return fresh, true
-}
-
-// isStalePolicy reports whether a failure suggests the cached announcement is out of
-// date, rather than something a refetch cannot help with.
-//
-// Deliberately narrow. Refetching on any failure would turn every transient relay
-// problem into an extra round trip, and would mask a caller's own mistakes as hub churn.
-func isStalePolicy(err error) bool {
-	return errors.Is(err, transport.ErrEnvelopeTooLarge) ||
-		errors.Is(err, transport.ErrTooManyItems) ||
-		errors.Is(err, transport.ErrVerifyBudgetExceeded)
 }
