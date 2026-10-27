@@ -49,7 +49,8 @@ type RedeemOptions struct {
 // it unwraps to the underlying error too). The redeem is never resent: the
 // caller reads its own row with RedeemFollowUp. Any other code is definitive
 // (PAYMENT_FAILED: the slice is still claimable, retry with a fresh invoice and
-// proof; RATE_LIMITED: try later, the slice is not spent).
+// proof; RATE_LIMITED: try later, the slice is not spent). A tombstone is a
+// *nipcash.BillGone carrying its reason: the call closes not applied.
 func (c *Client) CashRedeem(ctx context.Context, params nipcash.CashRedeemParams) (*nipcash.CashRedeemResult, error) {
 	return c.CashRedeemWith(ctx, params, RedeemOptions{})
 }
@@ -80,6 +81,11 @@ func (c *Client) CashRedeemWith(ctx context.Context, params nipcash.CashRedeemPa
 		return nil, oneItemOutcome(OutcomeNotServed, nil, sendErr, nipcash.MethodCashRedeem)
 	}
 	out := outcomes[0]
+	if out.Gone != nil {
+		// Closed, not applied: the reason is the tombstone's, never the
+		// message text.
+		return nil, &nipcash.BillGone{Method: nipcash.MethodCashRedeem, Tombstone: *out.Gone}
+	}
 	err = oneItemOutcome(out.State, out.Error, sendErr, nipcash.MethodCashRedeem)
 	if out.NeedsStatus() {
 		return nil, needsStatus(out, err)
