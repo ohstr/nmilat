@@ -8,6 +8,14 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `vectors` (`Files`, `Build`, `WriteAll`, `Version`), which builds
+  every cross-implementation vector file (37) from nmilat with deterministic
+  inputs, and `cmd/export-vectors`; the files are committed under
+  `testdata/vectors` with a drift test and a known-answer read-back test.
+  ([#205](https://github.com/ohstr/nmilat/pull/205))
+- Adds tests freezing the remaining known-answer negatives (relay hash,
+  reply key, params hash, the connection key never produced) and member
+  connection keys. ([#205](https://github.com/ohstr/nmilat/pull/205))
 - Adds `relay.Reject(prefix, err)`, so an event validator chooses its NIP-01
   prefix (other errors stay `invalid:`); `nipCP/relayreg` now refuses a bare
   kind 9525 as `blocked:`.
@@ -773,6 +781,8 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes a proof missing several tags reporting a different missing tag from
+  run to run. ([#205](https://github.com/ohstr/nmilat/pull/205))
 - Fixes `nipLS` line limits: a line of exactly 1 MiB plus its newline is
   accepted on both sides; a longer one is answered `invalid: line too long`,
   discarded without buffering, and the connection kept; a result whose
