@@ -17,6 +17,8 @@ type ItemCtx struct {
 	// the ones the fake has no path of its own for (FaultRouteOverBound,
 	// FaultHoldPayments).
 	Fault Fault
+	// Relay is the relay the envelope arrived on, nil for one handed to Serve.
+	Relay *Relay
 }
 
 type faultKind int
@@ -30,6 +32,9 @@ const (
 	faultBreakSigner
 	faultRouteOverBound
 	faultHoldPayments
+	faultHoldSign
+	faultCrashAfterSign
+	faultHoldBroadcast
 )
 
 // Fault is what goes wrong while the fake Hub serves one item.
@@ -59,6 +64,15 @@ var (
 	// FaultHoldPayments keeps payments in flight until cleared (CASH-S-36).
 	// Like FaultRouteOverBound it is visible to the decision hook only.
 	FaultHoldPayments = Fault{kind: faultHoldPayments}
+	// FaultHoldSign keeps the withdrawal ledger from writing any about-to-sign
+	// record until cleared (WithdrawLedger.InjectFault).
+	FaultHoldSign = Fault{kind: faultHoldSign}
+	// FaultCrashAfterSign is a Hub that stored a signed version and restarted
+	// without broadcasting it: the ledger never broadcasts that version until
+	// cleared.
+	FaultCrashAfterSign = Fault{kind: faultCrashAfterSign}
+	// FaultHoldBroadcast holds every payout broadcast until cleared.
+	FaultHoldBroadcast = Fault{kind: faultHoldBroadcast}
 )
 
 // FaultStallUntil holds the item's commit until the Hub's clock reaches t. A
@@ -86,6 +100,12 @@ func (f Fault) String() string {
 		return "route over bound"
 	case faultHoldPayments:
 		return "hold payments"
+	case faultHoldSign:
+		return "hold sign"
+	case faultCrashAfterSign:
+		return "crash after sign"
+	case faultHoldBroadcast:
+		return "hold broadcast"
 	default:
 		return "unknown fault"
 	}

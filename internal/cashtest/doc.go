@@ -8,6 +8,8 @@
 //
 // The fake decides with the module's own transport helpers (envelope decoding,
 // freshness, the reply key), so it cannot drift from what the SDK expects. Hub
-// rules whose shared helpers do not exist yet are not faked here: the fake has
-// no ledger, and a test says how each item is answered through WithDecide.
+// rules whose shared helpers do not exist yet are not faked here: a test says
+// how each item is answered through WithDecide. The one ledger is
+// ServeWithdrawals': bills minted by mint_cash, their cash_status, and on-chain
+// withdrawals paid on a fake Chain.
 package cashtest

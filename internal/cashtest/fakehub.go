@@ -65,6 +65,7 @@ type FakeHub struct {
 	members   map[string]bool
 	closed    chan struct{}
 	circle    *circleHub
+	ledger    *WithdrawLedger
 }
 
 // Option configures a FakeHub.
@@ -245,7 +246,7 @@ func (h *FakeHub) Committed() []ItemCtx {
 func (h *FakeHub) onEvent(r *Relay, ev *nip01.Event) {
 	switch ev.Kind {
 	case transport.KindPrivateRequest:
-		h.publish(r, h.Serve(ev))
+		h.publish(r, h.serve(r, ev))
 	case kindNWCRequest:
 		h.serveNWC(r, ev)
 	}
@@ -268,7 +269,10 @@ func (h *FakeHub) publish(arrival *Relay, chunks []*nip01.Event) {
 
 // Serve answers one kind-23190 event and returns the reply chunks to publish;
 // nil means no reply. E1 to E6 are transport.ClassifyEnvelope's.
-func (h *FakeHub) Serve(ev *nip01.Event) []*nip01.Event {
+func (h *FakeHub) Serve(ev *nip01.Event) []*nip01.Event { return h.serve(nil, ev) }
+
+// serve is Serve for an event that arrived on arrival (nil: handed in directly).
+func (h *FakeHub) serve(arrival *Relay, ev *nip01.Event) []*nip01.Event {
 	conversationKey, err := transport.ConversationKeyFor(ev.PubKey, h.InboxPriv)
 	if err != nil {
 		return nil
@@ -303,7 +307,7 @@ func (h *FakeHub) Serve(ev *nip01.Event) []*nip01.Event {
 	results := []transport.Result{}
 	dropReply := false
 	for i, item := range env.Items {
-		ctx := ItemCtx{Item: item, Envelope: env, Index: i, Now: now}
+		ctx := ItemCtx{Item: item, Envelope: env, Index: i, Now: now, Relay: arrival}
 		if h.Fault != nil {
 			ctx.Fault = h.Fault(ctx)
 		}

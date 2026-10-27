@@ -20,7 +20,10 @@ var WithdrawMethods = []string{"cash_withdraw_quote", "cash_withdraw"}
 // privateMethods is PrivateMethods, with WithdrawMethods when the fake offers
 // withdrawals.
 func (h *FakeHub) privateMethods() []string {
-	if !h.Withdrawals {
+	h.mu.Lock()
+	on := h.Withdrawals
+	h.mu.Unlock()
+	if !on {
 		return PrivateMethods
 	}
 	return append(append([]string(nil), PrivateMethods...), WithdrawMethods...)
@@ -34,7 +37,8 @@ const FakeNetwork = "regtest"
 // get_info answers with the node identity as pubkey, so a client can find the
 // announcement from the connection alone. Every other method is NOT_IMPLEMENTED:
 // the bill methods and cash_lookup because they are private-transport only, and
-// mint_cash because the fake has no ledger yet (it is not listed in methods).
+// mint_cash unless the fake has a bill ledger (ServeWithdrawals), which serves
+// it and lists it in methods.
 func (h *FakeHub) serveNWC(r *Relay, ev *nip01.Event) {
 	walletPriv, connSecret, circle := h.walletPriv, h.connSecret, false
 	switch {
@@ -66,13 +70,24 @@ func (h *FakeHub) serveNWC(r *Relay, ev *nip01.Event) {
 			Code: "NOT_IMPLEMENTED", Message: req.Method + " is served on the private transport only",
 		}, ev, encryption)
 	case req.Method == "get_info":
+		methods := []string{"get_info"}
+		if h.ledger != nil {
+			methods = append(methods, "mint_cash")
+		}
 		resp, err = nip47.NewResponseEvent(h.walletPriv, ev.PubKey, req.Method, nip47.GetInfoResult{
 			Pubkey:         h.nodeXOnly,
 			Network:        FakeNetwork,
 			Chain:          FakeChain,
-			Methods:        []string{"get_info"},
+			Methods:        methods,
 			PrivateMethods: h.privateMethods(),
 		}, ev, encryption)
+	case req.Method == "mint_cash" && h.ledger != nil:
+		res, refusal := h.ledger.serveMint(ev, req.Params)
+		if refusal != nil {
+			resp, err = nip47.NewErrorResponseEvent(h.walletPriv, ev.PubKey, req.Method, *refusal, ev, encryption)
+		} else {
+			resp, err = nip47.NewResponseEvent(h.walletPriv, ev.PubKey, req.Method, res, ev, encryption)
+		}
 	default:
 		resp, err = nip47.NewErrorResponseEvent(h.walletPriv, ev.PubKey, req.Method, nip47.Error{
 			Code: "NOT_IMPLEMENTED", Message: req.Method + " is not served on this connection",
