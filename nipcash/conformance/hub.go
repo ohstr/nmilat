@@ -25,6 +25,7 @@ type suite struct {
 	inbox     string
 	limits    transport.Limits
 	relays    []string
+	wd        wdState
 }
 
 func connect(t *testing.T, h HubUnderTest, o Options) *suite {

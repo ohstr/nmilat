@@ -5,9 +5,9 @@
 // nmilat's CI runs it against its own fake Hub; a Hub implementation runs the
 // same code against itself through an adapter implementing HubUnderTest and
 // whichever optional interfaces it can (Clocked, Faulty, Admin, HubDeleter,
-// OrderPayer, PowRelay, Lister). A case needing an optional interface the Hub
-// does not implement is skipped with the interface named, so a run lists exactly
-// what it did not exercise.
+// OrderPayer, PowRelay, Lister, WithdrawChain, WithdrawToggle). A case needing
+// an optional interface the Hub does not implement is skipped with the
+// interface named, so a run lists exactly what it did not exercise.
 //
 // Each case runs as its own subtest named by its id (t.Run("CT-ENV-03", …)).
 package conformance
@@ -146,10 +146,12 @@ const (
 	needOrder
 	needPow
 	needLister
+	needWithdrawChain
+	needWithdrawToggle
 )
 
 func (n need) name() string {
-	return [...]string{"Clocked", "Faulty", "Admin", "HubDeleter", "OrderPayer", "PowRelay", "Lister"}[n]
+	return [...]string{"Clocked", "Faulty", "Admin", "HubDeleter", "OrderPayer", "PowRelay", "Lister", "WithdrawChain", "WithdrawToggle"}[n]
 }
 
 func (n need) satisfiedBy(h HubUnderTest) bool {
@@ -169,6 +171,10 @@ func (n need) satisfiedBy(h HubUnderTest) bool {
 		_, ok = h.(PowRelay)
 	case needLister:
 		_, ok = h.(Lister)
+	case needWithdrawChain:
+		_, ok = h.(WithdrawChain)
+	case needWithdrawToggle:
+		_, ok = h.(WithdrawToggle)
 	}
 	return ok
 }

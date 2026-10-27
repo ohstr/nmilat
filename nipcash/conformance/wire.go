@@ -34,10 +34,16 @@ type listener struct {
 
 func (s *suite) listen(t *testing.T, replyTo string) *listener {
 	t.Helper()
+	return s.listenKind(t, transport.KindPrivateResponse, replyTo)
+}
+
+// listenKind collects the events of kind p-tagged with p on every relay.
+func (s *suite) listenKind(t *testing.T, kind int, p string) *listener {
+	t.Helper()
 	l := &listener{wake: make(chan struct{}, 1)}
 	filter := nip01.NewSubscriptionFilterGroup(&nip01.SubscriptionFilter{
-		Kinds: []int{transport.KindPrivateResponse},
-		Tags:  map[string][]string{"p": {replyTo}},
+		Kinds: []int{kind},
+		Tags:  map[string][]string{"p": {p}},
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)

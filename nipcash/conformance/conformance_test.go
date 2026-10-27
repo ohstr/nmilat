@@ -2,9 +2,12 @@ package conformance_test
 
 import (
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ohstr/nmilat/internal/cashtest"
+	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/nipcash/conformance"
 )
 
@@ -78,4 +81,80 @@ func TestAgainstFakeListingHub(t *testing.T) {
 		}
 	}
 	conformance.Run(t, h, conformance.Options{Only: only})
+}
+
+// ledgerHub is the fake Hub with a bill ledger offering withdrawals, as a
+// WithdrawChain, WithdrawToggle, Clocked, Faulty and HubDeleter.
+type ledgerHub struct {
+	*cashtest.FakeHub
+	l     *cashtest.WithdrawLedger
+	fault *atomic.Pointer[cashtest.Fault]
+}
+
+func newLedgerHub(t *testing.T, terms *nipcash.WithdrawTerms) ledgerHub {
+	fault := &atomic.Pointer[cashtest.Fault]{}
+	fault.Store(&cashtest.FaultNone)
+	hub := cashtest.NewFakeHub(t, cashtest.WithFault(func(cashtest.ItemCtx) cashtest.Fault { return *fault.Load() }))
+	return ledgerHub{FakeHub: hub, l: hub.ServeWithdrawals(t, terms), fault: fault}
+}
+
+func (h ledgerHub) Tip(testing.TB) int64                  { return h.l.Chain().Tip() }
+func (h ledgerHub) Mine(_ testing.TB, n int)              { h.l.Chain().Mine(n) }
+func (h ledgerHub) Reorg(_ testing.TB, depth int)         { h.l.Chain().Reorg(depth) }
+func (h ledgerHub) EvictTx(_ testing.TB, txid string)     { h.l.Chain().Evict(txid) }
+func (h ledgerHub) HubOwnAddress(testing.TB) string       { return h.l.HubOwnAddress() }
+func (h ledgerHub) StarveCoins(_ testing.TB, on bool)     { h.l.StarveCoins(on) }
+func (h ledgerHub) SetWithdrawals(_ testing.TB, on bool)  { h.l.SetOffered(on) }
+func (h ledgerHub) Advance(_ testing.TB, d time.Duration) { h.l.Advance(d) }
+func (h ledgerHub) Withhold(_ testing.TB, txid string, on bool) {
+	h.l.Chain().Withhold(txid, on)
+}
+func (h ledgerHub) SetUnconfirmedBound(_ testing.TB, millis uint64) { h.l.SetUnconfirmedBound(millis) }
+func (h ledgerHub) ExternalAddress(_ testing.TB, st nipcash.ScriptType) string {
+	return cashtest.ExternalAddress(st)
+}
+func (h ledgerHub) Tx(t testing.TB, txid string) (string, uint32) {
+	raw, depth, ok := h.l.Chain().Raw(txid)
+	if !ok {
+		t.Fatalf("the fake chain does not know %s", txid)
+	}
+	return raw, depth
+}
+func (h ledgerHub) DeleteHub(testing.TB, bool) error { return h.l.DeleteHub() }
+func (h ledgerHub) InjectFault(t testing.TB, f conformance.Fault) {
+	switch f {
+	case conformance.FaultNone:
+		h.fault.Store(&cashtest.FaultNone)
+		h.l.InjectFault(cashtest.FaultNone)
+	case conformance.FaultBreakSigner:
+		h.fault.Store(&cashtest.FaultBreakSigner)
+	case conformance.FaultHoldSign:
+		h.l.InjectFault(cashtest.FaultHoldSign)
+	case conformance.FaultCrashAfterSign:
+		h.l.InjectFault(cashtest.FaultCrashAfterSign)
+	case conformance.FaultHoldBroadcast:
+		h.l.InjectFault(cashtest.FaultHoldBroadcast)
+	default:
+		t.Skipf("the fake ledger has no fault %d", f)
+	}
+}
+
+// TestAgainstFakeWithdrawLedger runs the withdrawal cases against the fake's
+// bill ledger and chain (T02-11, T02-12 at the wire).
+func TestAgainstFakeWithdrawLedger(t *testing.T) {
+	var only []string
+	for _, id := range conformance.IDs() {
+		if strings.HasPrefix(id, "CT-WD") || id == "CT-STAT-13" || id == "CT-ENV-16" || id == "CT-SCOPE-05" {
+			only = append(only, id)
+		}
+	}
+	conformance.Run(t, newLedgerHub(t, nil), conformance.Options{Only: only})
+}
+
+// TestAgainstFakeWithdrawLedgerUnbounded runs the cases reading the terms
+// against a ledger with no withdrawal minimum or maximum.
+func TestAgainstFakeWithdrawLedgerUnbounded(t *testing.T) {
+	terms := cashtest.DefaultWithdrawTerms()
+	terms.MinMillis, terms.MaxMillis = nil, nil
+	conformance.Run(t, newLedgerHub(t, &terms), conformance.Options{Only: []string{"CT-STAT-13", "CT-WD-02", "CT-WD-03"}})
 }
