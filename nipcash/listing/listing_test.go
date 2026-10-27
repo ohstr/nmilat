@@ -161,6 +161,9 @@ func TestT22_03_ParseListingSteps(t *testing.T) {
 		{"expiration 1795305600.0", key1, func(e *nip01.Event) { setTag(e, "expiration", "1795305600.0") }, mainnet, 1},
 		{"expiration -1", key1, func(e *nip01.Event) { setTag(e, "expiration", "-1") }, mainnet, 1},
 		{"unknown status", key1, func(e *nip01.Event) { setTag(e, "status", "gone") }, mainnet, 1},
+		{"two hints of an unknown kind", key1, func(e *nip01.Event) {
+			e.Tags = append(e.Tags, []string{"hint", "cheque", "1", "2", "3", "4"}, []string{"hint", "cheque", "1", "2", "3", "4"})
+		}, mainnet, 0},
 		{"two location", key1, func(e *nip01.Event) { e.Tags = append(e.Tags, []string{"location", "x"}) }, mainnet, 1},
 		{"bad signature", "", func(e *nip01.Event) { e.Content = "changed" }, mainnet, 1},
 		{"both type values", key1, func(e *nip01.Event) { e.Tags = append(e.Tags, []string{"t", "circle_wallet"}) }, mainnet, 2},
@@ -1034,5 +1037,32 @@ func TestCurrentByDSeveralSigners(t *testing.T) {
 	}
 	if !back.Taps().Passed(real) || back.Taps().Passed(copy) {
 		t.Fatal("pass not restored")
+	}
+}
+
+// A curator set is read by its first d only; #p values are chunked.
+func TestCuratorFirstDAndPChunks(t *testing.T) {
+	ev := nip01.NewEvent(CuratorSetKind, "", []string{"d", "other"}, []string{"d", CuratorSetD}, []string{"p", node})
+	if err := ev.Sign(key1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseCuratorSet(ev, nil); err == nil {
+		t.Fatal("a curator set by its second d")
+	}
+	nodes := make([]string, DefaultChunk+1)
+	for i := range nodes {
+		nodes[i] = fmt.Sprintf("%064x", i+1)
+	}
+	n := 0
+	for _, f := range TrustedFilters(Trusted{Follows: []string{pub2}, Nodes: nodes}) {
+		if slices.Contains(f.Kinds, KindReport) {
+			n++
+			if len(f.Tags["p"]) > DefaultChunk {
+				t.Fatalf("#p of %d values", len(f.Tags["p"]))
+			}
+		}
+	}
+	if n != 2 {
+		t.Fatalf("%d report requests, want 2", n)
 	}
 }

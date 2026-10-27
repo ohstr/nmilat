@@ -24,7 +24,8 @@ type Trusted struct{ Follows, Curators, Nodes, Operators []string }
 // identities; 31190 by the node identities; kind 5 by the node identities with
 // #k 31190; kinds 0 and 11191 by operators; kind 3 by follows with #p the
 // operators; then kind 5 by follows and curators with #k 31191, so a withdrawn
-// recommendation stops counting. Every authors list is chunked by DefaultChunk;
+// recommendation stops counting. Every authors list, and every #p list, is
+// chunked by DefaultChunk;
 // a request with no authors (or an empty #p) is left out. Relays, caching and
 // since are the caller's.
 func TrustedFilters(t Trusted) []nip01.SubscriptionFilter {
@@ -38,12 +39,20 @@ func TrustedFilters(t Trusted) []nip01.SubscriptionFilter {
 				return
 			}
 		}
+		// The one tag's values are chunked like authors, each authors chunk
+		// paired with each values chunk.
+		tagName, tagChunks := "", [][]string{nil}
+		for k, v := range tags {
+			tagName, tagChunks = k, ChunkAuthors(v, DefaultChunk)
+		}
 		for _, chunk := range ChunkAuthors(authors, DefaultChunk) {
-			f := nip01.SubscriptionFilter{Kinds: kinds, Authors: chunk}
-			for k, v := range tags {
-				f.Tags = map[string][]string{k: v}
+			for _, tv := range tagChunks {
+				f := nip01.SubscriptionFilter{Kinds: kinds, Authors: chunk}
+				if tagName != "" {
+					f.Tags = map[string][]string{tagName: tv}
+				}
+				out = append(out, f)
 			}
-			out = append(out, f)
 		}
 	}
 	add([]int{KindRecommendation}, people, map[string][]string{"k": {k31190}})

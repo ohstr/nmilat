@@ -57,7 +57,7 @@ func NewCuratorSet(c CuratorSet, encryptToSelf func(string) (string, error)) (*n
 // ParseCuratorSet reads a signed curator set: its public p tags, then its
 // private ones when content is set and decryptFromSelf is given.
 func ParseCuratorSet(ev *nip01.Event, decryptFromSelf func(string) (string, error)) (*CuratorSet, error) {
-	if ev == nil || ev.Kind != CuratorSetKind || !hasTag(ev, "d", CuratorSetD) {
+	if ev == nil || ev.Kind != CuratorSetKind || firstTag(ev, "d") != CuratorSetD {
 		return nil, fmt.Errorf("%w: kind or d", ErrCuratorSet)
 	}
 	if err := ev.Verify(); err != nil {

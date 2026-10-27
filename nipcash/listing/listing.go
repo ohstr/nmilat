@@ -184,6 +184,16 @@ func tagValue(t []string) string {
 	return t[1]
 }
 
+// firstTag is the value of ev's first name tag, "" without one.
+func firstTag(ev *nip01.Event, name string) string {
+	for _, t := range ev.Tags {
+		if len(t) > 0 && t[0] == name {
+			return tagValue(t)
+		}
+	}
+	return ""
+}
+
 func hasTag(ev *nip01.Event, name, value string) bool {
 	for _, t := range ev.Tags {
 		if len(t) >= 2 && t[0] == name && t[1] == value {

@@ -76,7 +76,11 @@ func parseListing(ev *nip01.Event, o *CheckOptions) (*Listing, error) {
 				typeCounts[v]++
 			}
 		case "hint":
-			hintCounts[tagValue(t)]++
+			// A hint of an unknown payment kind is ignored, so it is not
+			// counted either.
+			if knownPayment(tagValue(t)) {
+				hintCounts[tagValue(t)]++
+			}
 		}
 	}
 	for _, name := range exactlyOne {
