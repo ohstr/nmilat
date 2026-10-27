@@ -378,6 +378,9 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes the relay hanging for good when a query with several tag names (or a
+  `before_id`) ran inside a read while a write grew the store, as a NIP-29
+  group create does. The query is now planned in the caller's transaction.
 - Fixes a filter with several tag names walking every tag's index range, so
   `#d` lookups plus a common tag such as `#l` took seconds. The scan now
   follows the smallest range and checks the other tags per event.
