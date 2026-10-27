@@ -3,6 +3,7 @@ package conformance
 import (
 	"context"
 	"errors"
+	"github.com/ohstr/nmilat/nip47"
 	"slices"
 	"strings"
 	"testing"
@@ -17,6 +18,18 @@ var scopeCases = []ctCase{
 	{id: "CT-ENV-14", run: ctEnv14},
 	{id: "CT-SCOPE-03", run: ctScope03},
 	{id: "CT-CSIG-01", run: ctCsig01},
+	{id: "CT-CSIG-02", run: ctCsig02},
+}
+
+// CT-CSIG-02 (CASH-CSIG-04, CASH-NET-01): the Cash Hub connection's get_info
+// names the chain TLV 6 names, and a network of the four.
+func ctCsig02(t *testing.T, s *suite) {
+	if s.info.Chain != s.conn.Chain {
+		t.Errorf("get_info chain %q, TLV 6 %q", s.info.Chain, s.conn.Chain)
+	}
+	if !nip47.ValidNetwork(s.info.Network) {
+		t.Errorf("get_info network %q", s.info.Network)
+	}
 }
 
 // CT-CSIG-01 (CASH-CSIG-01..03): the cashhub1 string the Hub hands out carries

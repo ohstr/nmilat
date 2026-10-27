@@ -44,6 +44,7 @@ func (h *FakeHub) serveNWC(r *Relay, ev *nip01.Event) {
 		resp, err = nip47.NewResponseEvent(h.walletPriv, ev.PubKey, req.Method, nip47.GetInfoResult{
 			Pubkey:         h.nodeXOnly,
 			Network:        FakeNetwork,
+			Chain:          FakeChain,
 			Methods:        []string{"get_info"},
 			PrivateMethods: PrivateMethods,
 		}, ev, encryption)

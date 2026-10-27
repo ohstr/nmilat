@@ -269,7 +269,7 @@ func TestT02_06_FakeNWC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Pubkey != h.NodeXOnly() || info.Network != cashtest.FakeNetwork {
+	if info.Pubkey != h.NodeXOnly() || info.Network != cashtest.FakeNetwork || info.Chain != cashtest.FakeChain {
 		t.Errorf("get_info pubkey %s network %s", info.Pubkey, info.Network)
 	}
 	for _, m := range []string{"cash_status", "cash_redeem", "cash_transfer", "cash_consolidate", "cash_lookup", "mint_cash"} {
@@ -339,5 +339,23 @@ func TestFakeHub_ResultTypeAndDefaults(t *testing.T) {
 	}
 	if h.TombstoneWindow != 1296000*time.Second {
 		t.Errorf("TombstoneWindow %s", h.TombstoneWindow)
+	}
+}
+
+// T08-03: CallWithOptions carries the expiration through to the wallet service.
+func TestT08_03_CallWithOptions(t *testing.T) {
+	h := cashtest.NewFakeHub(t)
+	conn, _ := nipcash.DecodeCashHubConnection(h.CashHubConnection())
+	nwc, err := relayclient.NewNWCClient(context.Background(), &nip47.PairingInfo{
+		WalletPubkey: conn.Pubkey, RelayURLs: conn.Relays, Secret: conn.Secret}, nip47.EncryptionNIP44V2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nwc.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	resp, err := nwc.CallWithOptions(ctx, "get_info", nil, nip47.WithExpiration(time.Now().Add(time.Minute).Unix()))
+	if err != nil || resp.Error != nil {
+		t.Fatalf("CallWithOptions: %v %+v", err, resp)
 	}
 }

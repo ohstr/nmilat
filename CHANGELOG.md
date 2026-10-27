@@ -8,6 +8,13 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `network` and `chain` to `get_info` results (`GetInfoResult.Chain`,
+  `ValidNetwork`), `accepting`, `fee_reserve`, `dust_threshold_millis`,
+  `rotation_delay_secs` and `per_wallet_max_receive_millis` to a Circle
+  Wallet Hub's terms (`CircleWalletInfo.MissingAlways` names absent keys),
+  receive budgets, the NIP-CASH and NIP-CW error codes and rotation
+  notifications, `delete_circle_wallet`, and `nip47.WithExpiration`,
+  `RequestExpiration` and `NWCClient.CallWithOptions`.
 - Adds `request_id` and lookup helpers for NIP-CASH: `ValidRequestID`,
   `NewRequestID`, `DerivedRequestID`, `CheckDeadline`, `CommitAllowed`,
   `DeadlineWindow`, `DecideLookup`, `RecordRetained`, `TombstoneAnswerable`,
