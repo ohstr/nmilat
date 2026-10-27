@@ -385,3 +385,37 @@ func TestCanonicalParamsHash_RejectsInvalidJSON(t *testing.T) {
 		}
 	}
 }
+
+// A binding tag that is not exactly [name, value] departs from the encoding
+// (NIP-CASH §Item Proofs: each value is a string), as claim proofs already
+// require; an expiration other than not_after has its own error.
+func TestItemProof_BindingTagShapeAndExpiration(t *testing.T) {
+	priv, binding := testBinding(t)
+	sign := func(tags [][]string) []byte {
+		ev, err := nip01.NewSignedEvent(KindItemProof, "", priv, tags...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := json.Marshal(ev)
+		return b
+	}
+	for name, edit := range map[string]func([][]string) [][]string{
+		"extra element": func(x [][]string) [][]string { x[2] = append(x[2], "extra"); return x },
+		"short tag":     func(x [][]string) [][]string { return append(x, []string{tagMethod}) },
+	} {
+		if _, err := VerifyItemProof(sign(edit(binding.tags())), binding, time.Now()); !errors.Is(err, ErrProofMalformed) {
+			t.Errorf("%s: %v, want ErrProofMalformed", name, err)
+		}
+	}
+	// An unknown tag stays ignored.
+	if _, err := VerifyItemProof(sign(append(binding.tags(), []string{"x", "1", "2"})), binding, time.Now()); err != nil {
+		t.Errorf("unknown tag: %v", err)
+	}
+	proof := sign(binding.tags())
+	other := binding
+	other.NotAfter++
+	_, err := VerifyItemProof(proof, other, time.Now())
+	if !errors.Is(err, ErrProofWrongExpiration) || !errors.Is(err, ErrProofWrongNonce) {
+		t.Errorf("expiration mismatch: %v, want ErrProofWrongExpiration (and ErrProofWrongNonce)", err)
+	}
+}

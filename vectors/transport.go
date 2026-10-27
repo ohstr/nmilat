@@ -828,7 +828,9 @@ func buildProofVectors() (any, error) {
 	verify("missing ph tag", "item", tagged(append(append([][]string{}, base[:3]...), base[4:]...)), b, now)
 	verify("empty en tag", "item", tagged([][]string{base[0], base[1], base[2], base[3], {"en", ""}}), b, now)
 	verify("no expiration tag is fine", "item", tagged(base[:5]), b, now)
-	verify("extra tags are ignored", "item", tagged(append(append([][]string{}, base...), []string{"x", "y"}, []string{"d"})), b, now)
+	verify("extra tags are ignored", "item", tagged(append(append([][]string{}, base...), []string{"x", "y"})), b, now)
+	verify("a short binding tag is refused", "item", tagged(append(append([][]string{}, base...), []string{"d"})), b, now)
+	verify("a binding tag with an extra element is refused", "item", tagged(append([][]string{append(append([]string{}, base[0]...), "extra")}, base[1:]...)), b, now)
 	badSig := strings.Replace(string(item), `"sig":"`, `"sig":"00`, 1)
 	badSig = strings.Replace(badSig, badSig[strings.Index(badSig, `"sig":"`)+7:strings.Index(badSig, `"sig":"`)+9], "", 0)
 	var ev nip01.Event

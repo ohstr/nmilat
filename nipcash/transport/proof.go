@@ -36,8 +36,11 @@ var (
 	ErrProofWrongMethod = errors.New("transport: item proof is bound to a different method")
 	ErrProofWrongParams = errors.New("transport: item proof is bound to different params")
 	ErrProofWrongNonce  = errors.New("transport: item proof is bound to a different envelope")
-	ErrProofStale       = errors.New("transport: item proof is outside its freshness window")
-	ErrProofSignature   = errors.New("transport: item proof signature is invalid")
+	// ErrProofWrongExpiration is an expiration tag that is not the envelope's
+	// not_after. It also matches ErrProofWrongNonce, which it was before.
+	ErrProofWrongExpiration = errors.New("transport: item proof expiration is not the envelope's not_after")
+	ErrProofStale           = errors.New("transport: item proof is outside its freshness window")
+	ErrProofSignature       = errors.New("transport: item proof signature is invalid")
 )
 
 // ProofBinding is everything an item proof commits to. Every field is a separate
@@ -176,7 +179,7 @@ func verifyProof(wantKind int, proof json.RawMessage, want ProofBinding, now tim
 		return "", ErrProofWrongNonce
 	}
 	if got[tagExpiration] != strconv.FormatInt(want.NotAfter, 10) {
-		return "", fmt.Errorf("%w: expiration %q, envelope not_after %d", ErrProofWrongNonce, got[tagExpiration], want.NotAfter)
+		return "", fmt.Errorf("%w (%w): expiration %q, envelope not_after %d", ErrProofWrongExpiration, ErrProofWrongNonce, got[tagExpiration], want.NotAfter)
 	}
 
 	// NIP-CASH §Freshness, in whole seconds: now − 300 ≤ created_at ≤ now + 60.
@@ -201,12 +204,13 @@ func verifyProof(wantKind int, proof json.RawMessage, want ProofBinding, now tim
 func proofTags(tags [][]string) (map[string]string, error) {
 	out := make(map[string]string, len(proofRequiredTags))
 	for _, tag := range tags {
-		if len(tag) < 2 {
+		if len(tag) == 0 || !proofRequiredTags[tag[0]] {
 			continue
 		}
 		name := tag[0]
-		if !proofRequiredTags[name] {
-			continue
+		// Each binding tag's value is one string (NIP-CASH §Item Proofs).
+		if len(tag) != 2 {
+			return nil, fmt.Errorf("%w: %q tag is not one string", ErrProofMalformed, name)
 		}
 		if _, dup := out[name]; dup {
 			return nil, fmt.Errorf("%w: duplicate %q tag", ErrProofMalformed, name)
