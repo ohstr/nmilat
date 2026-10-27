@@ -54,7 +54,9 @@ func ParseRotationNotification(n *nip47.Notification) (RotationEvent, bool) {
 // sends nothing a Hub would refuse or that would cancel a rotation. After
 // wallet_frozen or a FROZEN refusal the wallet is frozen: no payout with its
 // current key until Unfrozen (the member's unfreeze applied) or a completed
-// rotation installs a new key. The zero value is not usable; use NewWalletGuard.
+// rotation installs a new key. Send every request signed by the wallet key
+// through Do (or check Check first) so the freeze is enforced. The zero value is
+// not usable; use NewWalletGuard.
 type WalletGuard struct {
 	mu      sync.Mutex
 	key     string
