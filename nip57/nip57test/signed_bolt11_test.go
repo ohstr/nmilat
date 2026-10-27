@@ -55,3 +55,21 @@ func TestSignedBolt11_SignatureRecoversNode(t *testing.T) {
 		t.Fatalf("recovered %s, want %s", got, k.Pub)
 	}
 }
+
+// DecodeBolt11 reads the creation time and the x field, 3600 when absent.
+func TestDecodeBolt11_TimestampAndExpiry(t *testing.T) {
+	ph := sha256.Sum256([]byte("t"))
+	for _, c := range []struct{ expiry, want int64 }{{86400, 86400}, {1, 1}, {0, 3600}} {
+		s, err := SignedBolt11(Invoice{Currency: "bc", AmountMillis: 1000, PaymentHash: ph[:], Timestamp: 1720000000, Expiry: c.expiry, NodePriv: NewKey(1).Priv})
+		if err != nil {
+			t.Fatal(err)
+		}
+		inv, err := nip57.DecodeBolt11(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if inv.Timestamp != 1720000000 || inv.Expiry != c.want || inv.ExpiresAt() != 1720000000+c.want {
+			t.Errorf("expiry %d: decoded ts %d expiry %d", c.expiry, inv.Timestamp, inv.Expiry)
+		}
+	}
+}

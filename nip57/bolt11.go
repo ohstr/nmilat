@@ -20,7 +20,18 @@ type Invoice struct {
 	Description     string // the "d" field (payment memo), if present
 	DescriptionHash string
 	PaymentHash     string
+	// Timestamp is the invoice's creation time, in unix seconds.
+	Timestamp int64
+	// Expiry is the "x" field in seconds, or 3600 when absent (BOLT11's
+	// default).
+	Expiry int64
 }
+
+// DefaultBolt11Expiry is the expiry BOLT11 gives an invoice with no "x" field.
+const DefaultBolt11Expiry = 3600
+
+// ExpiresAt is the unix time the invoice expires: Timestamp + Expiry.
+func (i *Invoice) ExpiresAt() int64 { return i.Timestamp + i.Expiry }
 
 // DecodeBolt11 decodes a bolt11 invoice string into its currency prefix,
 // amount, memo, payment hash, and description hash — what NIP-57 needs to
@@ -42,6 +53,7 @@ const (
 	bolt11FieldPaymentHash     = 1
 	bolt11FieldDescription     = 13
 	bolt11FieldDescriptionHash = 23
+	bolt11FieldExpiry          = 6
 )
 
 const (
@@ -74,7 +86,10 @@ func decodeBolt11(bolt11 string) (*Invoice, error) {
 	}
 	fields := words[bolt11TimestampWords : len(words)-bolt11SignatureWords]
 
-	inv := &Invoice{Currency: currency, AmountMloki: amountMloki}
+	inv := &Invoice{Currency: currency, AmountMloki: amountMloki, Expiry: DefaultBolt11Expiry}
+	for _, w := range words[:bolt11TimestampWords] {
+		inv.Timestamp = inv.Timestamp<<5 | int64(w)
+	}
 
 	for i := 0; i+3 <= len(fields); {
 		fieldType := int(fields[i])
@@ -98,6 +113,14 @@ func decodeBolt11(bolt11 string) (*Invoice, error) {
 		case bolt11FieldDescriptionHash:
 			if h, err := bolt11HashHex(data); err == nil {
 				inv.DescriptionHash = h
+			}
+		case bolt11FieldExpiry:
+			if len(data) > 0 && len(data) <= 12 {
+				var x int64
+				for _, w := range data {
+					x = x<<5 | int64(w)
+				}
+				inv.Expiry = x
 			}
 		}
 	}
