@@ -77,7 +77,7 @@ func (s *BatchSession) sendBatch(ctx context.Context, builders []itemBuilder, op
 
 		written, err := writeAhead(ctx, packedNow, notAfter, opts)
 		if err != nil {
-			return outcomes, fmt.Errorf("%w: write ahead: %v", ErrNotSent, err)
+			return withNotSent(outcomes, packedNow, remaining, nil), fmt.Errorf("%w: write ahead: %v", ErrNotSent, err)
 		}
 		got, accepted, err := s.sendOne(ctx, p, i)
 		if !repacked && policyRefused(got) {
@@ -103,9 +103,12 @@ func (s *BatchSession) sendBatch(ctx context.Context, builders []itemBuilder, op
 		}
 		recordAccepted(ctx, packedNow, accepted, opts)
 		if err != nil && len(got) == 0 && errors.Is(err, ErrNotSent) {
-			// Nothing of this envelope was published: its items get no outcome,
-			// and the caller closes their written-ahead calls as not sent.
-			return outcomes, err
+			// Nothing of this envelope was published. On the first envelope its
+			// items get no outcome, and the caller closes their written-ahead
+			// calls as not sent; partway through a batch, this envelope's and every
+			// later item get OutcomeNotSent, so one outcome per item holds and the
+			// calls an earlier envelope published are told apart.
+			return withNotSent(outcomes, packedNow, remaining, written), err
 		}
 		got = withAccepted(withRequestIDs(got, packedNow, written), accepted)
 		if len(got) > 0 {
@@ -124,6 +127,25 @@ func (s *BatchSession) sendBatch(ctx context.Context, builders []itemBuilder, op
 		return outcomes, errors.Join(incomplete...)
 	}
 	return outcomes, nil
+}
+
+// withNotSent gives every item of the envelope that was not published (packed,
+// with its written-ahead calls) and of every later one (rest) OutcomeNotSent,
+// when earlier envelopes already have outcomes. With none, it adds nothing.
+func withNotSent(outcomes []ItemOutcome, packed, rest []itemBuilder, written map[string]*nipcash.PendingCall) []ItemOutcome {
+	if len(outcomes) == 0 {
+		return outcomes
+	}
+	add := func(bs []itemBuilder, written map[string]*nipcash.PendingCall) {
+		out := make([]ItemOutcome, 0, len(bs))
+		for _, b := range bs {
+			out = append(out, ItemOutcome{ID: b.ID, State: OutcomeNotSent})
+		}
+		outcomes = append(outcomes, withRequestIDs(out, bs, written)...)
+	}
+	add(packed, written)
+	add(rest, nil)
+	return outcomes
 }
 
 // checkBillCalls is the check before anything is written: a call carrying a

@@ -53,8 +53,10 @@ const (
 	// OutcomeNotSent means nothing of this item was published: the batch
 	// stopped before its envelope went out (a send that could not start, a
 	// deadline too close, an item that could not be built). The Hub never saw
-	// it. Set only by CreateCircleWalletMany, so that every join has an
-	// outcome; a join is single use, so a retry needs a new Prepare.
+	// it. Set by every batch that stops partway, after an earlier envelope was
+	// published, so that every item has an outcome and a written-ahead call
+	// can be closed as not sent; and by CreateCircleWalletMany for every join
+	// it did not send. A join is single use, so a retry needs a new Prepare.
 	OutcomeNotSent
 )
 

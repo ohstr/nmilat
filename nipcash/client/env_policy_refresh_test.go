@@ -1,6 +1,8 @@
 package client
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/ohstr/nmilat/nipcash"
@@ -147,5 +149,60 @@ func TestT11_20_RefusedRequestIDsAreNotResent(t *testing.T) {
 		if j.writes[o.RequestID] != 1 {
 			t.Errorf("%s written ahead %d times, want 1 (never resent under its id)", o.RequestID, j.writes[o.RequestID])
 		}
+	}
+}
+
+// failSecondWrite fails the second WriteAhead, so a batch stops before its
+// second envelope is published.
+type failSecondWrite struct {
+	*testJournal
+	n int
+}
+
+func (j *failSecondWrite) WriteAhead(ctx context.Context, calls []nipcash.PendingCall) error {
+	j.n++
+	if j.n == 2 {
+		return errors.New("disk full")
+	}
+	return j.testJournal.WriteAhead(ctx, calls)
+}
+
+// L1: a batch that stops with ErrNotSent after its first envelope was published
+// still gives every item an outcome: the unsent ones are OutcomeNotSent.
+func TestSendBatch_NotSentPartwayGivesEveryItemAnOutcome(t *testing.T) {
+	hub := newTestHub(t, alwaysSucceed)
+	hub.limits = withMaxItems(2)
+	s, _ := openTestSession(t, hub)
+
+	items := make([]BatchTransfer, 3)
+	for i := range items {
+		priv, target := sessionKeypair(t)
+		items[i] = BatchTransfer{Bill: mustBill(t, target), Params: nipcash.CashTransferParams{
+			Credential: nipcash.BySigning(priv), To: mustCashTarget(t), CurrentAmount: 1000}}
+	}
+	j := &failSecondWrite{testJournal: newTestJournal()}
+	ctx, cancel := e2eContext(t)
+	defer cancel()
+	out, err := s.TransferMany(ctx, items, j, "dev")
+	if !errors.Is(err, ErrNotSent) {
+		t.Fatalf("err = %v, want ErrNotSent", err)
+	}
+	if len(out) != 3 {
+		t.Fatalf("%d outcomes, want 3", len(out))
+	}
+	var sent, notSent int
+	for _, o := range out {
+		switch o.State {
+		case OutcomeNotSent:
+			notSent++
+			if o.RequestID == "" {
+				t.Errorf("item %s: a not-sent call carries no request_id", o.ID)
+			}
+		case OutcomeResult:
+			sent++
+		}
+	}
+	if sent != 2 || notSent != 1 {
+		t.Fatalf("sent %d, not sent %d; want 2 and 1", sent, notSent)
 	}
 }
