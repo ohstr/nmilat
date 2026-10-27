@@ -23,13 +23,38 @@ type Relays interface {
 }
 
 // DialRelays is a Relays over websocket connections, one per call, answering
-// AUTH with authKeyHex (the user's key).
-func DialRelays(authKeyHex string) Relays { return dialRelays{key: authKeyHex} }
+// AUTH with authKeyHex (the user's key). It is DialRelaysWith with the default
+// AuthWait.
+func DialRelays(authKeyHex string) Relays { return DialRelaysWith(DialConfig{AuthKeyHex: authKeyHex}) }
 
-type dialRelays struct{ key string }
+// DefaultAuthWait is DialConfig.AuthWait's default.
+const DefaultAuthWait = 2 * time.Second
 
-// authWait bounds how long a query waits for a relay's AUTH to settle.
-const authWait = 2 * time.Second
+// DialConfig configures DialRelaysWith.
+type DialConfig struct {
+	// AuthKeyHex is the key that answers NIP-42 AUTH (the user's key).
+	AuthKeyHex string
+	// AuthWait bounds how long a query that found nothing waits for the
+	// relay's AUTH to settle before it asks once more: the wait ends as soon as
+	// the handshake settles, and lasts the whole AuthWait only on a relay that
+	// never challenges (or never answers). 0 is DefaultAuthWait; negative never
+	// waits.
+	AuthWait time.Duration
+}
+
+// DialRelaysWith is a Relays over websocket connections, one per call,
+// configured by c.
+func DialRelaysWith(c DialConfig) Relays {
+	if c.AuthWait == 0 {
+		c.AuthWait = DefaultAuthWait
+	}
+	return dialRelays{key: c.AuthKeyHex, authWait: c.AuthWait}
+}
+
+type dialRelays struct {
+	key      string
+	authWait time.Duration
+}
 
 func (d dialRelays) conn(ctx context.Context, relay string) (*relayclient.Connection, error) {
 	u, err := url.Parse(relay)
@@ -64,7 +89,10 @@ func (d dialRelays) Query(ctx context.Context, relay string, f nip01.Subscriptio
 	}
 	defer c.Close()
 	run := func() []*nip01.Event {
-		_, events, done := c.Subscribe(nip01.NewSubscriptionFilterGroup(&f))
+		// The events channel closes at EOSE, CLOSED or when the connection
+		// ends, together with the done channel: read it to the end, so an
+		// event buffered just before EOSE is never lost to that race.
+		_, events, _ := c.Subscribe(nip01.NewSubscriptionFilterGroup(&f))
 		var out []*nip01.Event
 		for {
 			select {
@@ -73,23 +101,23 @@ func (d dialRelays) Query(ctx context.Context, relay string, f nip01.Subscriptio
 					return out
 				}
 				out = append(out, ev.Event)
-			case <-done:
-				return out
 			case <-ctx.Done():
 				return out
 			}
 		}
 	}
 	out := run()
-	if len(out) == 0 {
+	if len(out) == 0 && d.authWait > 0 {
 		// A relay serving 1059 only to its p may have closed the first REQ
-		// before AUTH settled: ask once more after it does.
+		// before AUTH settled: ask once more as soon as it does.
+		t := time.NewTimer(d.authWait)
+		defer t.Stop()
 		select {
 		case <-c.AuthSettled():
 			if c.AuthState() == relayclient.AuthStateSucceeded {
 				out = run()
 			}
-		case <-time.After(authWait):
+		case <-t.C:
 		case <-ctx.Done():
 		}
 	}
