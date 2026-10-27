@@ -2,6 +2,7 @@ package cashtest
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"sync"
 	"testing"
 	"time"
@@ -354,7 +355,33 @@ func (h *FakeHub) serve(arrival *Relay, ev *nip01.Event) []*nip01.Event {
 	if dropReply {
 		return nil
 	}
+	results = append(results, rejectedResults(plaintext, env.Rejected)...)
 	return reply(transport.ResponseEnvelope{Results: results})
+}
+
+// rejectedResults answers the items decoding set aside with a code (a
+// consolidate over max_consolidate_sources: QUOTA_EXCEEDED); the rest of them
+// are omitted.
+func rejectedResults(plaintext string, rejected []transport.ItemRejection) []transport.Result {
+	var raw struct {
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+	}
+	var out []transport.Result
+	for _, r := range rejected {
+		if r.Code == "" {
+			continue
+		}
+		if raw.Items == nil {
+			_ = json.Unmarshal([]byte(plaintext), &raw)
+		}
+		if r.Index < len(raw.Items) && raw.Items[r.Index].ID != "" {
+			out = append(out, transport.Result{ID: raw.Items[r.Index].ID,
+				Error: &transport.ResultError{Code: r.Code, Message: r.Err.Error()}})
+		}
+	}
+	return out
 }
 
 // stall holds a commit as c.Fault says: until the Hub's clock reaches a

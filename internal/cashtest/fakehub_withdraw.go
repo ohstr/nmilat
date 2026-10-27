@@ -108,6 +108,8 @@ type WithdrawLedger struct {
 	invoices map[string]*fakeInvoice
 	// calls are the records of the transfers the ledger committed.
 	calls map[string]*callRecord
+	// ext is the rest: caps and lineages (ledger_merge.go).
+	ext ledgerExt
 }
 
 // payout is one withdrawal's record.

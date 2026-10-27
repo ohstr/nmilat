@@ -17,9 +17,8 @@ import (
 // The bill ledger behind ServeWithdrawals: bills minted by mint_cash on the
 // Cash Hub connection (or MintBill), their slices, cash_status, and the private
 // transport's per-item order I2 to I9 for items naming them. cash_redeem (paid
-// to the fake payee's invoices, ledger_spend.go) and cash_transfer (in place,
-// split and spin-off; not zap transfers) are served; cash_consolidate is
-// refused NOT_IMPLEMENTED at I5.
+// to the fake payee's invoices, ledger_spend.go), cash_transfer (in place,
+// split, spin-off and zap) and cash_consolidate (ledger_merge.go) are served.
 
 // Fee terms every slice the ledger mints carries (fixed at creation, never the
 // Hub's current terms): a redeem fee of 5000 ppm, so a 21000000-millis slice
@@ -179,6 +178,9 @@ func (l *WithdrawLedger) serveMint(ev *nip01.Event, params json.RawMessage) (any
 	if sum > ledgerWalletCeiling {
 		return refuse(nipcash.ErrCodeQuotaExceeded, "over the per-wallet ceiling")
 	}
+	if l.ext.liveCap > 0 && l.liveBillsLocked() >= l.ext.liveCap {
+		return refuse(nipcash.ErrCodeQuotaExceeded, "over the Cash Hub's live-wallet cap")
+	}
 	l.h.mu.Lock()
 	for _, r := range req.Recipients {
 		if r.IdentityType == "connection_key" && !l.h.TrustedIAs[r.IAPubkey] {
@@ -304,7 +306,7 @@ func (l *WithdrawLedger) decide(c ItemCtx) *transport.Result {
 		return errResult(nipcash.ErrCodeNotImplemented, "this Hub does not offer on-chain withdrawals", "")
 	case serving != nipcash.MethodCashStatus && serving != nipcash.MethodCashLookup &&
 		serving != nipcash.MethodCashWithdrawQuote && serving != nipcash.MethodCashWithdraw &&
-		serving != nipcash.MethodCashRedeem && serving != nipcash.MethodCashTransfer:
+		serving != nipcash.MethodCashRedeem && serving != nipcash.MethodCashTransfer && serving != nipcash.MethodCashConsolidate:
 		return errResult(nipcash.ErrCodeNotImplemented, "the fake ledger does not serve "+serving, "")
 	}
 	var rid struct {
@@ -337,6 +339,8 @@ func (l *WithdrawLedger) decide(c ItemCtx) *transport.Result {
 		return l.redeemLocked(it)
 	case nipcash.MethodCashTransfer:
 		return l.transferLocked(it)
+	case nipcash.MethodCashConsolidate:
+		return l.consolidateLocked(it)
 	}
 	if c.Item.Method == nipcash.MethodCashWithdraw {
 		return l.cancelLocked(it)

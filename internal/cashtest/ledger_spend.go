@@ -193,18 +193,27 @@ func (l *WithdrawLedger) redeemLocked(it *ledgerItem) *transport.Result {
 
 func isHex64(s string) bool { return nipcash.ValidCommitment(s) }
 
+func liveSlices(b *ledgerBill) int {
+	n := 0
+	for _, s := range b.slices {
+		if s.live() {
+			n++
+		}
+	}
+	return n
+}
+
 // transferLocked is cash_transfer: in place, or a spin-off into one or two new
-// wallets. A zap transfer is refused NOT_IMPLEMENTED.
+// wallets. A zap transfer is always a spin-off, its new_identity's wallet signed
+// under the zap scheme (ledger_merge.go).
 func (l *WithdrawLedger) transferLocked(it *ledgerItem) *transport.Result {
 	var req nipcash.CashTransferRequest
 	if json.Unmarshal(it.c.Item.Params, &req) != nil {
 		return errResult(nipcash.ErrCodeBadRequest, "params", "")
 	}
-	if req.ZapTarget != nil {
-		if *req.ZapTarget == "" {
-			return errResult(nipcash.ErrCodeBadRequest, "empty zap_target", "")
-		}
-		return errResult(nipcash.ErrCodeNotImplemented, "the fake ledger does not serve zap transfers", "")
+	zap := req.ZapTarget != nil
+	if zap && *req.ZapTarget == "" {
+		return errResult(nipcash.ErrCodeBadRequest, "empty zap_target", "")
 	}
 	b := it.b
 	// Step 1.
@@ -224,7 +233,13 @@ func (l *WithdrawLedger) transferLocked(it *ledgerItem) *transport.Result {
 		return res
 	}
 	l.used[req.RequestID] = true
+	if zap && s.idType != "pubkey" {
+		return errResult(nipcash.ErrCodeRestricted, "a zap transfer's source is pubkey-bound", "")
+	}
 	// Step 2.
+	if zap && ni.IdentityType != "pubkey" {
+		return errResult(nipcash.ErrCodeBadRequest, "a zap transfer's new_identity is a pubkey", "")
+	}
 	switch {
 	case ni.IdentityType == "pubkey" && isHex64(ni.IdentityValue) && ni.IAPubkey == "":
 	case ni.IdentityType == "cash" && nipcash.ValidCommitment(ni.IdentityValue) && ni.IAPubkey == "":
@@ -252,8 +267,8 @@ func (l *WithdrawLedger) transferLocked(it *ledgerItem) *transport.Result {
 	} else if req.RemainderCommitment != "" {
 		return errResult(nipcash.ErrCodeBadRequest, "remainder_commitment", "")
 	}
-	spin := partial
-	if !partial {
+	spin := partial || zap
+	if !spin {
 		switch ni.IdentityType {
 		case "cash":
 			spin = len(b.slices) != 1
@@ -261,6 +276,18 @@ func (l *WithdrawLedger) transferLocked(it *ledgerItem) *transport.Result {
 			for _, c := range b.slices {
 				spin = spin || c != s && c.live() && c.idType == ni.IdentityType && c.idValue == ni.IdentityValue && c.ia == ni.IAPubkey
 			}
+		}
+	}
+	if spin {
+		fresh, drained := 1, 0
+		if partial {
+			fresh = 2
+		}
+		if live := liveSlices(b); live == 1 {
+			drained = 1
+		}
+		if res := l.gateLocked(b, fresh, drained, true); res != nil {
+			return res
 		}
 	}
 	// The commit.
@@ -289,6 +316,19 @@ func (l *WithdrawLedger) transferLocked(it *ledgerItem) *transport.Result {
 		if err != nil {
 			return errResult(nipcash.ErrCodeInternal, "signer", "")
 		}
+		spun := []*ledgerBill{carved}
+		if zap {
+			z := nipcash.ZapContext{Recipient: ni.IdentityValue, Sender: s.idValue, ZapTarget: *req.ZapTarget,
+				IssuedAt: uint64(l.nowLocked())}
+			if carved.expiresAt != nil {
+				z.ExpiresAt = uint64(*carved.expiresAt)
+			}
+			if err := l.zapSignLocked(carved, z); err != nil {
+				delete(l.bills, carved.wallet)
+				return errResult(nipcash.ErrCodeInternal, "signer", "")
+			}
+			out["issued_at"], out["expires_at"] = z.IssuedAt, z.ExpiresAt
+		}
 		tok, err := deliver(carved)
 		if err != nil {
 			return errResult(nipcash.ErrCodeInternal, "delivery", "")
@@ -303,6 +343,7 @@ func (l *WithdrawLedger) transferLocked(it *ledgerItem) *transport.Result {
 			if err != nil {
 				return errResult(nipcash.ErrCodeInternal, "signer", "")
 			}
+			spun = append(spun, rb)
 			if tok, err = deliver(rb); err != nil {
 				return errResult(nipcash.ErrCodeInternal, "delivery", "")
 			}
@@ -310,6 +351,7 @@ func (l *WithdrawLedger) transferLocked(it *ledgerItem) *transport.Result {
 			out["remainder_wallet_pubkey"], out["remainder_wallet_token"] = rb.wallet, tok
 		}
 		s.state, s.claimedAt = nipcash.ReasonTransferred, l.nowLocked()
+		l.recordSpinLocked(b, spun...)
 	}
 	raw, err := json.Marshal(out)
 	if err != nil {
