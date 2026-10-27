@@ -64,6 +64,9 @@ var (
 	// ErrMixedCase is a bech32 credential that mixes upper and lower case, which
 	// every decoder here refuses, as BIP-173 requires (NIP-CASH §Wire Format).
 	ErrMixedCase = credcodec.ErrMixedCase
+	// ErrBech32m is a credential carrying a bech32m checksum: every decoder here
+	// requires NIP-19 bech32 (BIP-173).
+	ErrBech32m = credcodec.ErrBech32m
 )
 
 // HubGroupLen is the byte length of the hub-group fingerprint (TLV type 7): a

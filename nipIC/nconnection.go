@@ -2,6 +2,7 @@ package nipIC
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 
 	"github.com/flokiorg/go-flokicoin/chainutil/bech32"
@@ -48,14 +49,21 @@ func EncodeNConnection(key ConnectionKey, relays []string, platform WebIdentity)
 	return bech32.Encode(NConnectionPrefix, bits5)
 }
 
+// ErrNConnectionBech32m is an nconnection string carrying a bech32m checksum:
+// it is NIP-19 bech32 (BIP-173).
+var ErrNConnectionBech32m = errors.New("nipIC: nconnection carries a bech32m checksum, not bech32")
+
 // DecodeNConnection parses an nconnection string. It rejects no type 0, more
 // than one type 0 or type 2, a type 0 that is not 32 bytes, a TLV running past
 // the end, and a type 2 that is not a valid platform name (no key is taken from
 // it); unknown types are ignored.
 func DecodeNConnection(s string) (key ConnectionKey, relays []string, platform WebIdentity, err error) {
-	prefix, bits5, err := bech32.DecodeNoLimit(s)
+	prefix, bits5, version, err := bech32.DecodeNoLimitWithVersion(s)
 	if err != nil {
 		return "", nil, "", fmt.Errorf("nipIC: bech32 decode: %w", err)
+	}
+	if version != bech32.Version0 {
+		return "", nil, "", ErrNConnectionBech32m
 	}
 	if prefix != NConnectionPrefix {
 		return "", nil, "", fmt.Errorf("nipIC: expected prefix %q, got %q", NConnectionPrefix, prefix)

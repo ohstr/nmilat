@@ -19,18 +19,26 @@ import (
 // ErrMixedCase is a bech32 string with both upper- and lowercase letters.
 var ErrMixedCase = errors.New("bech32 string mixes upper and lower case")
 
+// ErrBech32m is a string carrying a bech32m checksum: credentials are NIP-19
+// bech32 (BIP-173), and only on-chain addresses use bech32m (BIP-350).
+var ErrBech32m = errors.New("bech32m checksum where a bech32 checksum is required")
+
 // MaxTLVValueLen is the largest value one TLV entry's length byte can carry.
 const MaxTLVValueLen = 255
 
-// DecodeBech32 refuses a mixed-case string, lowercases it and decodes it with no
-// length limit, returning the lowercase HRP and the 8-bit data.
+// DecodeBech32 refuses a mixed-case string or a bech32m checksum, lowercases it
+// and decodes it with no length limit, returning the lowercase HRP and the
+// 8-bit data.
 func DecodeBech32(s string) (hrp string, data []byte, err error) {
 	if strings.ToLower(s) != s && strings.ToUpper(s) != s {
 		return "", nil, ErrMixedCase
 	}
-	hrp, bits5, err := bech32.DecodeNoLimit(strings.ToLower(s))
+	hrp, bits5, version, err := bech32.DecodeNoLimitWithVersion(strings.ToLower(s))
 	if err != nil {
 		return "", nil, fmt.Errorf("invalid bech32: %w", err)
+	}
+	if version != bech32.Version0 {
+		return "", nil, ErrBech32m
 	}
 	data, err = bech32.ConvertBits(bits5, 5, 8, false)
 	if err != nil {

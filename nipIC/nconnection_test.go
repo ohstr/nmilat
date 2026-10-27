@@ -2,8 +2,11 @@ package nipIC
 
 import (
 	"encoding/hex"
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/flokiorg/go-flokicoin/chainutil/bech32"
 )
 
 // Ported from bot/pkg/nconnection/nconnection_test.go — same TLV wire
@@ -144,5 +147,24 @@ func TestT05_15_NConnection(t *testing.T) {
 		if f() == nil {
 			t.Errorf("%s: encoded", name)
 		}
+	}
+}
+
+// nconnection is NIP-19 bech32: a bech32m checksum is refused.
+func TestDecodeNConnection_RefusesBech32m(t *testing.T) {
+	s, err := EncodeNConnection(ConnectionKey(strings.Repeat("ab", 32)), []string{"wss://relay.example.com"}, "discord")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hrp, bits5, err := bech32.DecodeNoLimit(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := bech32.EncodeM(hrp, bits5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := DecodeNConnection(m); !errors.Is(err, ErrNConnectionBech32m) {
+		t.Fatalf("err = %v, want ErrNConnectionBech32m", err)
 	}
 }

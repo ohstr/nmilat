@@ -149,13 +149,13 @@ func TestDecodeNoLimitOnlyInTheCaseHelper(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			n := strings.Count(string(b), "bech32.DecodeNoLimit(")
+			n := strings.Count(string(b), "bech32.DecodeNoLimit(") + strings.Count(string(b), "bech32.DecodeNoLimitWithVersion(")
 			want := 0
 			if filepath.Base(f) == "credcodec.go" {
 				want = 1
 			}
 			if n != want {
-				t.Errorf("%s calls bech32.DecodeNoLimit %d times, want %d", f, n, want)
+				t.Errorf("%s calls a bech32 decoder %d times, want %d", f, n, want)
 			}
 		}
 	}
