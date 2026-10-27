@@ -246,8 +246,25 @@ func TestAnnouncement_RejectsUnusableAnnouncedLimits(t *testing.T) {
 		}
 		return tags
 	})
-	if _, err := ParseAnnouncement(ev, nodeXOnly); !errors.Is(err, ErrAnnouncementMalformed) {
-		t.Fatalf("ParseAnnouncement() = %v, want ErrAnnouncementMalformed", err)
+	// A max_bytes over 65535 is clamped for the client, never a rejection (T09-14).
+	a, err := ParseAnnouncement(ev, nodeXOnly)
+	if err != nil {
+		t.Fatalf("ParseAnnouncement() = %v", err)
+	}
+	if a.EffectiveLimits().MaxEnvelopeBytes != MaxNIP44Plaintext {
+		t.Errorf("effective max_bytes %d", a.EffectiveLimits().MaxEnvelopeBytes)
+	}
+	// A consolidate cap no max_bytes can hold is non-conforming.
+	retag(t, ev, nodePriv, func(tags [][]string) [][]string {
+		for _, tag := range tags {
+			if tag[0] == "limit" && tag[1] == LimitMaxConsolidateSources {
+				tag[2] = "200"
+			}
+		}
+		return tags
+	})
+	if _, err := ParseAnnouncement(ev, nodeXOnly); !errors.Is(err, ErrHubNonConforming) {
+		t.Fatalf("ParseAnnouncement() = %v, want ErrHubNonConforming", err)
 	}
 }
 

@@ -133,7 +133,6 @@ func TestEnvelope_RejectsMalformedShape(t *testing.T) {
 		tamper func(*Envelope)
 		want   error
 	}{
-		"wrong version":      {func(e *Envelope) { e.Version = 99 }, ErrEnvelopeVersion},
 		"no items":           {func(e *Envelope) { e.Items = nil }, ErrEnvelopeNoItems},
 		"short nonce":        {func(e *Envelope) { e.Nonce = "abcd" }, ErrEnvelopeMalformed},
 		"uppercase nonce":    {func(e *Envelope) { e.Nonce = strings.ToUpper(e.Nonce) }, ErrEnvelopeMalformed},
@@ -276,22 +275,21 @@ func TestEnvelope_DecodeRejectsOversizePlaintext(t *testing.T) {
 	}
 }
 
+// T09-15: CheckFreshness against H: now+H accepted, now+H+1 refused, passed refused.
 func TestEnvelope_CheckFreshness(t *testing.T) {
-	now := time.Now()
-	env := Envelope{NotAfter: now.Add(60 * time.Second).Unix()}
-
-	if err := env.CheckFreshness(now); err != nil {
-		t.Errorf("a 60s window must be accepted: %v", err)
+	now := time.Unix(1720000000, 0)
+	const H = 300
+	if err := CheckFreshness(Envelope{NotAfter: now.Unix() + H}, now, H); err != nil {
+		t.Errorf("now+H: %v", err)
 	}
-	if err := env.CheckFreshness(now.Add(2 * time.Minute)); !errors.Is(err, ErrEnvelopeExpired) {
-		t.Errorf("CheckFreshness past not_after = %v, want ErrEnvelopeExpired", err)
+	if err := CheckFreshness(Envelope{NotAfter: now.Unix() + H + 1}, now, H); !errors.Is(err, ErrEnvelopeTooFresh) {
+		t.Errorf("now+H+1: %v", err)
 	}
-
-	// A client must not be able to mint itself an arbitrarily long-lived envelope:
-	// not_after also bounds how long the hub has to remember the nonce.
-	greedy := Envelope{NotAfter: now.Add(time.Hour).Unix()}
-	if err := greedy.CheckFreshness(now); !errors.Is(err, ErrEnvelopeTooFresh) {
-		t.Errorf("CheckFreshness with an hour-long window = %v, want ErrEnvelopeTooFresh", err)
+	if err := CheckFreshness(Envelope{NotAfter: now.Unix() - 1}, now, H); !errors.Is(err, ErrEnvelopeExpired) {
+		t.Errorf("passed: %v", err)
+	}
+	if err := CheckFreshness(Envelope{NotAfter: now.Unix()}, now, H); err != nil {
+		t.Errorf("not_after = now: %v", err)
 	}
 }
 

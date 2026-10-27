@@ -18,7 +18,7 @@ import (
 
 // defaultNotAfterWindow is how long a batch stays valid.
 //
-// Comfortably inside transport.MaxNotAfterWindow, which bounds how far ahead a hub will
+// Comfortably inside any horizon H a Hub may announce, which bounds how far ahead a hub will
 // accept — a hub need only remember a nonce until the envelope carrying it can no longer
 // be accepted, so asking for the maximum would make a hub remember more for no gain.
 const defaultNotAfterWindow = 60 * time.Second

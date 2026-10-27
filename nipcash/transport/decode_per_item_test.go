@@ -3,6 +3,7 @@ package transport
 import (
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -41,8 +42,8 @@ func decodeItems(t *testing.T, nonce string, notAfter int64, items ...Item) (*En
 	return Decode(raw, DefaultLimits())
 }
 
-// NIP-CASH §Batching Across Bills: "a Hub MUST evaluate each on its own". One
-// item without a bill proof must not cost its co-item an answer.
+// T09-08: Decode keeps an item without a bill proof (the Hub omits it at I3, on
+// its own terms) and its co-item; only I1 failures are omitted here.
 func TestDecode_OneBadItemDoesNotDropItsCoItems(t *testing.T) {
 	good, nonce, notAfter := perItemFixture(t, "1")
 	bad := good
@@ -52,44 +53,39 @@ func TestDecode_OneBadItemDoesNotDropItsCoItems(t *testing.T) {
 	if err != nil {
 		t.Fatalf("one item lacking a bill proof rejected the whole envelope: %v", err)
 	}
-	if len(env.Items) != 1 || env.Items[0].ID != "1" {
-		t.Fatalf("kept items = %+v, want only item 1", env.Items)
+	if len(env.Items) != 2 || env.Items[1].HasBillProof() {
+		t.Fatalf("kept items = %d, want both, the second without a bill proof", len(env.Items))
 	}
-	if len(env.Rejected) != 1 || env.Rejected[0].Index != 1 || !errors.Is(env.Rejected[0].Err, ErrEnvelopeMalformed) {
-		t.Fatalf("rejected = %+v, want item at index 1 as malformed", env.Rejected)
+	same := good
+	same.ID = "3"
+	env, err = decodeItems(t, nonce, notAfter, good, same)
+	if err != nil || len(env.Items) != 2 {
+		t.Fatalf("two identical items: %v", err)
 	}
 }
 
-// Two items sharing an id are both dropped: a reply to that id could not say
-// which one it answers. Their co-item is still served.
-func TestDecode_DuplicateIDsDropBothItems(t *testing.T) {
+// Two items sharing an id refuse the whole envelope (E4): a reply to that id
+// could not say which one it answers.
+func TestDecode_DuplicateIDsRefuseTheEnvelope(t *testing.T) {
 	good, nonce, notAfter := perItemFixture(t, "1")
 	a := good
-	a.ID, a.Params = "dup", json.RawMessage(`{"scope":"all"}`)
+	a.ID = "dup"
 	b := good
 	b.ID, b.Target = "dup", strings.Repeat("bb", 32)
-
-	env, err := decodeItems(t, nonce, notAfter, good, a, b)
-	if err != nil {
-		t.Fatalf("Decode: %v", err)
-	}
-	if len(env.Items) != 1 || env.Items[0].ID != "1" {
-		t.Fatalf("kept items = %+v, want only item 1", env.Items)
-	}
-	for _, r := range env.Rejected {
-		if !errors.Is(r.Err, ErrDuplicateItemID) {
-			t.Fatalf("rejection %+v, want ErrDuplicateItemID", r)
-		}
+	if _, err := decodeItems(t, nonce, notAfter, good, a, b); !errors.Is(err, ErrDuplicateItemID) {
+		t.Fatalf("err = %v, want ErrDuplicateItemID", err)
 	}
 }
 
-// With no servable item left there is nothing to answer, so Decode fails with
-// that item's own error, as it did before items were judged one by one.
-func TestDecode_NoServableItemFailsWithItsError(t *testing.T) {
-	good, nonce, notAfter := perItemFixture(t, "1")
-	good.BillProof = nil
-	if _, err := decodeItems(t, nonce, notAfter, good); !errors.Is(err, ErrEnvelopeMalformed) {
-		t.Fatalf("err = %v, want ErrEnvelopeMalformed", err)
+// An envelope whose every item is a structural omission still decodes, with no
+// items: the Hub answers it with "results": [].
+func TestDecode_NoServableItemStillDecodes(t *testing.T) {
+	_, nonce, notAfter := perItemFixture(t, "1")
+	raw := []byte(`{"not_after":` + strconv.FormatInt(notAfter, 10) + `,"nonce":"` + nonce + `","reply_to":"` + nonce +
+		`","items":[{"id":1,"target":"x","method":"m"},"str"]}`)
+	env, err := Decode(raw, DefaultLimits())
+	if err != nil || len(env.Items) != 0 || len(env.Rejected) != 2 {
+		t.Fatalf("Decode: %v %+v", err, env)
 	}
 }
 

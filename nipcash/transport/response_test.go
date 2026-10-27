@@ -285,9 +285,6 @@ func FuzzDecodeResponse(f *testing.F) {
 		if len(data) > limits.MaxEnvelopeBytes {
 			t.Fatalf("accepted %d bytes over the %d limit", len(data), limits.MaxEnvelopeBytes)
 		}
-		if decoded.Version != EnvelopeVersion {
-			t.Fatalf("accepted version %d", decoded.Version)
-		}
 		// The reply is bound to THIS request. Accepting another's is how a hostile
 		// relay replays one envelope's answer as another's.
 		if decoded.ReqNonce != reqNonce {

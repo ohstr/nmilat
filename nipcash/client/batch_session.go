@@ -202,7 +202,7 @@ func (s *BatchSession) Limits() transport.Limits {
 	if s.announcement == nil {
 		return transport.Limits{}
 	}
-	return s.announcement.Limits.Limits()
+	return s.announcement.EffectiveLimits()
 }
 
 // Inbox is the key envelopes are encrypted and p-tagged to. NOT the hub identity.

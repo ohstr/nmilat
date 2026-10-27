@@ -235,3 +235,24 @@ var proofRequiredTags = map[string]bool{
 
 // proofHexTags are the binding tags written as 64 lowercase hex.
 var proofHexTags = map[string]bool{tagTarget: true, tagHub: true, tagParamsHash: true}
+
+// ErrBillProofSigner is a bill proof signed by none of the live connections that
+// share the item's target.
+var ErrBillProofSigner = errors.New("transport: bill proof is not signed by a live connection of the target")
+
+// VerifyBillProofAny verifies a bill proof (VerifyBillProof) and then requires
+// its signer to be one of live, the client keys (x-only) of the Hub's live
+// connections sharing the item's target pubkey; it returns that key's index. A
+// Hub never passes a revoked connection's key, so its proofs verify nothing.
+func VerifyBillProofAny(proof json.RawMessage, want ProofBinding, now time.Time, live []string) (int, error) {
+	signer, err := VerifyBillProof(proof, want, now)
+	if err != nil {
+		return -1, err
+	}
+	for i, k := range live {
+		if k == signer {
+			return i, nil
+		}
+	}
+	return -1, ErrBillProofSigner
+}

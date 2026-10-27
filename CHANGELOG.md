@@ -8,6 +8,15 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds the Hub-side serving helpers of the private transport:
+  `transport.ClassifyEnvelope` (E1 to E6 in order), `ItemShapeOK`,
+  `BearerShapeOK`, `VerifyBillProofAny`, `WrapResponseChunk`,
+  `PaddedReplySize`, and `nipcash.ServingMethod`, `ReuseCheckApplies`,
+  `RequiresRequestID` and `AnswersWithTombstone`.
+- Adds proof of work for private requests: `transport.WrapRequestPow` mines
+  a request with an `expiration` equal to its `not_after`, `Remine` re-mines
+  the same envelope, `ParsePowRejection` reads a `pow:` refusal and
+  `RelayPowMinimum` reads a relay's NIP-11 minimum.
 - Adds `network` and `chain` to `get_info` results (`GetInfoResult.Chain`,
   `ValidNetwork`), `accepting`, `fee_reserve`, `dust_threshold_millis`,
   `rotation_delay_secs` and `per_wallet_max_receive_millis` to a Circle
@@ -304,6 +313,14 @@ privacy and performance fixes.
 
 ### Changed
 
+- Changes the private transport to the final serving rules: no `v` on
+  envelopes or replies; `cash_lookup`, `cash_order` and the withdrawal methods
+  servable; `Decode` keeps proofless, secretless and repeated items for the
+  Hub's own steps and reports an over-cap consolidate as `QUOTA_EXCEEDED`;
+  `CheckFreshness(e, now, H)` replaces `MaxNotAfterWindow`; padding stops at
+  `max_bytes`, and replies pad to the bucket under 65535; the verification
+  budget counts every signed event an item carries; an announced `max_bytes`
+  over 65535 is clamped (`Announcement.EffectiveLimits`).
 - Changes the kind-11190 announcement to the tag form: `inbox`, one `limit`
   per name, `r` and optional `addr` tags (`Announcement.Addrs`), an empty
   `content` and no version. `ParseAnnouncement` reads only tags and accepts an

@@ -300,23 +300,32 @@ func (l Limits) Validate() error {
 	return nil
 }
 
-// PaddedSize returns the size n is padded up to: the smallest multiple of
-// PadBucketBytes that is at least n. It returns ErrEnvelopeTooLarge when that
-// target would exceed MaxEnvelopeBytes, so the caller learns locally instead of
-// discovering it when the relay drops the event.
+// PaddedSize returns the size n is padded up to (NIP-CASH §Envelopes): the
+// smallest multiple of PadBucketBytes at least n, or MaxEnvelopeBytes when that
+// multiple is larger. Only n itself over MaxEnvelopeBytes is an error.
 func (l Limits) PaddedSize(n int) (int, error) {
 	if n < 0 {
 		return 0, fmt.Errorf("transport: negative size %d", n)
 	}
-	buckets := (n + l.PadBucketBytes - 1) / l.PadBucketBytes
-	if buckets == 0 {
-		buckets = 1
+	if n > l.MaxEnvelopeBytes {
+		return 0, fmt.Errorf("%w: %d bytes, limit %d", ErrEnvelopeTooLarge, n, l.MaxEnvelopeBytes)
 	}
-	padded := buckets * l.PadBucketBytes
-	if padded > l.MaxEnvelopeBytes {
-		return 0, fmt.Errorf("%w: %d bytes pads to %d, limit %d", ErrEnvelopeTooLarge, n, padded, l.MaxEnvelopeBytes)
+	padded := max(1, (n+l.PadBucketBytes-1)/l.PadBucketBytes) * l.PadBucketBytes
+	return min(padded, l.MaxEnvelopeBytes), nil
+}
+
+// PaddedReplySize is a reply chunk's padded size: the smallest multiple of bucket
+// at least n, capped at NIP-44's 65535, never the request's max_bytes. Only n
+// over 65535 is an error.
+func PaddedReplySize(n, bucket int) (int, error) {
+	if n < 0 || n > MaxNIP44Plaintext {
+		return 0, fmt.Errorf("%w: %d bytes, ceiling %d", ErrEnvelopeTooLarge, n, MaxNIP44Plaintext)
 	}
-	return padded, nil
+	if bucket <= 0 {
+		return n, nil
+	}
+	padded := max(1, (n+bucket-1)/bucket) * bucket
+	return min(padded, MaxNIP44Plaintext), nil
 }
 
 // EstimatedWireBytes reports roughly how large a full envelope becomes in an

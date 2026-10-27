@@ -2,8 +2,6 @@ package cashtest
 
 import (
 	"encoding/hex"
-	"encoding/json"
-	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -12,7 +10,6 @@ import (
 
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip44"
-	"github.com/ohstr/nmilat/nip59"
 	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/nipcash/transport"
 	"github.com/ohstr/nmilat/utils"
@@ -265,78 +262,34 @@ func (h *FakeHub) publish(arrival *Relay, chunks []*nip01.Event) {
 }
 
 // Serve answers one kind-23190 event and returns the reply chunks to publish;
-// nil means no reply.
+// nil means no reply. E1 to E6 are transport.ClassifyEnvelope's.
 func (h *FakeHub) Serve(ev *nip01.Event) []*nip01.Event {
 	conversationKey, err := transport.ConversationKeyFor(ev.PubKey, h.InboxPriv)
 	if err != nil {
 		return nil
 	}
-	plaintext, err := nip44.Decrypt(ev.Content, conversationKey[:])
-	if err != nil {
-		return nil // E1
+	plaintext, decryptErr := nip44.Decrypt(ev.Content, conversationKey[:])
+	now := h.Clock.Now()
+	verdict := transport.ClassifyEnvelope([]byte(plaintext), decryptErr, h.Limits, now,
+		func(nonce string) bool { return h.nonces.seen(nonce, now) })
+	if verdict.Action == transport.ServeDrop {
+		return nil
 	}
-	var raw map[string]json.RawMessage
-	if json.Unmarshal([]byte(plaintext), &raw) != nil {
-		return nil // E1
-	}
-	var replyTo, nonce string
-	_ = json.Unmarshal(raw["reply_to"], &replyTo)
-	if !isLowerHex64(replyTo) {
-		return nil // E1
-	}
+	replyTo, nonce := verdict.Envelope.ReplyTo, verdict.Envelope.Nonce
 	replyKey, err := transport.DeriveReplyKey(conversationKey, replyTo)
 	if err != nil {
 		return nil
 	}
-	now := h.Clock.Now()
-	var notAfter int64
-	notAfterOK := json.Unmarshal(raw["not_after"], &notAfter) == nil && raw["not_after"] != nil
-	if notAfterOK && now.Unix() > notAfter {
-		return nil // E2
-	}
-	_ = json.Unmarshal(raw["nonce"], &nonce)
 	reply := func(r transport.ResponseEnvelope) []*nip01.Event {
-		r.Version, r.ReqNonce = transport.EnvelopeVersion, nonce
+		r.ReqNonce = nonce
 		return h.chunks(replyKey, replyTo, r)
 	}
-	envError := func(code, msg string) []*nip01.Event {
-		return reply(transport.ResponseEnvelope{Error: &transport.ResultError{Code: code, Message: msg}})
+	if verdict.Action == transport.ServeRefuse {
+		return reply(transport.ResponseEnvelope{Error: &transport.ResultError{Code: verdict.Code, Message: verdict.Reason.Error()}})
 	}
-
-	// E3 before E4, without claiming: an envelope refused at E4 leaves its nonce
-	// unserved.
-	if h.nonces.seen(nonce, now) {
+	env := verdict.Envelope
+	if !h.nonces.claim(nonce, time.Unix(env.NotAfter, 0), now) {
 		return nil
-	}
-	// E4.
-	var items []json.RawMessage
-	switch {
-	case !isLowerHex64(nonce):
-		return envError("BAD_REQUEST", "nonce must be 64 lowercase hex characters")
-	case !notAfterOK:
-		return envError("BAD_REQUEST", "not_after must be an integer")
-	case notAfter > now.Unix()+h.Limits.MaxRequestAgeSeconds:
-		return envError("BAD_REQUEST", "not_after is too far ahead")
-	case json.Unmarshal(raw["items"], &items) != nil || len(items) == 0:
-		return envError("BAD_REQUEST", "items must be a non-empty array")
-	case duplicateIDs(items):
-		return envError("BAD_REQUEST", "two items share an id")
-	}
-	if !h.nonces.claim(nonce, time.Unix(notAfter, 0), now) {
-		return nil
-	}
-	// E5.
-	if len(plaintext) > h.Limits.MaxEnvelopeBytes || len(items) > h.Limits.MaxItems {
-		return envError("QUOTA_EXCEEDED", "envelope over max_bytes or max_items")
-	}
-	// E6, and I1 for the items Decode drops.
-	env, err := transport.Decode([]byte(plaintext), h.Limits)
-	switch {
-	case errors.Is(err, transport.ErrVerifyBudgetExceeded), errors.Is(err, transport.ErrTooManyItems),
-		errors.Is(err, transport.ErrEnvelopeTooLarge):
-		return envError("QUOTA_EXCEEDED", "over the verification budget")
-	case err != nil:
-		return reply(transport.ResponseEnvelope{Results: []transport.Result{}}) // every item omitted
 	}
 	h.mu.Lock()
 	h.envelopes = append(h.envelopes, *env)
@@ -424,50 +377,12 @@ func (h *FakeHub) chunks(replyKey [32]byte, replyTo string, r transport.Response
 			h.t.Errorf("cashtest: encode reply chunk %d: %v", seq, err)
 			return nil
 		}
-		sealed, err := nip44.Encrypt(string(encoded), replyKey[:])
+		ev, err := transport.WrapResponseChunk(encoded, replyKey, replyTo)
 		if err != nil {
-			h.t.Errorf("cashtest: encrypt reply chunk %d: %v", seq, err)
-			return nil
-		}
-		ev := nip01.NewEvent(transport.KindPrivateResponse, sealed)
-		ev.Tags = [][]string{{"p", replyTo}}
-		ev.CreatedAt = nip59.RandomizedCreatedAt()
-		fresh, _ := Keypair(h.t)
-		if err := ev.Sign(fresh); err != nil {
-			h.t.Errorf("cashtest: sign reply chunk %d: %v", seq, err)
+			h.t.Errorf("cashtest: wrap reply chunk %d: %v", seq, err)
 			return nil
 		}
 		out = append(out, ev)
 	}
 	return out
-}
-
-func isLowerHex64(s string) bool {
-	if len(s) != 64 {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return false
-		}
-	}
-	return true
-}
-
-func duplicateIDs(items []json.RawMessage) bool {
-	seen := map[string]bool{}
-	for _, raw := range items {
-		var it struct {
-			ID *string `json:"id"`
-		}
-		if json.Unmarshal(raw, &it) != nil || it.ID == nil {
-			continue
-		}
-		if seen[*it.ID] {
-			return true
-		}
-		seen[*it.ID] = true
-	}
-	return false
 }

@@ -143,7 +143,7 @@ func (s *suite) newEnvelope(t *testing.T, items ...transport.Item) (envelope, st
 	replyTo := mustNonce(t)
 	notAfter := time.Now().Add(60 * time.Second).Unix()
 	return envelope{
-		"v": transport.EnvelopeVersion, "nonce": nonce, "reply_to": replyTo,
+		"nonce": nonce, "reply_to": replyTo,
 		"not_after": notAfter, "items": items,
 	}, nonce, replyTo, notAfter
 }

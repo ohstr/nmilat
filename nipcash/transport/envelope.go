@@ -40,14 +40,10 @@ const (
 	KindBillProof = 23193
 )
 
-// EnvelopeVersion is the only version this package emits. Present so a future
-// change to the envelope shape is a version bump rather than a guess.
+// EnvelopeVersion is kept for source compatibility only. The envelope and the
+// response carry no version on the wire since nips 631341c; the Version fields
+// are never written or read.
 const EnvelopeVersion = 1
-
-// MaxNotAfterWindow bounds how far ahead an envelope may claim to be valid. It
-// also bounds the hub's replay-dedupe memory, since a nonce need only be
-// remembered until the envelope it belongs to can no longer be accepted.
-const MaxNotAfterWindow = 120 * time.Second
 
 // keyHexLen is the length of a hex-encoded 32-byte value: a pubkey, a nonce, or
 // a reply tag.
@@ -143,7 +139,8 @@ func hasRawValue(raw json.RawMessage) bool {
 
 // Envelope is the plaintext inside one private-transport ciphertext.
 type Envelope struct {
-	Version int `json:"v"`
+	// Version is never on the wire (see EnvelopeVersion).
+	Version int `json:"-"`
 	// NotAfter is the envelope's own expiry, in unix seconds. The wrapping event's
 	// created_at is randomised up to two days into the past (NIP-59), so it says
 	// nothing about freshness — replay protection has to live in here.
@@ -172,6 +169,10 @@ type Envelope struct {
 type ItemRejection struct {
 	Index int
 	Err   error
+	// Code is the item error a Hub answers with, when the item is answered rather
+	// than omitted: QUOTA_EXCEEDED for a consolidate over max_consolidate_sources.
+	// Empty for a structural (I1) omission.
+	Code string
 }
 
 // NewNonce returns a random 32-byte hex value, for Nonce and ReplyTo.
@@ -326,40 +327,45 @@ func writeCanonicalString(buf *bytes.Buffer, s string) {
 // told the envelope was over budget.
 func (i Item) VerificationCost() int {
 	// Every item carries a kind-23193 bill proof, whatever its identity mode, so
-	// that signature is unconditional. Undercounting it would let a batch of
-	// cash-mode items — each previously counted as free — spend far more
-	// secp256k1 time than the hub's budget believed it had authorised.
-	cost := 1 // the kind-23193 bill proof
-	if !i.IsBearer() {
-		// Plus the kind-23192 slice proof. A cash-mode item carries none: its
-		// secret IS the slice authorization, so there is no second signature.
-		// Counting a phantom verification would make a hub's budget refuse batches
-		// it could actually serve.
-		cost++
+	// that signature is unconditional.
+	cost := 1
+	if i.HasProof() {
+		cost++ // the kind-23192 item proof
 	}
-
-	// cash_consolidate is the only method carrying nested proofs today: one per
-	// source, plus an attestation for a connection_key source.
+	// Every signed event the params carry costs one: a claim proof
+	// (identity_event, a 23198 or a join's 23199), an attestation (35522), a
+	// withdraw quote (23187), and each source's own pair for a consolidate.
 	var params struct {
-		Sources []struct {
-			IdentityEvent    string `json:"identity_event"`
-			AttestationEvent string `json:"attestation_event"`
-		} `json:"sources"`
+		IdentityEvent    json.RawMessage   `json:"identity_event"`
+		AttestationEvent json.RawMessage   `json:"attestation_event"`
+		Quote            json.RawMessage   `json:"quote"`
+		Sources          []json.RawMessage `json:"sources"`
 	}
-	// A params body that will not decode costs nothing extra to count; it fails
-	// later, on its own terms.
 	if err := json.Unmarshal(i.Params, &params); err != nil {
 		return cost
 	}
-	for _, source := range params.Sources {
-		if source.IdentityEvent != "" {
-			cost++
+	cost += countSigned(params.IdentityEvent) + countSigned(params.AttestationEvent) + countSigned(params.Quote)
+	for _, raw := range params.Sources {
+		var source struct {
+			IdentityEvent    json.RawMessage `json:"identity_event"`
+			AttestationEvent json.RawMessage `json:"attestation_event"`
 		}
-		if source.AttestationEvent != "" {
-			cost++
+		if json.Unmarshal(raw, &source) != nil {
+			continue // a non-object element costs nothing
 		}
+		cost += countSigned(source.IdentityEvent) + countSigned(source.AttestationEvent)
 	}
 	return cost
+}
+
+// countSigned is 1 for a present, non-empty event value (a JSON string or
+// object), 0 for an absent, null or empty one.
+func countSigned(raw json.RawMessage) int {
+	t := bytes.TrimSpace(raw)
+	if len(t) == 0 || bytes.Equal(t, nullLiteral) || bytes.Equal(t, []byte(`""`)) {
+		return 0
+	}
+	return 1
 }
 
 // SourceCount reports how many consolidate sources an item declares, for checking
@@ -443,17 +449,16 @@ func (e Envelope) Encode(limits Limits) ([]byte, error) {
 	return padded, nil
 }
 
-// Decode parses and checks an envelope plaintext against limits.
+// Decode parses an envelope plaintext for a Hub that has already classified it
+// (ClassifyEnvelope: E1 to E6). It omits only what I1 makes a structural
+// omission (ItemShapeOK fails) and reports a consolidate over
+// max_consolidate_sources with Code QUOTA_EXCEEDED; every other item is kept,
+// proofless, secretless or repeated ones included, for the Hub's own steps (I2
+// onward) to decide. An envelope whose items are all omitted decodes with no
+// items: the Hub still answers it, with "results": [].
 //
-// Checks run cheapest-first and structurally only: size, version, item count,
-// tags, then the verification budget. No signature is verified and no database is
-// touched here, so rejecting a hostile envelope stays cheap.
-//
-// A structurally bad item is dropped into Rejected rather than failing the
-// envelope, so the hub still serves its co-items; an assembler batching for
-// others cannot silence them all with one malformed contribution. Decode fails
-// only on an envelope-level fault, or when no item survives (with that item's
-// own error). The verification budget counts the surviving items.
+// The header checks repeat E4/E5 so a caller using Decode alone cannot run a
+// malformed envelope; the budget counts the kept items.
 func Decode(plaintext []byte, limits Limits) (*Envelope, error) {
 	if err := limits.Validate(); err != nil {
 		return nil, err
@@ -462,23 +467,92 @@ func Decode(plaintext []byte, limits Limits) (*Envelope, error) {
 		return nil, fmt.Errorf("%w: %d bytes, limit %d",
 			ErrEnvelopeTooLarge, len(plaintext), limits.MaxEnvelopeBytes)
 	}
-
-	var e Envelope
-	if err := json.Unmarshal(plaintext, &e); err != nil {
+	var wire struct {
+		NotAfter int64             `json:"not_after"`
+		Nonce    string            `json:"nonce"`
+		ReplyTo  string            `json:"reply_to"`
+		Items    []json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(plaintext, &wire); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrEnvelopeMalformed, err)
 	}
-	if err := e.checkHeader(limits); err != nil {
+	e := Envelope{Version: EnvelopeVersion, NotAfter: wire.NotAfter, Nonce: wire.Nonce, ReplyTo: wire.ReplyTo}
+	if len(e.Nonce) != keyHexLen || !isLowerHex(e.Nonce) {
+		return nil, fmt.Errorf("%w: nonce must be %d lowercase hex characters", ErrEnvelopeMalformed, keyHexLen)
+	}
+	if len(e.ReplyTo) != keyHexLen || !isLowerHex(e.ReplyTo) {
+		return nil, fmt.Errorf("%w: reply_to must be %d lowercase hex characters", ErrEnvelopeMalformed, keyHexLen)
+	}
+	if len(wire.Items) == 0 {
+		return nil, ErrEnvelopeNoItems
+	}
+	if len(wire.Items) > limits.MaxItems {
+		return nil, fmt.Errorf("%w: %d items, limit %d", ErrTooManyItems, len(wire.Items), limits.MaxItems)
+	}
+	if duplicateItemIDs(wire.Items) {
+		return nil, fmt.Errorf("%w: two items share an id", ErrDuplicateItemID)
+	}
+	for i, raw := range wire.Items {
+		if !ItemShapeOK(raw) {
+			e.Rejected = append(e.Rejected, ItemRejection{Index: i, Err: fmt.Errorf("%w: item %d is not well formed", ErrEnvelopeMalformed, i)})
+			continue
+		}
+		var item Item
+		if err := json.Unmarshal(raw, &item); err != nil {
+			e.Rejected = append(e.Rejected, ItemRejection{Index: i, Err: fmt.Errorf("%w: %v", ErrEnvelopeMalformed, err)})
+			continue
+		}
+		if sources := item.SourceCount(); sources > limits.MaxConsolidateSources {
+			e.Rejected = append(e.Rejected, ItemRejection{Index: i, Code: "QUOTA_EXCEEDED",
+				Err: fmt.Errorf("%w: item %q declares %d sources, limit %d", ErrTooManyItems, item.ID, sources, limits.MaxConsolidateSources)})
+			continue
+		}
+		e.Items = append(e.Items, item)
+	}
+	if err := checkBudget(e.Items, limits); err != nil {
 		return nil, err
 	}
-	kept, rejected := e.checkItems(limits)
-	if len(kept) == 0 {
-		return nil, rejected[0].Err
-	}
-	if err := checkBudget(kept, limits); err != nil {
-		return nil, err
-	}
-	e.Items, e.Rejected = kept, rejected
 	return &e, nil
+}
+
+// ItemShapeOK is I1: an item is a JSON object with string id, target and method,
+// and params absent, null or an object. Anything else is omitted.
+func ItemShapeOK(raw json.RawMessage) bool {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
+		return false
+	}
+	for _, name := range []string{"id", "target", "method"} {
+		var s string
+		if v, ok := fields[name]; !ok || json.Unmarshal(v, &s) != nil {
+			return false
+		}
+	}
+	if p, ok := fields["params"]; ok {
+		t := bytes.TrimSpace(p)
+		if !bytes.Equal(t, nullLiteral) && (len(t) == 0 || t[0] != '{') {
+			return false
+		}
+	}
+	return true
+}
+
+// duplicateItemIDs reports two items, of whatever shape, carrying one string id.
+func duplicateItemIDs(items []json.RawMessage) bool {
+	seen := make(map[string]bool, len(items))
+	for _, raw := range items {
+		var it struct {
+			ID *string `json:"id"`
+		}
+		if json.Unmarshal(raw, &it) != nil || it.ID == nil {
+			continue
+		}
+		if seen[*it.ID] {
+			return true
+		}
+		seen[*it.ID] = true
+	}
+	return false
 }
 
 // check holds the rules Encode and Decode share, so a client cannot build
@@ -497,9 +571,6 @@ func (e Envelope) check(limits Limits) error {
 // checkHeader holds the envelope-level rules: a failure here leaves no item that
 // could be answered.
 func (e Envelope) checkHeader(limits Limits) error {
-	if e.Version != EnvelopeVersion {
-		return fmt.Errorf("%w: %d", ErrEnvelopeVersion, e.Version)
-	}
 	if len(e.Nonce) != keyHexLen || !isLowerHex(e.Nonce) {
 		return fmt.Errorf("%w: nonce must be %d lowercase hex characters", ErrEnvelopeMalformed, keyHexLen)
 	}
@@ -623,17 +694,16 @@ func checkBudget(items []Item, limits Limits) error {
 	return nil
 }
 
-// CheckFreshness validates not_after against now. Kept separate from check so a
-// client can build an envelope without its own clock deciding validity, while the
-// hub still refuses a stale or absurdly long-lived one.
-func (e Envelope) CheckFreshness(now time.Time) error {
-	notAfter := time.Unix(e.NotAfter, 0)
-	if now.After(notAfter) {
-		return fmt.Errorf("%w: expired at %s", ErrEnvelopeExpired, notAfter.UTC().Format(time.RFC3339))
+// CheckFreshness is a Hub's deadline check of an envelope's not_after against
+// its horizon H (NIP-CASH §Deadlines): passed (now > not_after) and more than H
+// ahead are refused; exactly H ahead is accepted.
+func CheckFreshness(e Envelope, now time.Time, horizon int64) error {
+	n := now.Unix()
+	if n > e.NotAfter {
+		return fmt.Errorf("%w: expired at %d", ErrEnvelopeExpired, e.NotAfter)
 	}
-	if notAfter.Sub(now) > MaxNotAfterWindow {
-		return fmt.Errorf("%w: valid for %s, maximum %s",
-			ErrEnvelopeTooFresh, notAfter.Sub(now), MaxNotAfterWindow)
+	if e.NotAfter > n+horizon {
+		return fmt.Errorf("%w: not_after %d is more than %d s past %d", ErrEnvelopeTooFresh, e.NotAfter, horizon, n)
 	}
 	return nil
 }

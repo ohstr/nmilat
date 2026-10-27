@@ -32,12 +32,19 @@ var (
 // mint_cash is deliberately absent. It is the hub owner's method on the hub's own
 // connection, and it is the one method with no retry idempotency — a hub with
 // bounded replay memory could double-mint on a caller's retry.
+//
+// cash_lookup is admitted because it writes nothing. cash_order (NIP-CO) and the
+// two withdrawal methods are served here only.
 var servableMethods = map[string]struct{}{
 	"cash_status":          {},
 	"cash_redeem":          {},
+	"cash_withdraw_quote":  {},
+	"cash_withdraw":        {},
 	"cash_transfer":        {},
 	"cash_consolidate":     {},
+	"cash_lookup":          {},
 	"create_circle_wallet": {},
+	"cash_order":           {},
 }
 
 // IsServableMethod reports whether a method may travel over the private transport.

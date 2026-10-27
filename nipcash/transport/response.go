@@ -49,7 +49,8 @@ type ResultError struct {
 // A caller reads an omission as "not served", which carries the same information
 // an error would without confirming anything about what the hub holds.
 type ResponseEnvelope struct {
-	Version int `json:"v"`
+	// Version is never on the wire (see EnvelopeVersion).
+	Version int `json:"-"`
 	// ReqNonce ties this response to the request that produced it, so a client
 	// cannot be confused by a response to something else.
 	ReqNonce string `json:"req_nonce"`
@@ -200,9 +201,6 @@ func (r ResponseEnvelope) EncodeResponse(limits Limits) ([]byte, error) {
 	if err := limits.Validate(); err != nil {
 		return nil, err
 	}
-	if r.Version != EnvelopeVersion {
-		return nil, fmt.Errorf("%w: %d", ErrEnvelopeVersion, r.Version)
-	}
 	// A reply echoes the request's nonce as sent. Only an envelope-level refusal
 	// can answer a malformed one: NIP-CASH §Serving an Envelope E4 refuses an
 	// envelope whose nonce is not 64 lowercase hex with BAD_REQUEST, and that
@@ -230,7 +228,9 @@ func (r ResponseEnvelope) EncodeResponse(limits Limits) ([]byte, error) {
 	}
 
 	const padFieldOverhead = len(`,"pad":""`)
-	target, err := limits.PaddedSize(len(body) + padFieldOverhead)
+	// A reply pads to the Hub's bucket under NIP-44's ceiling, never to the
+	// request's max_bytes, which bounds requests only.
+	target, err := PaddedReplySize(len(body)+padFieldOverhead, limits.PadBucketBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -244,9 +244,9 @@ func (r ResponseEnvelope) EncodeResponse(limits Limits) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("transport: marshal padded response: %w", err)
 	}
-	if len(padded) > limits.MaxEnvelopeBytes {
-		return nil, fmt.Errorf("%w: %d bytes after padding, limit %d",
-			ErrEnvelopeTooLarge, len(padded), limits.MaxEnvelopeBytes)
+	if len(padded) > MaxNIP44Plaintext {
+		return nil, fmt.Errorf("%w: %d bytes after padding, ceiling %d",
+			ErrEnvelopeTooLarge, len(padded), MaxNIP44Plaintext)
 	}
 	return padded, nil
 }
@@ -276,9 +276,6 @@ func DecodeResponse(plaintext []byte, reqNonce string, requestedIDs []string, li
 		return nil, err
 	}
 	r := chunk.ResponseEnvelope
-	if r.Version != EnvelopeVersion {
-		return nil, fmt.Errorf("%w: %d", ErrEnvelopeVersion, r.Version)
-	}
 	// Tolerated on decode for the same reason it is filled in on encode: a hub that
 	// answers in one event and omits the pair is not malformed, just terse.
 	if r.Seq == 0 && r.Total == 0 {

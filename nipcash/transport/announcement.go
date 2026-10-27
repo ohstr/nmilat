@@ -30,6 +30,9 @@ var (
 	// announcement carries no max_request_age of at least 60 seconds, or its newest
 	// announcement was rejected.
 	ErrHubUnusable = errors.New("transport: the hub is unusable for calls carrying a request_id")
+	// ErrHubNonConforming is an announced policy no conforming Hub announces, such
+	// as a max_consolidate_sources whose largest item cannot fit max_bytes.
+	ErrHubNonConforming = errors.New("transport: the hub's announced limits do not conform")
 	// ErrBadAddr is an addr a Hub was asked to announce that is not host:port with
 	// an IPv4, bracketed IPv6 or onion host.
 	ErrBadAddr = errors.New("transport: addr must be host:port with an IPv4, bracketed IPv6 or onion host")
@@ -309,10 +312,22 @@ func announcementFromTags(ev *nip01.Event) (*Announcement, error) {
 	// building something unencryptable, so the announced policy is validated
 	// rather than adopted. max_request_age is checked apart, by
 	// ValidateForBillCalls, since a Hub without one still answers reads.
-	if err := a.Limits.Limits().validateAdoptable(); err != nil {
+	if err := a.EffectiveLimits().validateAdoptable(); err != nil {
+		if errors.Is(err, ErrConsolidateCapTooHigh) {
+			return nil, fmt.Errorf("%w: %w: %v", ErrAnnouncementMalformed, ErrHubNonConforming, err)
+		}
 		return nil, fmt.Errorf("%w: announced limits are unusable: %v", ErrAnnouncementMalformed, err)
 	}
 	return a, nil
+}
+
+// EffectiveLimits are the limits a client sizes envelopes against: the announced
+// ones, max_bytes clamped to NIP-44's 65535 (a larger announced value is never a
+// reason to reject the announcement).
+func (a Announcement) EffectiveLimits() Limits {
+	l := a.Limits.Limits()
+	l.MaxEnvelopeBytes = min(l.MaxEnvelopeBytes, MaxNIP44Plaintext)
+	return l
 }
 
 // parseDecimal reads unsigned decimal with no leading zeros.
