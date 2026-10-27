@@ -79,7 +79,7 @@ func Recover(ctx context.Context, pc nipcash.PendingCall, lookup func(context.Co
 	case lo.Code != "":
 		return Action{Kind: ActionShow, Reason: "lookup_refused:" + lo.Code}, nil
 	}
-	isOrder := pc.Method == methodCashOrder
+	isOrder := pc.Method == nipcash.MethodCashOrder
 	if isOrder && pc.PayBy != 0 && (lo.Status == nipcash.LookupUnknown || lo.Status == nipcash.LookupExpired) {
 		// The held reply proves the order was placed: never re-placed. Before
 		// pay_by it is shown; after it the caller ends the order unpaid.
@@ -134,7 +134,7 @@ func Replace(ctx context.Context, pc nipcash.PendingCall, j Journal, o ReplaceOp
 	if j == nil {
 		return Action{}, ErrNoJournal
 	}
-	if (pc.Method == nipcash.MethodMintCash || pc.Method == methodCashOrder) && !o.Confirmed {
+	if (pc.Method == nipcash.MethodMintCash || pc.Method == nipcash.MethodCashOrder) && !o.Confirmed {
 		return Action{}, ErrReplaceNeedsConfirmation
 	}
 	max := o.MaxAttempts
@@ -162,7 +162,7 @@ func Replace(ctx context.Context, pc nipcash.PendingCall, j Journal, o ReplaceOp
 	}
 	next := pc
 	next.RequestID, next.DerivedFrom, next.Attempt, next.LastCode, next.SawReused = id, pc.RequestID, pc.Attempt+1, "", false
-	if pc.Method == methodCashOrder {
+	if pc.Method == nipcash.MethodCashOrder {
 		notify, err := nipcash.NewRequestID()
 		if err != nil {
 			return Action{}, err
@@ -185,11 +185,8 @@ func Replace(ctx context.Context, pc nipcash.PendingCall, j Journal, o ReplaceOp
 	return Action{Kind: ActionWait}, nil
 }
 
-// The methods nipcash/client does not send itself but recovers like its own.
-const (
-	methodCashOrder    = "cash_order"
-	methodCashWithdraw = "cash_withdraw"
-)
+// cash_withdraw is recovered like a call of this package (NIP-CASH §Withdrawing).
+const methodCashWithdraw = "cash_withdraw"
 
 func max64(a, b int64) int64 {
 	if a > b {

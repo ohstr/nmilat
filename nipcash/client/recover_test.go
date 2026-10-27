@@ -44,11 +44,11 @@ func TestRecover_Table(t *testing.T) {
 			LookupOutcome{NotServed: true}, "a", Action{Kind: ActionShow, Reason: "lookup_unanswered"}},
 		{"REQUEST_REUSED lookup reads as unanswered", base, LookupOutcome{Code: nipcash.ErrCodeRequestReused}, "a", Action{Kind: ActionWait}},
 		{"malformed shows", base, LookupOutcome{Malformed: true}, "a", Action{Kind: ActionShow, Reason: "lookup_malformed"}},
-		{"order done waits for the order", with(func(p *nipcash.PendingCall) { p.Method = methodCashOrder }),
+		{"order done waits for the order", with(func(p *nipcash.PendingCall) { p.Method = nipcash.MethodCashOrder }),
 			LookupOutcome{Status: nipcash.LookupDone, Result: done}, "a", Action{Kind: ActionWait, Result: done}},
-		{"held order unknown before pay_by shows", with(func(p *nipcash.PendingCall) { p.Method = methodCashOrder; p.PayBy = now.Unix() + 10 }),
+		{"held order unknown before pay_by shows", with(func(p *nipcash.PendingCall) { p.Method = nipcash.MethodCashOrder; p.PayBy = now.Unix() + 10 }),
 			LookupOutcome{Status: nipcash.LookupUnknown}, "a", Action{Kind: ActionShow, Reason: "lookup_unknown"}},
-		{"held order unknown after pay_by waits", with(func(p *nipcash.PendingCall) { p.Method = methodCashOrder; p.PayBy = now.Unix() - 10 }),
+		{"held order unknown after pay_by waits", with(func(p *nipcash.PendingCall) { p.Method = nipcash.MethodCashOrder; p.PayBy = now.Unix() - 10 }),
 			LookupOutcome{Status: nipcash.LookupUnknown}, "a", Action{Kind: ActionWait, Reason: "unknown"}},
 		{"withdraw that saw REQUEST_REUSED confirms", with(func(p *nipcash.PendingCall) { p.Method = methodCashWithdraw; p.SawReused = true }),
 			LookupOutcome{Status: nipcash.LookupUnknown}, "a", Action{Kind: ActionConfirmReplace}},
@@ -117,7 +117,7 @@ func TestReplace(t *testing.T) {
 	})
 	t.Run("an order gets a fresh notify", func(t *testing.T) {
 		order := pc
-		order.Method, order.Notify = methodCashOrder, testRequestID
+		order.Method, order.Notify = nipcash.MethodCashOrder, testRequestID
 		var sent nipcash.PendingCall
 		if _, err := Replace(ctx, order, newTestJournal(), ReplaceOptions{Confirmed: true}, func(_ context.Context, n nipcash.PendingCall) error {
 			sent = n

@@ -45,6 +45,9 @@ const (
 	// (CashStatusResult.Error) reads naturally here where it never did on the
 	// old name.
 	MethodCashStatus = "cash_status"
+	// MethodCashOrder is NIP-CO's order call: sent on the private transport
+	// only, against an Order connection (package nipCO).
+	MethodCashOrder = "cash_order"
 )
 
 // Identity type strings used on the wire (a request/response's
