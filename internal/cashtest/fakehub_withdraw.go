@@ -275,6 +275,10 @@ func (l *WithdrawLedger) SetUnconfirmedBound(millis uint64) {
 // StarveCoins makes the Hub unable to set coins aside: INSUFFICIENT_BALANCE.
 func (l *WithdrawLedger) StarveCoins(on bool) { l.mu.Lock(); l.starve = on; l.mu.Unlock() }
 
+// MarkUsed marks rid used on the node, as if a call carrying it had passed
+// its authorization here before: a later call with it is REQUEST_REUSED.
+func (l *WithdrawLedger) MarkUsed(rid string) { l.mu.Lock(); l.used[rid] = true; l.mu.Unlock() }
+
 // SetQuoteRateLimited refuses every quote RATE_LIMITED while on.
 func (l *WithdrawLedger) SetQuoteRateLimited(on bool) { l.mu.Lock(); l.rateLimited = on; l.mu.Unlock() }
 
