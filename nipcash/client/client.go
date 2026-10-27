@@ -34,20 +34,14 @@ type Client struct {
 	nwc          *relayclient.NWCClient
 	walletPubkey string
 
-	// token is the bill this client was dialled with, when it was dialled with one
-	// rather than with a bare pairing URI. Bill methods need it: a bill's mint
+	// token is the bill this client was dialled with. Bill methods need it: a bill's mint
 	// signature is the only thing that identifies its minting Hub, and that identity
 	// is what the transport announcement is verified against.
 	token *nipcash.Token
 
-	// connSecret is the bill's connection secret, kept from the pairing data this
-	// client was dialled with. It signs every item's kind-23193 bill proof, which is
-	// how a hub learns the sender genuinely holds this bill rather than having
-	// guessed its wallet pubkey.
-	//
-	// Taken from the pairing rather than from token, so it is present whether the
-	// caller supplied a lokicash token or the bill's raw pairing URI — the same
-	// secret either way.
+	// connSecret is the bill's connection secret (the token's TLV 2). It signs
+	// every item's kind-23193 bill proof, which is how a hub learns the sender
+	// genuinely holds this bill rather than having guessed its wallet pubkey.
 	connSecret string
 
 	// session is opened lazily and reused. Lazily because a Client dialled purely to
@@ -73,7 +67,7 @@ type Client struct {
 // can be diagnosed.
 func (c *Client) bill() (Bill, error) {
 	if c.connSecret == "" {
-		return Bill{}, fmt.Errorf("nipcash/client: this connection carries no bill secret, so no bill proof can be signed; dial the bill's own token or pairing uri")
+		return Bill{}, fmt.Errorf("nipcash/client: this connection carries no bill secret, so no bill proof can be signed; dial the bill's own token")
 	}
 	return BillFromParts(c.walletPubkey, c.connSecret)
 }
@@ -82,9 +76,8 @@ func (c *Client) bill() (Bill, error) {
 // over, opening it on first use.
 //
 // The hub identity comes from the bill's own mint signature, which is mandatory
-// (§Mint Provenance) precisely so this always works. A Client dialled with a bare
-// pairing URI has no token and therefore no hub identity, so it can mint but cannot
-// act on a bill — that is a real limit of a pairing URI, not of this client.
+// (§Mint Provenance) precisely so this always works. A Client without a token has
+// no hub identity, so it cannot act on a bill.
 func (c *Client) billSession(ctx context.Context) (*BatchSession, error) {
 	c.sessionMu.Lock()
 	defer c.sessionMu.Unlock()
@@ -92,7 +85,7 @@ func (c *Client) billSession(ctx context.Context) (*BatchSession, error) {
 		return c.session, nil
 	}
 	if c.token == nil {
-		return nil, fmt.Errorf("nipcash/client: bill methods need a cash token — a pairing URI carries no mint signature, so there is no hub identity to verify a transport announcement against")
+		return nil, fmt.Errorf("nipcash/client: bill methods need a cash token: its mint signature names the hub the transport announcement is verified against")
 	}
 	var minter string
 	var ok bool
@@ -183,17 +176,16 @@ func oneItemOutcome(state OutcomeState, resultErr *transport.ResultError, sendEr
 	return nil
 }
 
-// Connect dials tokenOrPairingURI, accepting either a cash-token-family
-// bech32 string (lokicash1..., satscash1..., ...) or a raw
-// nostr+walletconnect://... pairing URI — both decode to identical NIP-47
-// pairing data, so either is a fully sufficient connection credential.
+// Connect dials a bill: a cash-token-family bech32 string (satscash1...,
+// ...). No URI form is accepted: a cash NIP connection is never a
+// nostr+walletconnect URI.
 //
 // A cashhub1 string is refused (ErrCashHubConnection; use ConnectCashHub). A
 // bill followed by "#<cash secret>" is dialled from its token half; use
 // ConnectCashSlice to keep the secret half. A token is dialled on its usable
 // relays.
-func Connect(ctx context.Context, tokenOrPairingURI string, opts ...SessionOption) (*Client, error) {
-	c, _, err := ConnectCashSlice(ctx, tokenOrPairingURI, opts...)
+func Connect(ctx context.Context, token string, opts ...SessionOption) (*Client, error) {
+	c, _, err := ConnectCashSlice(ctx, token, opts...)
 	return c, err
 }
 
@@ -208,28 +200,19 @@ func ConnectCashSlice(ctx context.Context, s string, opts ...SessionOption) (*Cl
 	if i := strings.IndexByte(s, '#'); i >= 0 {
 		s, secret = s[:i], s[i+1:]
 	}
-	pairing, err := nip47.ParsePairingURI(s)
-	var tok *nipcash.Token
+	token, err := nipcash.Decode(s)
 	if err != nil {
-		token, decodeErr := nipcash.Decode(s)
-		if decodeErr != nil {
-			return nil, "", fmt.Errorf("nipcash/client: the string is neither a valid pairing uri (%v) nor a valid cash token (%v)", err, decodeErr)
-		}
-		pairing = &nip47.PairingInfo{
-			WalletPubkey: token.WalletPubkey,
-			RelayURLs:    token.UsableRelays(),
-			Secret:       token.Secret,
-		}
-		tok = &token
+		return nil, "", fmt.Errorf("nipcash/client: not a cash token: %w", err)
 	}
-	if secret != "" && secret == pairing.Secret {
+	if secret != "" && secret == token.Secret {
 		return nil, "", ErrSecretIsConnectionSecret
 	}
+	pairing := &nip47.PairingInfo{WalletPubkey: token.WalletPubkey, RelayURLs: token.UsableRelays(), Secret: token.Secret}
 	nwc, err := relayclient.NewNWCClient(ctx, pairing, nip47.EncryptionNIP44V2)
 	if err != nil {
 		return nil, "", err
 	}
-	return &Client{nwc: nwc, walletPubkey: pairing.WalletPubkey, connSecret: pairing.Secret, token: tok, sessionOpts: opts}, secret, nil
+	return &Client{nwc: nwc, walletPubkey: token.WalletPubkey, connSecret: token.Secret, token: &token, sessionOpts: opts}, secret, nil
 }
 
 // ConnectZap dials a zap bill (scheme 2) with its Cash Zap context, which

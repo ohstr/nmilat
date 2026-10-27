@@ -49,9 +49,8 @@ func BillFor(tok nipcash.Token) (Bill, error) {
 	return b, nil
 }
 
-// BillFromParts is for a caller holding the bill's pairing data rather than an encoded
-// token — a connection dialled from a raw pairing URI, which carries the same wallet
-// pubkey and secret but no token envelope around them.
+// BillFromParts is for a caller holding the bill's wallet pubkey and connection
+// secret as fields rather than an encoded token.
 //
 // Both are required. An empty secret is refused HERE, where the caller can be told
 // which bill is wrong, rather than deeper down where the only available answer is an

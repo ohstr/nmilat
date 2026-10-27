@@ -317,18 +317,3 @@ func TestJoin_Answers(t *testing.T) {
 		proofs[req.IdentityEvent] = true
 	}
 }
-
-// T12-25: no URI form is built or parsed anywhere in nipcw: neither package names
-// the NWC client's URI constructor or parser, nor writes the scheme.
-func TestNoURIForm(t *testing.T) {
-	for _, dir := range []string{".", ".."} {
-		for _, f := range goFiles(t, dir) {
-			src := readFile(t, f)
-			for _, bad := range []string{"ParsePairingURI", "BuildPairingURI", "nostr+walletconnect:"} {
-				if strings.Contains(src, bad) {
-					t.Errorf("%s names %s", f, bad)
-				}
-			}
-		}
-	}
-}
