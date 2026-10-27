@@ -8,6 +8,24 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds on-chain withdrawals to `nipcash` (`cash_withdraw_quote`,
+  `cash_withdraw`): witness address checks (`DecodeWitnessAddress`,
+  `NormalizeAddress`, `ClassifyAddress`, `WithdrawHRPs`), `WithdrawFee`, the
+  kind-23187 quote, call requests, the kind-23188 receipt, payouts, cancels,
+  `Detail`/`ParseDetail`, and the Hub's decisions (`CheckQuoteRequest`,
+  `CheckWithdrawPayout`, `PayoutStateOf`, `CancelDue`, `RemintExpiry`,
+  `WithdrawRecordRetained`, `WithdrawBlocksHubDelete`).
+  ([#197](https://github.com/ohstr/nmilat/pull/197))
+- Adds the withdrawal flows to `nipcash/client`: `WithdrawTerms`,
+  `QuoteWithdraw`, `Withdraw` (written ahead, receipt verified),
+  `LookupWithdraw`, `CancelWithdraw`, `WatchPayout`, `PayoutFinished`, the
+  batch forms, `WithWithdrawHRP`, `ReplaceOptions.Quote`, and the
+  `cash_withdraw` rules of `Recover` and `Replace`. `PendingCall` gains
+  `Quote`, `Address`, `HoldsUntil`, `Receipt` and `LastDetail`.
+  ([#197](https://github.com/ohstr/nmilat/pull/197))
+- Adds conformance cases CT-WD-01 (wire part) and CT-SCOPE-05, and
+  `cashtest.WithWithdrawals`.
+  ([#197](https://github.com/ohstr/nmilat/pull/197))
 - Adds `nip59.WrapWithKey`, `Unwrap` and `WithWrapExpiration`: the NIP-59
   receive path, and wraps under a key the caller keeps.
   ([#196](https://github.com/ohstr/nmilat/pull/196))
@@ -444,6 +462,10 @@ privacy and performance fixes.
 
 ### Changed
 
+- Changes `nipCO/client` to check order addresses with nipcash's witness
+  address helpers, and `FinalError.Detail`/`IndeterminateError.Detail` to
+  carry `ParseDetail` of the answer.
+  ([#197](https://github.com/ohstr/nmilat/pull/197))
 - Changes `client.Connect` and `ConnectCashSlice` to accept only a cash
   token: no NIP-47 URI form is parsed anywhere in the cash NIPs, which an
   import-graph test pins. ([#196](https://github.com/ohstr/nmilat/pull/196))
@@ -677,6 +699,8 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes `IndeterminateError`'s text including the call's request_id.
+  ([#197](https://github.com/ohstr/nmilat/pull/197))
 - Fixes `CashTransferResult.RecipientToken` to report a spin-off answered
   with its tombstone as `*BillGone`.
   ([#196](https://github.com/ohstr/nmilat/pull/196))
