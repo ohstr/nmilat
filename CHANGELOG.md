@@ -8,6 +8,10 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds tests covering the client scenarios of WP-11 end to end against the
+  fake ledger (mint, transfer, status, redeem, lookup and envelope cases)
+  and `RedeemProgressOf`, and tags existing tests with the T11 and E-* ids
+  they cover. ([#214](https://github.com/ohstr/nmilat/pull/214))
 - Adds `nipcash.Source.Ordered` and enforces `ErrMixedOrdered` in
   `ConsolidateMany`, `CashConsolidate` and the composites, which carry an
   `Ordered` mark onto the bills they build.
