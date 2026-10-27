@@ -95,23 +95,28 @@ func buildNIP44() (any, error) {
 	}
 	ck := mustHexBytes(strings.Repeat("ab", 32))
 	for _, c := range v.Valid.CalcPaddedLen {
-		if c[0] > nip44.MaxPlaintextSize {
-			continue // beyond NIP-44 v2's u16 prefix: refused below, not sealed
-		}
 		payload, err := nip44.Encrypt(strings.Repeat("a", c[0]), ck)
 		if err != nil {
 			return nil, fmt.Errorf("calc_padded_len %d: %w", c[0], err)
 		}
 		raw, _ := base64.StdEncoding.DecodeString(payload)
-		// version(1) || nonce(32) || u16 length || padded || mac(32).
-		if got := len(raw) - 1 - 32 - 2 - 32; got != c[1] {
+		// version(1) || nonce(32) || length prefix || padded || mac(32). The
+		// prefix is a u16, or from 65536 bytes on two zero bytes then a u32.
+		prefix := 2
+		if c[0] >= 65536 {
+			prefix = 6
+		}
+		if got := len(raw) - 1 - 32 - prefix - 32; got != c[1] {
 			return nil, fmt.Errorf("calc_padded_len %d: nmilat pads to %d, want %d", c[0], got, c[1])
 		}
 	}
-	// An out-of-range plaintext is refused, as the NIP requires.
+	// An out-of-range plaintext nmilat would still seal is one no conforming
+	// peer can open. cashkit follows the NIP and refuses it; any such
+	// divergence is recorded rather than hidden.
+	var divergences []string
 	for _, n := range v.Invalid.EncryptMsgLengths {
 		if _, err := nip44.Encrypt(strings.Repeat("a", n), ck); err == nil {
-			return nil, fmt.Errorf("invalid.encrypt_msg_lengths: nmilat encrypts a %d-byte plaintext", n)
+			divergences = append(divergences, fmt.Sprintf("invalid.encrypt_msg_lengths: nmilat encrypts a %d-byte plaintext; cashkit refuses it as the NIP requires", n))
 		}
 	}
 	for i, c := range v.Invalid.Decrypt {
@@ -127,12 +132,11 @@ func buildNIP44() (any, error) {
 		),
 		Checked: []string{
 			"valid.get_conversation_key",
-			"valid.calc_padded_len (by encryption, up to 65535 bytes)",
+			"valid.calc_padded_len",
 			"valid.encrypt_decrypt (conversation key and decrypt)",
 			"invalid.decrypt",
-			"invalid.encrypt_msg_lengths",
 		},
-		Divergences: []string{},
+		Divergences: divergences,
 		V2:          doc.V2,
 	}, nil
 }

@@ -23,10 +23,13 @@ import (
 const (
 	Version = 2
 
-	// MinPlaintextSize and MaxPlaintextSize bound a plaintext's length in
-	// bytes, as NIP-44 v2 does: the length prefix is a u16.
+	// MinPlaintextSize and MaxPlaintextSize bound a plaintext's length in bytes.
 	MinPlaintextSize = 1
-	MaxPlaintextSize = 65535
+	MaxPlaintextSize = 1<<32 - 1
+
+	// extendedPrefixThreshold is the first length written with the 6-byte
+	// prefix (two zero bytes, then a u32) instead of a u16.
+	extendedPrefixThreshold = 65536
 )
 
 var (
@@ -159,27 +162,45 @@ func hmacAad(key, message, aad []byte) []byte {
 	return h.Sum(nil)
 }
 
-// pad frames plaintext with its length as a u16, then zero padding. The
-// length must have passed checkPlaintextLen.
+// pad frames plaintext with its length, a u16 below extendedPrefixThreshold
+// and [0, 0] plus a u32 from it on, then zero padding. The length must have
+// passed checkPlaintextLen.
 func pad(plaintext string) []byte {
 	unpaddedLen := len(plaintext)
-	result := make([]byte, 2+calcPaddedLen(unpaddedLen))
-	binary.BigEndian.PutUint16(result, uint16(unpaddedLen))
-	copy(result[2:], plaintext)
+	prefixLen := 2
+	if unpaddedLen >= extendedPrefixThreshold {
+		prefixLen = 6
+	}
+	result := make([]byte, prefixLen+calcPaddedLen(unpaddedLen))
+	if prefixLen == 2 {
+		binary.BigEndian.PutUint16(result, uint16(unpaddedLen))
+	} else {
+		binary.BigEndian.PutUint32(result[2:], uint32(unpaddedLen))
+	}
+	copy(result[prefixLen:], plaintext)
 	return result
 }
 
-// unpad reverses pad: a u16 length of 1 to 65535 and the padded size NIP-44
-// gives it.
+// unpad reverses pad. A u16 length of 0 signals the extended prefix, which
+// must then carry a length of at least extendedPrefixThreshold.
 func unpad(padded []byte) (string, error) {
 	if len(padded) < 2 {
 		return "", ErrInvalidPadding
 	}
-	unpaddedLen := int(binary.BigEndian.Uint16(padded))
-	if unpaddedLen < MinPlaintextSize || len(padded) != 2+calcPaddedLen(unpaddedLen) {
+	unpaddedLen, prefixLen := int(binary.BigEndian.Uint16(padded)), 2
+	if unpaddedLen == 0 {
+		if len(padded) < 6 {
+			return "", ErrInvalidPadding
+		}
+		unpaddedLen, prefixLen = int(binary.BigEndian.Uint32(padded[2:])), 6
+		if unpaddedLen < extendedPrefixThreshold {
+			return "", ErrInvalidPadding
+		}
+	}
+	if len(padded) != prefixLen+calcPaddedLen(unpaddedLen) {
 		return "", ErrInvalidPadding
 	}
-	return string(padded[2 : 2+unpaddedLen]), nil
+	return string(padded[prefixLen : prefixLen+unpaddedLen]), nil
 }
 
 func calcPaddedLen(l int) int {
