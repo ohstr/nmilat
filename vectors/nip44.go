@@ -27,10 +27,34 @@ type nip44File struct {
 	// with. The other groups need a caller-chosen nonce, which nmilat's
 	// Encrypt does not take, so only cashkit checks them.
 	Checked []string `json:"checkedAgainstNmilat"`
-	// Divergences lists upstream cases where nmilat does not do what the NIP
-	// says. cashkit follows the NIP there.
-	Divergences []string        `json:"nmilatDivergences"`
-	V2          json.RawMessage `json:"v2"`
+	// Superseded lists rows of the pinned upstream file that the current
+	// NIP-44 v2 text overrides: plaintexts of 65536 bytes and more are valid
+	// under its extended length prefix. A reader skips these rows.
+	Superseded []string `json:"superseded"`
+	// ExtendedLengthPrefix is NIP-44 v2's "Extended length prefix" vectors:
+	// plaintext is pattern repeated n times, sealed with the fixed
+	// conversation key and nonce (checked in nip44/length_test.go).
+	ExtendedLengthPrefix []nip44ExtendedCase `json:"extendedLengthPrefix"`
+	V2                   json.RawMessage     `json:"v2"`
+}
+
+type nip44ExtendedCase struct {
+	ConversationKey string `json:"conversationKey"`
+	Nonce           string `json:"nonce"`
+	Pattern         string `json:"pattern"`
+	Repeat          int    `json:"repeat"`
+	PlaintextSHA256 string `json:"plaintextSha256"`
+	PayloadSHA256   string `json:"payloadSha256"`
+}
+
+// nip44Extended is the NIP's "Extended length prefix test vectors".
+var nip44Extended = []nip44ExtendedCase{
+	{"c41c775356fd92eadc63ff5a0dc1da211b268cbea22316767095b2871ea1412d", "0000000000000000000000000000000000000000000000000000000000000001", "a", 65535,
+		"6e1bebca6a8229364a162a72ef064826c4cd7457bf54f190ef782bd9deff3e42", "6d8c2810d1e870fbaa1f0a0937126cca837a15f9260e27060c331d70a3c0bc84"},
+	{"c41c775356fd92eadc63ff5a0dc1da211b268cbea22316767095b2871ea1412d", "0000000000000000000000000000000000000000000000000000000000000001", "a", 65536,
+		"bf718b6f653bebc184e1479f1935b8da974d701b893afcf49e701f3e2f9f9c5a", "b7b4edb36ba92e267d322d56d9aebc22e7fa96ff52e3c12adc07f07a43cbc616"},
+	{"c41c775356fd92eadc63ff5a0dc1da211b268cbea22316767095b2871ea1412d", "0000000000000000000000000000000000000000000000000000000000000001", "a", 65537,
+		"008ffc88d3c96a9f307524eb361e47c5222a887fc45fa0c1fb8d429c5c23b430", "eeb7c7c5373894ea2c1547cfd3ccb15d5a0b2d619da852e5c79df792dcc9e435"},
 }
 
 type upstreamV2 struct {
@@ -110,13 +134,25 @@ func buildNIP44() (any, error) {
 			return nil, fmt.Errorf("calc_padded_len %d: nmilat pads to %d, want %d", c[0], got, c[1])
 		}
 	}
-	// An out-of-range plaintext nmilat would still seal is one no conforming
-	// peer can open. cashkit follows the NIP and refuses it; any such
-	// divergence is recorded rather than hidden.
-	var divergences []string
+	// The pinned upstream file still lists lengths of 65536 and more as
+	// invalid; NIP-44 v2's extended length prefix makes them valid, so those
+	// rows are superseded, and nmilat must seal them.
+	superseded := []string{}
 	for _, n := range v.Invalid.EncryptMsgLengths {
-		if _, err := nip44.Encrypt(strings.Repeat("a", n), ck); err == nil {
-			divergences = append(divergences, fmt.Sprintf("invalid.encrypt_msg_lengths: nmilat encrypts a %d-byte plaintext; cashkit refuses it as the NIP requires", n))
+		if n < 65536 {
+			if _, err := nip44.Encrypt(strings.Repeat("a", n), ck); err == nil {
+				return nil, fmt.Errorf("invalid.encrypt_msg_lengths: nmilat encrypts a %d-byte plaintext", n)
+			}
+			continue
+		}
+		if _, err := nip44.Encrypt(strings.Repeat("a", n), ck); err != nil {
+			return nil, fmt.Errorf("extended length %d: nmilat refuses it: %w", n, err)
+		}
+		superseded = append(superseded, fmt.Sprintf("invalid.encrypt_msg_lengths: %d (valid under the extended length prefix)", n))
+	}
+	for _, c := range nip44Extended {
+		if sha256Hex(strings.Repeat(c.Pattern, c.Repeat)) != c.PlaintextSHA256 {
+			return nil, fmt.Errorf("extended length %d: plaintext hash", c.Repeat)
 		}
 	}
 	for i, c := range v.Invalid.Decrypt {
@@ -127,7 +163,7 @@ func buildNIP44() (any, error) {
 
 	return nip44File{
 		header: newHeader(
-			"NIP-44 v2: the upstream vectors, verbatim, after checking that nmilat agrees with them.",
+			"NIP-44 v2: the upstream vectors, verbatim, after checking that nmilat agrees with them; rows the current NIP text overrides are listed in superseded, and the NIP's extended length prefix vectors are added.",
 			"nip44/encryption.go; nip44/auditC_qa_kat_test.go; upstream github.com/paulmillr/nip44 nip44.vectors.json (sha256 "+upstreamNIP44SHA256+")",
 		),
 		Checked: []string{
@@ -135,9 +171,11 @@ func buildNIP44() (any, error) {
 			"valid.calc_padded_len",
 			"valid.encrypt_decrypt (conversation key and decrypt)",
 			"invalid.decrypt",
+			"invalid.encrypt_msg_lengths (below 65536)",
 		},
-		Divergences: divergences,
-		V2:          doc.V2,
+		Superseded:           superseded,
+		ExtendedLengthPrefix: nip44Extended,
+		V2:                   doc.V2,
 	}, nil
 }
 
