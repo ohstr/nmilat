@@ -351,3 +351,26 @@ func FuzzVerifyClaimProof(f *testing.F) {
 		}
 	})
 }
+
+// A transfer or consolidate expectation with no AmountMillis is refused, never
+// read as "any amount": a proof for some amount would otherwise pass.
+func TestVerifyClaimProof_UnboundAmount(t *testing.T) {
+	f := newClaimFixture(t)
+	amt := uint64(5000)
+	for _, method := range []string{MethodCashTransfer, MethodCashConsolidate} {
+		bound := ClaimBinding{Method: method, Wallet: f.wallet, NewIdentityHash: strings.Repeat("3", 64), AmountMillis: &amt,
+			SourcesHash: strings.Repeat("5", 64)}
+		if method == MethodCashTransfer {
+			bound.SourcesHash = ""
+		}
+		raw := f.sign(t, KindClaimProof, f.now.Unix(), bound.Tags(), "")
+		want := ClaimExpectation{Binding: bound, SliceType: identityTypePubkey, SliceValue: f.pub}
+		if _, err := VerifyClaimProof(raw, want, f.now); err != nil {
+			t.Fatalf("%s bound: %v", method, err)
+		}
+		want.Binding.AmountMillis = nil
+		if _, err := VerifyClaimProof(raw, want, f.now); !errors.Is(err, ErrClaimAmountUnbound) {
+			t.Errorf("%s with a nil amount: %v, want ErrClaimAmountUnbound", method, err)
+		}
+	}
+}

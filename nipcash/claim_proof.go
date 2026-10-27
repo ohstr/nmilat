@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -130,6 +131,12 @@ type ClaimError struct {
 
 func (e *ClaimError) Error() string { return "nipcash: claim proof " + e.Code + ": " + e.Reason }
 
+// ErrClaimAmountUnbound is a cash_transfer or cash_consolidate expectation with
+// no AmountMillis: a Hub's programming error, since an omitted request amount
+// must be resolved to the slice's current amount before the proof is checked.
+// VerifyClaimProof refuses it rather than accept any amount.
+var ErrClaimAmountUnbound = errors.New("nipcash: the claim expectation leaves amount_millis unbound; resolve an omitted amount to the slice's current amount")
+
 func unauthorized(format string, a ...any) error {
 	return &ClaimError{Code: "UNAUTHORIZED", Reason: fmt.Sprintf(format, a...)}
 }
@@ -191,6 +198,11 @@ func VerifyClaimProof(raw string, want ClaimExpectation, now time.Time) (ClaimVe
 	schema, ok := claimSchema(want.Binding.Method, want.SliceType)
 	if !ok {
 		return ClaimVerdict{}, unauthorized("no claim proof for method %q on a %q slice", want.Binding.Method, want.SliceType)
+	}
+	if schema["amount_millis"] && want.Binding.AmountMillis == nil {
+		// An omitted request amount is bound to the slice's current amount,
+		// never a wildcard (NIP-CASH §Transferring, Request).
+		return ClaimVerdict{}, ErrClaimAmountUnbound
 	}
 	got := map[string]string{}
 	for _, tag := range ev.Tags {
