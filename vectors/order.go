@@ -1,12 +1,14 @@
 package vectors
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strings"
 
 	"github.com/ohstr/nmilat/nip01"
+	"github.com/ohstr/nmilat/nip57/nip57test"
 	"github.com/ohstr/nmilat/nipCO"
 	"github.com/ohstr/nmilat/nipcash"
 )
@@ -116,6 +118,9 @@ type orderReplyCase struct {
 	Reply   string         `json:"reply"`
 	Error   string         `json:"error,omitempty"`
 	Want    map[string]any `json:"want,omitempty"`
+	// InvoiceCheck is CheckOrderInvoice's refusal of a parsed reply, "" when
+	// it passes (a Lightning invoice must be for exactly pay_millis).
+	InvoiceCheck string `json:"invoiceCheck,omitempty"`
 }
 
 type orderStateCase struct {
@@ -368,12 +373,22 @@ func buildOrder() (any, error) {
 			c.Error = errString(err)
 			if err == nil {
 				_ = json.Unmarshal([]byte(rawJSON(o)), &c.Want)
+				c.InvoiceCheck = errString(nipCO.CheckOrderInvoice(o))
 			}
 			f.Replies = append(f.Replies, c)
 		}
 	}
-	ln := `{"state":"open","payment":"lightning","amount_millis":21000000,"fee_millis":22000,"pay_millis":21022000,"invoice":"lnbc210220n1...","pay_by":1720003600,"bills":[]}`
+	// A signed BOLT11 invoice for exactly pay_millis, created at placement
+	// (pay_by − window) and expiring at pay_by, by the Hub node (key 1).
+	lnInvoice := func(millis uint64) string {
+		ph := sha256.Sum256([]byte("order preimage"))
+		return must(nip57test.SignedBolt11(nip57test.Invoice{Currency: "bc", AmountMillis: millis, PaymentHash: ph[:],
+			Timestamp: 1720000000, Expiry: 3600, NodePriv: strings.Repeat("0", 63) + "1"}))
+	}
+	ln := `{"state":"open","payment":"lightning","amount_millis":21000000,"fee_millis":22000,"pay_millis":21022000,"invoice":"` + lnInvoice(21022000) + `","pay_by":1720003600,"bills":[]}`
 	reply("Lightning, open", nipCO.PaymentLightning, ln)
+	reply("Lightning, the invoice is not for pay_millis", nipCO.PaymentLightning, strings.Replace(ln, lnInvoice(21022000), lnInvoice(21021000), 1))
+	reply("Lightning, an amountless invoice", nipCO.PaymentLightning, strings.Replace(ln, lnInvoice(21022000), lnInvoice(0), 1))
 	billJSON := func(token string) string {
 		return `{"wallet_pubkey":"` + wdBill + `","cash_token":` + token + `,"amount_millis":21000000,"paid_millis":21063000,"outpoint":"` + strings.Repeat("ab", 32) + `:0"}`
 	}

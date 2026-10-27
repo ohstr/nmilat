@@ -3,6 +3,7 @@ package client
 import (
 	"fmt"
 
+	"github.com/ohstr/nmilat/nipCO"
 	"github.com/ohstr/nmilat/nipcash"
 )
 
@@ -34,4 +35,12 @@ func orderAddress(addr, chain, network string) (string, error) {
 		return "", fmt.Errorf("%w: %v", ErrOrderReplyInvalid, err)
 	}
 	return norm, nil
+}
+
+// checkOrderInvoice is nipCO.CheckOrderInvoice as ErrOrderReplyInvalid.
+func checkOrderInvoice(o *nipCO.Order) error {
+	if err := nipCO.CheckOrderInvoice(o); err != nil {
+		return fmt.Errorf("%w: %v", ErrOrderReplyInvalid, err)
+	}
+	return nil
 }

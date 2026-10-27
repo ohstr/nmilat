@@ -22,7 +22,8 @@ var ErrBuyerKeyIsRecipient = errors.New("nipCO/client: the buyer key would be th
 // with its exact deadline; and sends it on the private transport only. A Journal
 // implementing nipcash/client.AcceptedRecorder is told the accepting relays.
 //
-// The reply is an open order with an invoice, or an address checked as a segwit
+// The reply is an open order with an invoice for exactly pay_millis, or an
+// address checked as a segwit
 // address of the Hub's network and chain (else ErrOrderReplyInvalid inside an
 // *IndeterminateError: the call stays pending and nothing is shown to pay). A
 // reply whose confirmations or pay_millis differ from what the terms read before
@@ -102,6 +103,12 @@ func (c *OrderClient) Place(ctx context.Context, p nipCO.CashOrderParams, j cash
 		return nil, o.CallError(sendErr)
 	}
 	order := o.Result
+	if order.Payment == nipCO.PaymentLightning {
+		if err := checkOrderInvoice(order); err != nil {
+			pc, _ := o.Pending()
+			return nil, &cashclient.IndeterminateError{Call: pc, Cause: err}
+		}
+	}
 	if order.Payment == nipCO.PaymentOnchain {
 		addr, err := orderAddress(order.Address, c.conn.Chain, c.Network())
 		if err != nil {

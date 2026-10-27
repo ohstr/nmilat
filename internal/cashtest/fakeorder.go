@@ -12,6 +12,7 @@ import (
 
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip47"
+	"github.com/ohstr/nmilat/nip57/nip57test"
 	"github.com/ohstr/nmilat/nipCO"
 	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/nipcash/transport"
@@ -297,7 +298,15 @@ func (b *OrderBook) place(c ItemCtx, signer string, proofErr error) *transport.R
 	o := nipCO.Order{State: nipCO.OrderOpen, Payment: req.Payment, AmountMillis: req.AmountMillis, FeeMillis: fee,
 		PayMillis: pay, PayBy: c.Now.Unix() + int64(k.Window)}
 	if req.Payment == nipCO.PaymentLightning {
-		o.Invoice = "lnbcrt" + randHex(16)
+		// A signed BOLT11 invoice for exactly pay_millis, expiring at pay_by
+		// (NIP-CO §Response).
+		hash, _ := hex.DecodeString(randHex(32))
+		inv, err := nip57test.SignedBolt11(nip57test.Invoice{Currency: "bcrt", AmountMillis: pay, PaymentHash: hash,
+			Timestamp: c.Now.Unix(), Expiry: int64(k.Window), NodePriv: b.h.NodePriv})
+		if err != nil {
+			return coded(nipcash.ErrCodeInternal, "invoice")
+		}
+		o.Invoice = inv
 	} else {
 		n, err := nipCO.ConfirmationsFor(k.Confirmations, pay)
 		if err != nil {
