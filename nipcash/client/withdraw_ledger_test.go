@@ -173,7 +173,7 @@ func TestEWD03_DroppedBeforeCommitReplaced(t *testing.T) {
 		_, err = c.Withdraw(ctx, nipcash.CashWithdrawParams{Quote: nq, Credential: cred, RequestID: next.RequestID, Notify: next.Notify, Remint: remint}, j, "dev")
 		return err
 	}
-	if act, err := Replace(ctx, pc, j, ReplaceOptions{}, send); err != nil || act.Kind != ActionWait {
+	if act, err := Replace(ctx, pc, j, ReplaceOptions{ChainTip: e.l.Chain().Tip()}, send); err != nil || act.Kind != ActionWait {
 		t.Fatalf("Replace: %+v %v", act, err)
 	}
 	derived, _ := nipcash.DerivedRequestID(pc.RequestID)

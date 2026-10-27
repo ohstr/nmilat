@@ -68,7 +68,8 @@ const MaxReplaceAttempts = 3
 // state, whose receipt is checked against the call (else the answer reads as
 // malformed and the call waits, never closed); it waits with the payout as
 // Result, and the caller closes it on PayoutFinished. unknown re-places it
-// automatically after only lost replies, with confirmation after
+// automatically after only lost replies (Replace then checks the quote is
+// still valid at ReplaceOptions.ChainTip), with confirmation after
 // REQUEST_REUSED, and closes it refused (reason code/detail) after a coded
 // refusal; a call recovered from withdraw_request_id (no quote) is never
 // re-placed.
@@ -152,6 +153,12 @@ type ReplaceOptions struct {
 	// verified with VerifyQuoteAnswer and its user confirmed; it needs
 	// Confirmed. nil keeps the call's quote.
 	Quote *nipcash.WithdrawQuote
+	// ChainTip is the height of the chain tip the caller knows. A cash_withdraw
+	// is re-placed automatically (without Confirmed) only while its quote is
+	// still valid at ChainTip (NIP-CASH §Withdrawals); with ChainTip 0, or past
+	// the quote's holds_until, Replace shows the call instead, so its user can
+	// get a new quote.
+	ChainTip int64
 }
 
 type replacementKey struct{}
@@ -252,6 +259,18 @@ func Replace(ctx context.Context, pc nipcash.PendingCall, j Journal, o ReplaceOp
 	}
 	if pc.Attempt >= max {
 		return Action{Kind: ActionShow, Reason: "replace_cap"}, nil
+	}
+	if isWithdraw {
+		holdsUntil := pc.HoldsUntil
+		if o.Quote != nil {
+			holdsUntil = o.Quote.HoldsUntil
+		}
+		switch {
+		case o.ChainTip > 0 && !nipcash.QuoteValidAt(holdsUntil, o.ChainTip):
+			return Action{Kind: ActionShow, Reason: "quote_expired"}, nil
+		case o.ChainTip <= 0 && !o.Confirmed:
+			return Action{Kind: ActionShow, Reason: "quote_unchecked"}, nil
+		}
 	}
 	id, err := nipcash.DerivedRequestID(pc.RequestID)
 	if err != nil {

@@ -617,7 +617,7 @@ func TestT21_32_WatchPayout(t *testing.T) {
 func TestT11_49_RecoverReplaceWithdraw(t *testing.T) {
 	now := time.Now()
 	base := nipcash.PendingCall{RequestID: testRequestID, Method: nipcash.MethodCashWithdraw, Device: "a", Deadline: now.Unix() - 10,
-		MaxRequestAge: 300, Quote: "{}", Notify: strings.Repeat("ab", 32), Target: strings.Repeat("cd", 32),
+		MaxRequestAge: 300, Quote: "{}", HoldsUntil: 100, Notify: strings.Repeat("ab", 32), Target: strings.Repeat("cd", 32),
 		Secrets: []nipcash.PendingSecret{{Secret: strings.Repeat("11", 32), Role: nipcash.SecretRoleRemint}}}
 	with := func(f func(*nipcash.PendingCall)) nipcash.PendingCall { pc := base; f(&pc); return pc }
 	unknown := LookupOutcome{Status: nipcash.LookupUnknown}
@@ -647,7 +647,15 @@ func TestT11_49_RecoverReplaceWithdraw(t *testing.T) {
 	derived, _ := nipcash.DerivedRequestID(testRequestID)
 	var sent nipcash.PendingCall
 	send := func(_ context.Context, next nipcash.PendingCall) error { sent = next; return nil }
-	if _, err := Replace(ctx, base, newTestJournal(), ReplaceOptions{}, send); err != nil {
+	// M8: re-placed automatically only while its quote holds at the known tip.
+	for tip, reason := range map[int64]string{0: "quote_unchecked", 101: "quote_expired"} {
+		sent = nipcash.PendingCall{}
+		act, err := Replace(ctx, base, newTestJournal(), ReplaceOptions{ChainTip: tip}, send)
+		if err != nil || act.Kind != ActionShow || act.Reason != reason || sent.RequestID != "" {
+			t.Errorf("tip %d: %+v %v (sent %q), want shown %s", tip, act, err, sent.RequestID, reason)
+		}
+	}
+	if _, err := Replace(ctx, base, newTestJournal(), ReplaceOptions{ChainTip: 100}, send); err != nil {
 		t.Fatal(err)
 	}
 	if sent.RequestID != derived || sent.Notify != base.Notify || sent.Quote != base.Quote || len(sent.Secrets) != 1 || sent.Secrets[0].Role != nipcash.SecretRoleRemint {

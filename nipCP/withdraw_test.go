@@ -237,7 +237,7 @@ func TestApplyLookupWithdraw(t *testing.T) {
 	send := func(ctx context.Context, next nipcash.PendingCall) error {
 		return j.WriteAhead(ctx, []nipcash.PendingCall{next})
 	}
-	if _, err := client.Replace(ctx, pc, j, client.ReplaceOptions{DerivedEntryExists: j.DerivedEntryExists}, send); err != nil {
+	if _, err := client.Replace(ctx, pc, j, client.ReplaceOptions{DerivedEntryExists: j.DerivedEntryExists, ChainTip: pc.HoldsUntil}, send); err != nil {
 		t.Fatal(err)
 	}
 	re, ok := j.Written(derived)
