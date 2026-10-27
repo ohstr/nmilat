@@ -363,7 +363,7 @@ func init() {
 		k("K-LVER-1 refused", "[true false]", "versions", "[name=K-LIST-1 offered after K-LIST-2: refused]", "accepted"),
 		k("K-LVER-1 remembered", "[true false]", "versions", "[name=K-LIST-2 expired then K-LIST-1 again: still refused]", "accepted"),
 		k("K-OPS-1 verified", "true", "operatorVerified", "[name=K-OPS-1 with K-LIST-1: verified]", "verified"),
-		k("K-TXT-1 1", "Alice's cash counter", "sanitizeText", "[in=Alice​'s‮ cash counter]", "out"),
+		k("K-TXT-1 1", "Alice's cash counter", "sanitizeText", "[in=Alice\u200b's\u202e cash counter]", "out"),
 		k("K-TXT-1 2", " Alice", "sanitizeText", "[in=✔ Alice]", "out"),
 		k("K-TXT-1 3", "A B", "sanitizeText", "[in=A\nB]", "out"),
 	}

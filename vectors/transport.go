@@ -108,14 +108,14 @@ func buildCanonicalParams() (any, error) {
 			f.Hash[len(f.Hash)-1].Hash = ""
 		}
 	}
-	add("full form (TestCanonicalParams_RFC8785Strings)", "{\n\t\t\"z\": \"<>&\",\n\t\t\"q\": \"\\\"\\\\\\b\\t\\n\\f\\r\\u0001\\u001f\\u007f é\",\n\t\t\"n\": 12345678901234567890,\n\t\t\"arr\": [1.50, true, null],\n\t\t\"a\": \"x y z\"\n\t}",
-		"{\"a\":\"x y z\",\"arr\":[1.50,true,null],\"n\":12345678901234567890,\"q\":\"\\\"\\\\\\b\\t\\n\\f\\r\\u0001\\u001f\x7f é\",\"z\":\"<>&\"}")
+	add("full form (TestCanonicalParams_RFC8785Strings)", "{\n\t\t\"z\": \"<>&\",\n\t\t\"q\": \"\\\"\\\\\\b\\t\\n\\f\\r\\u0001\\u001f\\u007f é\",\n\t\t\"n\": 12345678901234567890,\n\t\t\"arr\": [1.50, true, null],\n\t\t\"a\": \"x\u2028y\u2029z\"\n\t}",
+		"{\"a\":\"x\u2028y\u2029z\",\"arr\":[1.50,true,null],\"n\":12345678901234567890,\"q\":\"\\\"\\\\\\b\\t\\n\\f\\r\\u0001\\u001f\x7f é\",\"z\":\"<>&\"}")
 	for _, c := range [][3]string{
 		{"less-than", `{"s":"<"}`, `{"s":"<"}`},
 		{"greater-than", `{"s":">"}`, `{"s":">"}`},
 		{"ampersand", `{"s":"&"}`, `{"s":"&"}`},
-		{"U+2028", "{\"s\":\" \"}", "{\"s\":\" \"}"},
-		{"U+2029 escaped in input", `{"s":" "}`, "{\"s\":\" \"}"},
+		{"U+2028", "{\"s\":\"\u2028\"}", "{\"s\":\"\u2028\"}"},
+		{"U+2029 escaped in input", "{\"s\":\"\u2029\"}", "{\"s\":\"\u2029\"}"},
 		{"non-ASCII", `{"s":"é😀"}`, "{\"s\":\"é😀\"}"},
 		{"escaped slash", `{"s":"\/"}`, `{"s":"/"}`},
 		{"key with <", `{"<k":1}`, `{"<k":1}`},
@@ -415,8 +415,8 @@ func buildEnvelope() (any, error) {
 	enc("three items", envelopeWith(3), d)
 	enc("small limits", envelopeWith(2), small)
 	enc("html characters and U+2028 are escaped as Go does", modItem(1, func(it []transport.Item) []transport.Item {
-		it[0].ID = "a<b>&c d"
-		it[0].Params = json.RawMessage("{\"memo\": \"<&> \", \"n\": 1.50}")
+		it[0].ID = "a<b>&c\u2028d"
+		it[0].Params = json.RawMessage("{\"memo\": \"<&>\u2028\", \"n\": 1.50}")
 		return it
 	}), d)
 	enc("params are compacted", modItem(1, func(it []transport.Item) []transport.Item {

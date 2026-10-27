@@ -71,7 +71,7 @@ func buildNIP01() (any, error) {
 		{"other C0 controls", "\x00\x01\x1b\x1f"},
 		{"DEL", "a\x7fb"},
 		{"html characters", "<a href=\"x\">&amp;</a>"},
-		{"line and paragraph separators", "a b c"},
+		{"line and paragraph separators", "a\u2028b\u2029c"},
 		{"non-ASCII", "Café ☕ 日本語"},
 		{"emoji", "🦄🦄"},
 		{"slash", "a/b"},
@@ -93,7 +93,7 @@ func buildNIP01() (any, error) {
 	}
 	good := sign(23198, [][]string{{"d", pub}, {"amount_millis", "21000"}}, "")
 	add("signed claim proof", good)
-	add("signed text note with escapes", sign(1, [][]string{{"t", "a b"}}, "line\none \"q\" \x01"))
+	add("signed text note with escapes", sign(1, [][]string{{"t", "a\u2028b"}}, "line\none \"q\" \x01"))
 	add("signed with nil tags", sign(1, nil, "x"))
 
 	mut := func(name string, f func(*nip01.Event)) {
