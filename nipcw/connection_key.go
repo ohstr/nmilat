@@ -9,7 +9,7 @@ import (
 	"github.com/ohstr/nmilat/utils"
 )
 
-// ErrNoConnectionKey is returned by Request when no ConnectionKey was set.
+// ErrNoConnectionKey is returned by Prepare when no ConnectionKey was set.
 // NIP-CW has no Hub-generated alternative: the member generates the key.
 var ErrNoConnectionKey = errors.New("nipcw: create_circle_wallet requires a member-generated connection key")
 
@@ -35,8 +35,12 @@ func NewConnectionKey() (ConnectionKey, error) {
 	return ConnectionKeyFromSecret(hex.EncodeToString(raw[:]))
 }
 
-// ConnectionKeyFromSecret rebuilds a connection key from its hex secret.
+// ConnectionKeyFromSecret rebuilds a connection key from its secret, 64
+// lowercase hex, as journalled before a join was sent.
 func ConnectionKeyFromSecret(secretHex string) (ConnectionKey, error) {
+	if !isLowerHex64(secretHex) {
+		return ConnectionKey{}, fmt.Errorf("nipcw: connection secret must be 64 lowercase hex")
+	}
 	pubkey, err := utils.GetPublicKey(secretHex)
 	if err != nil {
 		return ConnectionKey{}, fmt.Errorf("nipcw: connection secret: %w", err)

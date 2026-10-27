@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 
 	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/nipcash/transport"
@@ -14,9 +15,9 @@ type BatchCircleJoin struct {
 	// Hub is the Hub connection: BillFromParts(hubPubkey, hubSecret). A join has
 	// no bill, so its bill proof is signed with the Hub connection's secret.
 	Hub Bill
-	// Params is the standard request. Params.Connection MUST be set: its secret
-	// is what the returned PairingURI carries.
-	Params nipcw.CreateCircleWalletParams
+	// Join is the signed join (nipcw.CreateCircleWalletParams.Prepare, bound to
+	// Hub's pubkey). It is single use: a join that cannot be built is refused.
+	Join *nipcw.PreparedJoin
 }
 
 // CircleJoinOutcome is one join's answer.
@@ -28,9 +29,14 @@ type CircleJoinOutcome struct {
 // CreateCircleWalletMany sends one or more circle joins in one request. Every Hub
 // must run on this session's node; the Hub evaluates each join on its own.
 //
-// A refused join is OutcomeError with the standard join's codes (nipcw.ErrNotReady,
-// ErrRestricted, ErrWalletExists, ErrRateLimited). An omission is NOT a refusal:
-// the join may have run and its reply been lost.
+// A refused join is OutcomeError with NIP-CW's join codes. An omission is NOT a
+// refusal: the join may have run and its reply been lost, so it is looked up
+// with LookupCircleJoin. A reply that fails nipcw's checks (another
+// connection_pubkey, another sender) is OutcomeError with Undecodable set.
+//
+// Each join's item is built once, from its single-use PreparedJoin. A join that
+// would have to move to a later envelope cannot be rebuilt, so the batch stops
+// there and the joins not yet sent get no outcome: nothing of them was sent.
 func (s *BatchSession) CreateCircleWalletMany(ctx context.Context, items []BatchCircleJoin) ([]CircleJoinOutcome, error) {
 	builders := make([]itemBuilder, 0, len(items))
 	byID := make(map[string]BatchCircleJoin, len(items))
@@ -43,7 +49,13 @@ func (s *BatchSession) CreateCircleWalletMany(ctx context.Context, items []Batch
 				if err := it.Hub.check(id, s.HubIdentity()); err != nil {
 					return transport.Item{}, err
 				}
-				return it.Params.Item(id, it.Hub.target, it.Hub.connSecret, b)
+				if it.Join == nil {
+					return transport.Item{}, errors.New("nipcash/client: a circle join needs its prepared join")
+				}
+				if it.Join.HubPubkey != it.Hub.target {
+					return transport.Item{}, errors.New("nipcash/client: the prepared join is bound to another Hub")
+				}
+				return it.Join.Item(id, it.Hub.connSecret, b)
 			},
 		})
 	}
@@ -58,7 +70,7 @@ func (s *BatchSession) CreateCircleWalletMany(ctx context.Context, items []Batch
 		if o.Succeeded() {
 			// Decrypted from the Hub connection key, not the inbox that carried it.
 			it := byID[o.ID]
-			result, err := it.Params.ParseResult(it.Hub.target, o.Result)
+			result, err := it.Join.ParseResult(o.Result)
 			if err != nil {
 				jo.State = OutcomeError
 				jo.Error = decodeError(o.ID, err)

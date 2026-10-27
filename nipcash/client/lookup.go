@@ -6,6 +6,7 @@ import (
 
 	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/nipcash/transport"
+	"github.com/ohstr/nmilat/nipcw"
 )
 
 // LookupTransfer looks a transfer up on this client's bill. A bearer call (cred
@@ -47,13 +48,30 @@ func (s *BatchSession) lookup(ctx context.Context, bill Bill, cred nipcash.Crede
 	if err := p.Request.Validate(); err != nil {
 		return LookupOutcome{}, err
 	}
+	return s.lookupItem(ctx, bill, func(id string, b nipcash.ItemBinding) (transport.Item, error) {
+		return p.Item(id, bill.target, bill.connSecret, b)
+	})
+}
+
+// LookupCircleJoin looks a lost circle join up (NIP-CW §Lost Join Reply): one
+// cash_lookup item targeting hub, the Circle Hub connection, with its bill proof
+// signed by hub's secret and its item proof by the join's key. Read the answer
+// as for any lookup: a done result is checked with p.ParseResult.
+func (s *BatchSession) LookupCircleJoin(ctx context.Context, hub Bill, p nipcw.JoinLookupParams) (LookupOutcome, error) {
+	return s.lookupItem(ctx, hub, func(id string, b nipcash.ItemBinding) (transport.Item, error) {
+		return p.Item(id, hub.target, hub.connSecret, b)
+	})
+}
+
+// lookupItem sends one lookup item against bill and reads its answer.
+func (s *BatchSession) lookupItem(ctx context.Context, bill Bill, build func(id string, b nipcash.ItemBinding) (transport.Item, error)) (LookupOutcome, error) {
 	outcomes, sendErr := s.sendBatch(ctx, []itemBuilder{{
 		ID: "1",
 		Build: func(id string, b nipcash.ItemBinding) (transport.Item, error) {
 			if err := bill.check(id, s.HubIdentity()); err != nil {
 				return transport.Item{}, err
 			}
-			return p.Item(id, bill.target, bill.connSecret, b)
+			return build(id, b)
 		},
 	}}, sendOptions{})
 	if len(outcomes) == 0 {
