@@ -14,6 +14,20 @@ import (
 // than the hub's announced max_bytes allows.
 var ErrItemTooLarge = errors.New("nipcash/client: a single item exceeds the hub's envelope limit")
 
+// ErrTooManySources is a consolidate whose sources exceed the Hub's announced
+// max_consolidate_sources, which the Hub refuses with QUOTA_EXCEEDED. It comes
+// wrapped with ErrItemTooLarge: the caller splits it into several consolidates,
+// each a new call.
+var ErrTooManySources = errors.New("nipcash/client: a consolidate has more sources than the hub's max_consolidate_sources")
+
+// fitsAlone checks that b's item, built on its own against a throwaway binding,
+// fits an envelope the Hub accepts: an item that does not can never be sent,
+// however a batch is split. A builder that cannot build is reported too.
+func fitsAlone(b itemBuilder, hubXOnly string, limits transport.Limits, notAfter int64) error {
+	_, _, _, err := packOne([]itemBuilder{b}, hubXOnly, limits, notAfter)
+	return err
+}
+
 // itemBuilder produces one item once its envelope's binding is known.
 //
 // The indirection exists because of an ordering constraint that is easy to miss and

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/nipcash/transport"
@@ -296,6 +297,12 @@ type ConsolidateOutcome struct {
 //
 // Every item carries a request_id and is written ahead to j, as TransferMany's.
 //
+// Each item is checked on its own before anything is written or sent: sources
+// over the Hub's announced max_consolidate_sources are refused with
+// ErrTooManySources, and an item that fits no envelope with ErrItemTooLarge
+// (NIP-CASH §Envelopes; both wrap ErrItemTooLarge). The caller splits such an
+// item into several consolidates, each a new call.
+//
 // An item whose sources' ordered marks differ (nipcash.Source.Ordered, or the
 // item's Bill.Ordered for the source that is its bill) is refused with
 // ErrMixedOrdered before anything is written or sent: a Hub refuses that mix
@@ -340,6 +347,10 @@ func (s *BatchSession) ConsolidateMany(ctx context.Context, items []BatchConsoli
 		})
 	}
 
+	if err := s.checkConsolidateItems(items, builders); err != nil {
+		return nil, err
+	}
+
 	// sendBatch can return outcomes AND an error, when a reply arrived in fewer chunks
 	// than the hub sent. Those outcomes are real answers and must not be discarded —
 	// the error says part of the picture is missing, not that none of it is.
@@ -363,6 +374,28 @@ func (s *BatchSession) ConsolidateMany(ctx context.Context, items []BatchConsoli
 		out = append(out, co)
 	}
 	return out, sendErr
+}
+
+// checkConsolidateItems refuses, before anything is written, an item over the
+// announced source cap or one that fits no envelope on its own. An unusable
+// announcement is left to sendBatch, which reports it.
+func (s *BatchSession) checkConsolidateItems(items []BatchConsolidate, builders []itemBuilder) error {
+	limits := s.Limits()
+	if limits.Validate() != nil {
+		return nil
+	}
+	notAfter := time.Now().Add(s.deadlineWindow()).Unix()
+	for i, it := range items {
+		id := itemID(it.ID, i)
+		if n := len(it.Params.Sources); n > limits.MaxConsolidateSources {
+			return fmt.Errorf("%w: %w: item %q has %d sources, the hub's max_consolidate_sources is %d",
+				ErrItemTooLarge, ErrTooManySources, id, n, limits.MaxConsolidateSources)
+		}
+		if err := fitsAlone(builders[i], s.HubIdentity(), limits, notAfter); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // itemID falls back to the index when a caller supplied no id of their own.
