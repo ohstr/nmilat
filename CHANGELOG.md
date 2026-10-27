@@ -874,6 +874,10 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes `transport.DecodeResponse` refusing a reply larger than the request's
+  `max_bytes`: a Hub pads each reply chunk against its own `pad_bucket_bytes`
+  and 65535, as `EncodeResponse` does, so a reply is now refused for size
+  only past 65535 bytes.
 - Fixes the credential decoders and `nipIC.DecodeNConnection` accepting a
   bech32m checksum: these strings are NIP-19 bech32 (on-chain addresses keep
   BIP-350). ([#206](https://github.com/ohstr/nmilat/pull/206))
