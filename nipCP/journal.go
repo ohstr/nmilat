@@ -141,5 +141,17 @@ func (j *PocketJournal) DerivedEntryExists(ctx context.Context, id string) (bool
 	if err != nil {
 		return false, err
 	}
-	return DerivedEntryExists(s.Entries, id), nil
+	if DerivedEntryExists(s.Entries, id) {
+		return true, nil
+	}
+	// A negative is trusted only when as many relays answered as an entry is
+	// stored on: a missing answer may be the one relay holding the entry.
+	need := MinStored
+	if len(j.Relays) < need {
+		need = len(j.Relays)
+	}
+	if len(s.Answered) < need {
+		return false, fmt.Errorf("%w: %d of %d relays answered, need %d", ErrTooFewRelays, len(s.Answered), len(j.Relays), need)
+	}
+	return false, nil
 }

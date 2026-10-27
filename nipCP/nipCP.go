@@ -37,4 +37,7 @@ var (
 	ErrLookup = errors.New("nipCP: the call stays pending; look it up")
 	// ErrNotStored is a wrap fewer relays returned than Store requires.
 	ErrNotStored = errors.New("nipCP: the wrap was not read back from enough relays")
+	// ErrTooFewRelays: too few relays answered a sync to trust that an entry
+	// is absent.
+	ErrTooFewRelays = errors.New("nipCP: too few relays answered to trust an absence")
 )

@@ -262,17 +262,21 @@ func (s SeenSet) Add(id string) bool {
 }
 
 // Synced is one sync's harvest: every entry opened (unresolved, for
-// DerivedEntryExists and NextVersion), each wrap by id, and the relays that
-// returned each wrap.
+// DerivedEntryExists and NextVersion), each wrap by id, the relays that
+// returned each wrap, and the relays that answered the query at all.
 type Synced struct {
-	Entries []Entry
-	Wraps   map[string]*nip01.Event
-	On      map[string][]string
+	Entries  []Entry
+	Wraps    map[string]*nip01.Event
+	On       map[string][]string
+	Answered []string
 }
 
-// Sync queries every relay with f, opens each wrap not in seen (adding it), and
-// returns what it found. A relay that fails is skipped; err is set only when
-// every relay failed.
+// Sync queries every relay with f, opens each wrap not in seen, and returns
+// what it found. Every event is checked (id and signature) before it is keyed,
+// credited to a relay or marked seen, so a relay cannot hide a wrap by
+// returning garbage under its id; a wrap is added to seen only once it was
+// opened. A relay that fails is skipped; err is set only when every relay
+// failed.
 func Sync(ctx context.Context, rs Relays, relays []string, userPriv string, f nip01.SubscriptionFilter, seen SeenSet) (Synced, error) {
 	out := Synced{Wraps: map[string]*nip01.Event{}, On: map[string][]string{}}
 	var errs []error
@@ -283,8 +287,12 @@ func Sync(ctx context.Context, rs Relays, relays []string, userPriv string, f ni
 			errs = append(errs, fmt.Errorf("%s: %w", r, err))
 			continue
 		}
+		out.Answered = append(out.Answered, r)
 		for _, ev := range evs {
 			if ev == nil || ev.Kind != nip59.KindGiftWrap {
+				continue
+			}
+			if ev.Verify(nip01.WithoutPowCheck()) != nil {
 				continue
 			}
 			out.On[ev.ID] = append(out.On[ev.ID], r)
@@ -292,7 +300,7 @@ func Sync(ctx context.Context, rs Relays, relays []string, userPriv string, f ni
 				continue
 			}
 			out.Wraps[ev.ID] = ev
-			if seen == nil || seen.Add(ev.ID) {
+			if seen == nil || !seen[ev.ID] {
 				opened = append(opened, ev)
 			}
 		}
@@ -303,6 +311,11 @@ func Sync(ctx context.Context, rs Relays, relays []string, userPriv string, f ni
 	entries, err := OpenAll(opened, userPriv)
 	if err != nil {
 		return out, err
+	}
+	for _, ev := range opened {
+		if seen != nil {
+			seen.Add(ev.ID)
+		}
 	}
 	out.Entries = entries
 	return out, nil
