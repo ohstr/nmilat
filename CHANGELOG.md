@@ -8,6 +8,15 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds zap transfers, `cash_consolidate`, live-wallet and spin-off caps and
+  archive drops to the fake ledger, and a ledger circle (joins, join
+  lookups, member requests, extra and revoked connections, issued wallets);
+  the fake's conformance adapter implements every `Admin` hook.
+  ([#212](https://github.com/ohstr/nmilat/pull/212))
+- Adds conformance cases CT-JOIN-01..18, CT-JLK-01..06, CT-POW-04..06,
+  CT-XFER-04/-12/-20, CT-CONS-01..03/-05/-08/-09 and CT-LK-15, the optional
+  `CircleFunder` interface, and the E-JOIN end-to-end tests.
+  ([#212](https://github.com/ohstr/nmilat/pull/212))
 - Adds fake-Hub orders on a fake chain (mempool, confirmation tiers, reorgs,
   evictions), minting once per payment with splitting at `max_millis`,
   notices on every change, reservations released by the clock, retirable and
