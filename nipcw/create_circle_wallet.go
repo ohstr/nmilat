@@ -359,3 +359,13 @@ func conversationKey(privKeyHex, pubKeyHex string) ([]byte, error) {
 	}
 	return key, nil
 }
+
+// WalletConnection is a member's own Circle Wallet connection, held as fields:
+// the Hub's wallet_pubkey and relays from the details, and the secret the
+// member generated and kept. A Circle Wallet has no bech32 or URI form; the
+// member's client speaks NIP-47 to it directly.
+type WalletConnection struct {
+	WalletPubkey string
+	Relays       []string
+	Secret       string
+}
