@@ -158,6 +158,13 @@ func TestT05_10_Evaluate(t *testing.T) {
 	src = newSource()
 	src.publish(untrusted.Event)
 	spoofed("untrusted IA", src, claim(t, alice, untrusted))
+
+	// A claim whose signature fails names no pubkey.
+	forged := claim(t, alice, good)
+	forged.Content += " "
+	if v := run(src, forged); len(v) != 1 || v[0].State != Spoofed || v[0].Pubkey != "" {
+		t.Errorf("bad signature: %+v", v)
+	}
 	self := attest(t, alice, alice.pub)
 	src = newSource()
 	src.publish(self.Event)

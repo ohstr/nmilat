@@ -73,7 +73,13 @@ func Evaluate(ctx context.Context, key ConnectionKey, claims []*nip01.Event, src
 		claim, err := ParseIdentityConnection(ev)
 		if err != nil {
 			if ev != nil && ev.Kind == KindIdentityConnection && hasD(ev, key) {
-				out = append(out, Verdict{State: Spoofed, Pubkey: ev.PubKey, Reasons: []string{err.Error()}})
+				// A claim whose signature fails is nobody's: naming its
+				// pubkey would flag a key that never signed it.
+				pk := ev.PubKey
+				if ev.Verify(nip01.WithoutPowCheck()) != nil {
+					pk = ""
+				}
+				out = append(out, Verdict{State: Spoofed, Pubkey: pk, Reasons: []string{err.Error()}})
 			}
 			continue
 		}
