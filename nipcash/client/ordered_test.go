@@ -131,7 +131,7 @@ func TestComposites_OrderedMarks(t *testing.T) {
 	newFake := func() *fakeTransferConsolidater {
 		return &fakeTransferConsolidater{
 			transferFunc: func(nipcash.CashTransferParams) (*nipcash.CashTransferResult, error) {
-				return &nipcash.CashTransferResult{AmountMillis: 1000, NewWalletToken: "t"}, nil
+				return &nipcash.CashTransferResult{AmountMillis: 1000, NewWalletPubkey: "tw", NewWalletToken: "t"}, nil
 			},
 			consolidateFunc: func(nipcash.CashConsolidateParams) (*nipcash.CashConsolidateResult, error) {
 				return &nipcash.CashConsolidateResult{AmountMillis: 2000, NewWalletToken: "c", NewWalletPubkey: "w"}, nil
