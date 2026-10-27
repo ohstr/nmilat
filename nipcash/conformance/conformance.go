@@ -225,6 +225,7 @@ func allCases() []ctCase {
 	out = append(out, withdrawCases...)
 	out = append(out, listCases...)
 	out = append(out, joinCases...)
+	out = append(out, xferCases...)
 	return out
 }
 
