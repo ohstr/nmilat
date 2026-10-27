@@ -8,6 +8,34 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds the client's write-ahead journal for calls carrying a `request_id`:
+  `nipcash.PendingCall`, `client.Journal` (and the optional
+  `AcceptedRecorder`), envelopes packed one at a time with `not_after` =
+  now + `DeadlineWindow(H)` and each call written ahead with that exact
+  deadline before publishing, `FinalError` for `BAD_REQUEST`,
+  `IndeterminateError` for any other answer short of a result,
+  `ItemOutcome.RequestID` and `NeedsLookup`, `Recover` and `Replace` (derived
+  ids, at most 3 re-placements, a mint or order only with confirmation), and
+  `ErrNoJournal`, `ErrNotSent`, `ErrDeadlineTooClose`, `ErrDuplicateRequestID`
+  and `ErrReplaceNeedsConfirmation`.
+  ([#PR11](https://github.com/ohstr/nmilat/pull/PR11))
+- Adds minting over a `cashhub1` string (`ConnectCashHub`, `HubInfo`,
+  `HubClient.Info` with the online check, `HubClient.MintCash` with a
+  journal, `LookupMint`), lookups of transfers and consolidates
+  (`Client.LookupTransfer`, `LookupConsolidate`; a bearer call is looked up
+  without its secret first), `ConnectCashSlice`, `CashSecretCredential`,
+  `ConnectZap`, `SelectVerifiedCopy` and `Bill.Ordered`.
+  ([#PR11](https://github.com/ohstr/nmilat/pull/PR11))
+- Adds proof of work to the client: a session reads each relay's NIP-11
+  minimum, mines a request to the highest one with its `expiration` at
+  `not_after`, re-mines the same request on a `pow:` refusal, and reports a
+  minimum over `WithPowBudget` or mining not done in time as `ErrPowTooHard`
+  (an `ErrNotSent`). Sessions take `SessionOption`s.
+  ([#PR11](https://github.com/ohstr/nmilat/pull/PR11))
+- Adds a proof-of-work relay double to `internal/cashtest`
+  (`Relay.SetMinPow`, NIP-11, the `expiration` window, id dedup) and the
+  CT-POW-01..03 conformance cases.
+  ([#PR11](https://github.com/ohstr/nmilat/pull/PR11))
 - Adds `request_id` to `mint_cash`, `cash_transfer` and `cash_consolidate`
   (`RequestID`, filled with a fresh id by the SDK until the journal lands),
   `zap_target` and `remainder_commitment` to `cash_transfer`, a zap bill's
@@ -324,6 +352,14 @@ privacy and performance fixes.
 
 ### Changed
 
+- Changes `TransferMany`, `ConsolidateMany`, `CashTransfer` and
+  `CashConsolidate` to take a `Journal` and a device id (the composites take
+  them in their params); a call without a journal is refused. A session uses
+  the newest validly signed announcement and treats the Hub as unusable when
+  that one is rejected, never falling back to an older one; it publishes to
+  the announced relays, then the bill's own. `Connect` refuses a `cashhub1`
+  string and dials a token on its usable relays.
+  ([#PR11](https://github.com/ohstr/nmilat/pull/PR11))
 - Changes `cash_status` to the final wire: no `cash_secret` for a cash-mode
   bill, scope `mine` by default, a destroyed bill answered with a
   `{"status":"spent","reason":…}` tombstone for every bill method, and
@@ -499,6 +535,8 @@ privacy and performance fixes.
 
 ### Removed
 
+- Removes `Client.MintCash` (use `HubClient.MintCash`).
+  ([#PR11](https://github.com/ohstr/nmilat/pull/PR11))
 - Removes `MintCashParams.IdempotencyKey`, `nipcash.Anyone()` and
   `ErrWrongCredentialForTarget`,
   `RecipientResult.CashSecret`, `CashStatusResult.Error`/`IsSpent`,
