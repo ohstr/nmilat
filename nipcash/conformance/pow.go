@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -20,6 +21,9 @@ var powCases = []ctCase{
 	{id: "CT-POW-01", needs: []need{needPow}, run: ctPow01},
 	{id: "CT-POW-02", needs: []need{needPow}, run: ctPow02},
 	{id: "CT-POW-03", needs: []need{needPow}, run: ctPow03},
+	{id: "CT-POW-04", needs: []need{needPow}, run: ctPow04},
+	{id: "CT-POW-05", needs: []need{needPow}, run: ctPow05},
+	{id: "CT-POW-06", needs: []need{needPow}, run: ctPow06},
 }
 
 // powOn sets the Hub's relay minimum for one case and clears it afterwards.
@@ -170,5 +174,88 @@ func ctPow03(t *testing.T, s *suite) {
 	}
 	if ok, _ := offer(t, relay, day); ok {
 		t.Error("a repeated id was accepted before its expiration")
+	}
+}
+
+// minedAt is an envelope refused at E4 (no items) whose not_after is notAfter,
+// wrapped and mined with an expiration tag of expiration.
+func (s *suite) minedAt(t *testing.T, notAfter, expiration int64, difficulty int) request {
+	t.Helper()
+	e, _, _, _ := s.newEnvelope(t)
+	e["items"] = []transport.Item{}
+	e["not_after"] = notAfter
+	plaintext, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pr, key, err := transport.WrapRequestPow(ctx, plaintext, s.inbox, expiration, difficulty)
+	if err != nil {
+		t.Fatalf("mine: %v", err)
+	}
+	r := request{ev: pr.Event}
+	r.replyTo, _ = e["reply_to"].(string)
+	r.nonce, _ = e["nonce"].(string)
+	if k, err := transport.DeriveReplyKey(key, r.replyTo); err == nil {
+		r.replyKey = k
+	}
+	return r
+}
+
+// CT-POW-04 (CASH-POW-01): the Hub ignores the nonce and expiration tags:
+// freshness is not_after's alone, so an expiration later than a passed
+// not_after extends nothing, and a mined request with a live not_after runs.
+func ctPow04(t *testing.T, s *suite) {
+	_, relay := powOn(t, s, 4)
+	now := time.Now().Unix()
+	stale := s.minedAt(t, now-3600, now+3600, 4)
+	ls := s.listen(t, stale.replyTo)
+	if ok, msg := offer(t, relay, stale.ev); !ok {
+		t.Fatalf("the relay refused a request whose expiration is an hour ahead: %s", msg)
+	}
+	live := s.minedAt(t, now+60, now+3600, 4)
+	ll := s.listen(t, live.replyTo)
+	if ok, msg := offer(t, relay, live.ev); !ok {
+		t.Fatalf("the relay refused a mined request: %s", msg)
+	}
+	if got := ll.wait(1, s.quiet()); len(got) != 1 {
+		t.Fatalf("%d replies to a mined request with a live not_after and a later expiration, want 1", len(got))
+	} else if code := envelopeErrorCode(t, live.open(t, got[0].ev)); code != "BAD_REQUEST" {
+		t.Errorf("envelope error %q, want BAD_REQUEST (E4 ran)", code)
+	}
+	if got := ls.wait(1, s.quiet()); len(got) != 0 {
+		t.Errorf("a request past its not_after was answered: its later expiration extended its freshness")
+	}
+}
+
+// CT-POW-05 (CASH-POW-01, CASH-S-24): with proof of work required, every relay
+// the announcement lists enforces it, the inbox relay among them, and
+// max_request_age is at most one day.
+func ctPow05(t *testing.T, s *suite) {
+	_, relay := powOn(t, s, 4)
+	if !slices.Contains(s.relays, relay) {
+		t.Errorf("the inbox relay %s is not in the announcement's relays %v", relay, s.relays)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for _, r := range s.relays {
+		if n, err := transport.RelayPowMinimum(ctx, r); err != nil || n <= 0 {
+			t.Errorf("announced relay %s: NIP-11 min_pow_difficulty %d (%v): a PoW Hub lists only relays that enforce it", r, n, err)
+		}
+	}
+	if h := s.limits.MaxRequestAgeSeconds; h <= 0 || h > transport.MaxPowAhead {
+		t.Errorf("max_request_age %d: a PoW Hub announces at most %d", h, transport.MaxPowAhead)
+	}
+}
+
+// CT-POW-06 (CASH-POW-01): kind 23194 is not covered: an unmined get_info is
+// still answered while the inbox requires proof of work.
+func ctPow06(t *testing.T, s *suite) {
+	powOn(t, s, 12)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if _, err := s.nwc.GetInfo(ctx); err != nil {
+		t.Errorf("get_info (kind 23194, unmined) under a proof-of-work minimum: %v", err)
 	}
 }
