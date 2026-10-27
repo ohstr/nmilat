@@ -19,6 +19,8 @@ func TestSanitize(t *testing.T) {
 		{"\u2714\ufe0f Alice", 40, Options{}, " Alice"},
 		{"\u2066x\u2069\u2060\ufeff\u200c\u200d\u221a\u2611\u2705\U0001F5F8\u2713", 0, Options{}, "x"},
 		{"A\r\nB\tC\rD\u2028E", 0, Options{}, "A B C D E"},
+		// Directional marks and other invisibles.
+		{"a\u200eb\u200fc\u061cd\u00ade\u180ef\u2061g\u2064h", 0, Options{}, "abcdefgh"},
 		// Controls are kept unless StripControls.
 		{"a\x00b\x07", 0, Options{}, "a\x00b\x07"},
 		{"a\x00b\x07", 0, oneLine, "ab"},

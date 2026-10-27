@@ -30,8 +30,9 @@ func checkMark(r rune) bool {
 }
 
 // stripped reports a code point Sanitize always removes: the check-mark
-// look-alikes, the bidirectional controls U+202A–U+202E and U+2066–U+2069, and
-// the zero-width U+200B–U+200D, U+2060 and U+FEFF.
+// look-alikes, the bidirectional controls U+202A–U+202E and U+2066–U+2069, the
+// directional marks U+200E, U+200F and U+061C, the zero-width U+200B–U+200D,
+// U+2060 and U+FEFF, and the invisible U+00AD, U+180E and U+2061–U+2064.
 func stripped(r rune) bool {
 	switch {
 	case checkMark(r):
@@ -39,6 +40,13 @@ func stripped(r rune) bool {
 	case r >= 0x202A && r <= 0x202E, r >= 0x2066 && r <= 0x2069:
 		return true
 	case r >= 0x200B && r <= 0x200D, r == 0x2060, r == 0xFEFF:
+		return true
+	case r == 0x200E, r == 0x200F, r == 0x061C:
+		// Directional marks reorder neighbouring text too.
+		return true
+	case r == 0x00AD, r == 0x180E, r >= 0x2061 && r <= 0x2064:
+		// Invisible: soft hyphen, Mongolian vowel separator, invisible
+		// operators.
 		return true
 	}
 	return false
