@@ -2,6 +2,7 @@ package nipLS
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -183,9 +184,17 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) {
 	}
 
 	sc := bufio.NewScanner(conn)
-	sc.Buffer(make([]byte, 0, 64*1024), MaxMessageSize)
-	enc := json.NewEncoder(conn)
+	split := &lineSplitter{}
+	sc.Buffer(make([]byte, 0, 64*1024), MaxMessageSize+1)
+	sc.Split(split.split)
 	for sc.Scan() {
+		if split.overlong {
+			split.overlong = false
+			if !writeResponse(conn, nip46.Response{Error: ErrPrefixInvalid + "line too long"}) {
+				return
+			}
+			continue
+		}
 		line := sc.Bytes()
 		if len(strings.TrimSpace(string(line))) == 0 {
 			continue
@@ -204,10 +213,67 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) {
 				resp.Result = result
 			}
 		}
-		if err := enc.Encode(resp); err != nil {
+		if !writeResponse(conn, resp) {
 			return
 		}
 	}
+}
+
+// lineSplitter is a bufio.SplitFunc state for a scanner whose buffer holds
+// MaxMessageSize+1 bytes. A line is returned with its "\r", if any, which
+// counts toward the cap. A line longer than MaxMessageSize yields one
+// empty token with overlong set, and the rest of it, through its "\n", is
+// skipped as it arrives, never buffered.
+type lineSplitter struct {
+	overlong   bool // the token just returned stands for an over-long line
+	discarding bool // inside an over-long line
+}
+
+func (l *lineSplitter) split(data []byte, atEOF bool) (int, []byte, error) {
+	if l.discarding {
+		if i := bytes.IndexByte(data, '\n'); i >= 0 {
+			l.discarding = false
+			// The scanner reads more input after a nil token instead of
+			// splitting again, so a line already buffered behind the
+			// discarded one is returned now.
+			adv, tok, err := l.split(data[i+1:], atEOF)
+			return i + 1 + adv, tok, err
+		}
+		return len(data), nil, nil
+	}
+	if i := bytes.IndexByte(data, '\n'); i >= 0 && i <= MaxMessageSize {
+		return i + 1, data[:i], nil
+	}
+	if len(data) > MaxMessageSize {
+		l.overlong, l.discarding = true, true
+		return MaxMessageSize + 1, []byte{}, nil
+	}
+	if atEOF && len(data) > 0 {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
+}
+
+// writeResponse writes resp as one line. A response over MaxMessageSize
+// is replaced by an error for the same id, so nothing over the cap is
+// ever sent. It reports whether the write succeeded.
+func writeResponse(conn net.Conn, resp nip46.Response) bool {
+	line, err := json.Marshal(resp)
+	if err != nil {
+		return false
+	}
+	if len(line) > MaxMessageSize {
+		line, err = json.Marshal(nip46.Response{RequestID: resp.RequestID, Error: "result too large"})
+		if err != nil {
+			return false
+		}
+		if len(line) > MaxMessageSize {
+			// Only an id close to the cap gets here.
+			line, _ = json.Marshal(nip46.Response{Error: ErrPrefixInvalid + "request id too long"})
+		}
+	}
+	_, err = conn.Write(append(line, '\n'))
+	return err == nil
 }
 
 func (s *Server) peerAllowed(p Peer) bool {
