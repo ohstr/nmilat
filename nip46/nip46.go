@@ -38,6 +38,11 @@ const KindRequest = 24133
 //	nip04_decrypt:  [sender-pubkey, ciphertext]
 //	nip44_encrypt:  [recipient-pubkey, plaintext]
 //	nip44_decrypt:  [sender-pubkey, ciphertext]
+//
+// nip44_message_keys is an extension (NIP-LS): [counterpart-pubkey,
+// payload] returns the payload's message keys as {"chacha_key",
+// "chacha_nonce", "hmac_key"} hex, after checking its MAC. They open that
+// one payload and no other.
 const (
 	MethodConnect      = "connect"
 	MethodSignEvent    = "sign_event"
@@ -50,6 +55,8 @@ const (
 	MethodNIP04Decrypt = "nip04_decrypt"
 	MethodNIP44Encrypt = "nip44_encrypt"
 	MethodNIP44Decrypt = "nip44_decrypt"
+
+	MethodNIP44MessageKeys = "nip44_message_keys"
 )
 
 // Encryption scheme identifiers used in the request/response event's

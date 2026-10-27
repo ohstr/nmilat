@@ -14,6 +14,7 @@ import (
 
 	btcec "github.com/flokiorg/go-flokicoin/crypto"
 	"github.com/ohstr/nmilat/nip01"
+	"github.com/ohstr/nmilat/nip44"
 	"github.com/ohstr/nmilat/nip46"
 	relayclient "github.com/ohstr/nmilat/relay/client"
 )
@@ -466,6 +467,20 @@ func (c *Client) Decrypt(ctx context.Context, scheme, peerPubKey, ciphertext str
 		return "", err
 	}
 	return c.Call(ctx, method, peerPubKey, ciphertext)
+}
+
+// MessageKeys asks the signer for the keys that open one NIP-44 payload
+// exchanged with peerPubKey. Most remote signers don't offer it.
+func (c *Client) MessageKeys(ctx context.Context, peerPubKey, payload string) (nip44.Keys, error) {
+	res, err := c.Call(ctx, nip46.MethodNIP44MessageKeys, peerPubKey, payload)
+	if err != nil {
+		return nip44.Keys{}, err
+	}
+	var keys nip44.Keys
+	if err := json.Unmarshal([]byte(res), &keys); err != nil {
+		return nip44.Keys{}, fmt.Errorf("bunker: malformed nip44_message_keys result: %w", err)
+	}
+	return keys, nil
 }
 
 // Close disconnects. Pending calls fail with ErrClosed.

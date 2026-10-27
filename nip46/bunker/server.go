@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ohstr/nmilat/nip01"
+	"github.com/ohstr/nmilat/nip44"
 	"github.com/ohstr/nmilat/nip46"
 	relayclient "github.com/ohstr/nmilat/relay/client"
 	"github.com/ohstr/nmilat/utils"
@@ -72,7 +73,7 @@ var builtinMethods = map[string]bool{
 	nip46.MethodConnect: true, nip46.MethodSignEvent: true, nip46.MethodPing: true,
 	nip46.MethodGetPublicKey: true, nip46.MethodGetRelays: true, nip46.MethodSwitchRelays: true,
 	nip46.MethodLogout: true, nip46.MethodNIP04Encrypt: true, nip46.MethodNIP04Decrypt: true,
-	nip46.MethodNIP44Encrypt: true, nip46.MethodNIP44Decrypt: true,
+	nip46.MethodNIP44Encrypt: true, nip46.MethodNIP44Decrypt: true, nip46.MethodNIP44MessageKeys: true,
 }
 
 // NewServer validates cfg and prepares a server. Call Run to start it.
@@ -366,7 +367,7 @@ func (s *Server) dispatch(ctx context.Context, call *Call) (string, error) {
 		return s.authorized(ctx, call, func() (string, error) { return "ack", nil })
 	case nip46.MethodSignEvent:
 		return s.sign(ctx, call)
-	case nip46.MethodNIP04Encrypt, nip46.MethodNIP04Decrypt, nip46.MethodNIP44Encrypt, nip46.MethodNIP44Decrypt:
+	case nip46.MethodNIP04Encrypt, nip46.MethodNIP04Decrypt, nip46.MethodNIP44Encrypt, nip46.MethodNIP44Decrypt, nip46.MethodNIP44MessageKeys:
 		return s.crypto(ctx, call)
 	}
 	if h, ok := s.cfg.Methods[call.Method]; ok {
@@ -439,12 +440,24 @@ func (s *Server) crypto(ctx context.Context, call *Call) (string, error) {
 	} else {
 		call.Ciphertext = call.Params[1]
 	}
+	keyer, canKey := s.cfg.Key.(nip46.MessageKeyer)
+	if call.Method == nip46.MethodNIP44MessageKeys && !canKey {
+		return "", nip46.Invalid("unsupported method: " + call.Method)
+	}
 	return s.authorized(ctx, call, func() (string, error) {
 		var out string
 		var err error
-		if encrypting {
+		switch {
+		case encrypting:
 			out, err = s.cfg.Key.Encrypt(ctx, scheme, counterpart, call.Plaintext)
-		} else {
+		case call.Method == nip46.MethodNIP44MessageKeys:
+			var keys nip44.Keys
+			if keys, err = keyer.MessageKeys(ctx, counterpart, call.Ciphertext); err == nil {
+				var b []byte
+				b, err = json.Marshal(keys)
+				out = string(b)
+			}
+		default:
 			out, err = s.cfg.Key.Decrypt(ctx, scheme, counterpart, call.Ciphertext)
 		}
 		if err != nil {

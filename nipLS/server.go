@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ohstr/nmilat/nip01"
+	"github.com/ohstr/nmilat/nip44"
 	"github.com/ohstr/nmilat/nip46"
 )
 
@@ -71,7 +72,7 @@ var builtinMethods = map[string]bool{
 	nip46.MethodConnect: true, nip46.MethodSignEvent: true, nip46.MethodPing: true,
 	nip46.MethodGetPublicKey: true, nip46.MethodGetRelays: true, nip46.MethodSwitchRelays: true,
 	nip46.MethodLogout: true, nip46.MethodNIP04Encrypt: true, nip46.MethodNIP04Decrypt: true,
-	nip46.MethodNIP44Encrypt: true, nip46.MethodNIP44Decrypt: true,
+	nip46.MethodNIP44Encrypt: true, nip46.MethodNIP44Decrypt: true, nip46.MethodNIP44MessageKeys: true,
 }
 
 // NewServer validates cfg and prepares a server. It does not listen.
@@ -239,7 +240,7 @@ func (s *Server) handle(ctx context.Context, req *Request) (string, error) {
 		return "null", nil
 	case nip46.MethodSignEvent:
 		return s.handleSign(ctx, req)
-	case nip46.MethodNIP04Encrypt, nip46.MethodNIP04Decrypt, nip46.MethodNIP44Encrypt, nip46.MethodNIP44Decrypt:
+	case nip46.MethodNIP04Encrypt, nip46.MethodNIP04Decrypt, nip46.MethodNIP44Encrypt, nip46.MethodNIP44Decrypt, nip46.MethodNIP44MessageKeys:
 		return s.handleCrypto(ctx, req)
 	}
 	if h, ok := s.cfg.Methods[req.Method]; ok {
@@ -316,17 +317,34 @@ func (s *Server) handleCrypto(ctx context.Context, req *Request) (string, error)
 	} else {
 		req.Ciphertext = req.Params[1]
 	}
+	keyer, canKey := s.cfg.Key.(nip46.MessageKeyer)
+	if req.Method == nip46.MethodNIP44MessageKeys && !canKey {
+		return "", s.decide(req, Invalid("unsupported method: "+req.Method))
+	}
 	if err := s.cfg.Policy.Authorize(ctx, req); err != nil {
 		return "", s.decide(req, nip46.AsRefusal(err))
 	}
 	var result string
-	if encrypting {
+	switch {
+	case encrypting:
 		result, err = s.cfg.Key.Encrypt(ctx, scheme, counterpart, req.Plaintext)
-	} else {
+	case req.Method == nip46.MethodNIP44MessageKeys:
+		var keys nip44.Keys
+		if keys, err = keyer.MessageKeys(ctx, counterpart, req.Ciphertext); err == nil {
+			var b []byte
+			b, err = json.Marshal(keys)
+			result = string(b)
+		}
+	default:
 		result, err = s.cfg.Key.Decrypt(ctx, scheme, counterpart, req.Ciphertext)
 	}
 	if err != nil {
 		return "", s.decide(req, fmt.Errorf("%s failed: %w", req.Method, err))
+	}
+	if rp, ok := s.cfg.Policy.(ResultPolicy); ok {
+		if err := rp.AuthorizeResult(ctx, req, result); err != nil {
+			return "", s.decide(req, nip46.AsRefusal(err))
+		}
 	}
 	_ = s.decide(req, nil)
 	return result, nil
