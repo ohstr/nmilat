@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -61,6 +62,15 @@ const MaxReplaceAttempts = 3
 // is closed as refused instead), a foreign device's to show; expired is shown;
 // an unanswered lookup waits, and is shown past deadline + H; a malformed one is
 // shown.
+//
+// A cash_withdraw (NIP-CASH §Withdrawals): a done carries the payout's current
+// state, whose receipt is checked against the call (else the answer reads as
+// malformed and the call waits, never closed); it waits with the payout as
+// Result, and the caller closes it on PayoutFinished. unknown re-places it
+// automatically after only lost replies, with confirmation after
+// REQUEST_REUSED, and closes it refused (reason code/detail) after a coded
+// refusal; a call recovered from withdraw_request_id (no quote) is never
+// re-placed.
 func Recover(ctx context.Context, pc nipcash.PendingCall, lookup func(context.Context, nipcash.PendingCall) (LookupOutcome, error), localDevice string, now time.Time) (Action, error) {
 	lo, err := lookup(ctx, pc)
 	if err != nil {
@@ -72,7 +82,15 @@ func Recover(ctx context.Context, pc nipcash.PendingCall, lookup func(context.Co
 		}
 		return Action{Kind: ActionWait}
 	}
+	isWithdraw := pc.Method == nipcash.MethodCashWithdraw
+	if isWithdraw && !lo.Malformed && lo.Code == "" && !lo.NotServed && lo.Status == nipcash.LookupDone {
+		if err := checkWithdrawDone(pc, lo.Result); err != nil {
+			lo.Malformed = true
+		}
+	}
 	switch {
+	case lo.Malformed && isWithdraw:
+		return Action{Kind: ActionWait, Reason: "lookup_malformed"}, nil
 	case lo.Malformed:
 		return Action{Kind: ActionShow, Reason: "lookup_malformed"}, nil
 	case lo.NotServed, lo.Code == nipcash.ErrCodeRequestReused:
@@ -91,7 +109,7 @@ func Recover(ctx context.Context, pc nipcash.PendingCall, lookup func(context.Co
 	}
 	switch lo.Status {
 	case nipcash.LookupDone:
-		if isOrder || pc.Method == methodCashWithdraw {
+		if isOrder || isWithdraw {
 			return Action{Kind: ActionWait, Result: lo.Result}, nil
 		}
 		return Action{Kind: ActionClose, Result: lo.Result}, nil
@@ -103,11 +121,15 @@ func Recover(ctx context.Context, pc nipcash.PendingCall, lookup func(context.Co
 		switch {
 		case pc.Device != localDevice:
 			return Action{Kind: ActionShow, Reason: "foreign_device"}, nil
+		case pc.LastCode != "" && isWithdraw && pc.LastDetail != "":
+			return Action{Kind: ActionCloseRefused, Reason: pc.LastCode + "/" + string(pc.LastDetail)}, nil
 		case pc.LastCode != "":
 			return Action{Kind: ActionCloseRefused, Reason: pc.LastCode}, nil
+		case isWithdraw && pc.Quote == "":
+			return Action{Kind: ActionShow, Reason: "no_quote"}, nil
 		case pc.Attempt >= MaxReplaceAttempts:
 			return Action{Kind: ActionShow, Reason: "replace_cap"}, nil
-		case pc.Method == nipcash.MethodMintCash || isOrder || (pc.Method == methodCashWithdraw && pc.SawReused):
+		case pc.Method == nipcash.MethodMintCash || isOrder || (isWithdraw && pc.SawReused):
 			return Action{Kind: ActionConfirmReplace}, nil
 		default:
 			return Action{Kind: ActionReplace}, nil
@@ -125,6 +147,10 @@ type ReplaceOptions struct {
 	DerivedEntryExists func(context.Context, string) (bool, error)
 	// MaxAttempts defaults to MaxReplaceAttempts.
 	MaxAttempts int
+	// Quote is a new quote for a re-placed cash_withdraw, one the caller
+	// verified with VerifyQuoteAnswer and its user confirmed; it needs
+	// Confirmed. nil keeps the call's quote.
+	Quote *nipcash.WithdrawQuote
 }
 
 type replacementKey struct{}
@@ -162,6 +188,16 @@ func Replace(ctx context.Context, pc nipcash.PendingCall, j Journal, o ReplaceOp
 	if (pc.Method == nipcash.MethodMintCash || pc.Method == nipcash.MethodCashOrder) && !o.Confirmed {
 		return Action{}, ErrReplaceNeedsConfirmation
 	}
+	isWithdraw := pc.Method == nipcash.MethodCashWithdraw
+	if isWithdraw && (o.Quote != nil || pc.SawReused) && !o.Confirmed {
+		return Action{}, ErrReplaceNeedsConfirmation
+	}
+	if isWithdraw && pc.Quote == "" {
+		return Action{}, errNoWithdrawQuote
+	}
+	if o.Quote != nil && !isWithdraw {
+		return Action{}, fmt.Errorf("nipcash/client: only a cash_withdraw takes a new quote")
+	}
 	max := o.MaxAttempts
 	if max == 0 {
 		max = MaxReplaceAttempts
@@ -194,6 +230,17 @@ func Replace(ctx context.Context, pc nipcash.PendingCall, j Journal, o ReplaceOp
 		}
 		next.Notify = notify
 	}
+	if o.Quote != nil {
+		raw, err := o.Quote.Raw()
+		if err != nil {
+			return Action{}, err
+		}
+		if o.Quote.Wallet != pc.Target {
+			return Action{}, fmt.Errorf("nipcash/client: the new quote is for another bill")
+		}
+		// notify and the re-mint secret are kept (NIP-CASH §Withdrawals).
+		next.Quote, next.Address, next.HoldsUntil, next.Amount, next.Receipt = raw, o.Quote.Address, o.Quote.HoldsUntil, o.Quote.AmountMillis, ""
+	}
 	h := max64(pc.MaxRequestAge, nipcash.MinMaxRequestAge)
 	next.Deadline = time.Now().Unix() + nipcash.DeadlineWindow(h)
 	keepUntil := next.Deadline + h
@@ -214,8 +261,39 @@ func Replace(ctx context.Context, pc nipcash.PendingCall, j Journal, o ReplaceOp
 	return Action{Kind: ActionWait}, nil
 }
 
-// cash_withdraw is recovered like a call of this package (NIP-CASH §Withdrawing).
-const methodCashWithdraw = "cash_withdraw"
+// errNoWithdrawQuote is a withdrawal re-placed without its quote: a call
+// recovered from withdraw_request_id is never re-placed.
+var errNoWithdrawQuote = errors.New("nipcash/client: a withdrawal without its quote is never re-placed")
+
+// checkWithdrawDone checks a cash_withdraw lookup's done: a payout whose receipt
+// verifies against the call (its Hub, bill, quote id, request_id and the
+// quote's address, payout and sent_by; for a call without a quote, those of the
+// payout).
+func checkWithdrawDone(pc nipcash.PendingCall, result json.RawMessage) error {
+	p, err := nipcash.ParsePayout(result)
+	if err != nil {
+		return err
+	}
+	return verifyCallReceipt(pc, p)
+}
+
+// verifyCallReceipt checks p's receipt against the call pc, and that p pays
+// what the call's quote says.
+func verifyCallReceipt(pc nipcash.PendingCall, p *nipcash.Payout) error {
+	e := nipcash.ReceiptExpectation{HubXOnly: pc.HubIdentity, Target: pc.Target, RequestID: pc.RequestID,
+		Address: p.Address, PayoutMillis: p.PayoutMillis, SentBy: p.SentBy}
+	if pc.Quote != "" {
+		q, err := nipcash.ParseWithdrawQuote(pc.Quote)
+		if err != nil {
+			return fmt.Errorf("%w: the call's quote", nipcash.ErrReceiptInvalid)
+		}
+		e.QuoteID, e.Address, e.PayoutMillis, e.SentBy = q.ID, q.Address, q.PayoutMillis, q.SentBy
+		if p.Address != q.Address || p.PayoutMillis != q.PayoutMillis || p.SentBy != q.SentBy || p.AmountMillis != q.AmountMillis {
+			return fmt.Errorf("%w: the payout differs from the quote", nipcash.ErrReceiptInvalid)
+		}
+	}
+	return nipcash.VerifyWithdrawReceipt(p.Receipt, e)
+}
 
 func max64(a, b int64) int64 {
 	if a > b {

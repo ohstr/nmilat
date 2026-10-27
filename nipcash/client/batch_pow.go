@@ -25,6 +25,7 @@ type SessionOption func(*sessionConfig)
 type sessionConfig struct {
 	powMaxDifficulty int           // 0: no cap
 	powMaxDuration   time.Duration // 0: deadline − MinPublishMargin − now
+	withdrawHRP      string        // "": the bill's coin's HRPs (WithWithdrawHRP)
 }
 
 func newSessionConfig(opts []SessionOption) sessionConfig {

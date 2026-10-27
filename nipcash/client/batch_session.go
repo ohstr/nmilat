@@ -47,6 +47,9 @@ type BatchSession struct {
 	// no call carrying a request_id goes to this Hub, and no older one is used.
 	unusable error
 	powMin   map[string]int
+	// accepted are the relays that accepted each withdrawal, by its notify,
+	// for WatchPayout.
+	accepted map[string][]string
 }
 
 // NewBatchSession fetches and verifies a hub's announcement.

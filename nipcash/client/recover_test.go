@@ -50,7 +50,11 @@ func TestRecover_Table(t *testing.T) {
 			LookupOutcome{Status: nipcash.LookupUnknown}, "a", Action{Kind: ActionShow, Reason: "lookup_unknown"}},
 		{"held order unknown after pay_by waits", with(func(p *nipcash.PendingCall) { p.Method = nipcash.MethodCashOrder; p.PayBy = now.Unix() - 10 }),
 			LookupOutcome{Status: nipcash.LookupUnknown}, "a", Action{Kind: ActionWait, Reason: "unknown"}},
-		{"withdraw that saw REQUEST_REUSED confirms", with(func(p *nipcash.PendingCall) { p.Method = methodCashWithdraw; p.SawReused = true }),
+		{"withdraw that saw REQUEST_REUSED confirms", with(func(p *nipcash.PendingCall) {
+			p.Method = nipcash.MethodCashWithdraw
+			p.SawReused = true
+			p.Quote = "{}"
+		}),
 			LookupOutcome{Status: nipcash.LookupUnknown}, "a", Action{Kind: ActionConfirmReplace}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
