@@ -19,6 +19,9 @@ privacy and performance fixes.
   `VerifyProof` show one seal's content to a third party without any key.
 - Adds NIP-17 recipient, subject and reply tags, `ParseChatMessage`, and
   kind 10050 DM relay lists.
+- Adds builders for NIP-25 reactions, NIP-10 replies, NIP-18 reposts and
+  NIP-09 deletion requests, and NIP-02/NIP-51 list edits that keep every
+  other item.
 - Adds `WithSearchBatch` and `WithSearchInFlight`: `SearchIndexer` keeps
   several batches enqueued with a `search.Enqueuer` engine and acknowledges
   them in order, only past what was applied. A large relay's search can then
