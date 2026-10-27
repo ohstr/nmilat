@@ -14,6 +14,7 @@ import (
 	"github.com/ohstr/nmilat/nipCO"
 	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/nipcw"
+	"github.com/ohstr/nmilat/utils"
 )
 
 const otherConn = "e493dbf1c10d80f3581e4904930b1404cc6c13900ee0758474fa94abe8c4cd13"
@@ -973,5 +974,65 @@ func TestSignalsFor(t *testing.T) {
 	other := &Listing{NodeIdentity: node, D: otherConn, Event: l.Event}
 	if s := SignalsFor(other, trust, []*Recommendation{r}, nil, nil, opOf); len(s.Recommendations) != 0 {
 		t.Fatal("credited to an offer it does not name")
+	}
+}
+
+// Several pubkeys listing one d: none shows before a tap, then only the one
+// whose signer passed it (§Wallet Rules "Signals").
+func TestCurrentByDSeveralSigners(t *testing.T) {
+	real := kList1(t)
+	copier, err := utils.GetPublicKey(key3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sign, err := nipcash.LocalChainSigner(key3, "bitcoin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := nipCO.SignOrderConnection(nipCO.OrderConnection{Pubkey: kcoConn, Relays: []string{relayURL},
+		Secret: connSecret(), Label: "Copied counter", HasLabel: true, HubIdentity: copier, Chain: "bitcoin"}, sign, copier)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := kList1Fields(t)
+	f.Order = &c
+	ev, err := NewListing(f, createdList1, createdList1, signWith(key3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	copy, err := ParseListing(ev, mainnet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	book := NewVersionBook()
+	if l, ok := book.CurrentByD(kcoConn, createdList1); ok || l != nil {
+		t.Fatal("empty book shows a listing")
+	}
+	book.Offer(real, createdList1)
+	if l, ok := book.CurrentByD(kcoConn, createdList1); !ok || l != real {
+		t.Fatal("a single signer is not shown")
+	}
+	book.Offer(copy, createdList1)
+	if _, ok := book.CurrentByD(kcoConn, createdList1); ok {
+		t.Fatal("two signers shown before a tap")
+	}
+	// The copy's tap names another identity: hidden for good. The real one
+	// passes.
+	book.Taps().Record(copy, CheckTap(copy, info(node, "mainnet", "bitcoin"), json.RawMessage(tapTerms), nil))
+	book.Taps().Record(real, CheckTap(real, info(node, "mainnet", "bitcoin"), json.RawMessage(tapTerms), nil))
+	if l, ok := book.CurrentByD(kcoConn, createdList1); !ok || l != real {
+		t.Fatalf("after tap: %v %v", l, ok)
+	}
+	// The pass survives a snapshot.
+	snap, err := book.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	back := NewVersionBook()
+	if err := back.Restore(snap); err != nil {
+		t.Fatal(err)
+	}
+	if !back.Taps().Passed(real) || back.Taps().Passed(copy) {
+		t.Fatal("pass not restored")
 	}
 }

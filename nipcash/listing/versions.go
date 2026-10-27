@@ -103,6 +103,44 @@ func (b *VersionBook) Current(addr string, now int64) (*Listing, bool) {
 	return l, true
 }
 
+// CurrentByD is Current across every pubkey listing d (§Wallet Rules
+// "Signals"): the one current listing when a single pubkey lists d; when
+// several do, only the listing whose signer passed the check at tap
+// (TapCache.Passed), or none. Anyone can re-sign a listed connection's public
+// secret under their own key, so before a tap no copy is preferred.
+func (b *VersionBook) CurrentByD(d string, now int64) (*Listing, bool) {
+	b.mu.Lock()
+	var addrs []string
+	for a, l := range b.newest {
+		if l.D == d {
+			addrs = append(addrs, a)
+		}
+	}
+	b.mu.Unlock()
+	var shown []*Listing
+	for _, a := range addrs {
+		if l, ok := b.Current(a, now); ok {
+			shown = append(shown, l)
+		}
+	}
+	switch len(shown) {
+	case 0:
+		return nil, false
+	case 1:
+		return shown[0], true
+	}
+	var passed *Listing
+	for _, l := range shown {
+		if b.taps.Passed(l) {
+			if passed != nil {
+				return nil, false
+			}
+			passed = l
+		}
+	}
+	return passed, passed != nil
+}
+
 // Addresses lists the addresses the book holds a version of.
 func (b *VersionBook) Addresses() []string {
 	b.mu.Lock()
@@ -118,10 +156,11 @@ type snapshot struct {
 	Newest []*nip01.Event        `json:"newest"`
 	Floors map[string]int64      `json:"floors"`
 	Taps   map[string]TapOutcome `json:"taps"`
+	Passed []string              `json:"passed,omitempty"`
 }
 
-// Snapshot serialises the book: every newest version, the deletion floors and
-// the tap outcomes.
+// Snapshot serialises the book: every newest version, the deletion floors, the
+// tap outcomes and the addresses that passed at tap.
 func (b *VersionBook) Snapshot() ([]byte, error) {
 	b.mu.Lock()
 	s := snapshot{Floors: map[string]int64{}, Taps: map[string]TapOutcome{}}
@@ -135,6 +174,9 @@ func (b *VersionBook) Snapshot() ([]byte, error) {
 	b.taps.mu.Lock()
 	for k, o := range b.taps.hide {
 		s.Taps[k] = o
+	}
+	for a := range b.taps.passed {
+		s.Passed = append(s.Passed, a)
 	}
 	b.taps.mu.Unlock()
 	return json.Marshal(s)
@@ -170,11 +212,18 @@ func (b *VersionBook) Restore(p []byte) error {
 		}
 		taps[k] = o
 	}
+	passed := map[string]bool{}
+	for _, a := range s.Passed {
+		if k, _, _, ok := ParseAddress(a); !ok || k != KindListing {
+			return fmt.Errorf("listing: snapshot: passed address %q", a)
+		}
+		passed[a] = true
+	}
 	b.mu.Lock()
 	b.newest, b.floors = newest, floors
 	b.mu.Unlock()
 	b.taps.mu.Lock()
-	b.taps.hide = taps
+	b.taps.hide, b.taps.passed = taps, passed
 	b.taps.mu.Unlock()
 	return nil
 }

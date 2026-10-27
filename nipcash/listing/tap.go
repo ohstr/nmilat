@@ -129,27 +129,40 @@ func CheckTap(l *Listing, info *nip47.GetInfoResult, raw json.RawMessage, infoEr
 // TapHideForGood and TapHideUntilNewer hide; both are per version, so a newer
 // created_at is never hidden by an older version's outcome. It is safe for
 // concurrent use.
+//
+// It also remembers which addresses (pubkey and d) passed the check at tap
+// (TapShow), which decides what shows when several pubkeys list one d
+// (VersionBook.CurrentByD).
 type TapCache struct {
-	mu   sync.Mutex
-	hide map[string]TapOutcome
+	mu     sync.Mutex
+	hide   map[string]TapOutcome
+	passed map[string]bool
 }
 
 // NewTapCache returns an empty cache.
-func NewTapCache() *TapCache { return &TapCache{hide: map[string]TapOutcome{}} }
+func NewTapCache() *TapCache {
+	return &TapCache{hide: map[string]TapOutcome{}, passed: map[string]bool{}}
+}
 
 func tapKey(l *Listing) string {
 	return l.NodeIdentity + ":" + l.D + ":" + strconv.FormatUint(l.Event.CreatedAt, 10)
 }
 
-// Record stores a hiding outcome for l's version; TapShow and TapUnavailable
-// record nothing, and a version hidden for good stays so.
+// Record stores a hiding outcome for l's version and marks l's address as
+// passed on TapShow; TapUnavailable records nothing, and a version hidden for
+// good stays so.
 func (c *TapCache) Record(l *Listing, r TapResult) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.hide == nil {
 		c.hide = map[string]TapOutcome{}
 	}
+	if c.passed == nil {
+		c.passed = map[string]bool{}
+	}
 	switch r.Outcome {
+	case TapShow:
+		c.passed[l.Address()] = true
 	case TapHideForGood, TapHideUntilNewer:
 		if prev, ok := c.hide[tapKey(l)]; !ok || prev != TapHideForGood {
 			c.hide[tapKey(l)] = r.Outcome
@@ -171,4 +184,11 @@ func (c *TapCache) Outcome(l *Listing) (TapOutcome, bool) {
 	defer c.mu.Unlock()
 	o, ok := c.hide[tapKey(l)]
 	return o, ok
+}
+
+// Passed reports whether l's signer passed the check at tap for l's address.
+func (c *TapCache) Passed(l *Listing) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.passed[l.Address()]
 }
