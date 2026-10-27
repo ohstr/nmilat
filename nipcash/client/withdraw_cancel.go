@@ -52,9 +52,6 @@ func (s *BatchSession) cancelWithdraw(ctx context.Context, bill Bill, pc nipcash
 	o := outs[0]
 	switch {
 	case o.Result != nil:
-		if o.Result.Tx != "" && o.Result.Txid != "" && o.Result.Vout != nil {
-			o.Result.TxErr = nipcash.VerifyPayoutTx(o.Result.Tx, o.Result.Txid, *o.Result.Vout, o.Result.Address, "", o.Result.PayoutMillis)
-		}
 		return o.Result, nil
 	case o.State == OutcomeError && o.Error != nil && !o.Undecodable && o.Gone == nil:
 		if o.Error.Code == nipcash.ErrCodeRequestReused {

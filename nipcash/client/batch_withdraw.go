@@ -311,10 +311,9 @@ func (s *BatchSession) WithdrawCancelMany(ctx context.Context, items []BatchWith
 		co := WithdrawCancelOutcome{ItemOutcome: o}
 		if o.Succeeded() {
 			it := byID[o.ID]
-			p, err := nipcash.CashWithdrawParams{Credential: it.Credential}.ParseLookupResult(o.Result)
-			if err == nil {
-				err = verifyCallReceipt(withHub(it.Call, s.HubIdentity()), p)
-			}
+			// As a lookup's answer: the receipt, and a cancelled payout's
+			// re-minted bill checked against this Hub and its wallet.
+			p, err := s.checkPayout(withHub(it.Call, s.HubIdentity()), it.Credential, o.Result)
 			if err != nil {
 				co.ItemOutcome = parseFailure(co.ItemOutcome, err)
 			} else {

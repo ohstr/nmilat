@@ -728,3 +728,43 @@ func TestT21_28_ErrorTextPrivate(t *testing.T) {
 		}
 	}
 }
+
+// A cancelled payout's re-minted bill, answered to a cancel request, is
+// checked as a lookup's is: this Hub's bill for the named wallet, or the
+// answer is refused.
+func TestWithdraw_CancelChecksTheRemint(t *testing.T) {
+	ctx, cancel := e2eContext(t)
+	defer cancel()
+	w := newWDHub(t, true)
+	w.locked(func() { w.sentBy = time.Now().Unix() - nipcash.CancelRequestAfter - 10 })
+	q := w.quote(t, wdAddr)
+	j := newTestJournal()
+	if _, err := w.s.withdraw(ctx, w.bill, nipcash.CashWithdrawParams{Quote: q, Credential: w.cred()}, j, "dev"); err != nil {
+		t.Fatal(err)
+	}
+	pc := j.all()[0]
+	now := time.Now().Unix()
+	cancelled := w.lastPayout()
+	cancelled.State, cancelled.NewWalletPubkey = nipcash.PayoutCancelled, strings.Repeat("22", 32)
+	answer := func(tok string) {
+		c := cancelled
+		c.NewWalletToken = nipcash.TokenOrTombstone{Token: tok}
+		w.locked(func() { w.cancel = func(item transport.Item) *transport.Result { return wdResult(item, &c) } })
+	}
+
+	own := remintToken(t, w.hub.hubPriv, w.hub.hubXOnly)
+	answer(own)
+	if p, err := w.s.cancelWithdraw(ctx, w.bill, pc, w.cred(), now); err != nil || p.NewWalletToken.Token != own {
+		t.Fatalf("own re-mint: %+v %v", p, err)
+	}
+	otherPriv, otherX := sessionKeypair(t)
+	answer(remintToken(t, otherPriv, otherX))
+	if p, err := w.s.cancelWithdraw(ctx, w.bill, pc, w.cred(), now); !errors.Is(err, ErrCancelAnswer) || p != nil {
+		t.Errorf("foreign re-mint: %+v %v, want ErrCancelAnswer", p, err)
+	}
+	cancelled.NewWalletPubkey = strings.Repeat("44", 32)
+	answer(own)
+	if p, err := w.s.cancelWithdraw(ctx, w.bill, pc, w.cred(), now); !errors.Is(err, ErrCancelAnswer) || p != nil {
+		t.Errorf("re-mint for another wallet: %+v %v, want ErrCancelAnswer", p, err)
+	}
+}
