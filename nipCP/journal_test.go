@@ -110,7 +110,11 @@ func TestDerivedRecordAndDevice(t *testing.T) {
 		t.Fatal(err)
 	}
 	sent := 0
-	send := func(context.Context, nipcash.PendingCall) error { sent++; return nil }
+	// The SDK send path writes the derived call ahead (client.Replace does not).
+	send := func(ctx context.Context, next nipcash.PendingCall) error {
+		sent++
+		return j.WriteAhead(ctx, []nipcash.PendingCall{next})
+	}
 	pc.MaxRequestAge = 60
 	a, err := client.Replace(ctx, pc, j, client.ReplaceOptions{DerivedEntryExists: j.DerivedEntryExists}, send)
 	if err != nil || a.Kind != client.ActionWait || sent != 1 {
