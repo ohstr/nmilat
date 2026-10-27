@@ -3,6 +3,8 @@ package nipcash
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 
 	btcec "github.com/flokiorg/go-flokicoin/crypto"
@@ -163,4 +165,29 @@ func encryptForTest(t *testing.T, fromPrivHex, toPubHex, plaintext string) strin
 		t.Fatal(err)
 	}
 	return ciphertext
+}
+
+// A spin-off always carries its token: without one RecipientToken errors, as a
+// *BillGone when a lookup answered the new bill's tombstone.
+func TestCashTransferResult_RecipientToken_SpinOffWithoutToken(t *testing.T) {
+	r := &CashTransferResult{NewWalletPubkey: strings.Repeat("ab", 32)}
+	if tok, err := r.RecipientToken("orig"); err == nil || tok != "" {
+		t.Fatalf("RecipientToken = %q, %v; want an error", tok, err)
+	}
+	r.NewWalletTombstone = &Tombstone{Status: StatusSpent, Reason: ReasonRedeemed}
+	var gone *BillGone
+	if _, err := r.RecipientToken("orig"); !errors.As(err, &gone) || gone.Tombstone.Reason != ReasonRedeemed {
+		t.Fatalf("err = %v, want *BillGone", err)
+	}
+}
+
+func TestChainForHRP(t *testing.T) {
+	for hrp, want := range map[string]string{"satscash": "bitcoin", "SATSCASH": "bitcoin", "lokicash": "flokicoin"} {
+		if got, ok := ChainForHRP(hrp); !ok || got != want {
+			t.Errorf("ChainForHRP(%q) = %q, %v", hrp, got, ok)
+		}
+	}
+	if _, ok := ChainForHRP("cashhub"); ok {
+		t.Error("cashhub has no chain")
+	}
 }

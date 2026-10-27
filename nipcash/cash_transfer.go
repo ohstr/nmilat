@@ -173,12 +173,15 @@ type CashTransferResult struct {
 func (r *CashTransferResult) ZapSigned() bool { return r.IssuedAt != nil && r.ExpiresAt != nil }
 
 // RecipientToken is the token the recipient needs: the new wallet's for a
-// spin-off, else (in place) the original token. A result that names a new
-// wallet but carries no token is an error.
+// spin-off, else (in place) the original token. A spin-off always carries its
+// token (NIP-CASH §cash_transfer), so one without it is an error: a *BillGone
+// when a lookup answered the new bill's tombstone, a malformed reply otherwise.
 func (r *CashTransferResult) RecipientToken(originalToken string) (string, error) {
 	switch {
 	case r.NewWalletToken != "":
 		return r.NewWalletToken, nil
+	case r.NewWalletTombstone != nil:
+		return "", &BillGone{Method: MethodCashTransfer, Tombstone: *r.NewWalletTombstone}
 	case r.NewWalletPubkey != "":
 		return "", fmt.Errorf("nipcash: the spin-off %s carries no token", r.NewWalletPubkey)
 	default:
