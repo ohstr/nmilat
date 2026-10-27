@@ -2,11 +2,16 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/nipcw"
 )
+
+// ErrJoinSigner is a LookupJoin whose credential is not the pending join's
+// signer. Nothing was sent.
+var ErrJoinSigner = errors.New("nipcw/client: the credential is not the join's signer")
 
 // JoinActionKind is what LookupJoin tells the caller to do with a pending join.
 type JoinActionKind int
@@ -50,6 +55,18 @@ type JoinAction struct {
 func (c *Client) LookupJoin(ctx context.Context, pj PendingJoin, cred nipcw.Credential) (JoinAction, error) {
 	if pj.HubPubkey != c.conn.Pubkey {
 		return JoinAction{}, fmt.Errorf("nipcw/client: the pending join is for Hub %s, not this connection's %s", pj.HubPubkey, c.conn.Pubkey)
+	}
+	// Only the join's own signer can look it up: another key's lookup answers
+	// unknown, which would read as a rejoin and could drop the journal entry
+	// holding the connection secret.
+	if pj.Pubkey != "" {
+		signer, err := cred.Pubkey()
+		if err != nil {
+			return JoinAction{}, err
+		}
+		if signer != pj.Pubkey {
+			return JoinAction{}, fmt.Errorf("%w: the credential signs for %s, the join for %s", ErrJoinSigner, signer, pj.Pubkey)
+		}
 	}
 	if _, err := c.info(ctx); err != nil {
 		return JoinAction{}, err

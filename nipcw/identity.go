@@ -29,6 +29,9 @@ func (c Credential) pubkey() (string, error) {
 	return utils.GetPublicKey(c.privKeyHex)
 }
 
+// Pubkey is the pubkey this credential signs for (x-only hex).
+func (c Credential) Pubkey() (string, error) { return c.pubkey() }
+
 // signProof signs a kind-23199 event with the given tags at createdAt.
 func (c Credential) signProof(createdAt int64, tags ...[]string) (*nip01.Event, error) {
 	if createdAt < 0 {

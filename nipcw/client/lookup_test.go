@@ -103,7 +103,12 @@ func TestLookupJoin(t *testing.T) {
 		}
 		return result(`{"status":"unknown"}`)
 	})
-	if act, _ := cl.LookupJoin(ctx, pj, nipcw.BySigning(otherPriv)); act.Kind != JoinShow || act.Reason != "lookup_unauthorized" {
+	if _, err := cl.LookupJoin(ctx, pj, nipcw.BySigning(otherPriv)); !errors.Is(err, ErrJoinSigner) {
+		t.Fatalf("other signer: %v, want ErrJoinSigner before sending", err)
+	}
+	unsigned := pj // a pending join that did not record its signer
+	unsigned.Pubkey = ""
+	if act, _ := cl.LookupJoin(ctx, unsigned, nipcw.BySigning(otherPriv)); act.Kind != JoinShow || act.Reason != "lookup_unauthorized" {
 		t.Fatalf("other signer: %+v", act)
 	}
 	other := pj

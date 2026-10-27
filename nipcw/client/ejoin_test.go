@@ -196,8 +196,8 @@ func TestEJoin04_06_14_LookupWindows(t *testing.T) {
 		t.Fatal(err)
 	}
 	other, _ := keypair(t)
-	if act, err := cl.LookupJoin(ctx, j.all()[0], nipcw.BySigning(other)); err != nil || act.Kind == JoinClose {
-		t.Fatalf("another signer's lookup: %+v %v, want an answer by the deadline", act, err)
+	if act, err := cl.LookupJoin(ctx, j.all()[0], nipcw.BySigning(other)); !errors.Is(err, ErrJoinSigner) {
+		t.Fatalf("another signer's lookup: %+v %v, want ErrJoinSigner before anything is sent", act, err)
 	}
 }
 
