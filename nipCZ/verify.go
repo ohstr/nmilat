@@ -422,3 +422,16 @@ func CheckInPlaceTransfer(z *CashZap, res *nipcash.CashTransferResult) error {
 // only be consolidated or redeemed same-node; a wallet MAY show it as "below
 // the redeem fee, combine with others" (NIP-CZ §Receiving).
 func BelowRedeemFee(amountMillis, baseFeeMillis uint64) bool { return amountMillis <= baseFeeMillis }
+
+// ValidateForRelay is what a relay that validates a 9522 applies: the Client
+// column's rules 1-6, which refuse. Rules 7 and 8 only decide counting, so
+// they never refuse an event, and rule 9 is never run (a relay never contacts a
+// Minter). The error is the first failing rule's *RuleError.
+func ValidateForRelay(ev *nip01.Event) error {
+	for _, r := range VerifyClient(ev, nil, nil, nil).Rules {
+		if r.N <= 6 && !r.OK && !r.Skipped {
+			return &RuleError{Rule: r.N, Reason: r.Reason}
+		}
+	}
+	return nil
+}

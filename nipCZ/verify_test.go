@@ -428,3 +428,17 @@ func TestBelowRedeemFee(t *testing.T) {
 		t.Fatal("BelowRedeemFee")
 	}
 }
+
+// T14-10 (S-CZ-50): a relay applies rules 1-6 only.
+func TestValidateForRelay(t *testing.T) {
+	f := newFx(t)
+	ev, _ := f.zap(t, zapOpts{target: f.note, issuedAt: f.note.CreatedAt - 1}) // fails rule 7 only
+	if err := ValidateForRelay(ev); err != nil {
+		t.Fatalf("rule 7 refused at a relay: %v", err)
+	}
+	ev, _ = f.zap(t, zapOpts{target: f.note, mutate: setTag("amount", "22000")})
+	var re *RuleError
+	if err := ValidateForRelay(ev); !errors.As(err, &re) || re.Rule != 6 {
+		t.Fatal(err)
+	}
+}
