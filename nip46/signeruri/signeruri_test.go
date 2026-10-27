@@ -117,7 +117,7 @@ func startBunker(t *testing.T) string {
 // T16-19 (LS-ADDR-02).
 func TestDialRoutesByScheme(t *testing.T) {
 	path := startLocal(t)
-	for _, uri := range []string{nipLS.FormatURI(path), "unix://" + path, path} {
+	for _, uri := range []string{nipLS.FormatURI(path), "unix://" + path, path, " UNIX://" + path + "\n", "Bunker+Unix://" + path} {
 		s, err := Dial(ctx5(t), uri, bunker.ClientOptions{})
 		if err != nil {
 			t.Fatalf("%s: %v", uri, err)

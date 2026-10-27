@@ -38,9 +38,14 @@ var ErrUnsupportedScheme = errors.New("signeruri: unsupported signer URI scheme"
 // are a nip46.Key and have a Close method, which the caller calls when
 // done. ctx bounds connecting only.
 func Dial(ctx context.Context, uri string, opts bunker.ClientOptions) (nip46.Signer, error) {
-	scheme, _, hasScheme := strings.Cut(strings.TrimSpace(uri), "://")
+	// The trimmed string, with its scheme lowercased (schemes are
+	// case-insensitive), is what the chosen dialer parses.
+	uri = strings.TrimSpace(uri)
+	scheme, rest, hasScheme := strings.Cut(uri, "://")
 	if hasScheme {
-		switch strings.ToLower(scheme) {
+		scheme = strings.ToLower(scheme)
+		uri = scheme + "://" + rest
+		switch scheme {
 		case bunker.URIScheme:
 			c, err := bunker.Dial(ctx, uri, opts)
 			if err != nil {
