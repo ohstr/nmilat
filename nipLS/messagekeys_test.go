@@ -137,7 +137,7 @@ func tamper(payload string) string {
 // signOnly is a Key without nip46.MessageKeyer.
 type signOnly struct{ k *LocalKey }
 
-func (s signOnly) PubKey() string                                 { return s.k.PubKey() }
+func (s signOnly) PubKey() string                                  { return s.k.PubKey() }
 func (s signOnly) Sign(ctx context.Context, ev *nip01.Event) error { return s.k.Sign(ctx, ev) }
 func (s signOnly) Encrypt(ctx context.Context, scheme, peer, pt string) (string, error) {
 	return s.k.Encrypt(ctx, scheme, peer, pt)
