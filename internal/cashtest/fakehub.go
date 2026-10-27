@@ -60,6 +60,7 @@ type FakeHub struct {
 	committed []ItemCtx
 	members   map[string]bool
 	closed    chan struct{}
+	circle    *circleHub
 }
 
 // Option configures a FakeHub.
@@ -122,6 +123,7 @@ func NewFakeHub(t testing.TB, opts ...Option) *FakeHub {
 	h.inboxXOnly = mustXOnly(t, h.InboxPriv)
 	h.walletPriv, h.walletXOnly = Keypair(t)
 	h.connSecret, _ = Keypair(t)
+	h.initCircle()
 	t.Cleanup(func() { close(h.closed) })
 
 	ann := h.Announcement()
@@ -204,10 +206,6 @@ func (h *FakeHub) CashHubConnection() string {
 	}
 	return s
 }
-
-// CircleHubConnection is "": the fake has no Circle Wallet Hub yet, and the
-// conformance cases that need one skip on an empty string.
-func (h *FakeHub) CircleHubConnection() string { return "" }
 
 // TrustIA marks an IA trusted or untrusted for later decisions.
 func (h *FakeHub) TrustIA(_ testing.TB, iaXOnly string, trusted bool) {

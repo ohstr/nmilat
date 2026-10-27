@@ -23,14 +23,19 @@ const FakeNetwork = "regtest"
 // the bill methods and cash_lookup because they are private-transport only, and
 // mint_cash because the fake has no ledger yet (it is not listed in methods).
 func (h *FakeHub) serveNWC(r *Relay, ev *nip01.Event) {
-	if !taggedP(ev, h.walletXOnly) {
+	walletPriv, connSecret, circle := h.walletPriv, h.connSecret, false
+	switch {
+	case taggedP(ev, h.walletXOnly):
+	case h.circle != nil && taggedP(ev, h.circle.xonly):
+		walletPriv, connSecret, circle = h.circle.priv, h.circle.secret, true
+	default:
 		return
 	}
-	appXOnly, err := utils.GetPublicKey(h.connSecret)
+	appXOnly, err := utils.GetPublicKey(connSecret)
 	if err != nil || ev.PubKey != appXOnly {
 		return // not this connection's client key
 	}
-	req, err := nip47.ParseRequestEvent(ev, h.walletPriv)
+	req, err := nip47.ParseRequestEvent(ev, walletPriv)
 	if err != nil {
 		return
 	}
@@ -39,8 +44,15 @@ func (h *FakeHub) serveNWC(r *Relay, ev *nip01.Event) {
 		encryption = enc
 	}
 	var resp *nip01.Event
-	switch req.Method {
-	case "get_info":
+	switch {
+	case circle && req.Method == "get_info":
+		resp, err = nip47.NewResponseEvent(walletPriv, ev.PubKey, req.Method, h.circleInfo(), ev, encryption)
+	case circle:
+		// A join on the standard transport is NOT_IMPLEMENTED (NIP-CW §Private Join).
+		resp, err = nip47.NewErrorResponseEvent(walletPriv, ev.PubKey, req.Method, nip47.Error{
+			Code: "NOT_IMPLEMENTED", Message: req.Method + " is served on the private transport only",
+		}, ev, encryption)
+	case req.Method == "get_info":
 		resp, err = nip47.NewResponseEvent(h.walletPriv, ev.PubKey, req.Method, nip47.GetInfoResult{
 			Pubkey:         h.nodeXOnly,
 			Network:        FakeNetwork,
@@ -57,7 +69,7 @@ func (h *FakeHub) serveNWC(r *Relay, ev *nip01.Event) {
 		h.t.Errorf("cashtest: nwc response: %v", err)
 		return
 	}
-	if err := resp.Sign(h.walletPriv); err != nil {
+	if err := resp.Sign(walletPriv); err != nil {
 		h.t.Errorf("cashtest: sign nwc response: %v", err)
 		return
 	}
