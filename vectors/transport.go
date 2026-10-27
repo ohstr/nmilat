@@ -584,7 +584,18 @@ func buildEnvelope() (any, error) {
 	}
 	t1, t2 := strings.Repeat("a1", 32), strings.Repeat("b2", 32)
 	coh("coherent", hub, env(signed(t1, "cash_status", `{"scope":"mine"}`, hub)))
-	coh("bearer item", hub, env(transport.Item{ID: "b", Target: t1, Method: "cash_redeem", Params: json.RawMessage(`{"cash_secret":"ab"}`), BillProof: json.RawMessage(fakeBillProof)}))
+	billOnly := func(method, params string) transport.Item {
+		it := signed(t1, method, params, hub)
+		it.ID, it.Proof = "b", nil
+		return it
+	}
+	coh("bearer item", hub, env(billOnly("cash_redeem", `{"cash_secret":"ab"}`)))
+	coh("proofless cash_status on its bill proof", hub, env(billOnly("cash_status", `{}`)))
+	coh("bill proof for other params", hub, env(func() transport.Item {
+		it := billOnly("cash_status", `{}`)
+		it.Params = json.RawMessage(`{"scope":"all"}`)
+		return it
+	}()))
 	coh("bearer item with a proof", hub, env(transport.Item{ID: "b", Target: t1, Method: "cash_redeem", Params: json.RawMessage(`{"cash_secret":"ab"}`), Proof: json.RawMessage(fakeProof), BillProof: json.RawMessage(fakeBillProof)}))
 	coh("mixed hubs", hub, env(signed(t1, "cash_status", `{}`, hub), signed(t2, "cash_status", `{}`, other)))
 	coh("not servable", hub, env(func() transport.Item { it := signed(t1, "mint_cash", `{}`, hub); return it }()))

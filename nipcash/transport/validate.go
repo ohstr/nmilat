@@ -94,22 +94,23 @@ func (e Envelope) Validate(hubXOnly string, now time.Time) error {
 			return fmt.Errorf("%w: item %q calls %q", ErrMethodNotServable, item.ID, item.Method)
 		}
 
-		// A cash-mode item has no proof to check — its secret is the authorization
-		// (NIP-CASH §Bearer Items). There is genuinely nothing to validate here:
-		// no binding to compare, no signature to verify. What CAN still be wrong is
-		// caught above and below — the method must be servable, and Encode has
-		// already required that a proofless item carry a secret at all.
+		// The I8 shapes, as Encode checks them: never both a proof and a
+		// cash_secret; a spend carries one; cash_status and cash_withdraw_quote
+		// carry no secret and, with neither, are served on the bill proof alone
+		// for a cash-mode slice (NIP-CASH §Bearer Items).
 		//
-		// Worth being explicit that this is not a hole. A hub decides whether a bill
-		// is cash-mode from its own records, never from the item, so an
-		// identity-bound bill cannot dodge its proof by omitting one and looking
-		// bearer: the hub simply finds no matching secret and omits the item.
-		if item.IsBearer() {
-			if item.HasProof() {
-				return fmt.Errorf("%w: item %q carries both a cash secret and a proof; "+
-					"a cash-mode item authorizes with its secret alone", ErrEnvelopeMalformed, item.ID)
-			}
-			continue
+		// Worth being explicit that a proofless item is not a hole. A hub decides
+		// whether a bill is cash-mode from its own records, never from the item,
+		// so an identity-bound bill cannot dodge its proof by omitting one and
+		// looking bearer: the hub simply finds no matching secret and omits the
+		// item.
+		if item.IsBearer() && item.HasProof() {
+			return fmt.Errorf("%w: item %q carries both a cash secret and a proof; "+
+				"a cash-mode item authorizes with its secret alone", ErrEnvelopeMalformed, item.ID)
+		}
+		if !BearerShapeOK(item.Method, item.HasProof(), item.IsBearer()) {
+			return fmt.Errorf("%w: item %q has a proof and cash_secret combination %s refuses",
+				ErrEnvelopeMalformed, item.ID, item.Method)
 		}
 
 		// Recomputed from the item's own params rather than taken on trust: the
@@ -118,26 +119,42 @@ func (e Envelope) Validate(hubXOnly string, now time.Time) error {
 		if err != nil {
 			return fmt.Errorf("item %q: %w", item.ID, err)
 		}
-
-		// VerifyItemProof is the hub's own check, run locally against the binding
-		// this item actually implies. Reusing it — rather than re-deriving the
-		// comparisons — is what guarantees local validation and remote acceptance
-		// cannot drift apart.
-		if _, err := VerifyItemProof(item.Proof, ProofBinding{
+		binding := ProofBinding{
 			Target:     item.Target,
 			HubXOnly:   hubXOnly,
 			Method:     item.Method,
 			ParamsHash: hash,
 			Nonce:      e.Nonce,
 			NotAfter:   e.NotAfter,
-		}, now); err != nil {
-			// ErrProofWrongHub here means either a foreign hub or a mixed envelope.
-			// Reported as the mixed-hub error because that is the actionable
-			// diagnosis: the caller assembled items that cannot travel together.
-			if errors.Is(err, ErrProofWrongHub) {
-				return fmt.Errorf("%w: item %q: %v", ErrEnvelopeMixedHubs, item.ID, err)
+		}
+
+		// VerifyItemProof is the hub's own check, run locally against the binding
+		// this item actually implies. Reusing it — rather than re-deriving the
+		// comparisons — is what guarantees local validation and remote acceptance
+		// cannot drift apart.
+		if item.HasProof() {
+			if _, err := VerifyItemProof(item.Proof, binding, now); err != nil {
+				// ErrProofWrongHub here means either a foreign hub or a mixed envelope.
+				// Reported as the mixed-hub error because that is the actionable
+				// diagnosis: the caller assembled items that cannot travel together.
+				if errors.Is(err, ErrProofWrongHub) {
+					return fmt.Errorf("%w: item %q: %v", ErrEnvelopeMixedHubs, item.ID, err)
+				}
+				return fmt.Errorf("item %q: %w", item.ID, err)
 			}
-			return fmt.Errorf("item %q: %w", item.ID, err)
+		}
+
+		// Every item, cash-mode included, carries a bill proof bound to the same
+		// six fields (NIP-CASH §Bill Proofs). Its signer is the bill's connection
+		// key, which only the Hub can match, so only the binding is checked here.
+		if !item.HasBillProof() {
+			return fmt.Errorf("%w: item %q has no bill proof", ErrEnvelopeMalformed, item.ID)
+		}
+		if _, err := VerifyBillProof(item.BillProof, binding, now); err != nil {
+			if errors.Is(err, ErrProofWrongHub) {
+				return fmt.Errorf("%w: item %q: bill proof: %v", ErrEnvelopeMixedHubs, item.ID, err)
+			}
+			return fmt.Errorf("item %q: bill proof: %w", item.ID, err)
 		}
 	}
 	return nil
