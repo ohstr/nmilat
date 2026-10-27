@@ -14,6 +14,9 @@ privacy and performance fixes.
 - Adds the `nip44_message_keys` method to `nipLS` and `nip46/bunker` (server
   and client), and `nipLS.ResultPolicy`, which sees an encrypt or decrypt
   result before it is returned.
+- Adds `nip59.Seal`, `WrapSeal` and `Unwrap`, which take the key as a signer
+  and never open a seal from a sender not asked for. `Prove` and
+  `VerifyProof` show one seal's content to a third party without any key.
 - Adds `WithSearchBatch` and `WithSearchInFlight`: `SearchIndexer` keeps
   several batches enqueued with a `search.Enqueuer` engine and acknowledges
   them in order, only past what was applied. A large relay's search can then
