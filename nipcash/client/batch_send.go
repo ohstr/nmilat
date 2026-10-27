@@ -42,6 +42,12 @@ func (s *BatchSession) deadlineWindow() time.Duration {
 // left (else ErrNotSent wrapping ErrDeadlineTooClose). One outcome per requested
 // item, always; an envelope that got no reply yields OutcomeUnanswered for
 // everything it carried.
+//
+// An envelope the Hub refuses whole with QUOTA_EXCEEDED or BAD_REQUEST ran
+// nothing (NIP-CASH §Chunked Replies). Once per batch, the announcement is then
+// re-read and, when the Hub's limits or inbox changed, the envelope's items are
+// packed again under them, written ahead again with the new deadline and sent
+// in fresh envelopes; otherwise the refusal is each item's outcome.
 func (s *BatchSession) sendBatch(ctx context.Context, builders []itemBuilder, opts sendOptions) ([]ItemOutcome, error) {
 	if len(builders) == 0 {
 		return nil, nil
@@ -57,6 +63,7 @@ func (s *BatchSession) sendBatch(ctx context.Context, builders []itemBuilder, op
 	outcomes := make([]ItemOutcome, 0, len(builders))
 	var incomplete []error
 	remaining := builders
+	repacked := false
 	for i := 0; len(remaining) > 0; i++ {
 		notAfter := time.Now().Add(s.deadlineWindow()).Unix()
 		env, ids, consumed, err := packOne(remaining, s.HubIdentity(), limits, notAfter)
@@ -75,6 +82,17 @@ func (s *BatchSession) sendBatch(ctx context.Context, builders []itemBuilder, op
 		if err != nil && isStalePolicy(err) && !errors.Is(err, ErrNotSent) {
 			if s.Refresh(ctx) == nil {
 				got, accepted, err = s.sendOne(ctx, p, i)
+			}
+		}
+		if !repacked && policyRefused(got) && rebuildable(packedNow) {
+			// The Hub refused the whole envelope for a limit it enforces: nothing
+			// ran, so its items are packed again, once, under the Hub's current
+			// announcement, when that differs from the copy they were packed under.
+			repacked = true
+			if fresh, ok := s.refreshedPolicy(ctx, limits, packedNow, opts); ok {
+				limits = fresh
+				remaining = append(append([]itemBuilder(nil), packedNow...), remaining...)
+				continue
 			}
 		}
 		recordAccepted(ctx, packedNow, accepted, opts)
@@ -528,6 +546,56 @@ func subscribeReplies(ctx context.Context, relayURL *url.URL, replyTo string) (<
 		}
 	}()
 	return out, ready, func() { conn.Close() }, nil
+}
+
+// policyRefused reports a reply that is one envelope-level refusal a stale copy
+// of the Hub's policy explains: QUOTA_EXCEEDED (an envelope over max_bytes,
+// max_items or max_verify_budget, NIP-CASH §Serving an Envelope E5, E6) or
+// BAD_REQUEST (a not_after further ahead than max_request_age, E4). Either
+// way no item ran.
+func policyRefused(got []ItemOutcome) bool {
+	if len(got) == 0 {
+		return false
+	}
+	for _, o := range got {
+		if o.State != OutcomeError || !o.envelopeLevel || o.Error == nil {
+			return false
+		}
+		if o.Error.Code != nipcash.ErrCodeQuotaExceeded && o.Error.Code != nipcash.ErrCodeBadRequest {
+			return false
+		}
+	}
+	return true
+}
+
+// rebuildable reports whether every item can be built again for a new
+// envelope: a single-use item (a circle join, Measure set) cannot.
+func rebuildable(packed []itemBuilder) bool {
+	for _, b := range packed {
+		if b.Measure != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// refreshedPolicy re-reads the announcement after a policy refusal and returns
+// the limits to pack under, ok only when they, or the inbox, changed, are
+// usable, and still admit the envelope's calls carrying a request_id. An
+// unchanged policy would be refused again.
+func (s *BatchSession) refreshedPolicy(ctx context.Context, packedUnder transport.Limits, packed []itemBuilder, opts sendOptions) (transport.Limits, bool) {
+	inbox := s.Inbox()
+	if s.Refresh(ctx) != nil {
+		return packedUnder, false
+	}
+	fresh := s.Limits()
+	if fresh == packedUnder && s.Inbox() == inbox {
+		return packedUnder, false
+	}
+	if fresh.Validate() != nil || s.checkBillCalls(packed, opts) != nil {
+		return packedUnder, false
+	}
+	return fresh, true
 }
 
 // isStalePolicy reports whether a failure suggests the cached announcement is out of
