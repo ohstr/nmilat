@@ -4,15 +4,12 @@
   "nmilat": "github.com/ohstr/nmilat devel",
   "checkedAgainstNmilat": [
     "valid.get_conversation_key",
-    "valid.calc_padded_len",
+    "valid.calc_padded_len (by encryption, up to 65535 bytes)",
     "valid.encrypt_decrypt (conversation key and decrypt)",
-    "invalid.decrypt"
+    "invalid.decrypt",
+    "invalid.encrypt_msg_lengths"
   ],
-  "nmilatDivergences": [
-    "invalid.encrypt_msg_lengths: nmilat encrypts a 65536-byte plaintext; cashkit refuses it as the NIP requires",
-    "invalid.encrypt_msg_lengths: nmilat encrypts a 100000-byte plaintext; cashkit refuses it as the NIP requires",
-    "invalid.encrypt_msg_lengths: nmilat encrypts a 10000000-byte plaintext; cashkit refuses it as the NIP requires"
-  ],
+  "nmilatDivergences": [],
   "v2": {
     "valid": {
       "get_conversation_key": [
