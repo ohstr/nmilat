@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/url"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -224,7 +225,8 @@ func TestT02_03_ReplyOnArrivalRelay(t *testing.T) {
 	}
 }
 
-// T02-04: Drop, Duplicate and Reorder are deterministic.
+// T02-04: Drop, Duplicate and Reorder are deterministic; Duplicate reaches
+// OnEvent listeners twice too.
 func TestT02_04_RelayHooks(t *testing.T) {
 	r := cashtest.NewRelay(t)
 	events := make([]*nip01.Event, 3)
@@ -250,6 +252,13 @@ func TestT02_04_RelayHooks(t *testing.T) {
 	}
 
 	r.Reorder(0)
+	var heardMu sync.Mutex
+	heard := map[string]int{}
+	r.OnEvent(func(_ *cashtest.Relay, ev *nip01.Event) {
+		heardMu.Lock()
+		heard[ev.ID]++
+		heardMu.Unlock()
+	})
 	r.Duplicate(func(ev *nip01.Event) bool { return ev.ID == events[0].ID })
 	r.Drop(func(ev *nip01.Event) bool { return ev.ID == events[1].ID })
 	r.Publish(events[0])
@@ -258,6 +267,31 @@ func TestT02_04_RelayHooks(t *testing.T) {
 	got = sub.take(t, 3)
 	if got[0].ID != events[0].ID || got[1].ID != events[0].ID || got[2].ID != events[2].ID {
 		t.Fatalf("duplicate/drop: got %s %s %s", got[0].Content, got[1].Content, got[2].Content)
+	}
+	// Listeners see a duplicated event twice, a dropped one still once.
+	waitFor := func(cond func() bool) bool {
+		for range 200 {
+			if cond() {
+				return true
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		return false
+	}
+	want := map[string]int{events[0].ID: 2, events[1].ID: 1, events[2].ID: 1}
+	if !waitFor(func() bool {
+		heardMu.Lock()
+		defer heardMu.Unlock()
+		for id, n := range want {
+			if heard[id] != n {
+				return false
+			}
+		}
+		return true
+	}) {
+		heardMu.Lock()
+		defer heardMu.Unlock()
+		t.Fatalf("listeners heard %v, want %v", heard, want)
 	}
 }
 

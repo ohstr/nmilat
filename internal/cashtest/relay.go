@@ -21,7 +21,8 @@ import (
 // kinds 10000-19999), never ephemeral ones (20000-29999), answers REQ with the
 // stored matches then EOSE, and delivers every accepted event to the live
 // subscriptions it matches. The hooks act on that delivery, deterministically:
-// Drop withholds an event from subscribers, Duplicate delivers it twice, Reorder
+// Drop withholds an event from subscribers, Duplicate delivers it twice (to
+// subscribers and OnEvent listeners alike), Reorder
 // holds deliveries and releases them in reverse, RefuseFrom answers a publish
 // OK false.
 type Relay struct {
@@ -76,7 +77,8 @@ func (r *Relay) URL() string { return "ws" + strings.TrimPrefix(r.srv.URL, "http
 // The event is still accepted and still reaches OnEvent listeners.
 func (r *Relay) Drop(f func(*nip01.Event) bool) { r.mu.Lock(); r.drop = f; r.mu.Unlock() }
 
-// Duplicate delivers every event f matches twice to each subscriber.
+// Duplicate delivers every event f matches twice to each subscriber and to each
+// OnEvent listener, as a relay that hands a Hub one request twice would.
 func (r *Relay) Duplicate(f func(*nip01.Event) bool) { r.mu.Lock(); r.duplicate = f; r.mu.Unlock() }
 
 // Reorder holds deliveries until n are held, then releases them newest first.
@@ -130,6 +132,10 @@ func (r *Relay) Publish(ev *nip01.Event) (bool, string) {
 	}
 	listeners := make([]func(*Relay, *nip01.Event), len(r.listeners))
 	copy(listeners, r.listeners)
+	copies := 1
+	if r.duplicate != nil && r.duplicate(ev) {
+		copies = 2
+	}
 	deliveries := r.queueLocked(ev)
 	conns := make([]*relayConn, 0, len(r.conns))
 	for c := range r.conns {
@@ -143,7 +149,9 @@ func (r *Relay) Publish(ev *nip01.Event) (bool, string) {
 		}
 	}
 	for _, f := range listeners {
-		go f(r, ev)
+		for range copies {
+			go f(r, ev)
+		}
 	}
 	return true, ""
 }
