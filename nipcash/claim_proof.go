@@ -318,6 +318,13 @@ func verifySliceAttestation(raw, sliceValue, sliceIA, signer string, iaTrusted f
 		}
 		return v, n
 	}
+	// Each tag the check reads appears once, as nipIC.ParseAttestation
+	// requires: with two, which one counts would be the sender's choice.
+	for _, name := range []string{"d", "p", "platform", "evidence", "expiration"} {
+		if _, n := tag(name); n > 1 {
+			return false, "", unauthorized("attestation %s tag repeated", name)
+		}
+	}
 	if d, _ := tag("d"); d != sliceValue {
 		return false, "", unauthorized("attestation d is not the slice's identity value")
 	}

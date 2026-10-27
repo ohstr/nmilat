@@ -286,6 +286,27 @@ func TestT06_04_ConnectionKeySlice(t *testing.T) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
+	// A repeated d, p or expiration is refused even when its last copy is the
+	// right one; the claim proof names the re-signed attestation, so only the
+	// repeat can fail it.
+	for _, name := range []string{"d", "p", "expiration"} {
+		ev := att.Event.Copy()
+		var first []string
+		for _, tag := range ev.Tags {
+			if tag[0] == name {
+				first = []string{name, map[string]string{"d": strings.Repeat("5", 64), "p": otherPub, "expiration": "1"}[name]}
+			}
+		}
+		ev.Tags = append([][]string{first}, ev.Tags...)
+		_ = ev.Sign(iaPriv)
+		b, _ := json.Marshal(ev)
+		w := want
+		w.Attestation = string(b)
+		proof := f.sign(t, KindClaimProof, now.Unix(), tagsFor(ev.ID), "")
+		if _, err := VerifyClaimProof(proof, w, now); !isCode(err, "UNAUTHORIZED") {
+			t.Errorf("%s repeated: %v", name, err)
+		}
+	}
 	noCK := f.sign(t, KindClaimProof, now.Unix(), append(f.binding.Tags(), []string{"e", att.ID}), "")
 	if _, err := VerifyClaimProof(noCK, want, now); !isCode(err, "UNAUTHORIZED") {
 		t.Errorf("no connection_key: %v", err)
