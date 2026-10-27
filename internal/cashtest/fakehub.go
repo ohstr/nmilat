@@ -317,13 +317,18 @@ func (h *FakeHub) serve(arrival *Relay, ev *nip01.Event) []*nip01.Event {
 			return nil
 		case faultCommitThenDropReply:
 			dropReply = true
-		case faultStallUntil:
-			if !h.waitFor(ctx.Fault.until) {
+		case faultStallUntil, faultStallCommit:
+			if !h.stall(ctx) {
 				return nil
 			}
-			ctx.Now = h.Clock.Now()
-			if ctx.Now.Unix() > env.NotAfter {
-				return nil // a commit past not_after is never answered
+			now = h.Clock.Now()
+			ctx.Now = now
+			if !nipcash.CommitAllowed(env.NotAfter, now.Unix()) {
+				// A call that reaches its commit after its deadline is refused,
+				// finally, and nothing is committed (NIP-CASH §Deadlines).
+				results = append(results, transport.Result{ID: item.ID, Error: &transport.ResultError{
+					Code: nipcash.ErrCodeBadRequest, Message: "the call reached its commit past its deadline"}})
+				continue
 			}
 		case faultInternal, faultBreakSigner:
 			results = append(results, transport.Result{ID: item.ID,
@@ -350,6 +355,23 @@ func (h *FakeHub) serve(arrival *Relay, ev *nip01.Event) []*nip01.Event {
 		return nil
 	}
 	return reply(transport.ResponseEnvelope{Results: results})
+}
+
+// stall holds a commit as c.Fault says: until the Hub's clock reaches a
+// FaultStallUntil's time, or while the fault hook still answers
+// FaultStallCommit. It reports false when the test ended first.
+func (h *FakeHub) stall(c ItemCtx) bool {
+	if c.Fault.kind == faultStallUntil {
+		return h.waitFor(c.Fault.until)
+	}
+	for h.Fault != nil && h.Fault(c).Is(FaultStallCommit) {
+		select {
+		case <-h.closed:
+			return false
+		case <-time.After(2 * time.Millisecond):
+		}
+	}
+	return true
 }
 
 // waitFor blocks until the clock reaches t, or the test ends.

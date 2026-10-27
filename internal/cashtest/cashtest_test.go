@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/url"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -86,7 +87,8 @@ func answerAll(c cashtest.ItemCtx) *transport.Result {
 
 // T02-02: the ManualClock drives the Hub's decisions: an envelope is served before
 // its not_after and dropped once the clock passes it; a stalled commit resumes
-// only when the clock reaches its time.
+// only when the clock reaches its time, and is refused BAD_REQUEST when that is
+// past not_after.
 func TestT02_02_ManualClockDrivesDecisions(t *testing.T) {
 	clock := cashtest.NewManualClock(time.Now())
 	h := cashtest.NewFakeHub(t, cashtest.WithClock(clock), cashtest.WithDecide(answerAll))
@@ -119,13 +121,72 @@ func TestT02_02_ManualClockDrivesDecisions(t *testing.T) {
 		t.Fatal("the stall did not resume when the clock reached it")
 	}
 
+	// A commit resumed past not_after is refused BAD_REQUEST, nothing committed.
 	r = request(t, h, clock.Now().Add(10*time.Second))
 	until = clock.Now().Add(time.Minute)
+	committed := len(h.Committed())
 	go func() { done <- h.Serve(r.ev) }()
 	time.Sleep(20 * time.Millisecond)
 	clock.Advance(2 * time.Minute)
-	if got := <-done; got != nil {
-		t.Fatal("a commit resumed past not_after was answered")
+	wantStalledRefused(t, r, <-done)
+	if len(h.Committed()) != committed {
+		t.Fatal("a commit resumed past not_after was committed")
+	}
+}
+
+// wantStalledRefused checks a reply of one chunk answering item 1 BAD_REQUEST.
+func wantStalledRefused(t *testing.T, r sent, got []*nip01.Event) {
+	t.Helper()
+	if len(got) != 1 {
+		t.Fatalf("%d chunks for a commit resumed past not_after, want 1", len(got))
+	}
+	c := open(t, r, got[0])
+	if len(c.Results) != 1 || c.Results[0].Error == nil || c.Results[0].Error.Code != nipcash.ErrCodeBadRequest {
+		t.Fatalf("a commit resumed past not_after answered %+v, want BAD_REQUEST", c.Results)
+	}
+}
+
+// FaultStallCommit holds a commit while the hook answers it; released before
+// not_after it commits, released after it is refused BAD_REQUEST.
+func TestFaultStallCommit(t *testing.T) {
+	clock := cashtest.NewManualClock(time.Now())
+	h := cashtest.NewFakeHub(t, cashtest.WithClock(clock), cashtest.WithDecide(answerAll))
+	var stalled atomic.Bool
+	h.Fault = func(cashtest.ItemCtx) cashtest.Fault {
+		if stalled.Load() {
+			return cashtest.FaultStallCommit
+		}
+		return cashtest.FaultNone
+	}
+	serve := func(r sent) chan []*nip01.Event {
+		done := make(chan []*nip01.Event, 1)
+		go func() { done <- h.Serve(r.ev) }()
+		select {
+		case <-done:
+			t.Fatal("a stalled commit returned before it was released")
+		case <-time.After(50 * time.Millisecond):
+		}
+		return done
+	}
+
+	stalled.Store(true)
+	done := serve(request(t, h, clock.Now().Add(time.Minute)))
+	stalled.Store(false)
+	if got := <-done; len(got) != 1 || len(h.Committed()) != 1 {
+		t.Fatalf("released in time: %d chunks, %d committed", len(got), len(h.Committed()))
+	}
+
+	stalled.Store(true)
+	r := request(t, h, clock.Now().Add(time.Minute))
+	done = serve(r)
+	clock.Advance(2 * time.Minute)
+	stalled.Store(false)
+	wantStalledRefused(t, r, <-done)
+	if len(h.Committed()) != 1 {
+		t.Fatal("a commit released past not_after was committed")
+	}
+	if !cashtest.FaultStallCommit.Is(cashtest.FaultStallCommit) || cashtest.FaultStallCommit.String() != "stall commit" {
+		t.Fatal("FaultStallCommit's identity")
 	}
 }
 

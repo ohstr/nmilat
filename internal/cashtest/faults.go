@@ -35,6 +35,7 @@ const (
 	faultHoldSign
 	faultCrashAfterSign
 	faultHoldBroadcast
+	faultStallCommit
 )
 
 // Fault is what goes wrong while the fake Hub serves one item.
@@ -73,10 +74,17 @@ var (
 	FaultCrashAfterSign = Fault{kind: faultCrashAfterSign}
 	// FaultHoldBroadcast holds every payout broadcast until cleared.
 	FaultHoldBroadcast = Fault{kind: faultHoldBroadcast}
+	// FaultStallCommit holds the item's commit for as long as the fault hook
+	// keeps answering it for that item. A commit that resumes past the
+	// envelope's not_after on the Hub's clock is refused BAD_REQUEST.
+	FaultStallCommit = Fault{kind: faultStallCommit}
 )
 
 // FaultStallUntil holds the item's commit until the Hub's clock reaches t. A
-// commit that resumes past the envelope's not_after is never answered.
+// commit that resumes past the envelope's not_after is refused BAD_REQUEST,
+// nothing committed (NIP-CASH: a call that reaches its commit after its
+// deadline is refused BAD_REQUEST, finally); the envelope's other items are
+// still served.
 func FaultStallUntil(t time.Time) Fault { return Fault{kind: faultStallUntil, until: t} }
 
 // Is reports whether f is the same fault as g, ignoring a stall's time.
@@ -106,6 +114,8 @@ func (f Fault) String() string {
 		return "crash after sign"
 	case faultHoldBroadcast:
 		return "hold broadcast"
+	case faultStallCommit:
+		return "stall commit"
 	default:
 		return "unknown fault"
 	}
