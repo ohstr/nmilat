@@ -226,9 +226,13 @@ func TestOrder_EndToEnd(t *testing.T) {
 	if lo, _, err := c.Lookup(ctx, forged); err != nil || lo.Code != nipcash.ErrCodeUnauthorized {
 		t.Errorf("forged lookup: %+v %v", lo, err)
 	}
-	// An id the Hub never saw is unknown.
+	// An id the Hub never saw is pending until its deadline, then unknown.
 	unknown := pc2
 	unknown.RequestID, _ = nipcash.NewRequestID()
+	if lo, _, err := c.Lookup(ctx, unknown); err != nil || lo.Status != nipcash.LookupPending {
+		t.Errorf("unknown lookup before its deadline: %+v %v", lo, err)
+	}
+	unknown.Deadline = book.Now().Unix() - 1
 	if lo, _, err := c.Lookup(ctx, unknown); err != nil || lo.Status != nipcash.LookupUnknown {
 		t.Errorf("unknown lookup: %+v %v", lo, err)
 	}
