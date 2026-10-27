@@ -283,6 +283,7 @@ func buildListing() (any, error) {
 	l2 := must(listing.ParseListing(l2ev, mainnet))
 	alt := r(k1, func(e *nip01.Event) { e.Content = "another text" })
 	lalt := must(listing.ParseListing(&alt, mainnet))
+	f.Events = append(f.Events, listingEventKAT{"", alt, "K-LIST-1 with other content, same created_at (K-LVER-1)"})
 	ver := func(id, name string, at int64, currentAt int64, ls ...*listing.Listing) {
 		b := listing.NewVersionBook()
 		c := listingVersion{ID: id, Name: name, CurrentAt: currentAt}
@@ -313,6 +314,7 @@ func buildListing() (any, error) {
 	vb("K-OPS-1 with K-LIST-1: verified", l1, ops)
 	vb("an 11191 without the a: not verified", l1, signedAtV(listing.NewOperatorOffers(nil, []listing.Ref{{Pubkey: connIdentity, Relay: connRelay}}), lCreated, connKey2))
 	otherP := r(k1, func(e *nip01.Event) { lSetTag(e, "p", connPubkey) })
+	f.Events = append(f.Events, listingEventKAT{"", otherP, "K-LIST-1 whose p names another key (operatorVerified)"})
 	vb("K-LIST-1's p naming another key: not verified", must(listing.ParseListing(&otherP, mainnet)), ops)
 	_ = opsP
 
@@ -369,6 +371,7 @@ func buildListing() (any, error) {
 		return nil, err
 	}
 	cl := must(listing.ParseListing(cev, mainnet))
+	f.Events = append(f.Events, listingEventKAT{"", *cev, "a circle listing (tap)"})
 	ci := func(identity, accepting string, available int) string {
 		return `{"network":"mainnet","chain":"bitcoin","methods":["get_info"],"circle_wallet":{"available_millis":` + fmt.Sprint(available) +
 			`,"max_exp_secs":0,"fees_ppm":0,"circle_policy":"allowlist","identity":"` + identity + `","accepting":` + accepting + `}}`

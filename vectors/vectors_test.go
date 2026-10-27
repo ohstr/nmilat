@@ -183,3 +183,50 @@ func matches(m map[string]any, conds string) bool {
 func k(id, want string, steps ...string) kat {
 	return kat{id: id, path: fmt.Sprint(steps), find: at(steps...), want: want}
 }
+
+// Every listing id listing.json refers to is the id of an event the file
+// carries, so a reader can rebuild each case from the file alone.
+func TestListingJSON_ReferencedEventsPresent(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "testdata", "vectors", "listing.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f struct {
+		Events []struct {
+			Event struct{ ID string } `json:"event"`
+		} `json:"events"`
+		Versions []struct {
+			Offers  []string `json:"offers"`
+			Current string   `json:"current"`
+		} `json:"versions"`
+		Operator []struct {
+			Listing string `json:"listingId"`
+		} `json:"operatorVerified"`
+		Tap []struct {
+			Listing string `json:"listing"`
+		} `json:"tap"`
+	}
+	if err := json.Unmarshal(raw, &f); err != nil {
+		t.Fatal(err)
+	}
+	have := map[string]bool{}
+	for _, e := range f.Events {
+		have[e.Event.ID] = true
+	}
+	var refs []string
+	for _, v := range f.Versions {
+		refs = append(refs, v.Offers...)
+		refs = append(refs, v.Current)
+	}
+	for _, o := range f.Operator {
+		refs = append(refs, o.Listing)
+	}
+	for _, tp := range f.Tap {
+		refs = append(refs, tp.Listing)
+	}
+	for _, id := range refs {
+		if id != "" && !have[id] {
+			t.Errorf("listing.json refers to %s, which is not among its events", id)
+		}
+	}
+}
