@@ -606,6 +606,10 @@ func TestT22_13_SanitizeText(t *testing.T) {
 			t.Errorf("SanitizeText(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
+	// Control characters: NUL, ESC (a CSI sequence's introducer) and C1 CSI.
+	if got := SanitizeText("a\x00b\x1b[31mc\u009bd", MaxTitle); got != "ab[31mcd" {
+		t.Errorf("controls = %q", got)
+	}
 	// Combining sequences: 41 clusters of e + U+0301 → 40, never cut inside one.
 	comb := strings.Repeat("é", 41)
 	if got := SanitizeText(comb, MaxTitle); got != strings.Repeat("é", 40) {
