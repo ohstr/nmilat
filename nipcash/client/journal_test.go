@@ -16,11 +16,14 @@ type testJournal struct {
 	order    []string
 	derived  map[string]int64
 	accepted map[string][]string
+	parents  map[string]string
+	writes   map[string]int
 	failNext error
 }
 
 func newTestJournal() *testJournal {
-	return &testJournal{calls: map[string][]byte{}, derived: map[string]int64{}, accepted: map[string][]string{}}
+	return &testJournal{calls: map[string][]byte{}, derived: map[string]int64{}, accepted: map[string][]string{},
+		parents: map[string]string{}, writes: map[string]int{}}
 }
 
 func (j *testJournal) WriteAhead(_ context.Context, calls []nipcash.PendingCall) error {
@@ -36,6 +39,7 @@ func (j *testJournal) WriteAhead(_ context.Context, calls []nipcash.PendingCall)
 			return err
 		}
 		j.calls[pc.RequestID] = raw
+		j.writes[pc.RequestID]++
 		j.order = append(j.order, pc.RequestID)
 	}
 	for _, pc := range calls {
@@ -53,6 +57,16 @@ func (j *testJournal) RecordDerived(_ context.Context, id string, keepUntil int6
 	j.derived[id] = keepUntil
 	return nil
 }
+
+func (j *testJournal) RecordDerivedFrom(_ context.Context, id, parent string, keepUntil int64) error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.derived[id], j.parents[id] = keepUntil, parent
+	return nil
+}
+
+// plainJournal hides testJournal's optional extensions.
+type plainJournal struct{ Journal }
 
 func (j *testJournal) DerivedPlaced(_ context.Context, id string) (bool, error) {
 	j.mu.Lock()

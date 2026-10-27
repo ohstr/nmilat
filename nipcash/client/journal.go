@@ -20,6 +20,13 @@ type Journal interface {
 	DerivedPlaced(ctx context.Context, id string) (bool, error)
 }
 
+// DerivedParentRecorder is an optional Journal extension: when the Journal
+// implements it, Replace calls RecordDerivedFrom, with the replaced call's
+// request_id as parent, in place of RecordDerived.
+type DerivedParentRecorder interface {
+	RecordDerivedFrom(ctx context.Context, id, parent string, keepUntil int64) error
+}
+
 // AcceptedRecorder is an optional Journal extension: told, after publish, which
 // relays accepted a call, so a later process can watch for its notices there. A
 // failure is reported and never fails the call.

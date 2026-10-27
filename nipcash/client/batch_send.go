@@ -144,7 +144,7 @@ func writeAhead(ctx context.Context, packed []itemBuilder, deadline int64, opts 
 		if b.Pending == nil {
 			continue
 		}
-		pc := b.Pending(deadline)
+		pc := asReplacement(ctx, b.Pending(deadline))
 		pc.Deadline, pc.Device = deadline, opts.device
 		calls = append(calls, pc)
 		byID[b.ID] = &calls[len(calls)-1]

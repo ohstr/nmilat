@@ -73,16 +73,19 @@ func TestReplace(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	t.Run("sends under the derived id, written ahead first", func(t *testing.T) {
+	t.Run("sends under the derived id, recording its parent", func(t *testing.T) {
 		j := newTestJournal()
 		var sent nipcash.PendingCall
 		act, err := Replace(ctx, pc, j, ReplaceOptions{}, func(_ context.Context, next nipcash.PendingCall) error {
-			if _, ok := j.call(next.RequestID); !ok {
-				t.Error("sent before the derived call was written ahead")
+			if _, ok := j.call(next.RequestID); ok {
+				t.Error("Replace wrote the derived call itself; the send path writes it")
 			}
 			sent = next
 			return nil
 		})
+		if j.parents[derived] != testRequestID {
+			t.Errorf("parent recorded %q, want %q", j.parents[derived], testRequestID)
+		}
 		if err != nil || act.Kind != ActionWait {
 			t.Fatalf("Replace = %+v, %v", act, err)
 		}
@@ -145,3 +148,44 @@ func TestReplace(t *testing.T) {
 }
 
 func nowForTest() time.Time { return time.Unix(1_900_000_000, 0) }
+
+// A re-placement through the SDK send path is written ahead exactly once, with
+// its exact deadline, DerivedFrom and Attempt; a Journal without the parent
+// extension gets RecordDerived.
+func TestReplace_WrittenOnceThroughTheSendPath(t *testing.T) {
+	hub := newTestHub(t, answerTransfer)
+	w := newWATransfer(t, hub)
+	ctx, cancel := e2eContext(t)
+	defer cancel()
+	tj := newTestJournal()
+	j := plainJournal{tj}
+
+	first := w.item
+	first.Params.RequestID = testRequestID
+	out, err := w.s.TransferMany(ctx, []BatchTransfer{first}, j, "d")
+	if err != nil || len(out) != 1 {
+		t.Fatalf("TransferMany: %v", err)
+	}
+	pc, _ := tj.call(testRequestID)
+	act, err := Replace(ctx, pc, j, ReplaceOptions{}, func(ctx context.Context, next nipcash.PendingCall) error {
+		again := w.item
+		again.Params.RequestID = next.RequestID
+		_, err := w.s.TransferMany(ctx, []BatchTransfer{again}, j, "d")
+		return err
+	})
+	if err != nil || act.Kind != ActionWait {
+		t.Fatalf("Replace = %+v, %v", act, err)
+	}
+	derived, _ := nipcash.DerivedRequestID(testRequestID)
+	if n := tj.writes[derived]; n != 1 {
+		t.Fatalf("derived call written %d times, want once", n)
+	}
+	got, _ := tj.call(derived)
+	envs := hub.envelopes()
+	if got.DerivedFrom != testRequestID || got.Attempt != 1 || got.Deadline != envs[len(envs)-1].NotAfter {
+		t.Errorf("derived call %+v (envelope not_after %d)", got, envs[len(envs)-1].NotAfter)
+	}
+	if _, ok := tj.derived[derived]; !ok || tj.parents[derived] != "" {
+		t.Errorf("RecordDerived not used for a plain journal: %v %q", tj.derived, tj.parents[derived])
+	}
+}

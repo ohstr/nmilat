@@ -127,10 +127,34 @@ type ReplaceOptions struct {
 	MaxAttempts int
 }
 
+type replacementKey struct{}
+
+// withReplacement marks ctx as carrying the re-placement of a call.
+func withReplacement(ctx context.Context, next nipcash.PendingCall) context.Context {
+	return context.WithValue(ctx, replacementKey{}, next)
+}
+
+// asReplacement completes a call about to be written ahead with what Replace
+// knows of it, when ctx carries the re-placement of the same request_id.
+func asReplacement(ctx context.Context, pc nipcash.PendingCall) nipcash.PendingCall {
+	next, ok := ctx.Value(replacementKey{}).(nipcash.PendingCall)
+	if !ok || next.RequestID != pc.RequestID {
+		return pc
+	}
+	pc.DerivedFrom, pc.Attempt = next.DerivedFrom, next.Attempt
+	if pc.Notify == "" {
+		pc.Notify = next.Notify
+	}
+	return pc
+}
+
 // Replace re-places a call after an unknown lookup: under its derived id, never
 // a fresh one, and never twice (a derived id already placed or written ahead
-// closes the call instead). It writes the derived call ahead, then sends it
-// through send, which builds fresh proofs and a new deadline.
+// closes the call instead). It records the derived id, then sends the derived
+// call through send, which must go through an SDK entry point taking a
+// Journal (CashTransfer, TransferMany, HubClient.MintCash, ...) with the ctx it
+// is given: that path writes the call ahead exactly once, with its exact
+// deadline, DerivedFrom and Attempt, and builds fresh proofs.
 func Replace(ctx context.Context, pc nipcash.PendingCall, j Journal, o ReplaceOptions, send func(context.Context, nipcash.PendingCall) error) (Action, error) {
 	if j == nil {
 		return Action{}, ErrNoJournal
@@ -172,15 +196,19 @@ func Replace(ctx context.Context, pc nipcash.PendingCall, j Journal, o ReplaceOp
 	}
 	h := max64(pc.MaxRequestAge, nipcash.MinMaxRequestAge)
 	next.Deadline = time.Now().Unix() + nipcash.DeadlineWindow(h)
-	if err := j.RecordDerived(ctx, id, next.Deadline+h); err != nil {
+	keepUntil := next.Deadline + h
+	if r, ok := j.(DerivedParentRecorder); ok {
+		err = r.RecordDerivedFrom(ctx, id, pc.RequestID, keepUntil)
+	} else {
+		err = j.RecordDerived(ctx, id, keepUntil)
+	}
+	if err != nil {
 		return Action{}, fmt.Errorf("nipcash/client: record derived id: %w", err)
 	}
-	// Written ahead before sending; the send path writes it again with the
-	// exact deadline it is packed under.
-	if err := j.WriteAhead(ctx, []nipcash.PendingCall{next}); err != nil {
-		return Action{}, fmt.Errorf("%w: write ahead: %v", ErrNotSent, err)
-	}
-	if err := send(ctx, next); err != nil {
+	// The derived call is written ahead once, by the send path, with the exact
+	// deadline it is packed under; the context carries what the send path
+	// cannot rebuild from the params (DerivedFrom, Attempt, a fresh notify).
+	if err := send(withReplacement(ctx, next), next); err != nil {
 		return Action{}, err
 	}
 	return Action{Kind: ActionWait}, nil
