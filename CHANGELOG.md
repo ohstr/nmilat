@@ -13,10 +13,12 @@ privacy and performance fixes.
   byte from an attestation for other platforms (`ConnectionKeyFromAttested`,
   `nipcash.ConnectionKeyFromAttestation`, `ConnectionKeyFromNConnection`),
   and the NIP-IC verification model (`nipIC.Evaluate`).
+  ([#185](https://github.com/ohstr/nmilat/pull/185))
 - Adds `nipIC.NewIdentityConnection`, which links a user's `35521` to one or
   more attestations by reference, `auth_type` support for attestations
   verified by other means, and `Attestation.Reverify` for cross-IA
   re-verification of `public_post` evidence.
+  ([#185](https://github.com/ohstr/nmilat/pull/185))
 - Adds the `cash-mint:v1` and `cash-zap:v1` mint signatures with
   `relay_hash` (`MintPayloadV1`, `ZapPayloadV1`, `ProvenancePayload`,
   `VerifyZapProvenance`, `MinterXOnly`), `nipcash.SignToken`, which refuses
@@ -283,10 +285,12 @@ privacy and performance fixes.
   `nipcash.ConnectionKey` to return an error and refuse non-canonical input
   and platforms without a canonical form, and `BySigningConnectionKey` to
   take the attestation only.
+  ([#185](https://github.com/ohstr/nmilat/pull/185))
 - Changes `nipIC.NewAttestation` to write a 90-day `expiration` unless the IA
   asks for none, and to refuse an invalid platform name or a non-canonical
   user id; `ParseAttestation`, `ParseIdentityConnection` and the
   `nconnection` codec refuse duplicate, malformed or missing fields.
+  ([#185](https://github.com/ohstr/nmilat/pull/185))
 - Changes `nipcash.Encode` to refuse unsigned tokens and empty, blank or
   non-ASCII relay hints, and the bech32 credential decoders to refuse a
   string that mixes upper and lower case (`ErrMixedCase`); an all-uppercase
