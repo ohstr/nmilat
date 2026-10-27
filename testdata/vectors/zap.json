@@ -1,5 +1,5 @@
 {
-  "description": "NIP-CZ Cash Zaps (kind 9522, cash-zap:v1 tokens): the recipient's 10522, the strict tag rules (K-CZ-1..6) and rules 1-8 of the client verification, and counting.",
+  "description": "NIP-CZ Cash Zaps (kind 9522, cash-zap:v1 tokens): the recipient's 10522, the strict tag rules (K-CZ-1..6) and rules 1-8 of the client verification (a scheme-1 mint bill carries no zap payload; there is no legacy payload), and counting.",
   "source": "nipCZ/{event,verify,count,info}.go; nipCZ/event_test.go, verify_test.go, count_test.go, info_test.go (K-CZ-1..6)",
   "nmilat": "github.com/ohstr/nmilat devel",
   "keys": {
@@ -2158,6 +2158,309 @@
       "zapSigned": true,
       "countable": false,
       "reason": "rule 8: the Minter is not trusted",
+      "valid": true
+    },
+    {
+      "name": "amount tag differs from the token's",
+      "event": {
+        "id": "932fa494ba54bf2e6aa9ef4b429d665541bcef64f95cf9577e703b83e5d42f39",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "amount",
+            "20000"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2pyrwg097a2sp6t07m5jrjcg33al5d02ln6nkh6eqdf2m6rfpjtw7q62laeyut8z86qcy4p9fw73mf8jq6k2a6gcx2hfv0rfkut8wslkc7qcyqqqqqqqqqq5sgpqqsyduwxdg"
+          ],
+          [
+            "w",
+            "abababababababababababababababababababababababababababababababab"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ],
+          [
+            "expires_at",
+            "0"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "93f06e3249e65c31bba0e1a30afea0fd51cc41e9bcd7b37c9ec00f1b05d7b6f6332fc9bd0a24feb3d8a949f3c46fadb234b65a0523933d43fd0b29c95a7d2eac"
+      },
+      "withInfo": true,
+      "trustedMinters": [],
+      "rules": [
+        {
+          "n": 1,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 2,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 3,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 4,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 5,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 6,
+          "ok": false,
+          "skipped": false,
+          "reason": "the token's attested amount (TLV 6) is not amount"
+        },
+        {
+          "n": 7,
+          "ok": false,
+          "skipped": true,
+          "reason": "rule 6 failed"
+        },
+        {
+          "n": 8,
+          "ok": false,
+          "skipped": true,
+          "reason": "rule 6 failed"
+        }
+      ],
+      "minter": "",
+      "zapSigned": false,
+      "countable": false,
+      "reason": "invalid",
+      "valid": false
+    },
+    {
+      "name": "chain tag differs from the token's prefix",
+      "event": {
+        "id": "1a2e87ad017239503b13ef08108fb582de330a4221d93cb689bac46ea2ed33c0",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "amount",
+            "21000"
+          ],
+          [
+            "chain",
+            "flokicoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2pyrwg097a2sp6t07m5jrjcg33al5d02ln6nkh6eqdf2m6rfpjtw7q62laeyut8z86qcy4p9fw73mf8jq6k2a6gcx2hfv0rfkut8wslkc7qcyqqqqqqqqqq5sgpqqsyduwxdg"
+          ],
+          [
+            "w",
+            "abababababababababababababababababababababababababababababababab"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ],
+          [
+            "expires_at",
+            "0"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "0ba79a0b0f9a204270540778fc0d3c37d38e09bd94fc2886e07de5667db322ea22bcf394d8db0786ccd5a5f0b61925fab9ff7c0ddb76cb875300499b8805a490"
+      },
+      "withInfo": true,
+      "trustedMinters": [],
+      "rules": [
+        {
+          "n": 1,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 2,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 3,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 4,
+          "ok": false,
+          "skipped": false,
+          "reason": "token prefix satscash is chain bitcoin, not flokicoin"
+        },
+        {
+          "n": 5,
+          "ok": false,
+          "skipped": true,
+          "reason": "rule 4 failed"
+        },
+        {
+          "n": 6,
+          "ok": false,
+          "skipped": true,
+          "reason": "rule 4 failed"
+        },
+        {
+          "n": 7,
+          "ok": false,
+          "skipped": true,
+          "reason": "rule 4 failed"
+        },
+        {
+          "n": 8,
+          "ok": false,
+          "skipped": true,
+          "reason": "rule 4 failed"
+        }
+      ],
+      "minter": "",
+      "zapSigned": false,
+      "countable": false,
+      "reason": "invalid",
+      "valid": false
+    },
+    {
+      "name": "a mint bill (scheme 1), no zap payload",
+      "event": {
+        "id": "48a26e58b0e35e63a4c3ffe6752c63ccb7415e876ff0c2685933706c25230304",
+        "pubkey": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "created_at": 1720000060,
+        "kind": 9522,
+        "tags": [
+          [
+            "e",
+            "24eea2cd3cb21023dd7145faf8c73a85216a72d5f12f53a65eafbf7a3adc8c6b"
+          ],
+          [
+            "k",
+            "1"
+          ],
+          [
+            "p",
+            "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4"
+          ],
+          [
+            "amount",
+            "21000"
+          ],
+          [
+            "chain",
+            "bitcoin"
+          ],
+          [
+            "cash",
+            "satscash1qqs2h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2at4w46h2cpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgzyr8vankwem8vankwem8vankwem8vankwem8vankwem8vankwem8vup2prau4khjtlundkpfdf2d58uvsxcqfuf40wznasc97kf3rkzanuhjm7krcg04p3ddqhp0xthn09sj5udfxgjp0qnzcnvylndhjm7akew59qcyqqqqqqqqqq5sgpqqszkd3s2m"
+          ],
+          [
+            "w",
+            "abababababababababababababababababababababababababababababababab"
+          ],
+          [
+            "issued_at",
+            "1720000060"
+          ],
+          [
+            "expires_at",
+            "0"
+          ]
+        ],
+        "content": "Great post!",
+        "sig": "cfeb91b4e83ecb98b73f4004ce93df23ce7ba0a5af1e3ee34f1b3d3f2445491cb1aa3884f318dcc9ba950455fb17e5e0b15d1fb56cfe8952197e83656b22c9ac"
+      },
+      "withInfo": true,
+      "trustedMinters": [],
+      "rules": [
+        {
+          "n": 1,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 2,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 3,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 4,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 5,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 6,
+          "ok": true,
+          "skipped": false
+        },
+        {
+          "n": 7,
+          "ok": false,
+          "skipped": false,
+          "reason": "the token carries no zap signature (TLV 8 is not 2)"
+        },
+        {
+          "n": 8,
+          "ok": true,
+          "skipped": false
+        }
+      ],
+      "minter": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+      "zapSigned": false,
+      "countable": false,
+      "reason": "rule 7: the token carries no zap signature (TLV 8 is not 2)",
       "valid": true
     },
     {

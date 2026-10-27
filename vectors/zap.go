@@ -91,7 +91,7 @@ func buildZap() (any, error) {
 	recip := must(utils.GetPublicKey(zRecipKey))
 	sender := must(utils.GetPublicKey(zSenderKey))
 	f := zapFile{header: newHeader(
-		"NIP-CZ Cash Zaps (kind 9522, cash-zap:v1 tokens): the recipient's 10522, the strict tag rules (K-CZ-1..6) and rules 1-8 of the client verification, and counting.",
+		"NIP-CZ Cash Zaps (kind 9522, cash-zap:v1 tokens): the recipient's 10522, the strict tag rules (K-CZ-1..6) and rules 1-8 of the client verification (a scheme-1 mint bill carries no zap payload; there is no legacy payload), and counting.",
 		"nipCZ/{event,verify,count,info}.go; nipCZ/event_test.go, verify_test.go, count_test.go, info_test.go (K-CZ-1..6)",
 	), Keys: map[string]string{"minter": minter, "minterSecret": zMinterKey, "recipient": recip, "recipientSecret": zRecipKey, "sender": sender, "senderSecret": zSenderKey}}
 
@@ -251,6 +251,22 @@ func buildZap() (any, error) {
 	resigned := signed(zOtherKey, nipCZ.KindCashZap, 1720000060, "Great post!", tags()...)
 	verify("re-signed by another sender: another key recovered (rule 8)", resigned, true)
 	exp := token(nipcash.ZapContext{Recipient: recip, Sender: sender, ZapTarget: note.ID, IssuedAt: 1720000060, ExpiresAt: 1720000060 + 3600}, 21000, strings.Repeat("ac", 32))
+	verify("amount tag differs from the token's", zap(set("amount", "20000")), true)
+	verify("chain tag differs from the token's prefix", zap(set("chain", "flokicoin")), true)
+	mint := func() string {
+		sign, err := nipcash.LocalMintSigner(zMinterKey, "satscash")
+		if err != nil {
+			panic(err)
+		}
+		amt := uint64(21000)
+		tok := nipcash.Token{HRP: "satscash", WalletPubkey: wallet, Secret: strings.Repeat("ce", 32), RelayURLs: []string{specRelay1}, AttestedAmountMillis: &amt}
+		tok, err = nipcash.SignToken(tok, nipcash.SchemeMintV1, nil, minter, sign)
+		if err != nil {
+			panic(err)
+		}
+		return must(nipcash.Encode(tok))
+	}()
+	verify("a mint bill (scheme 1), no zap payload", zap(set("cash", mint)), true)
 	verify("an expiring zap bill", zap(func(t [][]string) [][]string {
 		t = set("cash", exp)(t)
 		t = set("w", strings.Repeat("ac", 32))(t)
