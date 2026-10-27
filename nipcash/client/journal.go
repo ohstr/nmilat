@@ -46,7 +46,8 @@ var (
 	// ErrDuplicateRequestID is two items of one batch carrying one request_id.
 	ErrDuplicateRequestID = errors.New("nipcash/client: two calls in one batch share a request_id")
 	// ErrReplaceNeedsConfirmation is a mint or order re-placed without its user's
-	// explicit confirmation.
+	// explicit confirmation, or a withdrawal re-placed with a new quote, or after
+	// REQUEST_REUSED, without it.
 	ErrReplaceNeedsConfirmation = errors.New("nipcash/client: re-placing this call needs the user's explicit confirmation")
 	// ErrCashHubConnection is a cashhub1 string given where a bill was expected.
 	ErrCashHubConnection = errors.New("nipcash/client: this is a Cash Hub connection, not a bill; use ConnectCashHub")
@@ -60,7 +61,8 @@ var (
 )
 
 // FinalError is a BAD_REQUEST answered to a call carrying a request_id: the call
-// never committed, and the caller closes it.
+// never committed, and the caller closes it. Detail is nipcash.ParseDetail of
+// the answer's detail ("" for none or an unknown one).
 type FinalError struct{ Method, Code, Message, Detail string }
 
 func (e *FinalError) Error() string {
@@ -70,7 +72,8 @@ func (e *FinalError) Error() string {
 // IndeterminateError is any other answer to a call carrying a request_id — a
 // code other than BAD_REQUEST, an omission, an unanswered or conflicting item,
 // an undecodable result, a timeout after publish. The call stays pending and is
-// looked up (NIP-CASH §Errors: a client MUST NOT read it as a failure).
+// looked up (NIP-CASH §Errors: a client MUST NOT read it as a failure). Detail
+// is nipcash.ParseDetail of the answer's detail.
 type IndeterminateError struct {
 	Call          nipcash.PendingCall
 	Code, Message string
@@ -79,10 +82,12 @@ type IndeterminateError struct {
 }
 
 func (e *IndeterminateError) Error() string {
+	// The request_id stays out of the text: it is as private as the call
+	// (NIP-CASH §Finality). Call carries it.
 	if e.Code != "" {
-		return fmt.Sprintf("nipcash/client: %s %s is pending (answered %s: %s); look it up", e.Call.Method, e.Call.RequestID, e.Code, e.Message)
+		return fmt.Sprintf("nipcash/client: %s is pending (answered %s: %s); look it up", e.Call.Method, e.Code, e.Message)
 	}
-	return fmt.Sprintf("nipcash/client: %s %s is pending; look it up: %v", e.Call.Method, e.Call.RequestID, e.Cause)
+	return fmt.Sprintf("nipcash/client: %s is pending; look it up: %v", e.Call.Method, e.Cause)
 }
 
 func (e *IndeterminateError) Unwrap() error { return e.Cause }
@@ -116,16 +121,16 @@ func callOutcome(o ItemOutcome, pc *nipcash.PendingCall, sendErr error) error {
 		return &nipcash.BillGone{Method: pc.Method, Tombstone: *o.Gone}
 	}
 	if o.State == OutcomeError && o.Error != nil && o.Gone == nil && !o.Undecodable {
-		code := o.Error.Code
+		code, detail := o.Error.Code, nipcash.ParseDetail(o.Error.Detail)
 		if nipcash.FinalCode(code) {
-			return &FinalError{Method: pc.Method, Code: code, Message: o.Error.Message, Detail: o.Error.Detail}
+			return &FinalError{Method: pc.Method, Code: code, Message: o.Error.Message, Detail: string(detail)}
 		}
 		if code == nipcash.ErrCodeRequestReused {
 			pc.SawReused = true
 		} else {
-			pc.LastCode = code
+			pc.LastCode, pc.LastDetail = code, detail
 		}
-		return &IndeterminateError{Call: *pc, Code: code, Message: o.Error.Message, Detail: o.Error.Detail, Cause: sendErr}
+		return &IndeterminateError{Call: *pc, Code: code, Message: o.Error.Message, Detail: string(detail), Cause: sendErr}
 	}
 	cause := sendErr
 	if cause == nil {
