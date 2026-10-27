@@ -228,6 +228,9 @@ func NewAnnouncement(f Fields, createdAt int64) (*nip01.Event, error) {
 		return nil, fmt.Errorf("niplsp: compute the event id: %w", err)
 	}
 	ev.ID = hex.EncodeToString(id)
+	if err := checkBuilt(ev); err != nil {
+		return nil, err
+	}
 	return ev, nil
 }
 
