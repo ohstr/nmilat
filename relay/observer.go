@@ -262,7 +262,7 @@ func ClassifyKind(kind int) KindClass {
 		return KindGiftWrap
 	case 40, 41, 42, 43, 44:
 		return KindChannel
-	case 9734, 9735, 9520, 9521:
+	case 9734, 9735, 9520, 9521, 9522, 9523:
 		return KindZap
 	case 30023, 30024:
 		return KindLongForm
