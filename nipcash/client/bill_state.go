@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/ohstr/nmilat/nipcash"
+	relayclient "github.com/ohstr/nmilat/relay/client"
 )
 
 // BillState is what a caller actually wants to know about a bill, with the
@@ -18,8 +19,14 @@ const (
 	BillIndeterminate BillState = iota
 	// BillAvailable — the bill exists and its roster came back.
 	BillAvailable
-	// BillSpent — the Hub said so explicitly. Definitive.
+	// BillSpent — the Hub said so explicitly. Definitive. The tombstone's
+	// reason is in the result (Tombstone.Reason).
 	BillSpent
+	// BillNoSlice — the Hub answered NOT_FOUND: the bill is there, the
+	// caller's proof verified, and it holds no slice for that identity
+	// (NIP-CASH §Errors). Definitive about the caller, never "spent" and never
+	// "I don't know".
+	BillNoSlice
 )
 
 func (s BillState) String() string {
@@ -28,6 +35,8 @@ func (s BillState) String() string {
 		return "available"
 	case BillSpent:
 		return "spent"
+	case BillNoSlice:
+		return "no slice"
 	default:
 		return "indeterminate"
 	}
@@ -38,6 +47,7 @@ func (s BillState) String() string {
 //
 //	roster returned              -> BillAvailable
 //	"spent" + retained_until     -> BillSpent, with result.RetainedUntil set
+//	NOT_FOUND                    -> BillNoSlice, with the refusal as the error
 //	no answer (timeout, or past  -> BillIndeterminate
 //	the Hub's retention window)
 //
@@ -64,6 +74,12 @@ func (c *Client) State(ctx context.Context, cred nipcash.Credential) (BillState,
 // keeping these apart is what makes the rule above verifiable at all. Its
 // signature matches CashStatus's return so State can forward directly.
 func classify(result *nipcash.CashStatusResult, err error) (BillState, *nipcash.CashStatusResult, error) {
+	var we *relayclient.WalletError
+	if errors.As(err, &we) && we.Code == nipcash.ErrCodeNotFound {
+		// A coded answer, not silence: the Hub holds no slice for this
+		// identity. The error is kept for a caller that reads only it.
+		return BillNoSlice, nil, err
+	}
 	if err != nil {
 		// Includes context deadline exceeded, which is the ordinary shape of
 		// "the Hub said nothing" — see the note above on why that is not spent.
