@@ -31,7 +31,13 @@ func (e *Expiry) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// MarshalJSON writes the unix time, or null for never.
+// IsZero reports never, so a field tagged `omitzero` is omitted for a bill
+// that never expires: the Hub-side encoding NIP-CASH asks for. Every
+// expires_at field of this package's results carries the tag.
+func (e Expiry) IsZero() bool { return e.Never() }
+
+// MarshalJSON writes the unix time, or null for never (a field tagged
+// `omitzero` is omitted instead).
 func (e Expiry) MarshalJSON() ([]byte, error) {
 	if e.Never() {
 		return []byte("null"), nil

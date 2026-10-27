@@ -123,7 +123,7 @@ type cashConsolidateResponseWire struct {
 	AmountMillis    uint64           `json:"amount_millis"`
 	NewWalletPubkey string           `json:"new_wallet_pubkey"`
 	NewWalletToken  TokenOrTombstone `json:"new_wallet_token"`
-	ExpiresAt       Expiry           `json:"expires_at"`
+	ExpiresAt       Expiry           `json:"expires_at,omitzero"`
 }
 
 // CashConsolidateResult is cash_consolidate's response with the token decrypted.

@@ -49,7 +49,7 @@ type RecipientStatus struct {
 	// MinTransferMillis is the slice's own split floor, fixed at creation.
 	MinTransferMillis uint64 `json:"min_transfer_millis"`
 	// ExpiresAt is the wallet's deadline, the same on every row; never when absent.
-	ExpiresAt Expiry `json:"expires_at"`
+	ExpiresAt Expiry `json:"expires_at,omitzero"`
 	// WithdrawRequestID names the cash_withdraw that ended this slice, shown to
 	// that call's authorizer only; a row carrying it is terminal.
 	WithdrawRequestID string `json:"withdraw_request_id,omitempty"`
