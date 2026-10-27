@@ -27,6 +27,7 @@ func orderItem(t *testing.T, conn Bill) BatchOrder {
 		Recipient: target, AmountMillis: 21_000_000, Payment: nipCO.PaymentLightning, Notify: notify, RequestID: rid}}
 }
 
+// T11-47 (partial).
 // CashOrderMany places several orders in one request, writes each ahead and
 // reports the accepting relays per request_id; LookupOrderMany reads them back.
 func TestCashOrderMany_AndLookupOrderMany(t *testing.T) {

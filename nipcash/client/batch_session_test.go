@@ -143,6 +143,7 @@ func TestBatchSession_FetchesVerifiesAndCaches(t *testing.T) {
 	}
 }
 
+// E-ENV-03.
 // TestBatchSession_RejectsAnAnnouncementFromAnyoneElse is the substitution defence. An
 // announcement carries the inbox envelopes get encrypted to, so believing one signed by
 // an attacker would mean encrypting a holder's requests to them.
@@ -178,6 +179,7 @@ func TestBatchSession_NoAnnouncementIsNotAFault(t *testing.T) {
 	}
 }
 
+// T11-19.
 // TestBatchSession_PrefersAnnouncedRelaysButKeepsTheHints: a bill's token hints were
 // fixed at mint time and the hub may have moved, so announced relays take over. The
 // hints are kept as a fallback because if the announced relays later disappear they are

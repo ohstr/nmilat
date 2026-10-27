@@ -144,7 +144,7 @@ func TestT01_03_SeqOutOfRangeIsIncomplete(t *testing.T) {
 	}
 }
 
-// T01-04 (S-CASH-155): an item answered in two chunks is OutcomeConflict in every
+// E-XFER-12, T01-04 (S-CASH-155): an item answered in two chunks is OutcomeConflict in every
 // arrival order, whether the answers agree or not; only that item.
 func TestT01_04_ItemAnsweredInTwoChunks(t *testing.T) {
 	for name, second := range map[string]transport.Result{
@@ -225,7 +225,7 @@ func TestT01_08_InflatedTotalIsBounded(t *testing.T) {
 	wantStates(t, got, map[string]OutcomeState{"a": OutcomeResult, "b": OutcomeResult})
 }
 
-// T01-09 (S-CASH-158): an envelope-level QUOTA_EXCEEDED is every item's error.
+// E-XFER-14 (partial), T01-09 (S-CASH-158): an envelope-level QUOTA_EXCEEDED is every item's error.
 func TestT01_09_EnvelopeErrorForEveryItem(t *testing.T) {
 	f := newReplyFixture(t)
 	p := statusPacked(f.nonce, soon(), "a", "b")

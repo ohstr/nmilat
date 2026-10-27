@@ -14,6 +14,7 @@ func answered(lo LookupOutcome) func(context.Context, nipcash.PendingCall) (Look
 	return func(context.Context, nipcash.PendingCall) (LookupOutcome, error) { return lo, nil }
 }
 
+// T11-10, T11-16, T11-41, T11-45, T11-59, E-LK-04, E-LK-06, E-LK-07.
 func TestRecover_Table(t *testing.T) {
 	now := time.Unix(1_900_000_000, 0)
 	base := nipcash.PendingCall{RequestID: testRequestID, Method: nipcash.MethodCashTransfer, Device: "a",
@@ -69,6 +70,7 @@ func TestRecover_Table(t *testing.T) {
 	}
 }
 
+// T11-11, T11-12, T11-45.
 func TestReplace(t *testing.T) {
 	ctx := context.Background()
 	pc := nipcash.PendingCall{RequestID: testRequestID, Method: nipcash.MethodCashTransfer, Device: "a", MaxRequestAge: 300, Amount: 5}
@@ -153,6 +155,7 @@ func TestReplace(t *testing.T) {
 
 func nowForTest() time.Time { return time.Unix(1_900_000_000, 0) }
 
+// T11-12.
 // A re-placement through the SDK send path is written ahead exactly once, with
 // its exact deadline, DerivedFrom and Attempt; a Journal without the parent
 // extension gets RecordDerived.

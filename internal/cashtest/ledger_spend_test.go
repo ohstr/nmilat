@@ -49,6 +49,7 @@ func hubCode(err error) string {
 	return ""
 }
 
+// E-RED-01, E-RED-03, T11-26 (PAYMENT_FAILED).
 // cash_redeem against the ledger: the fake payee's invoice for the net amount
 // is paid once, its preimage returned with the slice's fee; a wrong amount is
 // BAD_REQUEST and an invoice the payee never issued PAYMENT_FAILED, both
@@ -93,6 +94,7 @@ func TestLedgerRedeem(t *testing.T) {
 	}
 }
 
+// E-XFER-02.
 // cash_transfer against the ledger: a partial split spins off two wallets
 // delivered to the caller, the source tombstoned transferred, the call looked
 // up done; a full transfer to a pubkey is in place; to cash on a two-slice

@@ -97,6 +97,7 @@ func TestEnvelope_RoundTrip(t *testing.T) {
 	}
 }
 
+// E-ENV-05.
 // TestEnvelope_EncodePadsToBuckets is the size-leak property end to end: whatever
 // is inside, the plaintext handed to NIP-44 lands on a bucket boundary.
 func TestEnvelope_EncodePadsToBuckets(t *testing.T) {

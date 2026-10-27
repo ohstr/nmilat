@@ -344,7 +344,7 @@ func mustJSON(t *testing.T, v any) json.RawMessage {
 	return b
 }
 
-// E-WD-12 and the WP-11 code rules: a receipt that does not verify, BAD_REQUEST,
+// T11-52, E-WD-12 and the WP-11 code rules: a receipt that does not verify, BAD_REQUEST,
 // and an id-bearing refusal with its detail.
 func TestWithdraw_Answers(t *testing.T) {
 	ctx, cancel := e2eContext(t)
@@ -675,7 +675,7 @@ func TestT11_49_RecoverReplaceWithdraw(t *testing.T) {
 	}
 }
 
-// T21-28: no error text carries a secret, notify, request_id, the address or
+// T11-40 (withdraw), T21-28: no error text carries a secret, notify, request_id, the address or
 // the quote.
 func TestT21_28_ErrorTextPrivate(t *testing.T) {
 	ctx, cancel := e2eContext(t)

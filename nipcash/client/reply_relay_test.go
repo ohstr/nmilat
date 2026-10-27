@@ -115,6 +115,7 @@ func testReply(replyTo string) *nip01.Event {
 	}
 }
 
+// T11-35, E-ENV-06.
 // NIP-CASH §Addressing the Response: the hub replies on the relay the request
 // arrived on, so the client must listen on the relay it sent to. The first relay
 // takes the subscription but refuses the request; the request goes out on the
@@ -200,6 +201,7 @@ func TestSubscribeAndPublish_ARefusedRequestIsNotSent(t *testing.T) {
 	}
 }
 
+// T11-34.
 // A relay registers a subscription and handles an event on two connections in
 // no fixed order. This one takes its time over the REQ and answers the request
 // at once, which is when a client that published without waiting for the

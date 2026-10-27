@@ -10,6 +10,7 @@ import (
 	relayclient "github.com/ohstr/nmilat/relay/client"
 )
 
+// T11-56.
 // A tombstone is its own answer: *BillGone, never ErrClaimNotFound.
 func TestCheckClaim_TombstoneIsGone(t *testing.T) {
 	until := int64(1758800000)
@@ -40,6 +41,7 @@ func signedKATToken(t *testing.T) nipcash.Token {
 
 const katMinter = "034f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa"
 
+// T11-37, T11-56.
 // The row is the credential's; the hint in the token plays no part; the amount
 // comes from the live row and a claimed one is not claimable.
 func TestCheckClaim_OwnRowFromTheCredential(t *testing.T) {

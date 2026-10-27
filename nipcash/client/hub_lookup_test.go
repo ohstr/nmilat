@@ -14,6 +14,7 @@ import (
 	"github.com/ohstr/nmilat/nipcash/transport"
 )
 
+// T11-36, T11-53, T11-54 (partial).
 // ConnectCashHub + Info run the online check and read the announcement; a mint
 // is written ahead and, answered with a code other than BAD_REQUEST (the fake
 // serves no mint_cash), is pending with LastCode set.
@@ -59,6 +60,7 @@ func TestHubClient_InfoAndMintWriteAhead(t *testing.T) {
 	}
 }
 
+// T11-18.
 func TestConnect_RefusesACashHubString(t *testing.T) {
 	hub := cashtest.NewFakeHub(t)
 	if _, err := Connect(context.Background(), hub.CashHubConnection()); !errors.Is(err, ErrCashHubConnection) {
@@ -66,6 +68,7 @@ func TestConnect_RefusesACashHubString(t *testing.T) {
 	}
 }
 
+// T11-15.
 // A bearer lookup goes without the cash secret first, and with it only after
 // UNAUTHORIZED.
 func TestLookupTransfer_BearerRetry(t *testing.T) {
@@ -108,6 +111,7 @@ func TestLookupTransfer_BearerRetry(t *testing.T) {
 	}
 }
 
+// E-LK-04.
 // A lookup answer that does not have the spec's shape is Malformed, never unknown.
 func TestLookup_MalformedIsNotUnknown(t *testing.T) {
 	hub := newTestHub(t, func(item transport.Item) *transport.Result {
@@ -127,6 +131,7 @@ func TestLookup_MalformedIsNotUnknown(t *testing.T) {
 	}
 }
 
+// T11-24.
 func TestCashSecretCredential_RefusesTheConnectionSecret(t *testing.T) {
 	_, target := sessionKeypair(t)
 	c := &Client{walletPubkey: target, connSecret: connSecretFor(target)}
@@ -138,6 +143,7 @@ func TestCashSecretCredential_RefusesTheConnectionSecret(t *testing.T) {
 	}
 }
 
+// T11-22.
 func TestZapBill_NeedsItsContext(t *testing.T) {
 	tok := nipcash.Token{Scheme: nipcash.SchemeZapV1}
 	c := &Client{token: &tok}

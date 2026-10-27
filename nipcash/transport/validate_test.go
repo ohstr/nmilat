@@ -176,6 +176,7 @@ func TestValidate_RejectsStaleProofs(t *testing.T) {
 	}
 }
 
+// T11-31.
 // TestValidate_RejectsAWrongHubEvenWhenInternallyConsistent: an envelope whose
 // items all agree with each other but name a hub other than the one being addressed
 // is still unservable. Consistency is not sufficient — it has to be THIS hub.

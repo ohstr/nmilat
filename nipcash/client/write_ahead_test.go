@@ -66,7 +66,7 @@ func requestsOn(r *cashtest.Relay) []*nip01.Event {
 	return out
 }
 
-// T11: the call is written ahead with the exact deadline the envelope carries,
+// T11-01, T11-02: the call is written ahead with the exact deadline the envelope carries,
 // before anything is published, and the outcome names its request_id.
 func TestWriteAhead_ExactDeadlineBeforePublish(t *testing.T) {
 	hub := newTestHub(t, answerTransfer)
@@ -117,6 +117,7 @@ func TestWriteAhead_ExactDeadlineBeforePublish(t *testing.T) {
 	}
 }
 
+// T11-01, T11-05, T11-09, E-MINT-08 (partial), E-XFER-15.
 func TestWriteAhead_RefusedBeforeAnythingIsWritten(t *testing.T) {
 	ctx, cancel := e2eContext(t)
 	defer cancel()
@@ -189,6 +190,7 @@ func TestWriteAhead_RefusedBeforeAnythingIsWritten(t *testing.T) {
 
 const testRequestID = "0123456789abcdef0123456789abcdef"
 
+// T11-07, T11-08.
 // The outcome model of a single call carrying a request_id.
 func TestCashTransfer_OutcomeModel(t *testing.T) {
 	for _, tc := range []struct {
@@ -299,6 +301,7 @@ func TestSession_NewestRejectedIsUnusable(t *testing.T) {
 	}
 }
 
+// T11-42, E-POW-01 (transfer).
 // Proof of work (NIP-CASH §Proof of Work): a request to a relay with a minimum
 // is mined to it with expiration = not_after, and served.
 func TestPow_MinedToTheRelayMinimum(t *testing.T) {
@@ -326,7 +329,7 @@ func TestPow_MinedToTheRelayMinimum(t *testing.T) {
 	}
 }
 
-// CASH-POW-03 (T11-43): a relay that raised its minimum refuses "pow: …"; the
+// E-POW-02, CASH-POW-03 (T11-43): a relay that raised its minimum refuses "pow: …"; the
 // same request is re-mined and published again, and the Hub runs it once.
 func TestPow_RemineOnRefusal(t *testing.T) {
 	hub := newTestHub(t, answerTransfer)

@@ -10,6 +10,7 @@ import (
 	"github.com/ohstr/nmilat/nipcash/transport"
 )
 
+// T11-19, E-ENV-02 (partial).
 // NIP-CASH §Multiple Relay Hints: when every relay fails, report what was tried,
 // not only the last failure. Both relays here refuse connections.
 func TestPrivateTransport_ReportsEveryRelayFailure(t *testing.T) {

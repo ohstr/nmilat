@@ -310,7 +310,7 @@ func (s *subscriber) take(t *testing.T, n int) []*nip01.Event {
 	return out
 }
 
-// T02-06: the Cash Hub connection answers get_info with the node identity and
+// E-LK-01 (23194 half), T02-06: the Cash Hub connection answers get_info with the node identity and
 // refuses the bill methods and cash_lookup on kind 23194 with NOT_IMPLEMENTED.
 func TestT02_06_FakeNWC(t *testing.T) {
 	h := cashtest.NewFakeHub(t)

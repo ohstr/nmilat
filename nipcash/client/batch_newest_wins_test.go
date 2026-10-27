@@ -10,6 +10,7 @@ import (
 	"github.com/ohstr/nmilat/nipcash/transport"
 )
 
+// E-ENV-03.
 // NIP-CASH §The Hub Announcement: a client MUST prefer the newest announcement and
 // never adopt an older one. Served newest-first, so last-arrival-wins would adopt
 // the retired inbox; the existing tests serve oldest-first and could not tell.

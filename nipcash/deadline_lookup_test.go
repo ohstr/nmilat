@@ -43,7 +43,7 @@ func TestT07_03_DerivedRequestID(t *testing.T) {
 	}
 }
 
-// T07-04, T07-05, T07-06 (K-DL-1).
+// T11-03, T07-04, T07-05, T07-06 (K-DL-1).
 func TestT07_04_Deadlines(t *testing.T) {
 	const T, H = int64(1720000000), int64(300)
 	for deadline, want := range map[int64]error{T + 300: nil, T: nil, T + 301: ErrDeadlineTooFar, T - 1: ErrDeadlinePassed, 0: ErrDeadlineMissing} {
@@ -71,7 +71,7 @@ func TestT07_04_Deadlines(t *testing.T) {
 	}
 }
 
-// T07-07..T07-12 (K-LK-1..7, K-JLK-1).
+// E-LK-03, T07-07..T07-12 (K-LK-1..7, K-JLK-1).
 func TestT07_07_DecideLookup(t *testing.T) {
 	const D, H = int64(1720000000), int64(300)
 	for now, want := range map[int64]LookupDecision{

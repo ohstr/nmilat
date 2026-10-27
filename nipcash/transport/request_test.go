@@ -82,6 +82,7 @@ func TestWrapRequest_SatisfiesTheHubsOwnAcceptanceRule(t *testing.T) {
 	}
 }
 
+// T11-30.
 // TestWrapRequest_AuthorIsEphemeralAndUnlinkable: the author key must differ every
 // time and must never be the inbox. If it were stable, the whole transport would
 // leak a sender identifier in the clear and the batching would buy nothing.
@@ -108,6 +109,7 @@ func TestWrapRequest_AuthorIsEphemeralAndUnlinkable(t *testing.T) {
 	}
 }
 
+// T11-30.
 // TestWrapRequest_CreatedAtIsBackdated: created_at must not be a freshness signal,
 // which is precisely why the envelope carries not_after. A stated time at or after
 // "now" would mean the randomisation is not happening.

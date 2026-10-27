@@ -290,7 +290,7 @@ func TestT10_21_ScopesTombstonesOrdered(t *testing.T) {
 	}
 }
 
-// T10-24, T10-25.
+// E-LK-02, T10-24, T10-25.
 func TestT10_24_Lookup(t *testing.T) {
 	pk := strings.Repeat("a", 64)
 	for name, r := range map[string]CashLookupRequest{

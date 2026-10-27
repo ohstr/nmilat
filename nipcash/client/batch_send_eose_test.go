@@ -102,6 +102,7 @@ func mustParseURL(t *testing.T, raw string) *url.URL {
 	return u
 }
 
+// T11-34.
 func TestSubscribeReplies_DeliversEventsPublishedAfterEOSE(t *testing.T) {
 	reply := &nip01.Event{
 		ID:        strings.Repeat("a", 64),

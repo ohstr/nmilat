@@ -149,6 +149,7 @@ func TestBatch_EndToEnd_ManyBillsInOneEvent(t *testing.T) {
 	}
 }
 
+// E-ENV-07.
 // TestBatch_EndToEnd_OmissionSurvivesTheRoundTrip: a hub that omits an item must produce
 // OutcomeNotServed at the caller, distinct from both success and error. This is the
 // property that keeps batching from becoming an existence oracle, and it has to hold
@@ -279,6 +280,7 @@ func newTestHub(t *testing.T, decide func(transport.Item) *transport.Result) *fa
 	}
 }
 
+// E-ENV-01.
 // TestBatch_EndToEnd_ChunkedReplyReassembles: a hub that answers in several events must
 // be invisible to the caller. Same call, same outcomes, one per item.
 func TestBatch_EndToEnd_ChunkedReplyReassembles(t *testing.T) {
@@ -319,6 +321,7 @@ func TestBatch_EndToEnd_ChunkedReplyReassembles(t *testing.T) {
 	}
 }
 
+// E-XFER-11 (partial).
 // TestBatch_EndToEnd_LostChunkIsIncompleteNotOmitted is the property that protects money.
 //
 // With 2 of 3 chunks received, reporting the missing items as omissions would claim the

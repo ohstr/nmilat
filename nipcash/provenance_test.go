@@ -309,7 +309,7 @@ func TestT04_24_ConnectionHeaders(t *testing.T) {
 	}
 }
 
-// T04-25 (K-ONL-1).
+// T11-14, T11-54 (unit), T04-25 (K-ONL-1).
 func TestT04_25_OnlineCheck(t *testing.T) {
 	id := "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
 	o := OnlineCheck{HubIdentity: id, Chain: "bitcoin"}

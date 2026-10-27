@@ -51,6 +51,7 @@ func TestClassify_Roster(t *testing.T) {
 	}
 }
 
+// T11-27.
 // A tombstone is definitive, and carries the deadline through.
 func TestClassify_Tombstone(t *testing.T) {
 	until := int64(1758800000)
@@ -68,6 +69,7 @@ func TestClassify_Tombstone(t *testing.T) {
 	}
 }
 
+// T11-27.
 // The property this whole helper exists for: silence is never "spent".
 //
 // A timeout, an unreachable relay, a dropped request and a Hub that is simply

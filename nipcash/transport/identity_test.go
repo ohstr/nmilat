@@ -5,6 +5,7 @@ import (
 	"testing"
 )
 
+// T11-14.
 // TestNormalizeNodeIdentity covers the shape mismatch that made the private
 // transport undiscoverable by its own documented discovery path.
 //
