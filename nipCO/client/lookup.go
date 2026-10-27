@@ -50,7 +50,9 @@ func (c *OrderClient) LookupFunc() func(context.Context, nipcash.PendingCall) (c
 }
 
 // parseOrder reads a done result against the written-ahead request: its kind
-// and amount must match, and every token's provenance must name TLV 4.
+// and amount must match, a Lightning invoice must be for pay_millis and expire
+// at pay_by, an on-chain address must be single-case and on the connection's
+// network, and every token's provenance must name TLV 4.
 func (c *OrderClient) parseOrder(pc nipcash.PendingCall, raw json.RawMessage) (*nipCO.Order, error) {
 	var sent struct {
 		Payment      string `json:"payment"`
@@ -64,6 +66,20 @@ func (c *OrderClient) parseOrder(pc nipcash.PendingCall, raw json.RawMessage) (*
 	order, err := nipCO.CashOrderParams{Payment: sent.Payment, AmountMillis: sent.AmountMillis}.ParseLookupResult(raw)
 	if err != nil {
 		return nil, err
+	}
+	// The order as it stands is in the Response's shape: the same invoice and
+	// address checks as a direct reply (NIP-CO §Response, §Reading an Order).
+	switch order.Payment {
+	case nipCO.PaymentLightning:
+		if err := checkOrderInvoice(order); err != nil {
+			return nil, err
+		}
+	case nipCO.PaymentOnchain:
+		addr, err := orderAddress(order.Address, c.conn.Chain, c.Network())
+		if err != nil {
+			return nil, err
+		}
+		order.Address = addr
 	}
 	for i, b := range order.Bills {
 		if b.Token.Tombstone != nil {

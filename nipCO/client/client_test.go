@@ -438,3 +438,47 @@ func TestPlace_InvalidAddress(t *testing.T) {
 		t.Fatalf("uppercase: %+v %v", order, err)
 	}
 }
+
+// An order read back with cash_lookup gets the same checks as a direct reply:
+// an on-chain address of another network, or an invoice that does not expire
+// at pay_by, makes the lookup Malformed, never a done order.
+func TestLookup_ChecksInvoiceAndAddress(t *testing.T) {
+	_, book := orderHub(t)
+	ctx, cancel := testContext(t)
+	defer cancel()
+	c := connect(t, ctx, book)
+
+	book.SetAddress("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4")
+	p, _ := cashOrder(t, nipCO.PaymentOnchain, 21_000_000)
+	j := newJournal()
+	if _, err := c.Place(ctx, p, j, "dev"); !errors.Is(err, ErrOrderReplyInvalid) {
+		t.Fatalf("Place: %v, want ErrOrderReplyInvalid", err)
+	}
+	lo, got, err := c.Lookup(ctx, j.only(t))
+	if err != nil || !lo.Malformed || got != nil {
+		t.Fatalf("on-chain lookup with another network's address: %+v %+v %v", lo, got, err)
+	}
+
+	ln, _ := cashOrder(t, nipCO.PaymentLightning, 21_000_000)
+	jl := newJournal()
+	if _, err := c.Place(ctx, ln, jl, "dev"); err != nil {
+		t.Fatal(err)
+	}
+	pc := jl.only(t)
+	order, ok := book.Order(pc.RequestID)
+	if !ok {
+		t.Fatal("the fake lost the order")
+	}
+	raw, err := json.Marshal(order)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.parseOrder(pc, raw); err != nil {
+		t.Fatalf("the stored order: %v", err)
+	}
+	order.PayBy++
+	raw, _ = json.Marshal(order)
+	if _, err := c.parseOrder(pc, raw); !errors.Is(err, ErrOrderReplyInvalid) {
+		t.Fatalf("pay_by not the invoice expiry: %v, want ErrOrderReplyInvalid", err)
+	}
+}
