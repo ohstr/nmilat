@@ -70,6 +70,7 @@ go get github.com/ohstr/nmilat
 - **[`nipcw`](https://github.com/ohstr/nips/blob/main/NIP-CW.md)** — Circle Wallet: shared self-service wallets
 - **[`nipIC`](https://github.com/ohstr/nips/blob/main/NIP-IC.md)** — Identity Connection: binds Web Identity accounts to Nostr pubkeys
 - **[`nipLS`](https://github.com/ohstr/nips/blob/main/NIP-LS.md)** — Local Signer: NIP-46 over a unix socket (`bunker+unix://`), client and policy-gated server
+- **[`niplsp`](https://github.com/ohstr/nips/blob/main/NIP-LSP.md)** — Lightning Service Provider Announcement: a node's LSPS offer in one kind 10735 event signed by its node key, built from its LSPS answers and checked against the live ones
 - **[`nipOA`](https://github.com/block/buzz/blob/main/docs/nips/NIP-OA.md)** — Owner Attestation
 
 ### Relay engine and infrastructure
