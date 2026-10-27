@@ -1,0 +1,842 @@
+{
+  "description": "Mint provenance: the cash-mint:v1 and cash-zap:v1 payloads over the relay hash, the per-HRP signed-message prefix, public-key recovery from the 65-byte compact signature over sha256d, and the reserved sign-text labels.",
+  "source": "nipcash/provenance.go, nipcash/sign.go; nipcash/provenance_test.go, token_codec_test.go (K-PAY-1, K-PAY-2, K-PAY-4, K-ZAP-1, K-TOK-1)",
+  "nmilat": "github.com/ohstr/nmilat devel",
+  "mintPayload": [
+    {
+      "name": "K-PAY-1",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "amountMillis": "21000",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "relayHash": "487f70e79899e5f04dabdeaa62db4654d0d005db40496df0930c5e12e8d2775c",
+      "payload": "cash-mint:v1:satscash:c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5:21000:487f70e79899e5f04dabdeaa62db4654d0d005db40496df0930c5e12e8d2775c"
+    },
+    {
+      "name": "K-PAY-2 (the label stays cash-mint:v1)",
+      "hrp": "lokicash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "amountMillis": "21000",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "relayHash": "487f70e79899e5f04dabdeaa62db4654d0d005db40496df0930c5e12e8d2775c",
+      "payload": "cash-mint:v1:lokicash:c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5:21000:487f70e79899e5f04dabdeaa62db4654d0d005db40496df0930c5e12e8d2775c"
+    },
+    {
+      "name": "zero amount, one hint",
+      "hrp": "satscash",
+      "walletPubkey": "2222222222222222222222222222222222222222222222222222222222222222",
+      "amountMillis": "0",
+      "relays": [
+        "wss://relay.example.com"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "relayHash": "454ad3fbd842bc4afd94753d5efc1ee9e6df6a9313ee33291588e21a9232c958",
+      "payload": "cash-mint:v1:satscash:2222222222222222222222222222222222222222222222222222222222222222:0:454ad3fbd842bc4afd94753d5efc1ee9e6df6a9313ee33291588e21a9232c958"
+    },
+    {
+      "name": "max amount, no hint",
+      "hrp": "xyzcash",
+      "walletPubkey": "2222222222222222222222222222222222222222222222222222222222222222",
+      "amountMillis": "18446744073709551615",
+      "relays": [],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "relayHash": "630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd",
+      "payload": "cash-mint:v1:xyzcash:2222222222222222222222222222222222222222222222222222222222222222:18446744073709551615:630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd"
+    },
+    {
+      "name": "K-PAY-4 (uppercase HRP in a hand-built token)",
+      "hrp": "SATSCASH",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "amountMillis": "21000",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "relayHash": "487f70e79899e5f04dabdeaa62db4654d0d005db40496df0930c5e12e8d2775c",
+      "payload": "cash-mint:v1:satscash:c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5:21000:487f70e79899e5f04dabdeaa62db4654d0d005db40496df0930c5e12e8d2775c"
+    }
+  ],
+  "zapPayload": [
+    {
+      "name": "K-ZAP-1",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "amountMillis": "5000",
+      "relayHash": "487f70e79899e5f04dabdeaa62db4654d0d005db40496df0930c5e12e8d2775c",
+      "zap": {
+        "recipient": "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4",
+        "sender": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "zapTarget": "30023:e493dbf1c10d80f3581e4904930b1404cc6c13900ee0758474fa94abe8c4cd13:my-article",
+        "issuedAt": 1720000000,
+        "expiresAt": 0
+      },
+      "targetHash": "79c69fd2170904248edc898066fce02a7fefa36235f4fb863f4329c99f891b8f",
+      "payload": "cash-zap:v1:satscash:c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5:5000:487f70e79899e5f04dabdeaa62db4654d0d005db40496df0930c5e12e8d2775c:pubkey/2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4:pubkey/fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556:79c69fd2170904248edc898066fce02a7fefa36235f4fb863f4329c99f891b8f:1720000000:0"
+    },
+    {
+      "name": "target hashed exactly as given",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "amountMillis": "5000",
+      "relayHash": "487f70e79899e5f04dabdeaa62db4654d0d005db40496df0930c5e12e8d2775c",
+      "zap": {
+        "recipient": "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4",
+        "sender": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "zapTarget": "hello world",
+        "issuedAt": 1720000000,
+        "expiresAt": 0
+      },
+      "targetHash": "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
+      "payload": "cash-zap:v1:satscash:c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5:5000:487f70e79899e5f04dabdeaa62db4654d0d005db40496df0930c5e12e8d2775c:pubkey/2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4:pubkey/fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556:b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9:1720000000:0"
+    },
+    {
+      "name": "with an expiry",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "amountMillis": "5000",
+      "relayHash": "487f70e79899e5f04dabdeaa62db4654d0d005db40496df0930c5e12e8d2775c",
+      "zap": {
+        "recipient": "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4",
+        "sender": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "zapTarget": "30023:e493dbf1c10d80f3581e4904930b1404cc6c13900ee0758474fa94abe8c4cd13:my-article",
+        "issuedAt": 1720000000,
+        "expiresAt": 1720086400
+      },
+      "targetHash": "79c69fd2170904248edc898066fce02a7fefa36235f4fb863f4329c99f891b8f",
+      "payload": "cash-zap:v1:satscash:c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5:5000:487f70e79899e5f04dabdeaa62db4654d0d005db40496df0930c5e12e8d2775c:pubkey/2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4:pubkey/fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556:79c69fd2170904248edc898066fce02a7fefa36235f4fb863f4329c99f891b8f:1720000000:1720086400"
+    },
+    {
+      "name": "empty target",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "amountMillis": "5000",
+      "relayHash": "487f70e79899e5f04dabdeaa62db4654d0d005db40496df0930c5e12e8d2775c",
+      "zap": {
+        "recipient": "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4",
+        "sender": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "zapTarget": "",
+        "issuedAt": 1720000000,
+        "expiresAt": 0
+      },
+      "error": "nipcash: payload field is malformed: zap_target is empty"
+    },
+    {
+      "name": "uppercase recipient",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "amountMillis": "5000",
+      "relayHash": "487f70e79899e5f04dabdeaa62db4654d0d005db40496df0930c5e12e8d2775c",
+      "zap": {
+        "recipient": "2F8BDE4D1A07209355B4A7250A5C5128E88B84BDDC619AB7CBA8D569B240EFE4",
+        "sender": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "zapTarget": "30023:e493dbf1c10d80f3581e4904930b1404cc6c13900ee0758474fa94abe8c4cd13:my-article",
+        "issuedAt": 1720000000,
+        "expiresAt": 0
+      },
+      "error": "nipcash: payload field is malformed: recipient and sender are 64 lowercase hex characters"
+    },
+    {
+      "name": "short sender",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "amountMillis": "5000",
+      "relayHash": "487f70e79899e5f04dabdeaa62db4654d0d005db40496df0930c5e12e8d2775c",
+      "zap": {
+        "recipient": "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4",
+        "sender": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a14602975",
+        "zapTarget": "30023:e493dbf1c10d80f3581e4904930b1404cc6c13900ee0758474fa94abe8c4cd13:my-article",
+        "issuedAt": 1720000000,
+        "expiresAt": 0
+      },
+      "error": "nipcash: payload field is malformed: recipient and sender are 64 lowercase hex characters"
+    }
+  ],
+  "specToken": {
+    "minterSecret": "0101010101010101010101010101010101010101010101010101010101010101",
+    "prefix": "Lightning Signed Message:",
+    "payload": "cash-mint:v1:satscash:c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5:21000:487f70e79899e5f04dabdeaa62db4654d0d005db40496df0930c5e12e8d2775c",
+    "digest": "278d47f6702494ccb7127d9ff80ed049ac324ac6bb30287a20a11c54520cdf23",
+    "signature": "20f2193bb16f948c87d4bd2d90594ff17eae4064d734f487472f2a8e95ed661fa741ab3b154d119c1af8cdaba25710c96748ae5cf179dfc7bcb0254423d4d4b4fa",
+    "header": 32,
+    "minter": "031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f",
+    "minterXOnly": "1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f",
+    "token": "satscash1qqsvvprlj3q76ltdxpz5qm54cp7dshrh3e9cemeu5746czdet3cfaegpzamhxue69uhhyetvv9ujuetcv9khqmr99e3k7mgprpmhxue69uhkyctrdd6hqtn90psk6urvv5hxuet5qgsqqqgzqvzq2ps8pqys5zcvp58q7yq3zgf3g9gkzuvpjxsmrsw3u8crqyqs2sfq7gvnhvt0jjxg049a9kg9jnl306hyqexhxn6gw3e0928ftmtxr7n5r2emz4x3r8q6lrx6hgjhzrykwj9wtnchnh78hjcz23pr6n2tf7sxpqqqqqqqqqq9yzq8qnkhn68lpqqszp39gk7"
+  },
+  "signedMessagePrefix": [
+    {
+      "hrp": "lokicash",
+      "prefix": "Flokicoin Lightning Signed Message:",
+      "chain": "flokicoin"
+    },
+    {
+      "hrp": "satscash",
+      "prefix": "Lightning Signed Message:",
+      "chain": "bitcoin"
+    },
+    {
+      "hrp": "xyzcash",
+      "prefix": null,
+      "chain": null
+    },
+    {
+      "hrp": "SATSCASH",
+      "prefix": null,
+      "chain": "bitcoin"
+    },
+    {
+      "hrp": "",
+      "prefix": null,
+      "chain": null
+    }
+  ],
+  "chainSignedMessagePrefix": [
+    {
+      "chain": "bitcoin",
+      "prefix": "Lightning Signed Message:"
+    },
+    {
+      "chain": "flokicoin",
+      "prefix": "Flokicoin Lightning Signed Message:"
+    },
+    {
+      "chain": "Bitcoin",
+      "prefix": null
+    },
+    {
+      "chain": "testnet",
+      "prefix": null
+    },
+    {
+      "chain": "",
+      "prefix": null
+    }
+  ],
+  "reservedSignText": [
+    {
+      "text": "cash-mint:v1:x",
+      "reserved": true
+    },
+    {
+      "text": "cash-zap:v1:x",
+      "reserved": true
+    },
+    {
+      "text": "cash-hub:v1:x",
+      "reserved": true
+    },
+    {
+      "text": "cash-order:v1:x",
+      "reserved": true
+    },
+    {
+      "text": "circle-hub:v1:x",
+      "reserved": true
+    },
+    {
+      "text": "CASH-MINT:v1",
+      "reserved": true
+    },
+    {
+      "text": "Cash-Hub:",
+      "reserved": true
+    },
+    {
+      "text": "cash-mint",
+      "reserved": false
+    },
+    {
+      "text": "hello",
+      "reserved": false
+    },
+    {
+      "text": " cash-mint:v1",
+      "reserved": false
+    },
+    {
+      "text": "circle-hub",
+      "reserved": false
+    },
+    {
+      "text": "cash-withdraw:v1",
+      "reserved": false
+    }
+  ],
+  "verify": [
+    {
+      "name": "K-TOK-1",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 1,
+      "mintSignature": "20f2193bb16f948c87d4bd2d90594ff17eae4064d734f487472f2a8e95ed661fa741ab3b154d119c1af8cdaba25710c96748ae5cf179dfc7bcb0254423d4d4b4fa",
+      "attestedAmountMillis": "21000",
+      "minter": "031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f"
+    },
+    {
+      "name": "valid, another signer",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 1,
+      "mintSignature": "20e982e72e33342e6bca5b761ac57a42330c39774995d7f0372ddb4b378c0aafd064388d5f61e51e0c82926ed39d6da34e91b2b9f75809ba146bb63134152a1599",
+      "attestedAmountMillis": "21000",
+      "minter": "02207bba70bc66309baa582a6ac120fd52d68026c51f6326f8ccedcbd2c1b7eb82"
+    },
+    {
+      "name": "lokicash under the flnd prefix",
+      "hrp": "lokicash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 1,
+      "mintSignature": "1f7d7b34f6849aa563d27b870d4e36a62bc7a60a3eb6a1e543e0bdc07de10bf8f17e270b7ee1652e101a5f59bb15e8f11615eec865c530d7c120741699d37d76d1",
+      "attestedAmountMillis": "21000",
+      "minter": "02207bba70bc66309baa582a6ac120fd52d68026c51f6326f8ccedcbd2c1b7eb82"
+    },
+    {
+      "name": "lokicash signed under the lnd prefix",
+      "hrp": "lokicash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 1,
+      "mintSignature": "20e83b403e653594b12d638f3b182a95394e73d680ba5d2b918c84644383180ba0683778f210d2b7b3b24643be14ce27bb163c9a9479fb54df193fef1b701da523",
+      "attestedAmountMillis": "21000",
+      "minter": "02ca984e65a7064b7b29040bcca975de2e5f079f27d9fe4cfc1365ceb11e18c3ba"
+    },
+    {
+      "name": "satscash signed under the flnd prefix",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 1,
+      "mintSignature": "1ff6151f087fb8ed03dd2559ec945437b3a7d0a490ae02e34a0defe293e690deb97e0e28cb6c22ba10c67bc49ae8e20e5739530a43bdf1435ece97a64b6772e04b",
+      "attestedAmountMillis": "21000",
+      "minter": "02f0017cb6aa5d95a8e4301495cc13a2af6594e4fde5a1a58c3357e461e2e3451c"
+    },
+    {
+      "name": "uncompressed recovery flag still yields the compressed key",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 1,
+      "mintSignature": "1ce982e72e33342e6bca5b761ac57a42330c39774995d7f0372ddb4b378c0aafd064388d5f61e51e0c82926ed39d6da34e91b2b9f75809ba146bb63134152a1599",
+      "attestedAmountMillis": "21000",
+      "minter": "02207bba70bc66309baa582a6ac120fd52d68026c51f6326f8ccedcbd2c1b7eb82"
+    },
+    {
+      "name": "signature from another node",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 1,
+      "mintSignature": "20601c35615326f2a589c0ca3b01f53da9d1c1cd18b4b066d4b1e28c12e222f9602fdb4397fb2664c577afa16660cd60bc6c38c795d72bd1d0b380b87bb542c8d7",
+      "attestedAmountMillis": "21000",
+      "minter": "037c3f0429768437a942f1818ef1616c609b7a6d8a8dd245e179c8c0838e7d169d"
+    },
+    {
+      "name": "tampered amount",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 1,
+      "mintSignature": "20f2193bb16f948c87d4bd2d90594ff17eae4064d734f487472f2a8e95ed661fa741ab3b154d119c1af8cdaba25710c96748ae5cf179dfc7bcb0254423d4d4b4fa",
+      "attestedAmountMillis": "21001",
+      "minter": "03a98316b50c7e7db18108f8d337a7d57bfc59f2c1ed28b4d95fa43f3edc27a7e5"
+    },
+    {
+      "name": "tampered wallet pubkey",
+      "hrp": "satscash",
+      "walletPubkey": "2222222222222222222222222222222222222222222222222222222222222222",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 1,
+      "mintSignature": "20f2193bb16f948c87d4bd2d90594ff17eae4064d734f487472f2a8e95ed661fa741ab3b154d119c1af8cdaba25710c96748ae5cf179dfc7bcb0254423d4d4b4fa",
+      "attestedAmountMillis": "21000",
+      "minter": "039e3098db2eb068176ec16b0288be60ca065519425d55fa7e1ba87f73f6c88611"
+    },
+    {
+      "name": "tampered hrp",
+      "hrp": "lokicash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 1,
+      "mintSignature": "20f2193bb16f948c87d4bd2d90594ff17eae4064d734f487472f2a8e95ed661fa741ab3b154d119c1af8cdaba25710c96748ae5cf179dfc7bcb0254423d4d4b4fa",
+      "attestedAmountMillis": "21000",
+      "minter": "039967507d018431c82098475123ea5dcedaf7ee6301dc74a245d4ba7adc0a4197"
+    },
+    {
+      "name": "relay hints swapped",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://backup.example.net",
+        "wss://relay.example.com"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 1,
+      "mintSignature": "20f2193bb16f948c87d4bd2d90594ff17eae4064d734f487472f2a8e95ed661fa741ab3b154d119c1af8cdaba25710c96748ae5cf179dfc7bcb0254423d4d4b4fa",
+      "attestedAmountMillis": "21000",
+      "minter": "038eebdcfc6535815aa58f57167a8161dbb22ff8b29a87398f377ddf651f717529"
+    },
+    {
+      "name": "relay hint removed",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 1,
+      "mintSignature": "20f2193bb16f948c87d4bd2d90594ff17eae4064d734f487472f2a8e95ed661fa741ab3b154d119c1af8cdaba25710c96748ae5cf179dfc7bcb0254423d4d4b4fa",
+      "attestedAmountMillis": "21000",
+      "minter": "037d6497073e47635aa52de2acfa280c4c71531921ae7fd9db37310d9d8926b239"
+    },
+    {
+      "name": "relay hint added",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net",
+        "wss://x.example"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 1,
+      "mintSignature": "20f2193bb16f948c87d4bd2d90594ff17eae4064d734f487472f2a8e95ed661fa741ab3b154d119c1af8cdaba25710c96748ae5cf179dfc7bcb0254423d4d4b4fa",
+      "attestedAmountMillis": "21000",
+      "minter": "037a20e0a8825c83e590ad721325486c01fbe736dec541d8d8f4511a4d71a50f28"
+    },
+    {
+      "name": "tampered secret",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "4444444444444444444444444444444444444444444444444444444444444444",
+      "scheme": 1,
+      "mintSignature": "20f2193bb16f948c87d4bd2d90594ff17eae4064d734f487472f2a8e95ed661fa741ab3b154d119c1af8cdaba25710c96748ae5cf179dfc7bcb0254423d4d4b4fa",
+      "attestedAmountMillis": "21000",
+      "minter": "029a40161d8632ac900f4dbbb3fb8f04bbee0b615d79a76268df3a75c10e41103f"
+    },
+    {
+      "name": "scheme 2 with its zap",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 2,
+      "zap": {
+        "recipient": "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4",
+        "sender": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "zapTarget": "30023:e493dbf1c10d80f3581e4904930b1404cc6c13900ee0758474fa94abe8c4cd13:my-article",
+        "issuedAt": 1720000000,
+        "expiresAt": 0
+      },
+      "mintSignature": "20a58d9cbda51c22b54d29160e2fa2b8b7761bf3b5392d9d65d9e98b2d78f7e0990cab68ee2b64bc8eacaf5c29035543b8015faed1916ca415408e97e4e55f1ab3",
+      "attestedAmountMillis": "5000",
+      "minter": "031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f"
+    },
+    {
+      "name": "scheme 2 with another issued_at",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 2,
+      "zap": {
+        "recipient": "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4",
+        "sender": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "zapTarget": "30023:e493dbf1c10d80f3581e4904930b1404cc6c13900ee0758474fa94abe8c4cd13:my-article",
+        "issuedAt": 1720000001,
+        "expiresAt": 0
+      },
+      "mintSignature": "20a58d9cbda51c22b54d29160e2fa2b8b7761bf3b5392d9d65d9e98b2d78f7e0990cab68ee2b64bc8eacaf5c29035543b8015faed1916ca415408e97e4e55f1ab3",
+      "attestedAmountMillis": "5000",
+      "minter": "02c8baa5003738c48807b5aab08af44c4aff15c68d2ea9964c260ebff9ba47f581"
+    },
+    {
+      "name": "scheme 2 read as scheme 1",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 2,
+      "mintSignature": "20a58d9cbda51c22b54d29160e2fa2b8b7761bf3b5392d9d65d9e98b2d78f7e0990cab68ee2b64bc8eacaf5c29035543b8015faed1916ca415408e97e4e55f1ab3",
+      "attestedAmountMillis": "5000",
+      "minter": null
+    },
+    {
+      "name": "scheme 1 read with a zap",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 1,
+      "zap": {
+        "recipient": "2f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4",
+        "sender": "fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556",
+        "zapTarget": "30023:e493dbf1c10d80f3581e4904930b1404cc6c13900ee0758474fa94abe8c4cd13:my-article",
+        "issuedAt": 1720000000,
+        "expiresAt": 0
+      },
+      "mintSignature": "20f2193bb16f948c87d4bd2d90594ff17eae4064d734f487472f2a8e95ed661fa741ab3b154d119c1af8cdaba25710c96748ae5cf179dfc7bcb0254423d4d4b4fa",
+      "attestedAmountMillis": "21000",
+      "minter": null
+    },
+    {
+      "name": "unknown hrp",
+      "hrp": "xyzcash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 1,
+      "mintSignature": "20f2193bb16f948c87d4bd2d90594ff17eae4064d734f487472f2a8e95ed661fa741ab3b154d119c1af8cdaba25710c96748ae5cf179dfc7bcb0254423d4d4b4fa",
+      "attestedAmountMillis": "21000",
+      "minter": null
+    },
+    {
+      "name": "signature without amount",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 1,
+      "mintSignature": "20f2193bb16f948c87d4bd2d90594ff17eae4064d734f487472f2a8e95ed661fa741ab3b154d119c1af8cdaba25710c96748ae5cf179dfc7bcb0254423d4d4b4fa",
+      "attestedAmountMillis": null,
+      "minter": null
+    },
+    {
+      "name": "amount without signature",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 1,
+      "mintSignature": null,
+      "attestedAmountMillis": "21000",
+      "minter": null
+    },
+    {
+      "name": "short signature",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 1,
+      "mintSignature": "20f2193bb16f948c87d4bd2d90594ff17eae4064d734f487472f2a8e95ed661fa741ab3b154d119c1af8cdaba25710c96748ae5cf179dfc7bcb0254423d4d4b4",
+      "attestedAmountMillis": "21000",
+      "minter": null
+    },
+    {
+      "name": "all-zero signature",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 1,
+      "mintSignature": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "attestedAmountMillis": "21000",
+      "minter": null
+    },
+    {
+      "name": "scheme none",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 0,
+      "mintSignature": "20f2193bb16f948c87d4bd2d90594ff17eae4064d734f487472f2a8e95ed661fa741ab3b154d119c1af8cdaba25710c96748ae5cf179dfc7bcb0254423d4d4b4fa",
+      "attestedAmountMillis": "21000",
+      "minter": null
+    },
+    {
+      "name": "header byte 0",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 1,
+      "mintSignature": "00f2193bb16f948c87d4bd2d90594ff17eae4064d734f487472f2a8e95ed661fa741ab3b154d119c1af8cdaba25710c96748ae5cf179dfc7bcb0254423d4d4b4fa",
+      "attestedAmountMillis": "21000",
+      "minter": "0323568bab629c40b8be991f7f7d29343756bbfcdfb9056e41d6d028c82ec32f6f"
+    },
+    {
+      "name": "header byte 1",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 1,
+      "mintSignature": "01f2193bb16f948c87d4bd2d90594ff17eae4064d734f487472f2a8e95ed661fa741ab3b154d119c1af8cdaba25710c96748ae5cf179dfc7bcb0254423d4d4b4fa",
+      "attestedAmountMillis": "21000",
+      "minter": "031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f"
+    },
+    {
+      "name": "header byte 3",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 1,
+      "mintSignature": "03f2193bb16f948c87d4bd2d90594ff17eae4064d734f487472f2a8e95ed661fa741ab3b154d119c1af8cdaba25710c96748ae5cf179dfc7bcb0254423d4d4b4fa",
+      "attestedAmountMillis": "21000",
+      "minter": null
+    },
+    {
+      "name": "header byte 26",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 1,
+      "mintSignature": "1af2193bb16f948c87d4bd2d90594ff17eae4064d734f487472f2a8e95ed661fa741ab3b154d119c1af8cdaba25710c96748ae5cf179dfc7bcb0254423d4d4b4fa",
+      "attestedAmountMillis": "21000",
+      "minter": null
+    },
+    {
+      "name": "header byte 27",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 1,
+      "mintSignature": "1bf2193bb16f948c87d4bd2d90594ff17eae4064d734f487472f2a8e95ed661fa741ab3b154d119c1af8cdaba25710c96748ae5cf179dfc7bcb0254423d4d4b4fa",
+      "attestedAmountMillis": "21000",
+      "minter": "0323568bab629c40b8be991f7f7d29343756bbfcdfb9056e41d6d028c82ec32f6f"
+    },
+    {
+      "name": "header byte 28",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 1,
+      "mintSignature": "1cf2193bb16f948c87d4bd2d90594ff17eae4064d734f487472f2a8e95ed661fa741ab3b154d119c1af8cdaba25710c96748ae5cf179dfc7bcb0254423d4d4b4fa",
+      "attestedAmountMillis": "21000",
+      "minter": "031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f"
+    },
+    {
+      "name": "header byte 31",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 1,
+      "mintSignature": "1ff2193bb16f948c87d4bd2d90594ff17eae4064d734f487472f2a8e95ed661fa741ab3b154d119c1af8cdaba25710c96748ae5cf179dfc7bcb0254423d4d4b4fa",
+      "attestedAmountMillis": "21000",
+      "minter": "0323568bab629c40b8be991f7f7d29343756bbfcdfb9056e41d6d028c82ec32f6f"
+    },
+    {
+      "name": "header byte 32",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 1,
+      "mintSignature": "20f2193bb16f948c87d4bd2d90594ff17eae4064d734f487472f2a8e95ed661fa741ab3b154d119c1af8cdaba25710c96748ae5cf179dfc7bcb0254423d4d4b4fa",
+      "attestedAmountMillis": "21000",
+      "minter": "031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f"
+    },
+    {
+      "name": "header byte 34",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 1,
+      "mintSignature": "22f2193bb16f948c87d4bd2d90594ff17eae4064d734f487472f2a8e95ed661fa741ab3b154d119c1af8cdaba25710c96748ae5cf179dfc7bcb0254423d4d4b4fa",
+      "attestedAmountMillis": "21000",
+      "minter": null
+    },
+    {
+      "name": "header byte 35",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 1,
+      "mintSignature": "23f2193bb16f948c87d4bd2d90594ff17eae4064d734f487472f2a8e95ed661fa741ab3b154d119c1af8cdaba25710c96748ae5cf179dfc7bcb0254423d4d4b4fa",
+      "attestedAmountMillis": "21000",
+      "minter": null
+    },
+    {
+      "name": "header byte 255",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 1,
+      "mintSignature": "fff2193bb16f948c87d4bd2d90594ff17eae4064d734f487472f2a8e95ed661fa741ab3b154d119c1af8cdaba25710c96748ae5cf179dfc7bcb0254423d4d4b4fa",
+      "attestedAmountMillis": "21000",
+      "minter": null
+    },
+    {
+      "name": "r = 0",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 1,
+      "mintSignature": "20000000000000000000000000000000000000000000000000000000000000000041ab3b154d119c1af8cdaba25710c96748ae5cf179dfc7bcb0254423d4d4b4fa",
+      "attestedAmountMillis": "21000",
+      "minter": null
+    },
+    {
+      "name": "s = 0",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 1,
+      "mintSignature": "20f2193bb16f948c87d4bd2d90594ff17eae4064d734f487472f2a8e95ed661fa70000000000000000000000000000000000000000000000000000000000000000",
+      "attestedAmountMillis": "21000",
+      "minter": null
+    },
+    {
+      "name": "r = 2^256-1",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 1,
+      "mintSignature": "20ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff41ab3b154d119c1af8cdaba25710c96748ae5cf179dfc7bcb0254423d4d4b4fa",
+      "attestedAmountMillis": "21000",
+      "minter": null
+    },
+    {
+      "name": "high s with flipped recovery parity",
+      "hrp": "satscash",
+      "walletPubkey": "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "relays": [
+        "wss://relay.example.com",
+        "wss://backup.example.net"
+      ],
+      "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "scheme": 1,
+      "mintSignature": "1ff2193bb16f948c87d4bd2d90594ff17eae4064d734f487472f2a8e95ed661fa7be54c4eab2ee63e50732545da8ef369772007ff53568d87f0fad1a68fb618c47",
+      "attestedAmountMillis": "21000",
+      "minter": "031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f"
+    }
+  ]
+}
