@@ -9,8 +9,12 @@ import (
 // KindFollowSet is NIP-51's follow set, the follow_set policy's membership source.
 const KindFollowSet = 30000
 
-// followSetFuture is how far ahead of now a version may be dated: 15 minutes.
-const followSetFuture = 900
+// FollowSetMaxFuture is how far ahead of now, in seconds, a follow-set
+// version may be dated: 15 minutes. A Hub ignores a later one, and its relays
+// should refuse it (nipcw/relayreg).
+const FollowSetMaxFuture = 900
+
+const followSetFuture = FollowSetMaxFuture
 
 // FollowSetAddress names a follow set: its author (the provider) and its d.
 type FollowSetAddress struct{ Provider, D string }
