@@ -74,6 +74,19 @@ func ChainSignedMessagePrefix(chain string) (string, bool) {
 	return "", false
 }
 
+// ChainForHRP is the chain a bill's HRP is minted on, by the §Mint
+// Provenance prefix table (satscash → bitcoin), and false for an HRP with no
+// row. The HRP is matched in lowercase.
+func ChainForHRP(hrp string) (string, bool) {
+	hrp = strings.ToLower(hrp)
+	for _, row := range prefixTable {
+		if row.hrp == hrp {
+			return row.chain, true
+		}
+	}
+	return "", false
+}
+
 // ValidChainName reports a chain name of 1 to 32 bytes of a-z, 0-9 and '-'.
 func ValidChainName(s string) bool { return credcodec.ValidChainName(s) }
 
