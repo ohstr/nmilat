@@ -174,3 +174,38 @@ func TestDecodeBolt11HRP_LargestAmountPerMultiplier(t *testing.T) {
 		}
 	}
 }
+
+// DecodeBolt11 returns the creation time and the x field of real invoices, so a
+// caller checking an invoice's expiry against a deadline (an order's pay_by, say)
+// needs no decoder of its own. An all-uppercase invoice (a QR code's form) reads
+// the same.
+func TestDecodeBolt11_TimestampAndExpiryOfRealInvoices(t *testing.T) {
+	for _, c := range []struct {
+		name, invoice     string
+		timestamp, expiry int64
+	}{
+		{
+			// BOLT 11's own example: no x field, so BOLT 11's default of 3600.
+			"bolt11 example, no x",
+			"lnbc1pvjluezsp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygspp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdpl2pkx2ctnv5sxxmmwwd5kgetjypeh2ursdae8g6twvus8g6rfwvs8qun0dfjkxaq9qrsgq357wnc5r2ueh7ck6q93dj32dlqnls087fxdwk8qakdyafkq3yap9us6v52vjjsrvywa6rt52cm9r9zqt8r2t7mlcwspyetp5h2tztugp9lfyql",
+			1496314658, DefaultBolt11Expiry,
+		},
+		{
+			// An flnd invoice with x = 86400.
+			"flnd lnfc 10u, x 86400",
+			"lnfc10u1p4dqm55pp55aq08rgfwhrrdpy5z5jhyd0v2p6ddlurxzj6q6gdx0a5j7c5hnyqdqdw3exzmnnvejhycqzeqxqyz5vqrzjq0uu9vvap7vzzlt63829ht853lrzuzuxgw76qe7l6qf6u5fsm2qjlapyqqqqqqqq9cqqqqlgqqqqqeqpjqsp5uv65wj7xp88qlul2pk5uymnfq2wedpn3g4545mswfmj0df4pup7q9qxpqysgqnwdkm8xuwgq4cp5ukw4kfmz6pz0zcwxtr77n05ls0ljk2rsmg46rmfdnfycwl0p26dyk0ufvmtlyxejn9sm4jp2t8ua663qnufqyhxqplfddnp",
+			1792044692, 86400,
+		},
+	} {
+		for _, form := range []string{c.invoice, strings.ToUpper(c.invoice)} {
+			inv, err := DecodeBolt11(form)
+			if err != nil {
+				t.Fatalf("%s: %v", c.name, err)
+			}
+			if inv.Timestamp != c.timestamp || inv.Expiry != c.expiry || inv.ExpiresAt() != c.timestamp+c.expiry {
+				t.Errorf("%s: timestamp %d expiry %d expires_at %d, want %d, %d, %d", c.name,
+					inv.Timestamp, inv.Expiry, inv.ExpiresAt(), c.timestamp, c.expiry, c.timestamp+c.expiry)
+			}
+		}
+	}
+}
