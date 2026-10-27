@@ -131,7 +131,7 @@ func TestSeenMarks(t *testing.T) {
 	}
 
 	// A later run restores the marks: the old version a relay still serves
-	// is refused, and v2 itself is remembered but not held until offered.
+	// is refused, and v2 itself is remembered, held once offered again.
 	next := &Seen{Options: mainnet}
 	for k, m := range marks {
 		next.Remember(k, m)
@@ -142,8 +142,12 @@ func TestSeenMarks(t *testing.T) {
 	if _, err := next.Current(key1Pub); !errors.Is(err, ErrNoUsable) {
 		t.Fatal("remembered mark is not an announcement")
 	}
-	if _, err := next.Offer(v2); !errors.Is(err, ErrNotNewer) {
-		t.Fatal("remembered event re-offered")
+	// The remembered event itself is usable once offered again.
+	if a, err := next.Offer(v2); err != nil || a == nil {
+		t.Fatalf("remembered event re-offered: %v", err)
+	}
+	if _, err := next.Current(key1Pub); err != nil {
+		t.Fatalf("remembered event not held: %v", err)
 	}
 	// Remember never lowers a newer mark.
 	next.Remember(key1Pub, Mark{CreatedAt: exampleCreatedAt, ID: v1.ID})

@@ -48,7 +48,8 @@ func NewSeen(o CheckOptions) *Seen {
 
 // Offer takes one event. It returns the announcement when ev is now the
 // node's newest and passed every check; ErrNotNewer when it is no newer than
-// the newest seen (the same event again returns the stored outcome); and the
+// the newest seen (the same event again returns the stored outcome, and the
+// event of a mark restored by Remember is checked and held); and the
 // check's *AnnouncementError otherwise, in which case a newer-but-failing ev
 // still becomes the newest and leaves the node with no usable announcement.
 func (s *Seen) Offer(ev *nip01.Event) (*Announcement, error) {
@@ -62,13 +63,13 @@ func (s *Seen) Offer(ev *nip01.Event) (*Announcement, error) {
 		s.nodes = map[string]*seenEntry{}
 	}
 	e, ok := s.nodes[ev.PubKey]
-	if ok && e.mark.ID == ev.ID && e.mark.CreatedAt == created {
-		if e.ann == nil && e.err == nil {
-			return nil, ErrNotNewer // remembered, never held
-		}
+	if ok && e.mark.ID == ev.ID && e.mark.CreatedAt == created && (e.ann != nil || e.err != nil) {
 		return e.ann, e.err
 	}
-	if ok && !e.mark.newer(created, ev.ID) {
+	// The remembered mark's own event (restored by Remember, never held) is
+	// checked and held like a newer one.
+	remembered := ok && e.mark.ID == ev.ID && e.mark.CreatedAt == created
+	if ok && !remembered && !e.mark.newer(created, ev.ID) {
 		return nil, ErrNotNewer
 	}
 	ann, err := ParseAnnouncement(ev, s.Options)
@@ -116,8 +117,8 @@ func (s *Seen) Marks() map[string]Mark {
 	return out
 }
 
-// Remember restores a mark kept from an earlier run: versions no newer than it
-// are refused from now on. It never lowers a newer mark already held.
+// Remember restores a mark kept from an earlier run: versions older than it
+// are refused from now on, and the mark's own event is taken when offered. It never lowers a newer mark already held.
 func (s *Seen) Remember(nodeKey string, m Mark) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
