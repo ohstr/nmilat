@@ -9,7 +9,6 @@ package transport
 // announced value whose whole purpose is PRIVACY is not defended at all.
 
 import (
-	"encoding/json"
 	"fmt"
 	"testing"
 
@@ -78,15 +77,8 @@ func TestAuditC_SecA_ParseAnnouncementAcceptsNoPadding(t *testing.T) {
 	nodePriv, nodeXOnly := testKeypair(t)
 	_, inbox := testKeypair(t)
 
-	content, err := json.Marshal(Announcement{
-		Version: AnnouncementVersion,
-		Inbox:   inbox,
-		Limits:  announcedFrom(hostilePolicy()),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ev := nip01.NewEvent(KindHubAnnouncement, string(content))
+	ev := nip01.NewEvent(KindHubAnnouncement, "")
+	ev.Tags = append([][]string{{"inbox", inbox}}, limitTags(hostilePolicy())...)
 	if err := ev.Sign(nodePriv); err != nil {
 		t.Fatal(err)
 	}

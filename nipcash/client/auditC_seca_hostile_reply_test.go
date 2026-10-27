@@ -28,8 +28,7 @@ func hostileSession(limits transport.Limits, inbox string) *BatchSession {
 	return &BatchSession{
 		hubXOnly: strings.Repeat("a", 64),
 		announcement: &transport.Announcement{
-			Version: transport.AnnouncementVersion,
-			Inbox:   inbox,
+			Inbox: inbox,
 			Limits: transport.AnnouncedLimits{
 				MaxBytes:              limits.MaxEnvelopeBytes,
 				MaxItems:              limits.MaxItems,

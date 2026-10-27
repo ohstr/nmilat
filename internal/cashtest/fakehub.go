@@ -315,7 +315,7 @@ func (h *FakeHub) Serve(ev *nip01.Event) []*nip01.Event {
 		return envError("BAD_REQUEST", "nonce must be 64 lowercase hex characters")
 	case !notAfterOK:
 		return envError("BAD_REQUEST", "not_after must be an integer")
-	case time.Unix(notAfter, 0).Sub(now) > transport.MaxNotAfterWindow:
+	case notAfter > now.Unix()+h.Limits.MaxRequestAgeSeconds:
 		return envError("BAD_REQUEST", "not_after is too far ahead")
 	case json.Unmarshal(raw["items"], &items) != nil || len(items) == 0:
 		return envError("BAD_REQUEST", "items must be a non-empty array")

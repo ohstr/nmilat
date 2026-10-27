@@ -84,8 +84,7 @@ func TestBatchMethods_RejectAZeroBillByName(t *testing.T) {
 	s := &BatchSession{
 		relays: []string{"ws://127.0.0.1:1"},
 		announcement: &transport.Announcement{
-			Version: 1,
-			Inbox:   strings.Repeat("ab", 32),
+			Inbox: strings.Repeat("ab", 32),
 			Limits: transport.AnnouncedLimits{
 				MaxBytes:              d.MaxEnvelopeBytes,
 				MaxItems:              d.MaxItems,

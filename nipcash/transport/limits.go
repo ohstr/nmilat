@@ -199,7 +199,14 @@ type Limits struct {
 	// refuses a value whose maximal item could not fit MaxEnvelopeBytes, so a hub
 	// cannot advertise a cap that is impossible to honour.
 	MaxConsolidateSources int
+	// MaxRequestAgeSeconds is the horizon H, the announced max_request_age: how
+	// far past arrival a deadline may lie, and the record-retention unit
+	// (NIP-CASH §Deadlines). An announcing Hub sets at least 60.
+	MaxRequestAgeSeconds int64
 }
+
+// DefaultMaxRequestAge is the RECOMMENDED horizon H, in seconds.
+const DefaultMaxRequestAge = 300
 
 // DefaultLimits returns the policy a hub gets when it configures nothing.
 func DefaultLimits() Limits {
@@ -209,6 +216,7 @@ func DefaultLimits() Limits {
 		PadBucketBytes:        DefaultPadBucketBytes,
 		MaxVerifyBudget:       DefaultMaxVerifyBudget,
 		MaxConsolidateSources: DefaultMaxConsolidateSources,
+		MaxRequestAgeSeconds:  DefaultMaxRequestAge,
 	}
 }
 
@@ -235,6 +243,18 @@ var (
 // author is not necessarily honest and a value can be chosen to harm the client
 // rather than merely be wrong.
 func (l Limits) ValidateAnnounced() error {
+	if err := l.validateAdoptable(); err != nil {
+		return err
+	}
+	if l.MaxRequestAgeSeconds < MinMaxRequestAge {
+		return fmt.Errorf("%w: max_request_age %d is below %d", ErrLimitsNotPositive, l.MaxRequestAgeSeconds, MinMaxRequestAge)
+	}
+	return nil
+}
+
+// validateAdoptable is what a client checks of an announced policy before adopting
+// it: Validate (which bounds max_bytes by NIP-44's 65535) plus the padding floor.
+func (l Limits) validateAdoptable() error {
 	if err := l.Validate(); err != nil {
 		return err
 	}

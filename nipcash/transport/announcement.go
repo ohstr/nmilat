@@ -2,9 +2,12 @@ package transport
 
 import (
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
+	"strconv"
+	"strings"
 
 	"github.com/flokiorg/go-flokicoin/crypto/schnorr"
 	"github.com/ohstr/nmilat/nip01"
@@ -19,48 +22,67 @@ import (
 // "d" tag is needed. Numbered to mirror the 23190 transport block.
 const KindHubAnnouncement = 11190
 
-// AnnouncementVersion is the only version this package emits.
-const AnnouncementVersion = 1
-
 var (
 	ErrAnnouncementMalformed = errors.New("transport: hub announcement is malformed")
 	ErrAnnouncementAuthor    = errors.New("transport: hub announcement was not signed by the expected node identity")
-	ErrAnnouncementVersion   = errors.New("transport: unsupported hub announcement version")
 	ErrAnnouncementSignature = errors.New("transport: hub announcement signature is invalid")
+	// ErrHubUnusable is a Hub a client sends no bill-creating call to: its
+	// announcement carries no max_request_age of at least 60 seconds, or its newest
+	// announcement was rejected.
+	ErrHubUnusable = errors.New("transport: the hub is unusable for calls carrying a request_id")
+	// ErrBadAddr is an addr a Hub was asked to announce that is not host:port with
+	// an IPv4, bracketed IPv6 or onion host.
+	ErrBadAddr = errors.New("transport: addr must be host:port with an IPv4, bracketed IPv6 or onion host")
 )
 
-// Announcement is what a hub publishes so clients can reach its private transport.
-//
-// It carries the envelope limits as well as the inbox key, because a client that
-// guesses the limits gets a rejection it could have predicted locally. This is the
-// channel through which "ask the hub, do not assume" actually happens.
+// Tag names and limit names of the kind-11190 announcement (NIP-CASH §The Hub
+// Announcement).
+const (
+	annTagInbox = "inbox"
+	annTagLimit = "limit"
+	annTagRelay = "r"
+	annTagAddr  = "addr"
+
+	LimitMaxBytes              = "max_bytes"
+	LimitMaxItems              = "max_items"
+	LimitMaxConsolidateSources = "max_consolidate_sources"
+	LimitPadBucketBytes        = "pad_bucket_bytes"
+	LimitMaxVerifyBudget       = "max_verify_budget"
+	LimitMaxRequestAge         = "max_request_age"
+)
+
+// MinMaxRequestAge is the smallest horizon H a Hub may announce, in seconds.
+const MinMaxRequestAge = 60
+
+// Announcement is what a hub publishes so clients can reach its private
+// transport: its inbox, its envelope limits, the relays it reads its inbox on
+// and, optionally, where its Lightning node listens. On the wire every field is
+// a tag and content is empty; the kind is the version.
 type Announcement struct {
-	Version int `json:"v"`
 	// Inbox is the x-only pubkey clients NIP-44 encrypt envelopes to and p-tag.
-	// NOT the node identity: see keys.GetPrivateTransportKey for why the node key
-	// can sign but cannot decrypt.
-	Inbox  string          `json:"inbox"`
-	Limits AnnouncedLimits `json:"limits"`
-	Relays []string        `json:"relays,omitempty"`
-	// CreatedAt is the announcing EVENT's created_at, not part of the content.
-	//
-	// Carried here because kind 11190 is replaceable but every announcement the hub
-	// ever published stays individually valid forever — each one is genuinely signed
-	// by the node identity. So a relay serving an old one is not forging anything; it
-	// is CHOOSING which of the hub's own past policies a client obeys. Without a
-	// timestamp a client has nothing to order them by and adopts whichever arrives
-	// first.
-	CreatedAt int64 `json:"-"`
+	// A client uses whatever it says; it may equal the announcing identity.
+	Inbox  string
+	Limits AnnouncedLimits
+	// Relays are the r tags, in the Hub's order.
+	Relays []string
+	// Addrs are the well-formed addr tags, display and connect hints only; a
+	// malformed one is dropped, never fatal.
+	Addrs []string
+	// CreatedAt is the announcing event's created_at. Every announcement the hub
+	// ever published stays validly signed, so a client orders candidates by it and
+	// never moves backwards.
+	CreatedAt int64
 }
 
-// AnnouncedLimits is Limits on the wire. Spelled out separately so the JSON names
-// are part of the protocol rather than an accident of Go field names.
+// AnnouncedLimits are the limit tags.
 type AnnouncedLimits struct {
-	MaxBytes              int `json:"max_bytes"`
-	MaxItems              int `json:"max_items"`
-	MaxConsolidateSources int `json:"max_consolidate_sources"`
-	PadBucketBytes        int `json:"pad_bucket_bytes"`
-	MaxVerifyBudget       int `json:"max_verify_budget"`
+	MaxBytes              int
+	MaxItems              int
+	MaxConsolidateSources int
+	PadBucketBytes        int
+	MaxVerifyBudget       int
+	// MaxRequestAge is H, in seconds; 0 when the Hub announced none.
+	MaxRequestAge int64
 }
 
 // Limits converts the announced values into the type the codec enforces.
@@ -71,66 +93,86 @@ func (a AnnouncedLimits) Limits() Limits {
 		MaxConsolidateSources: a.MaxConsolidateSources,
 		PadBucketBytes:        a.PadBucketBytes,
 		MaxVerifyBudget:       a.MaxVerifyBudget,
+		MaxRequestAgeSeconds:  a.MaxRequestAge,
 	}
 }
 
-func announcedFrom(l Limits) AnnouncedLimits {
-	return AnnouncedLimits{
-		MaxBytes:              l.MaxEnvelopeBytes,
-		MaxItems:              l.MaxItems,
-		MaxConsolidateSources: l.MaxConsolidateSources,
-		PadBucketBytes:        l.PadBucketBytes,
-		MaxVerifyBudget:       l.MaxVerifyBudget,
+// ValidateForBillCalls is the client's check before a call carrying a
+// request_id: the Hub must announce max_request_age of at least 60 seconds, or
+// it is ErrHubUnusable.
+func (a Announcement) ValidateForBillCalls() error {
+	if a.Limits.MaxRequestAge < MinMaxRequestAge {
+		return fmt.Errorf("%w: max_request_age %d, want at least %d", ErrHubUnusable, a.Limits.MaxRequestAge, MinMaxRequestAge)
+	}
+	return nil
+}
+
+func limitTags(l Limits) [][]string {
+	n := func(v int64) string { return strconv.FormatInt(v, 10) }
+	return [][]string{
+		{annTagLimit, LimitMaxBytes, n(int64(l.MaxEnvelopeBytes))},
+		{annTagLimit, LimitMaxItems, n(int64(l.MaxItems))},
+		{annTagLimit, LimitMaxConsolidateSources, n(int64(l.MaxConsolidateSources))},
+		{annTagLimit, LimitPadBucketBytes, n(int64(l.PadBucketBytes))},
+		{annTagLimit, LimitMaxVerifyBudget, n(int64(l.MaxVerifyBudget))},
+		{annTagLimit, LimitMaxRequestAge, n(l.MaxRequestAgeSeconds)},
 	}
 }
 
-// NewAnnouncement builds an UNSIGNED announcement event with its ID computed, ready
-// for the caller to have the node sign that ID.
+// NewAnnouncement builds an UNSIGNED kind-11190 announcement with its ID
+// computed, ready for the caller to have the node sign that ID: content "", one
+// inbox tag, one limit tag per limit, the r relays in order, then each addr.
 //
-// It returns an unsigned event on purpose. The announcement must be signed by the
-// Lightning node identity, and the node never releases that private key — so the
-// hub takes ev.ID, asks the node for a BIP340 signature over it, and attaches the
-// result. That indirection is the whole reason this is split from signing: no
-// in-process key can produce this signature.
+// It refuses a policy ValidateAnnounced refuses (so a max_request_age below 60
+// and a max_bytes above 65535), a relay that is not a ws:// or wss:// URL, an
+// addr that is not host:port (ErrBadAddr), and the node identity as inbox. It
+// parses its own event before returning it, so a Hub never publishes an
+// announcement a client would reject.
 //
-// nodeXOnly is the node's identity pubkey in x-only form (its compressed form with
-// the 02/03 prefix dropped), which is what a client recovers from a bill's mint
-// signature.
-func NewAnnouncement(nodeXOnly, inbox string, limits Limits, relays []string) (*nip01.Event, error) {
+// It returns an unsigned event on purpose: the node identity signs, and the node
+// never releases that key, so the Hub asks the node for a BIP340 signature over
+// ev.ID and attaches it.
+func NewAnnouncement(nodeXOnly, inbox string, limits Limits, relays []string, addrs ...string) (*nip01.Event, error) {
 	if len(nodeXOnly) != keyHexLen || !isLowerHex(nodeXOnly) {
 		return nil, fmt.Errorf("%w: node pubkey must be %d lowercase hex characters",
 			ErrAnnouncementMalformed, keyHexLen)
 	}
-	if len(inbox) != keyHexLen || !isLowerHex(inbox) {
-		return nil, fmt.Errorf("%w: inbox pubkey must be %d lowercase hex characters",
-			ErrAnnouncementMalformed, keyHexLen)
+	if !validInbox(inbox) {
+		return nil, fmt.Errorf("%w: inbox must be a 64 lowercase hex x-only pubkey", ErrAnnouncementMalformed)
 	}
-	if err := limits.Validate(); err != nil {
+	if err := limits.ValidateAnnounced(); err != nil {
 		return nil, fmt.Errorf("refusing to announce an invalid envelope policy: %w", err)
 	}
 	// Announcing the node's own key as its inbox would mean the hub cannot decrypt
-	// what clients send it — the node will not perform the ECDH. Catch it here
-	// rather than in production silence.
+	// what clients send it — the node will not perform the ECDH.
 	if inbox == nodeXOnly {
 		return nil, fmt.Errorf("%w: inbox must not be the node identity key", ErrAnnouncementMalformed)
 	}
-
-	content, err := json.Marshal(Announcement{
-		Version: AnnouncementVersion,
-		Inbox:   inbox,
-		Limits:  announcedFrom(limits),
-		Relays:  relays,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("transport: marshal announcement: %w", err)
+	tags := [][]string{{annTagInbox, inbox}}
+	tags = append(tags, limitTags(limits)...)
+	for _, r := range relays {
+		if !validRelayURL(r) {
+			return nil, fmt.Errorf("%w: relay %q is not a ws:// or wss:// URL", ErrAnnouncementMalformed, r)
+		}
+		tags = append(tags, []string{annTagRelay, r})
+	}
+	for _, a := range addrs {
+		if !ValidAddr(a) {
+			return nil, fmt.Errorf("%w: %q", ErrBadAddr, a)
+		}
+		tags = append(tags, []string{annTagAddr, a})
 	}
 
-	ev := nip01.NewUnsignedEvent(KindHubAnnouncement, nodeXOnly, string(content))
+	ev := nip01.NewUnsignedEvent(KindHubAnnouncement, nodeXOnly, "")
+	ev.Tags = tags
 	id, err := ev.HashID()
 	if err != nil {
 		return nil, fmt.Errorf("transport: compute announcement id: %w", err)
 	}
 	ev.ID = hex.EncodeToString(id)
+	if _, err := announcementFromTags(ev); err != nil {
+		return nil, fmt.Errorf("transport: built an announcement a client would reject: %w", err)
+	}
 	return ev, nil
 }
 
@@ -195,31 +237,140 @@ func ParseAnnouncement(ev *nip01.Event, expectedNodeXOnly string) (*Announcement
 		return nil, fmt.Errorf("%w: %v", ErrAnnouncementSignature, err)
 	}
 
-	var a Announcement
-	if err := json.Unmarshal([]byte(ev.Content), &a); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrAnnouncementMalformed, err)
+	a, err := announcementFromTags(ev)
+	if err != nil {
+		return nil, err
 	}
-	if a.Version != AnnouncementVersion {
-		return nil, fmt.Errorf("%w: %d", ErrAnnouncementVersion, a.Version)
+	a.CreatedAt = int64(ev.CreatedAt) //nolint:gosec // event timestamps are seconds
+	return a, nil
+}
+
+// announcementFromTags reads an announcement's tags: exactly one inbox, at most
+// one limit of each name, well-formed inbox, limit and r values; unknown tags,
+// unknown limit names and malformed addrs are ignored. The announced envelope
+// policy must be one a client can adopt.
+func announcementFromTags(ev *nip01.Event) (*Announcement, error) {
+	a := &Announcement{}
+	inboxes := 0
+	seenLimit := map[string]bool{}
+	for _, tag := range ev.Tags {
+		if len(tag) == 0 {
+			continue
+		}
+		switch tag[0] {
+		case annTagInbox:
+			inboxes++
+			if len(tag) < 2 || !validInbox(tag[1]) {
+				return nil, fmt.Errorf("%w: malformed inbox", ErrAnnouncementMalformed)
+			}
+			a.Inbox = tag[1]
+		case annTagLimit:
+			if len(tag) < 3 {
+				return nil, fmt.Errorf("%w: malformed limit tag", ErrAnnouncementMalformed)
+			}
+			name := tag[1]
+			if seenLimit[name] {
+				return nil, fmt.Errorf("%w: two %q limits", ErrAnnouncementMalformed, name)
+			}
+			seenLimit[name] = true
+			v, ok := parseDecimal(tag[2])
+			if !ok {
+				return nil, fmt.Errorf("%w: limit %q value %q is not unsigned decimal", ErrAnnouncementMalformed, name, tag[2])
+			}
+			switch name {
+			case LimitMaxBytes:
+				a.Limits.MaxBytes = clampInt(v)
+			case LimitMaxItems:
+				a.Limits.MaxItems = clampInt(v)
+			case LimitMaxConsolidateSources:
+				a.Limits.MaxConsolidateSources = clampInt(v)
+			case LimitPadBucketBytes:
+				a.Limits.PadBucketBytes = clampInt(v)
+			case LimitMaxVerifyBudget:
+				a.Limits.MaxVerifyBudget = clampInt(v)
+			case LimitMaxRequestAge:
+				a.Limits.MaxRequestAge = int64(min(v, 1<<31)) //nolint:gosec // bounded
+			}
+		case annTagRelay:
+			if len(tag) < 2 || !validRelayURL(tag[1]) {
+				return nil, fmt.Errorf("%w: malformed r tag", ErrAnnouncementMalformed)
+			}
+			a.Relays = append(a.Relays, tag[1])
+		case annTagAddr:
+			if len(tag) >= 2 && ValidAddr(tag[1]) {
+				a.Addrs = append(a.Addrs, tag[1])
+			}
+		}
 	}
-	if len(a.Inbox) != keyHexLen || !isLowerHex(a.Inbox) {
-		return nil, fmt.Errorf("%w: inbox pubkey must be %d lowercase hex characters",
-			ErrAnnouncementMalformed, keyHexLen)
-	}
-	if _, err := schnorr.ParsePubKey(mustHex(a.Inbox)); err != nil {
-		return nil, fmt.Errorf("%w: inbox is not a valid x-only pubkey: %v", ErrAnnouncementMalformed, err)
-	}
-	if a.Inbox == expectedNodeXOnly {
-		return nil, fmt.Errorf("%w: inbox must not be the node identity key", ErrAnnouncementMalformed)
+	if inboxes != 1 {
+		return nil, fmt.Errorf("%w: %d inbox tags, want exactly 1", ErrAnnouncementMalformed, inboxes)
 	}
 	// A hostile or misconfigured hub must not be able to talk a client into
 	// building something unencryptable, so the announced policy is validated
-	// rather than adopted.
-	if err := a.Limits.Limits().ValidateAnnounced(); err != nil {
+	// rather than adopted. max_request_age is checked apart, by
+	// ValidateForBillCalls, since a Hub without one still answers reads.
+	if err := a.Limits.Limits().validateAdoptable(); err != nil {
 		return nil, fmt.Errorf("%w: announced limits are unusable: %v", ErrAnnouncementMalformed, err)
 	}
-	a.CreatedAt = int64(ev.CreatedAt)
-	return &a, nil
+	return a, nil
+}
+
+// parseDecimal reads unsigned decimal with no leading zeros.
+func parseDecimal(s string) (uint64, bool) {
+	v, err := strconv.ParseUint(s, 10, 64)
+	if err != nil || strconv.FormatUint(v, 10) != s {
+		return 0, false
+	}
+	return v, true
+}
+
+func clampInt(v uint64) int { return int(min(v, 1<<31)) } //nolint:gosec // bounded
+
+func validInbox(s string) bool {
+	if len(s) != keyHexLen || !isLowerHex(s) {
+		return false
+	}
+	_, err := schnorr.ParsePubKey(mustHex(s))
+	return err == nil
+}
+
+func validRelayURL(s string) bool {
+	u, err := url.Parse(s)
+	return err == nil && (u.Scheme == "ws" || u.Scheme == "wss") && u.Host != ""
+}
+
+// ValidAddr reports host:port with an IPv4 address, a bracketed IPv6 address or
+// an onion address as the host, and a port from 1 to 65535.
+func ValidAddr(s string) bool {
+	host, port, err := net.SplitHostPort(s)
+	if err != nil {
+		return false
+	}
+	p, err := strconv.ParseUint(port, 10, 16)
+	if err != nil || p == 0 || strconv.FormatUint(p, 10) != port {
+		return false
+	}
+	if strings.HasSuffix(host, ".onion") {
+		label := strings.TrimSuffix(host, ".onion")
+		if len(label) != 56 && len(label) != 16 {
+			return false
+		}
+		for i := 0; i < len(label); i++ {
+			c := label[i]
+			if (c < 'a' || c > 'z') && (c < '2' || c > '7') {
+				return false
+			}
+		}
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	if ip.To4() != nil {
+		return !strings.HasPrefix(s, "[")
+	}
+	return strings.HasPrefix(s, "[")
 }
 
 // mustHex decodes hex already known to be well formed by a length and charset check.

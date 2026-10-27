@@ -8,6 +8,13 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `request_id` and lookup helpers for NIP-CASH: `ValidRequestID`,
+  `NewRequestID`, `DerivedRequestID`, `CheckDeadline`, `CommitAllowed`,
+  `DeadlineWindow`, `DecideLookup`, `RecordRetained`, `TombstoneAnswerable`,
+  `SliceLive`, the `ErrCode*` constants, `CodeRetryable` and `FinalCode`.
+- Adds `max_request_age` to the Hub announcement (`Limits.MaxRequestAgeSeconds`,
+  `AnnouncedLimits.MaxRequestAge`) and `Announcement.ValidateForBillCalls`,
+  which reports a Hub without one of at least 60 seconds as unusable.
 - Adds shared claim-proof helpers for NIP-CASH Hubs: `VerifyClaimProof`
   (the exact tag schema per method and slice, bound values, freshness,
   consumed ids, the connection_key attestation checks, `RESTRICTED` for an
@@ -287,6 +294,11 @@ privacy and performance fixes.
 
 ### Changed
 
+- Changes the kind-11190 announcement to the tag form: `inbox`, one `limit`
+  per name, `r` and optional `addr` tags (`Announcement.Addrs`), an empty
+  `content` and no version. `ParseAnnouncement` reads only tags and accepts an
+  inbox equal to the author; `NewAnnouncement` takes optional addrs and
+  parses its own event before returning it.
 - Changes claim proofs to carry the `m` tag, and `s` on `cash_consolidate`,
   through `ClaimBinding`; item and bill proofs now must carry `expiration`
   equal to the envelope's `not_after`, an empty `content` and lowercase hex
