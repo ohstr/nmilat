@@ -162,6 +162,13 @@ func TestVerifyClient_Rule7(t *testing.T) {
 			t.Fatalf("%+v", v)
 		}
 	})
+	t.Run("e and a on another author's event: valid, not counted", func(t *testing.T) {
+		ev, _ := f.zap(t, zapOpts{target: other.article, useA: true})
+		v := countable(ev, other.article)
+		if !v.Valid() || v.Countable || firstFailure(v) != 7 {
+			t.Fatalf("%+v", v)
+		}
+	})
 	t.Run("issued before its target", func(t *testing.T) {
 		ev, _ := f.zap(t, zapOpts{target: f.note, issuedAt: f.note.CreatedAt - 1})
 		if v := countable(ev, f.note); v.Countable || firstFailure(v) != 7 {

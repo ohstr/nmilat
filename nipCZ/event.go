@@ -233,13 +233,6 @@ func parseCashZap(ev *nip01.Event) (*CashZap, *RuleError) {
 	if len(vals["k"]) == 1 {
 		z.K = vals["k"][0]
 	}
-	if z.E != "" && z.A != "" {
-		_, author, _, ok := parseCoordinate(z.A)
-		if !ok || author != z.Recipient.Value {
-			return nil, ruleErr(2, "e and a do not name the same event")
-		}
-	}
-
 	tok, err := decodeToken(z.Cash)
 	if err != nil {
 		return nil, ruleErr(3, "cash does not decode: %v", err)

@@ -133,11 +133,21 @@ func TestParseCashZap_Rule2Matrix(t *testing.T) {
 			t.Fatalf("%v %+v", err, z)
 		}
 	})
-	t.Run("e and a naming different events", func(t *testing.T) {
+	t.Run("a authored by someone other than p parses", func(t *testing.T) {
+		// Whether e and a name one event is checked against the target, and
+		// authorship only decides counting (rule 7): the parse accepts it.
 		other := hexKey(t)
 		ev, _ := f.zap(t, zapOpts{target: f.article, useA: true, mutate: setTag("a", "30023:"+other+":my:slug")})
-		_, err := ParseCashZap(ev)
-		wantRule(t, err, 2)
+		if _, err := ParseCashZap(ev); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("CK p with e and a parses", func(t *testing.T) {
+		ev, _ := f.zap(t, zapOpts{target: f.article, useA: true, mutate: chain(setTag("p", ck, "discord"), addTag("ia", hexKey(t)))})
+		z, err := ParseCashZap(ev)
+		if err != nil || z.E == "" || z.A == "" {
+			t.Fatalf("%v %+v", err, z)
+		}
 	})
 	t.Run("wrong kind", func(t *testing.T) {
 		if _, err := ParseCashZap(f.note); !errors.Is(err, ErrWrongKind) {
