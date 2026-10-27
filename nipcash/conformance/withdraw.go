@@ -2,6 +2,7 @@ package conformance
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,7 @@ import (
 	"github.com/flokiorg/go-flokicoin/wire"
 
 	"github.com/ohstr/nmilat/nip01"
+	"github.com/ohstr/nmilat/nip57"
 	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/nipcash/client"
 	"github.com/ohstr/nmilat/nipcash/transport"
@@ -542,10 +544,12 @@ func ctWd08(t *testing.T, s *suite) {
 	}
 }
 
-// CT-WD-09 (CASH-WD-09): races on one slice: two withdrawals with different
-// ids, in one envelope and in two at once: exactly one commits. (Withdraw
-// against cash_redeem or a split, and a commit stalled past its deadline, are
-// not run here.)
+// CT-WD-09 (CASH-WD-09): races on one slice, exactly one call commits and the
+// other is refused (RESTRICTED, or the tombstone of the bill it drained): two
+// withdrawals with different ids, in one envelope and in two at once; a
+// withdrawal against a cash_redeem (Payee); a withdrawal against a split. And
+// a withdrawal whose commit is stalled past its deadline is refused
+// BAD_REQUEST, the slice left claimable (Faulty).
 func ctWd09(t *testing.T, s *suite) {
 	sess := s.withdrawals(t)
 	addr := s.address(t, p2wpkh)
@@ -553,44 +557,166 @@ func ctWd09(t *testing.T, s *suite) {
 	if s.o.Long {
 		n = 50
 	}
-	for i := range n {
-		h := s.pubkeyBill(t, wdAmount, 0)
-		q := s.quoteOK(t, h, addr)
-		var wins int
-		if i%2 == 0 {
+	withdrawOne := func(h holder, q *nipcash.WithdrawQuote) func() client.ItemOutcome {
+		return func() client.ItemOutcome {
 			ctx, cancel := ctx15()
-			outs, _ := sess.WithdrawMany(ctx, []client.BatchWithdraw{{ID: "1", Bill: h.bill, Params: nipcash.CashWithdrawParams{Quote: q, Credential: h.cred}},
-				{ID: "2", Bill: h.bill, Params: nipcash.CashWithdrawParams{Quote: q, Credential: h.cred}}}, newMemJournal(), "conformance")
-			cancel()
-			for _, o := range outs {
-				if o.Result != nil {
-					wins++
-				}
+			defer cancel()
+			outs, _ := sess.WithdrawMany(ctx, []client.BatchWithdraw{{ID: "1", Bill: h.bill,
+				Params: nipcash.CashWithdrawParams{Quote: q, Credential: h.cred}}}, newMemJournal(), "conformance")
+			if len(outs) != 1 || outs[0].Result == nil && outs[0].Error == nil && outs[0].Gone == nil {
+				return client.ItemOutcome{State: client.OutcomeNotServed}
 			}
-		} else {
-			var mu sync.Mutex
-			var wg sync.WaitGroup
-			for range 2 {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					ctx, cancel := ctx15()
-					defer cancel()
-					outs, _ := sess.WithdrawMany(ctx, []client.BatchWithdraw{{ID: "1", Bill: h.bill,
-						Params: nipcash.CashWithdrawParams{Quote: q, Credential: h.cred}}}, newMemJournal(), "conformance")
-					if len(outs) == 1 && outs[0].Result != nil {
-						mu.Lock()
-						wins++
-						mu.Unlock()
-					}
-				}()
+			o := outs[0].ItemOutcome
+			if outs[0].Result != nil {
+				o.State = client.OutcomeResult
 			}
-			wg.Wait()
-		}
-		if wins != 1 {
-			t.Fatalf("race %d: %d withdrawals of one slice committed, want exactly 1", i, wins)
+			return o
 		}
 	}
+	t.Run("two withdrawals", func(t *testing.T) {
+		for i := range n {
+			h := s.pubkeyBill(t, wdAmount, 0)
+			q := s.quoteOK(t, h, addr)
+			if i%2 == 0 {
+				ctx, cancel := ctx15()
+				outs, _ := sess.WithdrawMany(ctx, []client.BatchWithdraw{{ID: "1", Bill: h.bill, Params: nipcash.CashWithdrawParams{Quote: q, Credential: h.cred}},
+					{ID: "2", Bill: h.bill, Params: nipcash.CashWithdrawParams{Quote: q, Credential: h.cred}}}, newMemJournal(), "conformance")
+				cancel()
+				wins := 0
+				for _, o := range outs {
+					if o.Result != nil {
+						wins++
+					}
+				}
+				if wins != 1 {
+					t.Fatalf("race %d: %d withdrawals of one slice in one envelope committed, want exactly 1", i, wins)
+				}
+				continue
+			}
+			race(t, i, withdrawOne(h, q), withdrawOne(h, q))
+		}
+	})
+	t.Run("withdraw and cash_redeem", func(t *testing.T) {
+		payee, ok := s.h.(Payee)
+		if !ok {
+			t.Skip("the Hub does not implement Payee")
+		}
+		for i := range n {
+			h := s.pubkeyBill(t, wdAmount, 0)
+			net := s.status(t, h, nipcash.ScopeMine).Recipients[0].NetRedeemableMillis
+			q := s.quoteOK(t, h, addr)
+			inv := payee.Invoice(t, net)
+			race(t, i, withdrawOne(h, q), func() client.ItemOutcome {
+				ctx, cancel := ctx15()
+				defer cancel()
+				outs, _ := sess.RedeemMany(ctx, []client.BatchRedeem{{ID: "1", Bill: h.bill,
+					Params: nipcash.CashRedeemParams{Invoice: inv, Credential: h.cred}}})
+				if len(outs) != 1 {
+					return client.ItemOutcome{State: client.OutcomeNotServed}
+				}
+				if r := outs[0].Result; r != nil && !preimageOf(r.Preimage, inv) {
+					t.Errorf("race %d: the redemption's preimage does not hash to the invoice's payment hash", i)
+				}
+				return outs[0].ItemOutcome
+			})
+		}
+	})
+	t.Run("withdraw and split", func(t *testing.T) {
+		split := uint64(wdAmount / 4)
+		for i := range n {
+			h := s.pubkeyBill(t, wdAmount, 0)
+			q := s.quoteOK(t, h, addr)
+			_, to := keypair(t)
+			race(t, i, withdrawOne(h, q), func() client.ItemOutcome {
+				ctx, cancel := ctx15()
+				defer cancel()
+				outs, _ := sess.TransferMany(ctx, []client.BatchTransfer{{ID: "1", Bill: h.bill, Params: nipcash.CashTransferParams{
+					Credential: h.cred, To: nipcash.Pubkey(to), CurrentAmount: h.amount, SplitAmount: &split}}}, newMemJournal(), "conformance")
+				if len(outs) != 1 {
+					return client.ItemOutcome{State: client.OutcomeNotServed}
+				}
+				return outs[0].ItemOutcome
+			})
+		}
+	})
+	t.Run("stalled commit", func(t *testing.T) {
+		f, ok := s.h.(Faulty)
+		if !ok {
+			t.Skip("the Hub does not implement Faulty")
+		}
+		h := s.pubkeyBill(t, wdAmount, 0)
+		q := s.quoteOK(t, h, addr)
+		e, nonce, replyTo, _ := s.newEnvelope(t)
+		notAfter := time.Now().Add(3 * time.Second).Unix()
+		e["not_after"] = notAfter
+		e["items"] = []transport.Item{s.rawItem(t, h, "1", nipcash.MethodCashWithdraw, withdrawParams(t, h, q, nil), h.priv, nonce, notAfter)}
+		l := s.listen(t, replyTo)
+		f.InjectFault(t, FaultStallCommit)
+		cleared := false
+		t.Cleanup(func() {
+			if !cleared {
+				f.InjectFault(t, FaultNone)
+			}
+		})
+		r := s.wrap(t, e, "")
+		s.publish(t, 0, r.ev)
+		time.Sleep(time.Until(time.Unix(notAfter+2, 0)))
+		f.InjectFault(t, FaultNone)
+		cleared = true
+		got := l.wait(1, s.quiet()+5*time.Second)
+		if len(got) == 0 {
+			t.Fatal("no reply to a call whose commit was stalled past its deadline, want BAD_REQUEST")
+		}
+		var results []map[string]json.RawMessage
+		if err := json.Unmarshal(r.open(t, got[0].ev)["results"], &results); err != nil || len(results) != 1 {
+			t.Fatalf("results %v: %v", results, err)
+		}
+		if code := resultCode(results[0]); code != nipcash.ErrCodeBadRequest {
+			t.Fatalf("a commit stalled past its deadline answered %v, want BAD_REQUEST", results[0])
+		}
+		// Nothing committed: the slice is still claimable.
+		s.withdrawOK(t, h, addr)
+	})
+}
+
+// race runs a and b at once on one slice: exactly one commits, and the other
+// is refused RESTRICTED or with the tombstone of the bill the winner drained.
+func race(t *testing.T, i int, a, b func() client.ItemOutcome) {
+	t.Helper()
+	var outs [2]client.ItemOutcome
+	var wg sync.WaitGroup
+	for k, f := range []func() client.ItemOutcome{a, b} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			outs[k] = f()
+		}()
+	}
+	wg.Wait()
+	wins := 0
+	for _, o := range outs {
+		switch {
+		case o.State == client.OutcomeResult:
+			wins++
+		case o.Gone != nil, o.Error != nil && o.Error.Code == nipcash.ErrCodeRestricted:
+		default:
+			t.Errorf("race %d: the losing call answered %+v, want RESTRICTED or the tombstone", i, o)
+		}
+	}
+	if wins != 1 {
+		t.Fatalf("race %d: %d calls on one slice committed, want exactly 1", i, wins)
+	}
+}
+
+// preimageOf reports preimage hashing to bolt11's payment hash.
+func preimageOf(preimage, bolt11 string) bool {
+	inv, err := nip57.DecodeBolt11(bolt11)
+	raw, herr := hex.DecodeString(preimage)
+	if err != nil || herr != nil {
+		return false
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]) == inv.PaymentHash
 }
 
 // CT-WD-10 (CASH-WD-22): a destroyed bill answers a quote and a withdrawal

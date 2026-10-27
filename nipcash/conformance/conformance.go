@@ -5,7 +5,7 @@
 // nmilat's CI runs it against its own fake Hub; a Hub implementation runs the
 // same code against itself through an adapter implementing HubUnderTest and
 // whichever optional interfaces it can (Clocked, Faulty, Admin, HubDeleter,
-// OrderPayer, PowRelay, Lister, WithdrawChain, WithdrawToggle). A case needing
+// OrderPayer, PowRelay, Lister, WithdrawChain, WithdrawToggle, Payee). A case needing
 // an optional interface the Hub does not implement is skipped with the
 // interface named, so a run lists exactly what it did not exercise.
 //
@@ -42,7 +42,8 @@ type Fault int
 
 const (
 	FaultNone Fault = iota
-	// FaultStallCommit holds every commit until the fault is cleared.
+	// FaultStallCommit holds every commit until the fault is cleared; a commit
+	// it held past the call's deadline is then refused BAD_REQUEST.
 	FaultStallCommit
 	// FaultBreakSigner makes the node signer fail.
 	FaultBreakSigner
@@ -127,6 +128,14 @@ type Lister interface {
 	CloseCircle(t testing.TB, d string)
 }
 
+// Payee is an optional Hub with a Lightning payee the suite can invoice, for
+// the cases that redeem a slice (CT-WD-09).
+type Payee interface {
+	// Invoice is a fresh invoice for millis that the Hub under test pays as an
+	// external payment (never one its own node receives), settling at once.
+	Invoice(t testing.TB, millis uint64) string
+}
+
 // Options tunes a run.
 type Options struct {
 	// Long runs the cases that need real time, and waits longer before deciding
@@ -148,10 +157,11 @@ const (
 	needLister
 	needWithdrawChain
 	needWithdrawToggle
+	needPayee
 )
 
 func (n need) name() string {
-	return [...]string{"Clocked", "Faulty", "Admin", "HubDeleter", "OrderPayer", "PowRelay", "Lister", "WithdrawChain", "WithdrawToggle"}[n]
+	return [...]string{"Clocked", "Faulty", "Admin", "HubDeleter", "OrderPayer", "PowRelay", "Lister", "WithdrawChain", "WithdrawToggle", "Payee"}[n]
 }
 
 func (n need) satisfiedBy(h HubUnderTest) bool {
@@ -175,6 +185,8 @@ func (n need) satisfiedBy(h HubUnderTest) bool {
 		_, ok = h.(WithdrawChain)
 	case needWithdrawToggle:
 		_, ok = h.(WithdrawToggle)
+	case needPayee:
+		_, ok = h.(Payee)
 	}
 	return ok
 }

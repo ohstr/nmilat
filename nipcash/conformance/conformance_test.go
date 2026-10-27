@@ -84,12 +84,14 @@ func TestAgainstFakeListingHub(t *testing.T) {
 }
 
 // ledgerHub is the fake Hub with a bill ledger offering withdrawals, as a
-// WithdrawChain, WithdrawToggle, Clocked, Faulty and HubDeleter.
+// WithdrawChain, WithdrawToggle, Clocked, Faulty, HubDeleter and Payee.
 type ledgerHub struct {
 	*cashtest.FakeHub
 	l     *cashtest.WithdrawLedger
 	fault *atomic.Pointer[cashtest.Fault]
 }
+
+func (h ledgerHub) Invoice(_ testing.TB, millis uint64) string { return h.l.Invoice(millis) }
 
 func newLedgerHub(t *testing.T, terms *nipcash.WithdrawTerms) ledgerHub {
 	fault := &atomic.Pointer[cashtest.Fault]{}
@@ -124,8 +126,18 @@ func (h ledgerHub) DeleteHub(testing.TB, bool) error { return h.l.DeleteHub() }
 func (h ledgerHub) InjectFault(t testing.TB, f conformance.Fault) {
 	switch f {
 	case conformance.FaultNone:
+		if h.fault.Load().Is(cashtest.FaultStallCommit) {
+			// The suite waited out a stall on the wall clock; a real Hub's clock
+			// kept running meanwhile, so the fake's catches up before the commit
+			// resumes.
+			if c, ok := h.Clock.(*cashtest.ManualClock); ok && c.Now().Before(time.Now()) {
+				c.Set(time.Now())
+			}
+		}
 		h.fault.Store(&cashtest.FaultNone)
 		h.l.InjectFault(cashtest.FaultNone)
+	case conformance.FaultStallCommit:
+		h.fault.Store(&cashtest.FaultStallCommit)
 	case conformance.FaultBreakSigner:
 		h.fault.Store(&cashtest.FaultBreakSigner)
 	case conformance.FaultHoldSign:
