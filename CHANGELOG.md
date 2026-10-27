@@ -8,6 +8,16 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds conformance cases CT-WD-01..21 and 23..26, CT-STAT-13 and CT-ENV-16,
+  with the optional `WithdrawChain` and `WithdrawToggle` interfaces; the
+  suite mints its bills with `mint_cash` over the Cash Hub connection.
+  ([#202](https://github.com/ohstr/nmilat/pull/202))
+- Adds a bill ledger to the fake Hub (`ServeWithdrawals`: `mint_cash`,
+  `cash_status` with the withdraw object, quotes, withdrawals, cancels,
+  lookups, re-mints, notices), a fake chain (blocks, mempool, reorgs,
+  evictions, withheld transactions) and the payout faults, with end-to-end
+  client tests E-WD-02..06 and 08..11.
+  ([#202](https://github.com/ohstr/nmilat/pull/202))
 - Adds `MintCashResult.MarshalJSON`/`UnmarshalJSON`, so a Hub encodes its
   `mint_cash` reply from the result type, and `Expiry.IsZero`.
   ([#201](https://github.com/ohstr/nmilat/pull/201))
