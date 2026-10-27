@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gorilla/websocket"
 
@@ -36,6 +37,10 @@ type Relay struct {
 	drop, duplicate, refuse func(*nip01.Event) bool
 	reorder                 int
 	held                    []*nip01.Event
+
+	minPow  int
+	powSeen map[string]int64
+	powNow  func() time.Time
 }
 
 type relayConn struct {
@@ -104,6 +109,10 @@ func (r *Relay) Publish(ev *nip01.Event) (bool, string) {
 	if r.refuse != nil && r.refuse(ev) {
 		r.mu.Unlock()
 		return false, "blocked: refused by test"
+	}
+	if msg := r.powRefusalLocked(ev); msg != "" {
+		r.mu.Unlock()
+		return false, msg
 	}
 	r.accepted = append(r.accepted, ev)
 	switch k := ev.Kind; {
@@ -183,6 +192,9 @@ func (c *relayConn) deliver(ev *nip01.Event) {
 }
 
 func (r *Relay) serve(w http.ResponseWriter, req *http.Request) {
+	if r.serveNIP11(w, req) {
+		return
+	}
 	upgrader := websocket.Upgrader{}
 	ws, err := upgrader.Upgrade(w, req, nil)
 	if err != nil {

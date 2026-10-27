@@ -184,6 +184,7 @@ func allCases() []ctCase {
 	var out []ctCase
 	out = append(out, envCases...)
 	out = append(out, scopeCases...)
+	out = append(out, powCases...)
 	return out
 }
 
