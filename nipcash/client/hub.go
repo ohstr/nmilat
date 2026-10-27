@@ -143,6 +143,9 @@ func (h *HubClient) MintCash(ctx context.Context, p nipcash.MintCashParams, j Jo
 	pc.Deadline = time.Now().Add(s.deadlineWindow()).Unix()
 	pc.HubIdentity, pc.MaxRequestAge, pc.Device, pc.Chain = h.conn.HubIdentity, s.MaxRequestAge(), device, h.conn.Chain
 	pc = asReplacement(ctx, pc)
+	if err := checkReplacement(ctx, []nipcash.PendingCall{pc}); err != nil {
+		return nil, err
+	}
 	if err := j.WriteAhead(ctx, []nipcash.PendingCall{pc}); err != nil {
 		return nil, fmt.Errorf("%w: write ahead: %v", ErrNotSent, err)
 	}

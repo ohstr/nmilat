@@ -196,3 +196,44 @@ func TestReplace_WrittenOnceThroughTheSendPath(t *testing.T) {
 		t.Errorf("RecordDerived not used for a plain journal: %v %q", tj.derived, tj.parents[derived])
 	}
 }
+
+// M1: a re-placement whose send path packs a fresh id, or the derived id with
+// another amount, is refused before anything is written ahead or sent.
+func TestReplace_RefusesAFreshIDOrAChangedCall(t *testing.T) {
+	hub := newTestHub(t, answerTransfer)
+	w := newWATransfer(t, hub)
+	ctx, cancel := e2eContext(t)
+	defer cancel()
+	j := newTestJournal()
+
+	first := w.item
+	first.Params.RequestID = testRequestID
+	if _, err := w.s.TransferMany(ctx, []BatchTransfer{first}, j, "d"); err != nil {
+		t.Fatalf("TransferMany: %v", err)
+	}
+	pc, _ := j.call(testRequestID)
+	sentBefore := len(hub.envelopes())
+	for name, edit := range map[string]func(*BatchTransfer, nipcash.PendingCall){
+		"fresh id": func(b *BatchTransfer, _ nipcash.PendingCall) { b.Params.RequestID = "" },
+		"another amount": func(b *BatchTransfer, n nipcash.PendingCall) {
+			b.Params.RequestID = n.RequestID
+			b.Params.CurrentAmount++
+		},
+	} {
+		_, err := Replace(ctx, pc, newTestJournal(), ReplaceOptions{}, func(ctx context.Context, next nipcash.PendingCall) error {
+			again := w.item
+			edit(&again, next)
+			_, err := w.s.TransferMany(ctx, []BatchTransfer{again}, j, "d")
+			return err
+		})
+		if !errors.Is(err, errReplacementMismatch) {
+			t.Errorf("%s: err = %v, want errReplacementMismatch", name, err)
+		}
+	}
+	if n := len(hub.envelopes()); n != sentBefore {
+		t.Fatalf("%d envelopes sent by refused re-placements", n-sentBefore)
+	}
+	if len(j.writes) != 1 {
+		t.Fatalf("journal holds %d calls, want only the original", len(j.writes))
+	}
+}

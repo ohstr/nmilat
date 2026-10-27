@@ -56,6 +56,9 @@ func (s *BatchSession) sendBatch(ctx context.Context, builders []itemBuilder, op
 	if err := s.checkBillCalls(builders, opts); err != nil {
 		return nil, err
 	}
+	if err := checkReplacementBuilders(ctx, builders); err != nil {
+		return nil, err
+	}
 	limits := s.Limits()
 	if err := limits.Validate(); err != nil {
 		return nil, fmt.Errorf("nipcash/client: hub announced an unusable envelope policy: %w", err)
@@ -127,6 +130,20 @@ func (s *BatchSession) sendBatch(ctx context.Context, builders []itemBuilder, op
 		return outcomes, errors.Join(incomplete...)
 	}
 	return outcomes, nil
+}
+
+// checkReplacementBuilders is checkReplacement over every call of a batch.
+func checkReplacementBuilders(ctx context.Context, builders []itemBuilder) error {
+	if _, ok := ctx.Value(replacementKey{}).(nipcash.PendingCall); !ok {
+		return nil
+	}
+	var calls []nipcash.PendingCall
+	for _, b := range builders {
+		if b.Pending != nil {
+			calls = append(calls, b.Pending(0))
+		}
+	}
+	return checkReplacement(ctx, calls)
 }
 
 // withNotSent gives every item of the envelope that was not published (packed,

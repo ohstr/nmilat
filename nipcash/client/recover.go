@@ -174,13 +174,59 @@ func asReplacement(ctx context.Context, pc nipcash.PendingCall) nipcash.PendingC
 	return pc
 }
 
+// errReplacementMismatch is a re-placement whose send path packed no call
+// under the derived id, or packed it with another method, target, amount,
+// secrets or quote than the call it replaces (NIP-CASH §Looking Up a Call,
+// Finality: always the derived id, never a fresh one).
+var errReplacementMismatch = errors.New("nipcash/client: the re-placement must send the replaced call, unchanged, under its derived id")
+
+// checkReplacement refuses, before anything is written ahead, calls that do not
+// carry the re-placement ctx marks exactly once and unchanged. Without one in
+// ctx it passes.
+func checkReplacement(ctx context.Context, calls []nipcash.PendingCall) error {
+	next, ok := ctx.Value(replacementKey{}).(nipcash.PendingCall)
+	if !ok {
+		return nil
+	}
+	n := 0
+	for _, pc := range calls {
+		if pc.RequestID != next.RequestID {
+			continue
+		}
+		n++
+		if pc.Method != next.Method || pc.Target != next.Target || pc.Amount != next.Amount ||
+			pc.SourceSecret != next.SourceSecret || !sameSecrets(pc.Secrets, next.Secrets) ||
+			pc.Quote != next.Quote || pc.Address != next.Address {
+			return errReplacementMismatch
+		}
+	}
+	if n != 1 {
+		return errReplacementMismatch
+	}
+	return nil
+}
+
+func sameSecrets(a, b []nipcash.PendingSecret) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // Replace re-places a call after an unknown lookup: under its derived id, never
 // a fresh one, and never twice (a derived id already placed or written ahead
 // closes the call instead). It records the derived id, then sends the derived
 // call through send, which must go through an SDK entry point taking a
 // Journal (CashTransfer, TransferMany, HubClient.MintCash, ...) with the ctx it
 // is given: that path writes the call ahead exactly once, with its exact
-// deadline, DerivedFrom and Attempt, and builds fresh proofs.
+// deadline, DerivedFrom and Attempt, and builds fresh proofs. It refuses,
+// before writing anything, a send that packs no call under the derived id or
+// changes its method, target, amount, secrets or quote.
 func Replace(ctx context.Context, pc nipcash.PendingCall, j Journal, o ReplaceOptions, send func(context.Context, nipcash.PendingCall) error) (Action, error) {
 	if j == nil {
 		return Action{}, ErrNoJournal
