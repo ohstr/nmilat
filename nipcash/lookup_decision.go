@@ -18,8 +18,10 @@ const (
 )
 
 // LookupInput is what a Hub knows when it answers a lookup. Horizon is its
-// current H; HaveRecord is a record matched for this caller (a record under
-// another signer is passed as none).
+// current H; HaveRecord is a record matched for this caller. For a join
+// lookup, a join under another signer is passed as none. For a request_id
+// lookup, a record under another authorizer is not passed at all: the Hub
+// answers it UNAUTHORIZED before DecideLookup, never unknown.
 type LookupInput struct {
 	Now, Deadline, Horizon int64
 	Join                   bool
