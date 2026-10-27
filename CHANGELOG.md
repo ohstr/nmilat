@@ -8,6 +8,15 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `nipcash.QuoteForSlice`, binding a withdraw quote to the bill, the
+  slice's identity and its current amount (the fake Hub uses it; conformance
+  adds CT-WD-27, same identity at another amount), `ErrClaimAmountUnbound`,
+  `transport.ErrProofWrongExpiration` (also matching `ErrProofWrongNonce`),
+  `transport.ServeVerdict.Served`, `client.ReplaceOptions.ChainTip`,
+  `TransferOutcome.CallError`/`ConsolidateOutcome.CallError`,
+  `nipcw.Credential.Pubkey` and `nipcw/client.ErrJoinSigner`,
+  `nipCP.Synced.Answered` and `ErrTooFewRelays`, and
+  `listing.VersionBook.CurrentByD` with `TapCache.Passed`.
 - Adds `client.NeedsStatusError`/`ErrNeedsStatus` for a redeem whose outcome
   is unknown (never resent) and `Client.RedeemFollowUp`, `BillNoSlice`,
   `LocalReason`/`LocalRetryable` with `ReasonStatusWidened`,
@@ -588,6 +597,27 @@ privacy and performance fixes.
 
 ### Changed
 
+- Changes `Replace` to re-place a withdrawal automatically only while its
+  quote holds at `ReplaceOptions.ChainTip`, showing it (`quote_unchecked`,
+  `quote_expired`) otherwise, so callers must now pass the tip; to refuse,
+  before anything is written, a send that packs no call under the derived id
+  or changes its target, amount, secrets or quote; and to record the derived
+  id only once the call is written ahead.
+- Changes a batch refused whole with QUOTA_EXCEEDED or BAD_REQUEST to keep
+  that refusal for every call carrying a `request_id`, repacking only items
+  without one, and drops the unreachable stale-policy resend; a batch stopped
+  partway by ErrNotSent gives each unsent item `OutcomeNotSent`.
+- Changes `ItemOutcome.SafeToResend` to answer true only for BAD_REQUEST or
+  a definitive code on a call without a `request_id`, never for INTERNAL or
+  REQUEST_REUSED; `RedeemOptions.AutoAmount` with no `Payee` to read the payee
+  from the invoice's signature; and `CashRedeem` to return
+  `*nipcash.BillGone` for a destroyed bill.
+- Changes `VersionBook` to show, when several pubkeys list one `d`, only the
+  listing whose signer passed at tap, or none; `listing.SanitizeText` to strip
+  control characters; and `textsan` to strip U+200E, U+200F, U+061C, U+00AD,
+  U+180E and U+2061-U+2064.
+- Changes `PocketJournal.DerivedEntryExists` to return `ErrTooFewRelays`
+  rather than report an absence when fewer than `MinStored` relays answered.
 - Changes a batch refused whole with QUOTA_EXCEEDED or BAD_REQUEST to
   re-read the announcement and, when the policy changed, repack and resend
   once; `TransferMany` to generate the remainder target of a partial cash
@@ -874,6 +904,46 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes `RekeyCashSlice` reporting success with no token when the Hub spins
+  the slice off, stranding the funds: it returns the new wallet's pubkey and
+  token, and consolidates an interim spin-off over its own connection.
+- Fixes `nipCP.Sync` trusting the id a relay claims: each wrap's id and
+  signature are checked before it is keyed, credited to a relay or marked
+  seen, and it is marked seen only once it opens, so one relay can no longer
+  hide a pocket entry.
+- Fixes `HubClient.MintCash` closing a mint whose token's provenance is not
+  the connection's Hub identity or whose wallet differs (now
+  `*IndeterminateError`); a `cash_consolidate` reply with an empty
+  `new_wallet_token` or `new_wallet_pubkey` being accepted (now
+  `ErrEmptyToken`, the call stays pending); a cancelled withdrawal's re-minted
+  bill going unchecked; and an order read back with `cash_lookup` skipping the
+  invoice and address checks.
+- Fixes `VerifyClaimProof` accepting any amount when a transfer or
+  consolidate expectation carries none; `Item.VerificationCost` undercounting
+  signed events when another params member is mistyped (an E6 budget bypass);
+  item and bill proofs accepting a binding tag that is not exactly one string;
+  a slice attestation repeating d, p, platform, evidence or expiration; an
+  envelope refused at E5 or E6 not counting as served; `Envelope.Validate`
+  skipping bill proofs and refusing a proofless cash_status or quote; and
+  `CashConsolidateParams.Pending` wrapping on overflow.
+- Fixes connections signed or encoded with `Label` but not `HasLabel`
+  (unverifiable), and labels that are not valid UTF-8.
+- Fixes nipCZ refusing a 9522 carrying `e` and `a` whose coordinate author is
+  not `p`, counting a zap on a target event that does not verify, and taking
+  minters from a 10522 another author signed.
+- Fixes listings accepting a mixed-case `connection`, hiding a listing whose
+  `get_info` lacks the `cash_order` key (now unavailable), refusing repeated
+  hints of an unknown payment kind, and reading a curator set by any `d`.
+- Fixes niplsp never using a remembered node's announcement again after a
+  restart, reading an LSPS1 answer with no known option as not asked, calling
+  a live check usable without list_protocols, and accepting a non-ASCII
+  website or image URL.
+- Fixes `TransferFromSources` dropping the session options on reconnect,
+  `LookupJoin` accepting a credential that is not the join's signer,
+  `ParseCreateCircleWalletRequest` reading an empty `budget_renewal` as never,
+  `nipCP` `Balance` wrapping on overflow, a Spoofed nipIC verdict naming the
+  pubkey of a claim whose signature fails, and `signeruri` passing the
+  untrimmed URI on.
 - Fixes `transport.DecodeResponse` refusing a reply larger than the request's
   `max_bytes`: a Hub pads each reply chunk against its own `pad_bucket_bytes`
   and 65535, as `EncodeResponse` does, so a reply is now refused for size
