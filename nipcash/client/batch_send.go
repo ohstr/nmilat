@@ -71,18 +71,19 @@ func (s *BatchSession) sendBatch(ctx context.Context, builders []itemBuilder, op
 		if err != nil {
 			return outcomes, fmt.Errorf("%w: write ahead: %v", ErrNotSent, err)
 		}
-		got, err := s.sendOne(ctx, p, i, opts)
+		got, accepted, err := s.sendOne(ctx, p, i)
 		if err != nil && isStalePolicy(err) && !errors.Is(err, ErrNotSent) {
 			if s.Refresh(ctx) == nil {
-				got, err = s.sendOne(ctx, p, i, opts)
+				got, accepted, err = s.sendOne(ctx, p, i)
 			}
 		}
+		recordAccepted(ctx, packedNow, accepted, opts)
 		if err != nil && len(got) == 0 && errors.Is(err, ErrNotSent) {
 			// Nothing of this envelope was published: its items get no outcome,
 			// and the caller closes their written-ahead calls as not sent.
 			return outcomes, err
 		}
-		got = withRequestIDs(got, packedNow, written)
+		got = withAccepted(withRequestIDs(got, packedNow, written), accepted)
 		if len(got) > 0 {
 			outcomes = append(outcomes, got...)
 			if err != nil {
@@ -91,7 +92,7 @@ func (s *BatchSession) sendBatch(ctx context.Context, builders []itemBuilder, op
 			continue
 		}
 		if err != nil {
-			outcomes = append(outcomes, withRequestIDs(unansweredOutcomes(p.ItemIDs, i), packedNow, written)...)
+			outcomes = append(outcomes, withAccepted(withRequestIDs(unansweredOutcomes(p.ItemIDs, i), packedNow, written), accepted)...)
 			incomplete = append(incomplete, err)
 		}
 	}
@@ -173,39 +174,62 @@ func withRequestIDs(out []ItemOutcome, packed []itemBuilder, written map[string]
 	return out
 }
 
-// sendOne publishes one envelope and waits for its reply.
-func (s *BatchSession) sendOne(ctx context.Context, p packedEnvelope, index int, opts sendOptions) ([]ItemOutcome, error) {
+// recordAccepted tells a Journal implementing AcceptedRecorder which relays
+// accepted the envelope, once per call carrying a request_id. A failure never
+// fails the call.
+func recordAccepted(ctx context.Context, packed []itemBuilder, accepted []string, opts sendOptions) {
+	rec, ok := opts.journal.(AcceptedRecorder)
+	if !ok || len(accepted) == 0 {
+		return
+	}
+	for _, b := range packed {
+		if b.RequestID != "" {
+			_ = rec.RecordAccepted(ctx, b.RequestID, append([]string(nil), accepted...))
+		}
+	}
+}
+
+// withAccepted stamps each outcome with the relays that accepted its envelope.
+func withAccepted(out []ItemOutcome, accepted []string) []ItemOutcome {
+	if len(accepted) == 0 {
+		return out
+	}
+	for i := range out {
+		out[i].Accepted = append([]string(nil), accepted...)
+	}
+	return out
+}
+
+// sendOne publishes one envelope and waits for its reply. accepted names the
+// relays that took the request.
+func (s *BatchSession) sendOne(ctx context.Context, p packedEnvelope, index int) ([]ItemOutcome, []string, error) {
 	limits := s.Limits()
 	inbox := s.Inbox()
 	if inbox == "" {
-		return nil, fmt.Errorf("%w: session has no announced inbox", ErrNotSent)
+		return nil, nil, fmt.Errorf("%w: session has no announced inbox", ErrNotSent)
 	}
 	plaintext, err := p.Envelope.Encode(limits)
 	if err != nil {
-		return nil, fmt.Errorf("%w: encode envelope %d: %v", ErrNotSent, index, err)
+		return nil, nil, fmt.Errorf("%w: encode envelope %d: %v", ErrNotSent, index, err)
 	}
 	req, conversationKey, err := s.wrap(ctx, plaintext, inbox, p.Envelope.NotAfter)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if time.Until(time.Unix(p.Envelope.NotAfter, 0)) < nipcash.MinPublishMargin*time.Second {
-		return nil, fmt.Errorf("%w: %w", ErrNotSent, ErrDeadlineTooClose)
+		return nil, nil, fmt.Errorf("%w: %w", ErrNotSent, ErrDeadlineTooClose)
 	}
 	replyKey, err := transport.DeriveReplyKey(conversationKey, p.Envelope.ReplyTo)
 	if err != nil {
-		return nil, fmt.Errorf("%w: reply key for envelope %d: %v", ErrNotSent, index, err)
+		return nil, nil, fmt.Errorf("%w: reply key for envelope %d: %v", ErrNotSent, index, err)
 	}
 	replies, accepted, stop, err := s.subscribeAndPublish(ctx, p.Envelope.ReplyTo, req)
 	if err != nil {
-		return nil, fmt.Errorf("send envelope %d: %w", index, err)
+		return nil, nil, fmt.Errorf("send envelope %d: %w", index, err)
 	}
 	defer stop()
-	if rec, ok := opts.journal.(AcceptedRecorder); ok && len(accepted) > 0 {
-		for _, id := range p.ItemIDs {
-			_ = rec.RecordAccepted(ctx, id, accepted) // a failure never fails the call
-		}
-	}
-	return s.collectReply(ctx, replies, replyKey, p, index)
+	out, err := s.collectReply(ctx, replies, replyKey, p, index)
+	return out, accepted, err
 }
 
 // ErrIncompleteReply means some chunks of a multi-event reply never arrived.

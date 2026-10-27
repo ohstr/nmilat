@@ -102,6 +102,9 @@ type ItemOutcome struct {
 	Envelope int
 	// RequestID is the request_id the item carried, "" for a call without one.
 	RequestID string
+	// Accepted names the relays that accepted the item's envelope: a Hub's
+	// notices for the call arrive there (NIP-CO §Order Notice).
+	Accepted []string
 	// pending is the call written ahead for this item, with its exact deadline.
 	pending *nipcash.PendingCall
 }
