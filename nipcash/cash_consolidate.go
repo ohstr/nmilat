@@ -138,7 +138,7 @@ type CashConsolidateResult struct {
 }
 
 // ParseResult reads a direct cash_consolidate reply: a tombstone is *BillGone; a
-// secret key is refused; a pubkey target's token is decrypted with Sources[0]'s
+// secret key is refused; an empty token or pubkey is ErrEmptyToken; a pubkey target's token is decrypted with Sources[0]'s
 // credential (the caller's proof key), a connection_key or cash target's comes in
 // the clear.
 func (p CashConsolidateParams) ParseResult(data []byte) (*CashConsolidateResult, error) {
@@ -167,6 +167,11 @@ func (p CashConsolidateParams) parse(data []byte) (*CashConsolidateResult, error
 	}
 	r := &CashConsolidateResult{AmountMillis: w.AmountMillis, NewWalletPubkey: w.NewWalletPubkey,
 		NewWalletToken: w.NewWalletToken.Token, ExpiresAt: w.ExpiresAt, NewWalletTombstone: w.NewWalletToken.Tombstone}
+	if r.NewWalletTombstone == nil && (r.NewWalletToken == "" || r.NewWalletPubkey == "") {
+		// Every source is consumed: a reply without the merged bill's
+		// credential leaves the call pending, as mint_cash does.
+		return r, ErrEmptyToken
+	}
 	if r.NewWalletToken == "" || len(p.Sources) == 0 || !IsPubkeyTarget(p.To) {
 		return r, nil
 	}

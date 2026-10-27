@@ -12,10 +12,11 @@ import (
 	"github.com/ohstr/nmilat/nipcash/transport"
 )
 
-// consolidateOK is a cash_consolidate success the client can parse.
+// consolidateOK is a cash_consolidate success the client can parse: a cash
+// target's token, in the clear.
 func consolidateOK(item transport.Item) *transport.Result {
 	return &transport.Result{ID: item.ID, ResultType: item.Method,
-		Result: json.RawMessage(`{"amount_millis":3000,"new_wallet_pubkey":"` + strings.Repeat("cd", 32) + `"}`)}
+		Result: json.RawMessage(`{"amount_millis":3000,"new_wallet_pubkey":"` + strings.Repeat("cd", 32) + `","new_wallet_token":"satscash1merged"}`)}
 }
 
 // consolidateItem is a two-source consolidate on fresh bills, with the marks given.
@@ -26,9 +27,8 @@ func consolidateItem(t *testing.T, id string, marks ...bool) BatchConsolidate {
 		priv, wallet := sessionKeypair(t)
 		sources[i] = nipcash.Source{WalletPubkey: wallet, Amount: 1000, Credential: nipcash.BySigning(priv), Ordered: m}
 	}
-	_, to := sessionKeypair(t)
 	return BatchConsolidate{ID: id, Bill: mustBill(t, sources[0].WalletPubkey),
-		Params: nipcash.CashConsolidateParams{Sources: sources, To: nipcash.Pubkey(to)}}
+		Params: nipcash.CashConsolidateParams{Sources: sources, To: mustCashTarget(t)}}
 }
 
 func openTestSession(t *testing.T, hub *fakeHub) (*BatchSession, *cashtest.Relay) {

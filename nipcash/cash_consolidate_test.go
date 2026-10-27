@@ -2,6 +2,7 @@ package nipcash
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 )
 
@@ -275,5 +276,35 @@ func TestCashConsolidatePending_Overflow(t *testing.T) {
 	p.Sources[1].Amount = 5
 	if pc, err := p.Pending(); err != nil || pc.Amount != half+5 {
 		t.Fatalf("got %v %v, want %d", pc.Amount, err, half+5)
+	}
+}
+
+// A direct reply with no credential for the merged bill keeps the call
+// pending (ErrEmptyToken), as mint_cash does; a cash target's token in the
+// clear is accepted.
+func TestCashConsolidateParams_ParseResult_EmptyTokenRefused(t *testing.T) {
+	privKeyHex, _ := generateTestKeypair(t)
+	p := CashConsolidateParams{RequestID: testRID,
+		Sources: []Source{
+			From(randomKeyHex(t), 1000, BySigning(privKeyHex)),
+			From(randomKeyHex(t), 1000, BySigning(privKeyHex)),
+		},
+		To: mustCashTarget(t),
+	}
+	for name, body := range map[string]string{
+		"empty token":  `{"amount_millis":2000,"new_wallet_pubkey":"` + ktokWallet + `","new_wallet_token":""}`,
+		"no token":     `{"amount_millis":2000,"new_wallet_pubkey":"` + ktokWallet + `"}`,
+		"empty pubkey": `{"amount_millis":2000,"new_wallet_pubkey":"","new_wallet_token":"` + ktok1 + `"}`,
+	} {
+		if _, err := p.ParseResult([]byte(body)); !errors.Is(err, ErrEmptyToken) {
+			t.Errorf("%s: %v, want ErrEmptyToken", name, err)
+		}
+		if _, err := p.ParseLookupResult([]byte(body)); !errors.Is(err, ErrEmptyToken) {
+			t.Errorf("%s (lookup): %v, want ErrEmptyToken", name, err)
+		}
+	}
+	good := `{"amount_millis":2000,"new_wallet_pubkey":"` + ktokWallet + `","new_wallet_token":"` + ktok1 + `"}`
+	if r, err := p.ParseResult([]byte(good)); err != nil || r.NewWalletToken != ktok1 {
+		t.Fatalf("good: %+v %v", r, err)
 	}
 }
