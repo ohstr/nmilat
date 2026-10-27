@@ -44,7 +44,7 @@ func (p CashRedeemParams) Request(walletPubkey string) (CashRedeemRequest, error
 	if err != nil {
 		return CashRedeemRequest{}, fmt.Errorf("nipcash: decode invoice: %w", err)
 	}
-	binding := proofBinding{WalletPubkey: walletPubkey, Bolt11Hash: invoice.PaymentHash}
+	binding := ClaimBinding{Method: MethodCashRedeem, Wallet: walletPubkey, Bolt11Hash: invoice.PaymentHash}
 	identityType, identityValue, identityEvent, attestationEvent, cashSecret, err := p.Credential.buildProof(binding)
 	if err != nil {
 		return CashRedeemRequest{}, err

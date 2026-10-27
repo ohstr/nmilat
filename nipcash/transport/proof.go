@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/ohstr/nmilat/nip01"
@@ -148,6 +149,9 @@ func verifyProof(wantKind int, proof json.RawMessage, want ProofBinding, now tim
 		return "", fmt.Errorf("%w: signer pubkey must be %d lowercase hex characters",
 			ErrProofMalformed, keyHexLen)
 	}
+	if ev.Content != "" {
+		return "", fmt.Errorf("%w: content must be empty", ErrProofMalformed)
+	}
 
 	got, err := proofTags(ev.Tags)
 	if err != nil {
@@ -171,11 +175,14 @@ func verifyProof(wantKind int, proof json.RawMessage, want ProofBinding, now tim
 	if got[tagEnvelope] != want.Nonce {
 		return "", ErrProofWrongNonce
 	}
+	if got[tagExpiration] != strconv.FormatInt(want.NotAfter, 10) {
+		return "", fmt.Errorf("%w: expiration %q, envelope not_after %d", ErrProofWrongNonce, got[tagExpiration], want.NotAfter)
+	}
 
-	created := time.Unix(int64(ev.CreatedAt), 0) //nolint:gosec // event timestamps are seconds since epoch
-	if created.Before(now.Add(-ProofFreshnessPast)) || created.After(now.Add(ProofFreshnessFuture)) {
-		return "", fmt.Errorf("%w: created_at %s, now %s",
-			ErrProofStale, created.UTC().Format(time.RFC3339), now.UTC().Format(time.RFC3339))
+	// NIP-CASH §Freshness, in whole seconds: now − 300 ≤ created_at ≤ now + 60.
+	created, n := int64(ev.CreatedAt), now.Unix() //nolint:gosec // event timestamps are seconds since epoch
+	if created < n-int64(ProofFreshnessPast/time.Second) || created > n+int64(ProofFreshnessFuture/time.Second) {
+		return "", fmt.Errorf("%w: created_at %d, now %d", ErrProofStale, created, n)
 	}
 
 	// Last, and only now: the ID must be the event's own hash and the signature
@@ -204,6 +211,9 @@ func proofTags(tags [][]string) (map[string]string, error) {
 		if _, dup := out[name]; dup {
 			return nil, fmt.Errorf("%w: duplicate %q tag", ErrProofMalformed, name)
 		}
+		if proofHexTags[name] && (len(tag[1]) != keyHexLen || !isLowerHex(tag[1])) {
+			return nil, fmt.Errorf("%w: %q must be %d lowercase hex characters", ErrProofMalformed, name, keyHexLen)
+		}
 		out[name] = tag[1]
 	}
 	for name := range proofRequiredTags {
@@ -220,4 +230,8 @@ var proofRequiredTags = map[string]bool{
 	tagMethod:     true,
 	tagParamsHash: true,
 	tagEnvelope:   true,
+	tagExpiration: true,
 }
+
+// proofHexTags are the binding tags written as 64 lowercase hex.
+var proofHexTags = map[string]bool{tagTarget: true, tagHub: true, tagParamsHash: true}

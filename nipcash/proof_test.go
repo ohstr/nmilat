@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -105,8 +106,8 @@ func TestBySigningConnectionKey_MandatoryExpiration(t *testing.T) {
 	t.Run("valid unexpired attestation succeeds", func(t *testing.T) {
 		att := buildTestAttestation(t, iaPrivHex, userPubHex, connectionKey, 90)
 		cred := mustConnCred(t, userPrivHex, att)
-		identityType, identityValue, identityEvent, attestationEvent, _, err := cred.buildProof(proofBinding{
-			WalletPubkey: randomKeyHex(t), Bolt11Hash: "h",
+		identityType, identityValue, identityEvent, attestationEvent, _, err := cred.buildProof(ClaimBinding{Method: MethodCashRedeem,
+			Wallet: randomKeyHex(t), Bolt11Hash: strings.Repeat("4", 64),
 		})
 		if err != nil {
 			t.Fatalf("buildProof: %v", err)

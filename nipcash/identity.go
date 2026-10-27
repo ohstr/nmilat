@@ -228,7 +228,7 @@ type Credential interface {
 	// connection_key mode); cashSecret is the plaintext secret (only for
 	// a cash credential). Exactly one of {identityEvent, cashSecret} is
 	// ever set.
-	buildProof(binding proofBinding) (identityType, identityValue string, identityEvent, attestationEvent []byte, cashSecret string, err error)
+	buildProof(binding ClaimBinding) (identityType, identityValue string, identityEvent, attestationEvent []byte, cashSecret string, err error)
 
 	// itemAuthorization reports how this credential can authorize an item on the
 	// PRIVATE TRANSPORT, which needs something buildProof cannot give it: a

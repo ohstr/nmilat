@@ -63,8 +63,9 @@ func (p CashTransferParams) Request(walletPubkey string) (CashTransferRequest, e
 	if p.SplitAmount != nil {
 		amountBound = *p.SplitAmount
 	}
-	binding := proofBinding{
-		WalletPubkey:    walletPubkey,
+	binding := ClaimBinding{
+		Method:          MethodCashTransfer,
+		Wallet:          walletPubkey,
 		NewIdentityHash: newIdentityHash(p.To),
 		AmountMillis:    &amountBound,
 	}

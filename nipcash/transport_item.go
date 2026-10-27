@@ -168,7 +168,7 @@ func StatusItem(id, target, connSecret string, p CashStatusParams, cred Credenti
 	// wireParams; passing CashStatusParams straight through broke that assumption
 	// silently, and produced an item with neither a proof nor a secret — malformed,
 	// refused by the codec, and therefore never sent.
-	_, _, _, _, cashSecret, err := cred.buildProof(proofBinding{WalletPubkey: target})
+	_, _, _, _, cashSecret, err := cred.buildProof(ClaimBinding{Wallet: target})
 	if err != nil {
 		return transport.Item{}, err
 	}

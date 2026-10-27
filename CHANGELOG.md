@@ -8,6 +8,11 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds shared claim-proof helpers for NIP-CASH Hubs: `VerifyClaimProof`
+  (the exact tag schema per method and slice, bound values, freshness,
+  consumed ids, the connection_key attestation checks, `RESTRICTED` for an
+  untrusted IA), `VerifySliceAttestation`, `ItemSignerMatchesClaim`,
+  `FreshAt`, `ClaimRetainUntil`, `SourcesHash` and `NewIdentityHashOf`.
 - Adds canonical NIP-IC ConnectionKeys for x, discord, email and dns (IDNA
   A-labels, refusing any input the mapping would change), keys taken byte for
   byte from an attestation for other platforms (`ConnectionKeyFromAttested`,
@@ -281,6 +286,10 @@ privacy and performance fixes.
 
 ### Changed
 
+- Changes claim proofs to carry the `m` tag, and `s` on `cash_consolidate`,
+  through `ClaimBinding`; item and bill proofs now must carry `expiration`
+  equal to the envelope's `not_after`, an empty `content` and lowercase hex
+  `d`, `h` and `ph`, with freshness counted in whole seconds.
 - Changes `nipIC.NewConnectionKey`, `nipAZ.Connection` and
   `nipcash.ConnectionKey` to return an error and refuse non-canonical input
   and platforms without a canonical form, and `BySigningConnectionKey` to

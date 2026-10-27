@@ -57,12 +57,22 @@ func (p CashConsolidateParams) Request() (CashConsolidateRequest, error) {
 	// under different identities are distinct and stay legal.
 	seen := make(map[string]struct{}, len(p.Sources))
 	sources := make([]consolidateSourceParam, len(p.Sources))
+	wallets := make([]string, len(p.Sources))
+	for i, src := range p.Sources {
+		wallets[i] = src.WalletPubkey
+	}
+	sourcesHash, err := SourcesHash(wallets)
+	if err != nil {
+		return CashConsolidateRequest{}, err
+	}
 	for i, src := range p.Sources {
 		amount := src.Amount
-		binding := proofBinding{
-			WalletPubkey:    src.WalletPubkey,
+		binding := ClaimBinding{
+			Method:          MethodCashConsolidate,
+			Wallet:          src.WalletPubkey,
 			NewIdentityHash: newIdentityHash(p.To),
 			AmountMillis:    &amount,
+			SourcesHash:     sourcesHash,
 		}
 		identityType, identityValue, identityEvent, attestationEvent, cashSecret, err := src.Credential.buildProof(binding)
 		if err != nil {

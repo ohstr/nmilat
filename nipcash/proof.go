@@ -57,32 +57,6 @@ func decryptFromPubkey(privKeyHex, pubKeyHex, ciphertext string) (string, error)
 // request that the server would reject anyway.
 var ErrAttestationExpired = errors.New("nipcash: attestation has no expiration, or has already expired")
 
-// proofBinding carries the call-specific values a kind-23198 proof binds to,
-// beyond the wallet pubkey every proof binds to via its own d-tag. Exactly
-// one of Bolt11Hash (cash_redeem) or NewIdentityHash+AmountMillis
-// (cash_transfer/cash_consolidate) is set, matching NIP-CASH's own binding
-// rules per method.
-type proofBinding struct {
-	WalletPubkey    string
-	Bolt11Hash      string
-	NewIdentityHash string
-	AmountMillis    *uint64
-}
-
-func (b proofBinding) tags() [][]string {
-	tags := [][]string{{"d", b.WalletPubkey}}
-	if b.Bolt11Hash != "" {
-		tags = append(tags, []string{"bolt11_hash", b.Bolt11Hash})
-	}
-	if b.NewIdentityHash != "" {
-		tags = append(tags, []string{"new_identity_hash", b.NewIdentityHash})
-	}
-	if b.AmountMillis != nil {
-		tags = append(tags, []string{"amount_millis", fmt.Sprintf("%d", *b.AmountMillis)})
-	}
-	return tags
-}
-
 // targetFields narrows a Target (or Recipient) back to its identity_type/
 // identity_value/ia_pubkey triple — every concrete implementer (namedIdentity,
 // cashRecipient, *CashTarget) implements this unexported shape
@@ -112,7 +86,7 @@ type secretCredential struct{ secret string }
 // entire proof, exactly as NIP-CASH's own cash-mode redemption model requires.
 func BySecret(secret string) Credential { return secretCredential{secret: secret} }
 
-func (c secretCredential) buildProof(proofBinding) (identityType, identityValue string, identityEvent, attestationEvent []byte, cashSecret string, err error) {
+func (c secretCredential) buildProof(ClaimBinding) (identityType, identityValue string, identityEvent, attestationEvent []byte, cashSecret string, err error) {
 	return "", "", nil, nil, c.secret, nil
 }
 
@@ -139,12 +113,12 @@ type signingCredential struct{ privKeyHex string }
 // builds or signs an event themselves.
 func BySigning(privKeyHex string) Credential { return signingCredential{privKeyHex: privKeyHex} }
 
-func (c signingCredential) buildProof(binding proofBinding) (identityType, identityValue string, identityEvent, attestationEvent []byte, cashSecret string, err error) {
+func (c signingCredential) buildProof(binding ClaimBinding) (identityType, identityValue string, identityEvent, attestationEvent []byte, cashSecret string, err error) {
 	pubkey, err := utils.GetPublicKey(c.privKeyHex)
 	if err != nil {
 		return "", "", nil, nil, "", fmt.Errorf("nipcash: derive pubkey: %w", err)
 	}
-	ev, err := nip01.NewSignedEvent(KindClaimProof, "", c.privKeyHex, binding.tags()...)
+	ev, err := nip01.NewSignedEvent(KindClaimProof, "", c.privKeyHex, binding.Tags()...)
 	if err != nil {
 		return "", "", nil, nil, "", fmt.Errorf("nipcash: sign claim proof: %w", err)
 	}
@@ -195,12 +169,12 @@ func BySigningConnectionKey(privKeyHex string, attestation *nipIC.Attestation) (
 	return connectionKeyCredential{privKeyHex: privKeyHex, attestation: attestation}, nil
 }
 
-func (c connectionKeyCredential) buildProof(binding proofBinding) (identityType, identityValue string, identityEvent, attestationEvent []byte, cashSecret string, err error) {
+func (c connectionKeyCredential) buildProof(binding ClaimBinding) (identityType, identityValue string, identityEvent, attestationEvent []byte, cashSecret string, err error) {
 	if c.attestation == nil || c.attestation.ExpiresAt == nil || time.Now().After(*c.attestation.ExpiresAt) {
 		return "", "", nil, nil, "", ErrAttestationExpired
 	}
 	connectionKey := c.attestation.ConnectionKey
-	tags := append(binding.tags(),
+	tags := append(binding.Tags(),
 		[]string{"connection_key", connectionKey.String()},
 		[]string{"e", c.attestation.ID},
 	)

@@ -43,7 +43,7 @@ func TestCreateCircleWalletMany_EndToEnd(t *testing.T) {
 		env := hub.envelopes()
 		want := transport.ProofBinding{
 			Target: hubWalletPub, HubXOnly: hub.hubXOnly, Method: nipcw.MethodCreateCircleWallet,
-			ParamsHash: hash, Nonce: env[len(env)-1].Nonce,
+			ParamsHash: hash, Nonce: env[len(env)-1].Nonce, NotAfter: env[len(env)-1].NotAfter,
 		}
 		if item.Target != hubWalletPub {
 			return nil
