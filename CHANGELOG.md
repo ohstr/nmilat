@@ -8,6 +8,16 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds fake-Hub orders on a fake chain (mempool, confirmation tiers, reorgs,
+  evictions), minting once per payment with splitting at `max_millis`,
+  notices on every change, reservations released by the clock, retirable and
+  extra connections, a broken-signer fault and a restart that keeps order
+  records; conformance cases CT-ORD-04..16, CT-ORDC-01..10, CT-LK-14 and
+  CT-OSL-01..05, with the optional `OrderConnectionAdder` and `Restarter`
+  interfaces. ([#211](https://github.com/ohstr/nmilat/pull/211))
+- Adds the end-to-end order tests E-ORD-01..09 and E-ORDC-01..02, and the
+  fuzz targets F-CO-1 and F-ORD-1.
+  ([#211](https://github.com/ohstr/nmilat/pull/211))
 - Adds `nip57.Invoice.Timestamp`, `Expiry` (3600 when the invoice has no `x`
   field, `DefaultBolt11Expiry`) and `ExpiresAt`.
   ([#210](https://github.com/ohstr/nmilat/pull/210))
