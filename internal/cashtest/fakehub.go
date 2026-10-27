@@ -295,6 +295,10 @@ func (h *FakeHub) serve(arrival *Relay, ev *nip01.Event) []*nip01.Event {
 		return h.chunks(replyKey, replyTo, r)
 	}
 	if verdict.Action == transport.ServeRefuse {
+		// Past E4 (E5, E6) the nonce counts as served: a replay is dropped.
+		if verdict.Served && !h.nonces.claim(nonce, time.Unix(verdict.Envelope.NotAfter, 0), now) {
+			return nil
+		}
 		return reply(transport.ResponseEnvelope{Error: &transport.ResultError{Code: verdict.Code, Message: verdict.Reason.Error()}})
 	}
 	env := verdict.Envelope

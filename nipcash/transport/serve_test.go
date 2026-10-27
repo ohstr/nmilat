@@ -91,7 +91,7 @@ func TestClassifyEnvelope(t *testing.T) {
 		f := baseFields()
 		edit(f)
 		v := classify(t, f, nil)
-		if v.Action != ServeRefuse || v.Code != "BAD_REQUEST" {
+		if v.Action != ServeRefuse || v.Code != "BAD_REQUEST" || v.Served {
 			t.Errorf("%s: %+v", name, v)
 		}
 	}
@@ -107,8 +107,8 @@ func TestClassifyEnvelope(t *testing.T) {
 	for i := range 11 {
 		many = append(many, json.RawMessage(`{"id":"`+strconv.Itoa(i)+`","target":"`+hex64("a")+`","method":"cash_status","bill_proof":{"x":1}}`))
 	}
-	if v := ClassifyEnvelope(rawEnvelope(baseFields(many...)), nil, l, serveNow, nil); v.Code != "QUOTA_EXCEEDED" {
-		t.Errorf("11 items: %+v", v)
+	if v := ClassifyEnvelope(rawEnvelope(baseFields(many...)), nil, l, serveNow, nil); v.Code != "QUOTA_EXCEEDED" || !v.Served {
+		t.Errorf("11 items: %+v, want QUOTA_EXCEEDED with the nonce served", v)
 	}
 	if v := ClassifyEnvelope(rawEnvelope(baseFields(many[:10]...)), nil, l, serveNow, nil); v.Action != ServeRun {
 		t.Errorf("10 items: %+v", v)
@@ -125,8 +125,8 @@ func TestClassifyEnvelope(t *testing.T) {
 	ckTransfer := json.RawMessage(`{"id":"t","target":"` + hex64("b") + `","method":"cash_transfer","params":{"identity_event":"{}","attestation_event":"{}"},"proof":{"x":1},"bill_proof":{"x":1}}`)
 	bearer := json.RawMessage(`{"id":"b","target":"` + hex64("c") + `","method":"cash_redeem","params":{"cash_secret":"s"},"bill_proof":{"x":1}}`)
 	eight := baseFields(pubkeyRedeem, ckTransfer, bearer)
-	if v := ClassifyEnvelope(rawEnvelope(eight), nil, l, serveNow, nil); v.Code != "QUOTA_EXCEEDED" {
-		t.Errorf("budget 8 vs 7: %+v", v)
+	if v := ClassifyEnvelope(rawEnvelope(eight), nil, l, serveNow, nil); v.Code != "QUOTA_EXCEEDED" || !v.Served {
+		t.Errorf("budget 8 vs 7: %+v, want QUOTA_EXCEEDED with the nonce served", v)
 	}
 	l.MaxVerifyBudget = 8
 	if v := ClassifyEnvelope(rawEnvelope(eight), nil, l, serveNow, nil); v.Action != ServeRun {

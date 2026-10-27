@@ -18,8 +18,10 @@ const (
 	ServeRun ServeAction = iota
 	// ServeDrop runs nothing and sends no reply.
 	ServeDrop
-	// ServeRefuse replies with the envelope-level error Code; nothing runs and
-	// the nonce stays unserved.
+	// ServeRefuse replies with the envelope-level error Code and nothing runs.
+	// An E4 refusal leaves the nonce unserved; one past E4 (E5, E6) does not:
+	// once an envelope passes E4 its nonce counts as served, and the caller
+	// marks it, as ServeVerdict.Served says.
 	ServeRefuse
 )
 
@@ -31,6 +33,10 @@ type ServeVerdict struct {
 	Code     string
 	Envelope *Envelope
 	Reason   error
+	// Served is set when the envelope passed E4, so its nonce now counts as
+	// served and the caller marks it: every ServeRun, and an E5 or E6
+	// ServeRefuse.
+	Served bool
 }
 
 // NonceSeen reports a nonce the Hub has already served (and still remembers).
@@ -88,6 +94,10 @@ func ClassifyEnvelope(plaintext []byte, decryptErr error, limits Limits, now tim
 	case duplicateItemIDs(items):
 		return refuse("BAD_REQUEST", ErrDuplicateItemID)
 	}
+	// Past E4 the nonce counts as served, refused or not.
+	refuse = func(code string, err error) ServeVerdict {
+		return ServeVerdict{Action: ServeRefuse, Code: code, Envelope: header, Reason: err, Served: true}
+	}
 	if len(plaintext) > limits.MaxEnvelopeBytes || len(items) > limits.MaxItems {
 		return refuse("QUOTA_EXCEEDED", ErrEnvelopeTooLarge)
 	}
@@ -98,7 +108,7 @@ func ClassifyEnvelope(plaintext []byte, decryptErr error, limits Limits, now tim
 	case err != nil:
 		return refuse("BAD_REQUEST", err)
 	}
-	return ServeVerdict{Action: ServeRun, Envelope: env}
+	return ServeVerdict{Action: ServeRun, Envelope: env, Served: true}
 }
 
 // integerField reads a JSON integer: digits with an optional leading minus, no

@@ -2,6 +2,7 @@ package conformance
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -135,7 +136,7 @@ func ctEnv10(t *testing.T, s *suite) {
 }
 
 // CT-ENV-11 (S-CASH-16, S-CASH-137): a replayed envelope, or its nonce under a
-// new ciphertext, gets no reply.
+// new ciphertext, gets no reply; so does one first refused at E5 (S-CASH-225).
 func ctEnv11(t *testing.T, s *suite) {
 	e, nonce, replyTo, notAfter := s.newEnvelope(t)
 	e["items"] = []transport.Item{s.omittedItem(t, "1", nonce, notAfter)}
@@ -149,6 +150,29 @@ func ctEnv11(t *testing.T, s *suite) {
 	s.publish(t, 0, s.wrap(t, e, "").ev) // the same envelope, new ciphertext
 	if got := l.wait(2, s.quiet()); len(got) != 1 {
 		t.Errorf("%d replies, want only the original's: a served nonce is never served again", len(got))
+	}
+
+	// An envelope refused at E5 passed E4, so its nonce counts as served too:
+	// the same envelope again gets no reply.
+	over, nonce, replyTo, notAfter := s.newEnvelope(t)
+	var items []transport.Item
+	for i := 0; i <= s.limits.MaxItems; i++ {
+		items = append(items, s.omittedItem(t, strconv.Itoa(i+1), nonce, notAfter))
+	}
+	over["items"] = items
+	l3 := s.listen(t, replyTo)
+	refused := s.wrap(t, over, "")
+	s.publish(t, 0, refused.ev)
+	got := l3.wait(1, s.quiet())
+	if len(got) != 1 {
+		t.Fatalf("%d replies to an envelope over max_items, want one QUOTA_EXCEEDED", len(got))
+	}
+	if code := envelopeErrorCode(t, refused.open(t, got[0].ev)); code != "QUOTA_EXCEEDED" {
+		t.Fatalf("envelope error %q, want QUOTA_EXCEEDED", code)
+	}
+	s.publish(t, 0, s.wrap(t, over, "").ev)
+	if got := l3.wait(2, s.quiet()); len(got) != 1 {
+		t.Errorf("%d replies, want one: the nonce of an envelope refused at E5 was served again", len(got))
 	}
 }
 
