@@ -172,10 +172,37 @@ func (h *HubClient) MintCash(ctx context.Context, p nipcash.MintCashParams, j Jo
 		return nil, &IndeterminateError{Call: pc, Code: code, Message: resp.Error.Message}
 	}
 	res, err := p.ParseResult(resp.Result)
+	if err == nil {
+		err = mintedByHub(res, h.conn.HubIdentity)
+	}
 	if err != nil {
 		return res, &IndeterminateError{Call: pc, Cause: err}
 	}
 	return res, nil
+}
+
+// errMintNotHubs reports a minted token whose provenance does not verify
+// against the connection's Hub identity (TLV 4).
+var errMintNotHubs = errors.New("nipcash/client: the minted token is not this Hub's bill")
+
+// mintedByHub checks a mint result's token: its provenance must verify against
+// hubIdentity, and it must be for the wallet the result names.
+func mintedByHub(res *nipcash.MintCashResult, hubIdentity string) error {
+	if res == nil || res.CashToken == "" {
+		return nil
+	}
+	t, err := nipcash.Decode(res.CashToken)
+	if err != nil {
+		return fmt.Errorf("nipcash/client: the minted token does not decode: %w", err)
+	}
+	minter, ok := nipcash.VerifyProvenance(t)
+	if !ok || !nipcash.HubIdentityEqual(hubIdentity, minter) {
+		return errMintNotHubs
+	}
+	if res.WalletPubkey != "" && t.WalletPubkey != res.WalletPubkey {
+		return fmt.Errorf("%w: wallet_pubkey differs from the token's", errMintNotHubs)
+	}
+	return nil
 }
 
 // LookupMint looks a mint up over the private transport: target TLV 0, item
