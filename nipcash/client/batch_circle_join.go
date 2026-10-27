@@ -34,43 +34,61 @@ type CircleJoinOutcome struct {
 // with LookupCircleJoin. A reply that fails nipcw's checks (another
 // connection_pubkey, another sender) is OutcomeError with Undecodable set.
 //
-// Each join's item is built once, from its single-use PreparedJoin. A join that
-// would have to move to a later envelope cannot be rebuilt, so the batch stops
-// there and the joins not yet sent get no outcome: nothing of them was sent.
+// Every join gets an outcome, in the order requested. Each join's item is built
+// once, from its single-use PreparedJoin, and only for the envelope that carries
+// it: the fit is decided on a stand-in of the same size, so joins that spill
+// into a later envelope are built and sent there. A join the batch stopped
+// before (its envelope was not published) is OutcomeNotSent, returned with the
+// error that stopped it; a retry needs a new Prepare. A join with no Hub, no
+// prepared join or one bound to another Hub is refused before anything is
+// built or sent, with no outcomes.
 func (s *BatchSession) CreateCircleWalletMany(ctx context.Context, items []BatchCircleJoin) ([]CircleJoinOutcome, error) {
 	builders := make([]itemBuilder, 0, len(items))
 	byID := make(map[string]BatchCircleJoin, len(items))
+	// The stand-in's item proof is signed by a throwaway key: a signature and a
+	// key are the same size whoever signs, so the stand-in is the join's size.
+	standIn, err := transport.NewNonce()
+	if err != nil {
+		return nil, err
+	}
 	for i, it := range items {
 		it := it
-		byID[itemID(it.ID, i)] = it
+		id := itemID(it.ID, i)
+		if err := checkCircleJoin(id, it, s.HubIdentity()); err != nil {
+			return nil, err
+		}
+		byID[id] = it
 		builders = append(builders, itemBuilder{
-			ID: itemID(it.ID, i),
+			ID: id,
 			Build: func(id string, b nipcash.ItemBinding) (transport.Item, error) {
-				if err := it.Hub.check(id, s.HubIdentity()); err != nil {
+				if err := checkCircleJoin(id, it, s.HubIdentity()); err != nil {
 					return transport.Item{}, err
 				}
-				if it.Join == nil {
-					return transport.Item{}, errors.New("nipcash/client: a circle join needs its prepared join")
-				}
-				if it.Join.HubPubkey != it.Hub.target {
-					return transport.Item{}, errors.New("nipcash/client: the prepared join is bound to another Hub")
-				}
 				return it.Join.Item(id, it.Hub.connSecret, b)
+			},
+			Measure: func(id string, b nipcash.ItemBinding) (transport.Item, error) {
+				return nipcash.BuildItem(id, it.Join.HubPubkey, it.Hub.connSecret, nipcw.MethodCreateCircleWallet,
+					it.Join.Request, nipcash.BySigning(standIn), b)
 			},
 		})
 	}
 
 	outcomes, sendErr := s.sendBatch(ctx, builders, sendOptions{})
-	if sendErr != nil && len(outcomes) == 0 {
-		return nil, sendErr
-	}
-	out := make([]CircleJoinOutcome, 0, len(outcomes))
+	got := make(map[string]ItemOutcome, len(outcomes))
 	for _, o := range outcomes {
+		got[o.ID] = o
+	}
+	out := make([]CircleJoinOutcome, 0, len(builders))
+	for _, b := range builders {
+		o, ok := got[b.ID]
+		if !ok {
+			out = append(out, CircleJoinOutcome{ItemOutcome: ItemOutcome{ID: b.ID, State: OutcomeNotSent}})
+			continue
+		}
 		jo := CircleJoinOutcome{ItemOutcome: o}
 		if o.Succeeded() {
 			// Decrypted from the Hub connection key, not the inbox that carried it.
-			it := byID[o.ID]
-			result, err := it.Join.ParseResult(o.Result)
+			result, err := byID[o.ID].Join.ParseResult(o.Result)
 			if err != nil {
 				jo.State = OutcomeError
 				jo.Error = decodeError(o.ID, err)
@@ -82,4 +100,19 @@ func (s *BatchSession) CreateCircleWalletMany(ctx context.Context, items []Batch
 		out = append(out, jo)
 	}
 	return out, sendErr
+}
+
+// checkCircleJoin is what a join needs before anything is built: a Hub
+// connection on this session's node, and a prepared join bound to that Hub.
+func checkCircleJoin(id string, it BatchCircleJoin, sessionNode string) error {
+	if err := it.Hub.check(id, sessionNode); err != nil {
+		return err
+	}
+	if it.Join == nil {
+		return errors.New("nipcash/client: a circle join needs its prepared join")
+	}
+	if it.Join.HubPubkey != it.Hub.target {
+		return errors.New("nipcash/client: the prepared join is bound to another Hub")
+	}
+	return nil
 }

@@ -50,6 +50,12 @@ const (
 	// spec forbids picking one answer by arrival order or seq. The other items keep
 	// theirs. Not safe to resend.
 	OutcomeConflict
+	// OutcomeNotSent means nothing of this item was published: the batch
+	// stopped before its envelope went out (a send that could not start, a
+	// deadline too close, an item that could not be built). The Hub never saw
+	// it. Set only by CreateCircleWalletMany, so that every join has an
+	// outcome; a join is single use, so a retry needs a new Prepare.
+	OutcomeNotSent
 )
 
 func (s OutcomeState) String() string {
@@ -64,6 +70,8 @@ func (s OutcomeState) String() string {
 		return "unanswered"
 	case OutcomeConflict:
 		return "conflict"
+	case OutcomeNotSent:
+		return "not sent"
 	default:
 		return fmt.Sprintf("OutcomeState(%d)", int(s))
 	}

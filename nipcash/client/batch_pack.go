@@ -49,6 +49,12 @@ type itemBuilder struct {
 	// Pending returns the call to write ahead for the envelope deadline it was
 	// packed under; nil for an item that writes nothing ahead.
 	Pending func(deadline int64) nipcash.PendingCall
+	// Measure, when set, builds a stand-in of the same size as Build's item
+	// without using anything up. It is set for a single-use item (a circle
+	// join, whose prepared join builds once): packing decides the fit on the
+	// stand-in and calls Build only for the envelope that will carry it, so an
+	// item that spills into a later envelope is still built there.
+	Measure func(id string, b nipcash.ItemBinding) (transport.Item, error)
 }
 
 // packedEnvelope is one request envelope, built and ready to wrap.
@@ -117,7 +123,11 @@ func packOne(builders []itemBuilder, hubXOnly string, limits transport.Limits, n
 	var ids []string
 	consumed := 0
 	for _, b := range builders {
-		item, err := b.Build(b.ID, binding)
+		probe := b.Build
+		if b.Measure != nil {
+			probe = b.Measure
+		}
+		item, err := probe(b.ID, binding)
 		if err != nil {
 			// A builder that cannot produce an item at all — a captured-proof
 			// credential, a malformed invoice — is the caller's error and must
@@ -136,6 +146,18 @@ func packOne(builders []itemBuilder, hubXOnly string, limits transport.Limits, n
 			// against that envelope's own nonce — which is exactly why builders are
 			// deferred rather than items pre-built.
 			break
+		}
+		if b.Measure != nil {
+			// The fit was decided on the stand-in; the real item is built once,
+			// here, for the envelope that carries it.
+			built, err := b.Build(b.ID, binding)
+			if err != nil {
+				return transport.Envelope{}, nil, 0, fmt.Errorf("item %q: %w", b.ID, err)
+			}
+			candidate.Items[len(candidate.Items)-1] = built
+			if _, err := candidate.Encode(limits); err != nil {
+				return transport.Envelope{}, nil, 0, fmt.Errorf("item %q: built larger than measured: %w", b.ID, err)
+			}
 		}
 		env = candidate
 		ids = append(ids, b.ID)

@@ -166,8 +166,9 @@ func (c *Client) Join(ctx context.Context, p nipcw.CreateCircleWalletParams, o J
 	}
 
 	outcomes, sendErr := session.CreateCircleWalletMany(ctx, []cashclient.BatchCircleJoin{{ID: "join", Hub: hub, Join: prepared}})
-	if len(outcomes) == 0 {
-		// No outcome means the item was never packed, so nothing was sent.
+	if len(outcomes) == 0 || outcomes[0].State == cashclient.OutcomeNotSent {
+		// No outcome, or OutcomeNotSent: the item's envelope was never
+		// published, so nothing was sent.
 		if sendErr == nil {
 			sendErr = errors.New("no outcome")
 		}
