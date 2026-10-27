@@ -16,8 +16,9 @@ import (
 
 // The bill ledger behind ServeWithdrawals: bills minted by mint_cash on the
 // Cash Hub connection (or MintBill), their slices, cash_status, and the private
-// transport's per-item order I2 to I9 for items naming them. cash_redeem,
-// cash_transfer and cash_consolidate are not served on these bills: they are
+// transport's per-item order I2 to I9 for items naming them. cash_redeem (paid
+// to the fake payee's invoices, ledger_spend.go) and cash_transfer (in place,
+// split and spin-off; not zap transfers) are served; cash_consolidate is
 // refused NOT_IMPLEMENTED at I5.
 
 // Fee terms every slice the ledger mints carries (fixed at creation, never the
@@ -302,7 +303,8 @@ func (l *WithdrawLedger) decide(c ItemCtx) *transport.Result {
 	case (serving == nipcash.MethodCashWithdrawQuote || serving == nipcash.MethodCashWithdraw) && !l.offered:
 		return errResult(nipcash.ErrCodeNotImplemented, "this Hub does not offer on-chain withdrawals", "")
 	case serving != nipcash.MethodCashStatus && serving != nipcash.MethodCashLookup &&
-		serving != nipcash.MethodCashWithdrawQuote && serving != nipcash.MethodCashWithdraw:
+		serving != nipcash.MethodCashWithdrawQuote && serving != nipcash.MethodCashWithdraw &&
+		serving != nipcash.MethodCashRedeem && serving != nipcash.MethodCashTransfer:
 		return errResult(nipcash.ErrCodeNotImplemented, "the fake ledger does not serve "+serving, "")
 	}
 	var rid struct {
@@ -331,6 +333,10 @@ func (l *WithdrawLedger) decide(c ItemCtx) *transport.Result {
 		return l.quoteLocked(it)
 	case nipcash.MethodCashWithdraw:
 		return l.withdrawLocked(it)
+	case nipcash.MethodCashRedeem:
+		return l.redeemLocked(it)
+	case nipcash.MethodCashTransfer:
+		return l.transferLocked(it)
 	}
 	if c.Item.Method == nipcash.MethodCashWithdraw {
 		return l.cancelLocked(it)
@@ -426,6 +432,12 @@ func (l *WithdrawLedger) lookupLocked(it *ledgerItem) *transport.Result {
 	if json.Unmarshal(it.c.Item.Params, &req) != nil || req.Validate() != nil || req.ConnectionPubkey != "" {
 		return errResult(nipcash.ErrCodeBadRequest, "lookup", "")
 	}
+	if c := l.calls[req.RequestID]; c != nil {
+		if c.wallet != it.b.wallet || !authorizes(c.cashCommitment, c.authorizer, it) {
+			return errResult(nipcash.ErrCodeUnauthorized, "not the call's authorizer", "")
+		}
+		return okResult(map[string]any{"status": nipcash.LookupDone, "result": c.result})
+	}
 	p := l.payouts[req.RequestID]
 	if p != nil && !l.retainedLocked(p) {
 		p = nil
@@ -453,14 +465,20 @@ func (l *WithdrawLedger) lookupLocked(it *ledgerItem) *transport.Result {
 // the record: the recorded authorizer's item proof, or, for a call a cash
 // commitment authorized, no proof and the matching cash_secret.
 func (l *WithdrawLedger) authorizesLocked(p *payout, it *ledgerItem) bool {
-	if p.cashCommitment != "" {
+	return authorizes(p.cashCommitment, p.authorizer, it)
+}
+
+// authorizes is a lookup's authorization against a record by cashCommitment
+// (for a call a cash commitment authorized) or authorizer.
+func authorizes(cashCommitment, authorizer string, it *ledgerItem) bool {
+	if cashCommitment != "" {
 		var s struct {
 			CashSecret string `json:"cash_secret"`
 		}
 		_ = json.Unmarshal(it.c.Item.Params, &s)
-		return !it.c.Item.HasProof() && secretMatches(s.CashSecret, p.cashCommitment)
+		return !it.c.Item.HasProof() && secretMatches(s.CashSecret, cashCommitment)
 	}
-	return it.signer != "" && it.signer == p.authorizer
+	return it.signer != "" && it.signer == authorizer
 }
 
 func secretMatches(secret, commitment string) bool {

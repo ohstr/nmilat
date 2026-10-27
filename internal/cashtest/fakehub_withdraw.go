@@ -103,6 +103,11 @@ type WithdrawLedger struct {
 	holdCast    bool
 	crash       bool
 	rng         io.Reader
+
+	// invoices are the fake Lightning payee's open invoices, by payment hash.
+	invoices map[string]*fakeInvoice
+	// calls are the records of the transfers the ledger committed.
+	calls map[string]*callRecord
 }
 
 // payout is one withdrawal's record.
@@ -163,7 +168,8 @@ func (h *FakeHub) ServeWithdrawals(t testing.TB, terms *nipcash.WithdrawTerms) *
 	t.Helper()
 	l := &WithdrawLedger{h: h, chain: NewChain(), offered: true, bills: map[string]*ledgerBill{},
 		payouts: map[string]*payout{}, used: map[string]bool{}, consumed: map[string]int64{}, ckHolder: map[string]string{},
-		setAside: map[wire.OutPoint]string{}, bound: ^uint64(0), rng: mrand.NewChaCha8([32]byte{0x11})}
+		setAside: map[wire.OutPoint]string{}, bound: ^uint64(0), rng: mrand.NewChaCha8([32]byte{0x11}),
+		invoices: map[string]*fakeInvoice{}, calls: map[string]*callRecord{}}
 	l.terms = DefaultWithdrawTerms()
 	if terms != nil {
 		l.terms = *terms
