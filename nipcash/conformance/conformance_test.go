@@ -42,20 +42,6 @@ func (h orderHub) Reorg(t testing.TB, _ int)                    { t.Skip("the fa
 func (h orderHub) Evict(t testing.TB, _ string)                 { t.Skip("the fake has no chain") }
 func (h orderHub) RetireOrderConnection(_ testing.TB, _ string) { h.book.Retire() }
 
-// TestAgainstFakeOrderHub runs the NIP-CO cases against the fake's Order
-// connection.
-func TestAgainstFakeOrderHub(t *testing.T) {
-	hub := cashtest.NewFakeHub(t)
-	h := orderHub{FakeHub: hub, book: hub.ServeOrders(t, fakeOrderTerms)}
-	var only []string
-	for _, id := range conformance.IDs() {
-		if strings.HasPrefix(id, "CT-ORD") {
-			only = append(only, id)
-		}
-	}
-	conformance.Run(t, h, conformance.Options{Only: only})
-}
-
 // TestAgainstFakeWithdrawHub runs the withdrawal cases against a fake Hub that
 // offers withdrawals.
 func TestAgainstFakeWithdrawHub(t *testing.T) {

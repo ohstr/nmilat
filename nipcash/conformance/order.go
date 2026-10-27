@@ -15,12 +15,41 @@ import (
 	relayclient "github.com/ohstr/nmilat/relay/client"
 )
 
-// orderCases are the NIP-CO cases a Hub implementing OrderPayer runs. CT-ORD-14
-// retires the connection, so it runs last.
+// orderCases are the NIP-CO cases a Hub implementing OrderPayer runs, with the
+// order lookup (CT-LK-14) and ordered-slice (CT-OSL) cases. CT-ORD-14 retires
+// the connection, so it runs last.
 var orderCases = []ctCase{
 	{id: "CT-ORD-01", needs: []need{needOrder}, run: ctOrd01},
 	{id: "CT-ORD-02", needs: []need{needOrder}, run: ctOrd02},
 	{id: "CT-ORD-03", needs: []need{needOrder}, run: ctOrd03},
+	{id: "CT-ORD-04", needs: []need{needOrder}, run: ctOrd04},
+	{id: "CT-ORD-05", needs: []need{needOrder}, run: ctOrd05},
+	{id: "CT-ORD-06", needs: []need{needOrder}, run: ctOrd06},
+	{id: "CT-ORD-07", needs: []need{needOrder}, run: ctOrd07},
+	{id: "CT-ORD-08", needs: []need{needOrder}, run: ctOrd08},
+	{id: "CT-ORD-09", needs: []need{needOrder}, run: ctOrd09},
+	{id: "CT-ORD-10", needs: []need{needOrder, needFaulty}, run: ctOrd10},
+	{id: "CT-ORD-11", needs: []need{needOrder, needClock}, run: ctOrd11},
+	{id: "CT-ORD-12", needs: []need{needOrder}, run: ctOrd12},
+	{id: "CT-ORD-13", needs: []need{needOrder}, run: ctOrd13},
+	{id: "CT-ORD-15", needs: []need{needOrder}, run: ctOrd15},
+	{id: "CT-ORD-16", needs: []need{needOrder, needAdmin}, run: ctOrd16},
+	{id: "CT-LK-14", needs: []need{needOrder}, run: ctLk14},
+	{id: "CT-ORDC-01", needs: []need{needOrder}, run: ctOrdc01},
+	{id: "CT-ORDC-02", needs: []need{needOrder}, run: ctOrdc02},
+	{id: "CT-ORDC-03", needs: []need{needOrder}, run: ctOrdc03},
+	{id: "CT-ORDC-04", needs: []need{needOrder}, run: ctOrdc04},
+	{id: "CT-ORDC-05", needs: []need{needOrder, needClock}, run: ctOrdc05},
+	{id: "CT-ORDC-06", needs: []need{needOrder, needClock}, run: ctOrdc06},
+	{id: "CT-ORDC-07", needs: []need{needOrder}, run: ctOrdc07},
+	{id: "CT-ORDC-08", needs: []need{needOrder}, run: ctOrdc08},
+	{id: "CT-ORDC-09", needs: []need{needOrder}, run: ctOrdc09},
+	{id: "CT-ORDC-10", needs: []need{needOrder, needClock}, run: ctOrdc10},
+	{id: "CT-OSL-01", needs: []need{needOrder}, run: ctOsl01},
+	{id: "CT-OSL-02", needs: []need{needOrder}, run: ctOsl02},
+	{id: "CT-OSL-03", needs: []need{needOrder}, run: ctOsl03},
+	{id: "CT-OSL-04", needs: []need{needOrder}, run: ctOsl04},
+	{id: "CT-OSL-05", needs: []need{needOrder, needAdmin}, run: ctOsl05},
 	{id: "CT-ORD-14", needs: []need{needOrder}, run: ctOrd14},
 }
 
@@ -237,9 +266,10 @@ func ctOrd03(t *testing.T, s *suite) {
 	}
 }
 
-// CT-ORD-14 (CO-CONN-03; get_info and lookup half): once retired, get_info
-// answers "cash_order": {} at once, a new order is RESTRICTED, and an order
-// placed before is still looked up.
+// CT-ORD-14 (CO-CONN-03, CO-S-03): once retired, get_info answers
+// "cash_order": {} at once, a new order is RESTRICTED, an order placed before
+// is still looked up and its payment still minted; a second connection of the
+// same Hub (OrderConnectionAdder) still serves orders.
 func ctOrd14(t *testing.T, s *suite) {
 	oc, nwc := orderConn(t, s)
 	buyer, _ := keypair(t)
@@ -276,5 +306,30 @@ func ctOrd14(t *testing.T, s *suite) {
 	}
 	if lr.Status != nipcash.LookupDone {
 		t.Errorf("lookup status %s, want done", lr.Status)
+	}
+	var before nipCO.Order
+	if err := json.Unmarshal(lr.Result, &before); err != nil {
+		t.Fatalf("the order placed before retirement: %v", err)
+	}
+	p := &placed{rid: sent.RequestID, buyer: buyer, payment: before.Payment, amount: before.AmountMillis,
+		deadline: deadline, oc: oc, order: &before}
+	k := &orderKit{s: s, oc: oc}
+	k.pay(t, p, before.PayMillis)
+	if o := k.await(t, p, func(o *nipCO.Order) bool { return len(o.Bills) > 0 }); len(o.Bills) != 1 {
+		t.Errorf("a payment to an order placed before retirement: %s with %d bills", o.State, len(o.Bills))
+	}
+	adder, ok := s.h.(OrderConnectionAdder)
+	if !ok {
+		t.Log("the Hub cannot add an Order connection: the second-connection half is not run")
+		return
+	}
+	oc2, err := nipCO.DecodeOrderConnection(adder.AddOrderConnection(t))
+	if err != nil {
+		t.Fatalf("the added connection: %v", err)
+	}
+	k2 := &orderKit{s: s, oc: oc2}
+	q, m := k2.request(t, before.Payment, before.AmountMillis, false)
+	if res := k2.send(t, q, m); q.order == nil {
+		t.Errorf("an order on a second connection of the Hub: %v", res)
 	}
 }
