@@ -190,6 +190,11 @@ type BatchTransfer struct {
 type TransferOutcome struct {
 	ItemOutcome
 	Result *nipcash.CashTransferResult
+	// Remainder is the cash target the remainder of a partial split of a cash
+	// source was sent to: the caller's own, or the one the SDK generated and
+	// wrote ahead (role nipcash.SecretRoleRemainder). nil for any other call.
+	// Its secret opens the remainder wallet.
+	Remainder *nipcash.CashTarget
 	// Ordered is the item's Bill.Ordered, a local mark the bills the transfer
 	// makes keep (NIP-CASH §Data Model: a new wallet made from an ordered slice
 	// is ordered, and an in-place reassignment keeps the mark).
@@ -200,6 +205,11 @@ type TransferOutcome struct {
 // carries a request_id (one is generated when Params has none) and is written
 // ahead to j, as device's, with its envelope's exact deadline before anything is
 // published. Outcomes carry the request_id; NeedsLookup says which to look up.
+//
+// A partial split of a cash source without a RemainderTarget gets a fresh one
+// (nipcash.CashTransferParams.WithRemainder), its secret written ahead with
+// role nipcash.SecretRoleRemainder; a re-placement (Replace) keeps the
+// replaced call's. The target sent is TransferOutcome.Remainder.
 func (s *BatchSession) TransferMany(ctx context.Context, items []BatchTransfer, j Journal, device string) ([]TransferOutcome, error) {
 	builders := make([]itemBuilder, 0, len(items))
 	// Kept so each result can be parsed through the SAME params that authorized it —
@@ -218,6 +228,11 @@ func (s *BatchSession) TransferMany(ctx context.Context, items []BatchTransfer, 
 		if err := it.Bill.check(itemID(it.ID, i), s.HubIdentity()); err != nil {
 			return nil, err
 		}
+		params, err := remainderFor(ctx, it.Params)
+		if err != nil {
+			return nil, err
+		}
+		it.Params = params
 		pc, err := it.Params.Pending(it.Bill.target)
 		if err != nil {
 			return nil, err
@@ -246,7 +261,7 @@ func (s *BatchSession) TransferMany(ctx context.Context, items []BatchTransfer, 
 	}
 	out := make([]TransferOutcome, 0, len(outcomes))
 	for _, o := range outcomes {
-		to := TransferOutcome{ItemOutcome: o, Ordered: orderedByID[o.ID]}
+		to := TransferOutcome{ItemOutcome: o, Ordered: orderedByID[o.ID], Remainder: paramsByID[o.ID].RemainderTarget}
 		if o.Succeeded() {
 			// ParseResult, never a plain unmarshal: a spun-off wallet's token
 			// arrives ENCRYPTED to its new owner, and only the credential that
@@ -442,4 +457,27 @@ func (s *BatchSession) pendingAt(pc nipcash.PendingCall) func(int64) nipcash.Pen
 		pc.Deadline, pc.HubIdentity, pc.MaxRequestAge = deadline, s.HubIdentity(), s.MaxRequestAge()
 		return pc
 	}
+}
+
+// remainderFor completes a transfer's RemainderTarget: kept when the caller
+// gave one, the replaced call's when ctx carries a re-placement of this
+// request_id, else a fresh one when the call needs it (NIP-CASH §Transferring
+// and Splitting a Slice, remainder_commitment).
+func remainderFor(ctx context.Context, p nipcash.CashTransferParams) (nipcash.CashTransferParams, error) {
+	if !p.NeedsRemainder() || p.RemainderTarget != nil {
+		return p, nil
+	}
+	if next, ok := ctx.Value(replacementKey{}).(nipcash.PendingCall); ok && next.RequestID == p.RequestID {
+		for _, sec := range next.Secrets {
+			if sec.Role == nipcash.SecretRoleRemainder {
+				t, err := nipcash.CashTargetFromSecret(sec.Secret)
+				if err != nil {
+					return p, err
+				}
+				p.RemainderTarget = t
+				return p, nil
+			}
+		}
+	}
+	return p.WithRemainder()
 }
