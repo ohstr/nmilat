@@ -8,6 +8,9 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `nip44.MessageKeys` and `nip44.OpenWithKeys`: one payload's message
+  keys, MAC checked, which open that payload and no other. The package now
+  tests against the official NIP-44 v2 vectors.
 - Adds `WithSearchBatch` and `WithSearchInFlight`: `SearchIndexer` keeps
   several batches enqueued with a `search.Enqueuer` engine and acknowledges
   them in order, only past what was applied. A large relay's search can then
