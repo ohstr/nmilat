@@ -8,6 +8,23 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `nipCZ` (Cash Zaps): `ParseCashZap` and `ParseCashZapInfo` for kinds
+  9522 and 10522, `VerifyClient` (rules 1-8) and `VerifyWallet` (rules 1-6,
+  8 and 9, with a caller-supplied rule 9 check and the
+  `CheckStatus`/`CheckInPlaceTransfer` helpers), and a `Verdict` with
+  `Countable`, `ExpiresAtTrusted`, `CreditSender`, `MinterUnlisted`,
+  `MayContactMinter` and `Received`.
+  ([#194](https://github.com/ohstr/nmilat/pull/194))
+- Adds `nipCZ.ZapTransfer`, which builds a zap's `cash_transfer` and refuses
+  a ConnectionKey-bound bill on a target (`ErrZapNeedsPubkeyBill`),
+  `NewCashZap`, which copies `issued_at`/`expires_at` exactly and never
+  writes `expiration`, `PlanSend`/`PlanSendCandidates`, `Count`,
+  `SelectCopy`/`SelectTrustedCopy`, `ZapTargetFor`, `ZapContextFromEvent`,
+  `Chains`/`ChainForHRP`, `SameMinter`, `IncomingFilter`, `SentFilters`,
+  `PublishRelays` and `IncomingRelays`.
+  ([#194](https://github.com/ohstr/nmilat/pull/194))
+- Adds `nipCZ/relayreg`, an opt-in relay validator for kind 9522 that
+  applies rules 1-6. ([#194](https://github.com/ohstr/nmilat/pull/194))
 - Adds `nipAZ.ServerPolicy` and `ReceiptPolicy`, so a server applies every
   NIP-AZ request rule (advertised chain, callback amount, own endpoint,
   trusted `ia`) and every receipt rule including rule 10, `SupportsAltZap`,
