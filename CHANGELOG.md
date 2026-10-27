@@ -8,6 +8,11 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `nip46/signeruri.Dial`, which opens a signer from a `bunker://`,
+  `bunker+unix://` or `unix://` URI or a bare absolute socket path and
+  refuses any other scheme, `nipLS.DenyAll`, and `nipLS.ErrMessageTooLarge`
+  (the client no longer sends a request line over 1 MiB).
+  ([#203](https://github.com/ohstr/nmilat/pull/203))
 - Adds conformance cases CT-WD-01..21 and 23..26, CT-STAT-13 and CT-ENV-16,
   with the optional `WithdrawChain` and `WithdrawToggle` interfaces; the
   suite mints its bills with `mint_cash` over the Cash Hub connection.
@@ -754,6 +759,11 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes `nipLS` line limits: a line of exactly 1 MiB plus its newline is
+  accepted on both sides; a longer one is answered `invalid: line too long`,
+  discarded without buffering, and the connection kept; a result whose
+  response would exceed 1 MiB is answered `result too large`.
+  ([#203](https://github.com/ohstr/nmilat/pull/203))
 - Fixes `nipCP` relay queries losing an event that arrived just before EOSE.
   ([#201](https://github.com/ohstr/nmilat/pull/201))
 - Fixes `IndeterminateError`'s text including the call's request_id.
