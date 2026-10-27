@@ -81,25 +81,52 @@ type ledgerHub struct {
 
 func (h ledgerHub) Invoice(_ testing.TB, millis uint64) string { return h.l.Invoice(millis) }
 
-// ledgerHub's Admin: the owner's delete and the Hub's balance; the circle and
-// wallet-cap hooks skip, the fake ledger having none.
+// ledgerHub's Admin: the owner's delete, the Hub's balance, the caps on new
+// wallets, archive drops and, on a ledger made WithCircleHub, the circle's
+// hooks (a ledger without a circle skips those).
 func (h ledgerHub) DeleteBill(_ testing.TB, wallet string) { _ = h.l.DeleteBill(wallet) }
 func (h ledgerHub) Balance(testing.TB) uint64              { return h.l.Balance() }
-func (h ledgerHub) Rotate(t testing.TB, _ *nip01.Event)    { t.Skip("the fake ledger has no circle") }
-func (h ledgerHub) SetAccepting(t testing.TB, _ bool)      { t.Skip("the fake ledger has no circle") }
+func (h ledgerHub) Rotate(t testing.TB, req *nip01.Event) {
+	if h.CircleHubConnection() == "" {
+		t.Skip("the fake ledger has no circle")
+	}
+	if err := h.l.MemberRequest(req); err != nil {
+		t.Fatalf("the fake refused the member request: %v", err)
+	}
+}
+func (h ledgerHub) SetAccepting(t testing.TB, on bool) {
+	if h.CircleHubConnection() == "" {
+		t.Skip("the fake ledger has no circle")
+	}
+	h.l.SetCircleAccepting(on)
+}
 func (h ledgerHub) AddCircleConnection(t testing.TB) string {
-	t.Skip("the fake ledger has no circle")
-	return ""
+	s, err := h.l.AddCircleConnection()
+	if err != nil {
+		t.Skipf("the fake ledger: %v", err)
+	}
+	return s
 }
-func (h ledgerHub) RevokeCircleConnection(t testing.TB, _ string) {
-	t.Skip("the fake ledger has no circle")
+func (h ledgerHub) RevokeCircleConnection(t testing.TB, s string) {
+	if err := h.l.RevokeCircleConnection(s); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
 }
-func (h ledgerHub) SetLiveWalletCap(t testing.TB, _ int) { t.Skip("the fake ledger has no wallet cap") }
-func (h ledgerHub) SetSpinOffRate(t testing.TB, _ int, _ time.Duration) {
-	t.Skip("the fake ledger has no spin-off rate")
+func (h ledgerHub) SetLiveWalletCap(_ testing.TB, n int) { h.l.SetLiveWalletCap(n) }
+func (h ledgerHub) SetSpinOffRate(_ testing.TB, n int, per time.Duration) {
+	h.l.SetSpinOffRate(n, per)
 }
-func (h ledgerHub) DropArchive(t testing.TB, _ string) {
-	t.Skip("the fake ledger keeps no bill archive")
+func (h ledgerHub) DropArchive(t testing.TB, wallet string) {
+	if err := h.l.DropArchive(wallet); err != nil {
+		t.Fatalf("drop archive: %v", err)
+	}
+}
+
+// FundCircleWallet credits an issued Circle Wallet (CircleFunder).
+func (h ledgerHub) FundCircleWallet(t testing.TB, wallet string, millis uint64) {
+	if err := h.l.FundCircleWallet(wallet, millis); err != nil {
+		t.Fatalf("fund: %v", err)
+	}
 }
 
 // RemoveSlice is the owner's removal (SliceRemover).
@@ -111,12 +138,13 @@ var (
 	_ conformance.Admin        = ledgerHub{}
 	_ conformance.SliceRemover = ledgerHub{}
 	_ conformance.Payee        = ledgerHub{}
+	_ conformance.CircleFunder = ledgerHub{}
 )
 
-func newLedgerHub(t *testing.T, terms *nipcash.WithdrawTerms) ledgerHub {
+func newLedgerHub(t *testing.T, terms *nipcash.WithdrawTerms, opts ...cashtest.Option) ledgerHub {
 	fault := &atomic.Pointer[cashtest.Fault]{}
 	fault.Store(&cashtest.FaultNone)
-	hub := cashtest.NewFakeHub(t, cashtest.WithFault(func(cashtest.ItemCtx) cashtest.Fault { return *fault.Load() }))
+	hub := cashtest.NewFakeHub(t, append([]cashtest.Option{cashtest.WithFault(func(cashtest.ItemCtx) cashtest.Fault { return *fault.Load() })}, opts...)...)
 	return ledgerHub{FakeHub: hub, l: hub.ServeWithdrawals(t, terms), fault: fault}
 }
 
@@ -189,4 +217,19 @@ func TestAgainstFakeWithdrawLedgerUnbounded(t *testing.T) {
 	terms := cashtest.DefaultWithdrawTerms()
 	terms.MinMillis, terms.MaxMillis = nil, nil
 	conformance.Run(t, newLedgerHub(t, &terms), conformance.Options{Only: []string{"CT-STAT-13", "CT-WD-02", "CT-WD-03"}})
+}
+
+// TestAgainstFakeCircleLedger runs the circle, cap and archive cases against a
+// ledger made WithCircleHub, on the wall clock (proofs are judged on it), each
+// case on a Hub of its own so one case's clock, rate or holdings never reach
+// another.
+func TestAgainstFakeCircleLedger(t *testing.T) {
+	for _, id := range conformance.IDs() {
+		if !strings.HasPrefix(id, "CT-JOIN") && !strings.HasPrefix(id, "CT-JLK") && !strings.HasPrefix(id, "CT-XFER") &&
+			!strings.HasPrefix(id, "CT-CONS") && id != "CT-LK-15" {
+			continue
+		}
+		h := newLedgerHub(t, nil, cashtest.WithCircleHub(), cashtest.WithClock(cashtest.RealClock{}))
+		conformance.Run(t, h, conformance.Options{Only: []string{id}})
+	}
 }

@@ -6,7 +6,7 @@
 // same code against itself through an adapter implementing HubUnderTest and
 // whichever optional interfaces it can (Clocked, Faulty, Admin, HubDeleter,
 // OrderPayer, PowRelay, Lister, WithdrawChain, WithdrawToggle, Payee,
-// SliceRemover). A case needing
+// SliceRemover, CircleFunder). A case needing
 // an optional interface the Hub does not implement is skipped with the
 // interface named, so a run lists exactly what it did not exercise.
 //
@@ -129,6 +129,12 @@ type Lister interface {
 	CloseCircle(t testing.TB, d string)
 }
 
+// CircleFunder is an optional Circle Wallet Hub whose issued wallets the suite
+// can credit, as a payment received would (CT-JOIN-08, CT-JOIN-15).
+type CircleFunder interface {
+	FundCircleWallet(t testing.TB, walletPubkey string, millis uint64)
+}
+
 // Payee is an optional Hub with a Lightning payee the suite can invoice, for
 // the cases that redeem a slice (CT-WD-09).
 type Payee interface {
@@ -166,10 +172,12 @@ const (
 	needWithdrawChain
 	needWithdrawToggle
 	needPayee
+	needCircleFunds
 )
 
 func (n need) name() string {
-	return [...]string{"Clocked", "Faulty", "Admin", "HubDeleter", "OrderPayer", "PowRelay", "Lister", "WithdrawChain", "WithdrawToggle", "Payee"}[n]
+	return [...]string{"Clocked", "Faulty", "Admin", "HubDeleter", "OrderPayer", "PowRelay", "Lister", "WithdrawChain", "WithdrawToggle", "Payee",
+		"CircleFunder"}[n]
 }
 
 func (n need) satisfiedBy(h HubUnderTest) bool {
@@ -195,6 +203,8 @@ func (n need) satisfiedBy(h HubUnderTest) bool {
 		_, ok = h.(WithdrawToggle)
 	case needPayee:
 		_, ok = h.(Payee)
+	case needCircleFunds:
+		_, ok = h.(CircleFunder)
 	}
 	return ok
 }
@@ -214,6 +224,7 @@ func allCases() []ctCase {
 	out = append(out, orderCases...)
 	out = append(out, withdrawCases...)
 	out = append(out, listCases...)
+	out = append(out, joinCases...)
 	return out
 }
 
