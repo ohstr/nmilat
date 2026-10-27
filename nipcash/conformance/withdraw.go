@@ -21,6 +21,7 @@ import (
 	"github.com/ohstr/nmilat/nipcash/client"
 	"github.com/ohstr/nmilat/nipcash/transport"
 	relayclient "github.com/ohstr/nmilat/relay/client"
+	"github.com/ohstr/nmilat/utils"
 )
 
 // withdrawCases are the on-chain withdrawal cases (NIP-CASH §Redeeming
@@ -51,6 +52,7 @@ var withdrawCases = []ctCase{
 	{id: "CT-WD-19", needs: []need{needFaulty, needClock}, run: ctWd19},
 	{id: "CT-WD-20", needs: []need{needFaulty, needClock, needWithdrawChain}, run: ctWd20},
 	{id: "CT-WD-21", needs: []need{needWithdrawChain, needClock}, run: ctWd21},
+	{id: "CT-WD-22", needs: []need{needAdmin, needFaulty, needClock}, run: ctWd22},
 	{id: "CT-WD-23", needs: []need{needWithdrawChain, needClock}, run: ctWd23},
 	{id: "CT-WD-25", needs: []need{needFaulty, needWithdrawChain}, run: ctWd25},
 	{id: "CT-WD-26", needs: []need{needWithdrawChain, needClock}, run: ctWd26},
@@ -1198,6 +1200,57 @@ func ctWd21(t *testing.T, s *suite) {
 		if wo, _ := s.withdraw(t, old, rq); wo.Error == nil || wo.Error.Code != nipcash.ErrCodeUnauthorized {
 			t.Errorf("the old secret on the re-minted bill: %+v, want UNAUTHORIZED", wo.ItemOutcome)
 		}
+	}
+}
+
+// CT-WD-22 (CASH-WD-26): a re-minted slice (a payout cancelled for want of an
+// about-to-sign record, as CT-WD-19): the owner's delete of its wallet is
+// refused and, through SliceRemover, so is the slice's removal; the
+// withdrawal's record stays while the slice is live, past its deadline plus
+// H and the tombstone window.
+func ctWd22(t *testing.T, s *suite) {
+	s.withdrawals(t)
+	f := s.h.(Faulty)
+	f.InjectFault(t, FaultHoldSign)
+	t.Cleanup(func() { f.InjectFault(t, FaultNone) })
+	h := s.pubkeyBill(t, wdAmount, 0)
+	_, pc := s.withdrawOK(t, h, s.address(t, p2wpkh))
+	for range 10 {
+		if s.payoutNow(t, h, pc).State == nipcash.PayoutCancelled {
+			break
+		}
+		s.advance(t, 6*time.Hour)
+	}
+	p := s.payoutNow(t, h, pc)
+	if p.State != nipcash.PayoutCancelled {
+		t.Fatalf("no about-to-sign record a day after sent_by: %s, want cancelled", p.State)
+	}
+	r := s.checkRemint(t, p, h.cred, wdAmount)
+	pub, err := utils.GetPublicKey(h.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := func(what string) {
+		t.Helper()
+		st := s.status(t, r, nipcash.ScopeMine)
+		if st.Tombstone != nil || len(st.Recipients) != 1 || st.Recipients[0].Claimed || st.Recipients[0].AmountMillis != wdAmount {
+			t.Fatalf("after %s the re-minted slice is %+v, want it live and unclaimed", what, st)
+		}
+	}
+	s.h.(Admin).DeleteBill(t, r.tok.WalletPubkey)
+	live("the owner's delete of its wallet")
+	if rm, ok := s.h.(SliceRemover); ok {
+		if rm.RemoveSlice(t, r.tok.WalletPubkey, "pubkey", pub) == nil {
+			t.Errorf("the owner removed a re-minted slice")
+		}
+		live("the owner's removal of the slice")
+	} else {
+		t.Log("the Hub does not implement SliceRemover: the removal is not exercised")
+	}
+	s.advance(t, 30*24*time.Hour)
+	live("30 days")
+	if p := s.payoutNow(t, h, pc); p.State != nipcash.PayoutCancelled || p.NewWalletPubkey != r.tok.WalletPubkey {
+		t.Errorf("the record of a payout whose re-minted slice lives: %+v", p)
 	}
 }
 

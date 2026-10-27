@@ -5,7 +5,8 @@
 // nmilat's CI runs it against its own fake Hub; a Hub implementation runs the
 // same code against itself through an adapter implementing HubUnderTest and
 // whichever optional interfaces it can (Clocked, Faulty, Admin, HubDeleter,
-// OrderPayer, PowRelay, Lister, WithdrawChain, WithdrawToggle, Payee). A case needing
+// OrderPayer, PowRelay, Lister, WithdrawChain, WithdrawToggle, Payee,
+// SliceRemover). A case needing
 // an optional interface the Hub does not implement is skipped with the
 // interface named, so a run lists exactly what it did not exercise.
 //
@@ -134,6 +135,13 @@ type Payee interface {
 	// Invoice is a fresh invoice for millis that the Hub under test pays as an
 	// external payment (never one its own node receives), settling at once.
 	Invoice(t testing.TB, millis uint64) string
+}
+
+// SliceRemover is an optional Hub whose wallet owner can remove a recipient's
+// unclaimed slice (NIP-CASH §Removing a Recipient). The error is the Hub's
+// refusal.
+type SliceRemover interface {
+	RemoveSlice(t testing.TB, wallet, identityType, identityValue string) error
 }
 
 // Options tunes a run.

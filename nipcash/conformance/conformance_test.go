@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ohstr/nmilat/internal/cashtest"
+	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/nipcash/conformance"
 )
@@ -84,7 +85,8 @@ func TestAgainstFakeListingHub(t *testing.T) {
 }
 
 // ledgerHub is the fake Hub with a bill ledger offering withdrawals, as a
-// WithdrawChain, WithdrawToggle, Clocked, Faulty, HubDeleter and Payee.
+// WithdrawChain, WithdrawToggle, Clocked, Faulty, HubDeleter, Payee, Admin and
+// SliceRemover.
 type ledgerHub struct {
 	*cashtest.FakeHub
 	l     *cashtest.WithdrawLedger
@@ -92,6 +94,38 @@ type ledgerHub struct {
 }
 
 func (h ledgerHub) Invoice(_ testing.TB, millis uint64) string { return h.l.Invoice(millis) }
+
+// ledgerHub's Admin: the owner's delete and the Hub's balance; the circle and
+// wallet-cap hooks skip, the fake ledger having none.
+func (h ledgerHub) DeleteBill(_ testing.TB, wallet string) { _ = h.l.DeleteBill(wallet) }
+func (h ledgerHub) Balance(testing.TB) uint64              { return h.l.Balance() }
+func (h ledgerHub) Rotate(t testing.TB, _ *nip01.Event)    { t.Skip("the fake ledger has no circle") }
+func (h ledgerHub) SetAccepting(t testing.TB, _ bool)      { t.Skip("the fake ledger has no circle") }
+func (h ledgerHub) AddCircleConnection(t testing.TB) string {
+	t.Skip("the fake ledger has no circle")
+	return ""
+}
+func (h ledgerHub) RevokeCircleConnection(t testing.TB, _ string) {
+	t.Skip("the fake ledger has no circle")
+}
+func (h ledgerHub) SetLiveWalletCap(t testing.TB, _ int) { t.Skip("the fake ledger has no wallet cap") }
+func (h ledgerHub) SetSpinOffRate(t testing.TB, _ int, _ time.Duration) {
+	t.Skip("the fake ledger has no spin-off rate")
+}
+func (h ledgerHub) DropArchive(t testing.TB, _ string) {
+	t.Skip("the fake ledger keeps no bill archive")
+}
+
+// RemoveSlice is the owner's removal (SliceRemover).
+func (h ledgerHub) RemoveSlice(_ testing.TB, wallet, identityType, identityValue string) error {
+	return h.l.RemoveSlice(wallet, identityType, identityValue)
+}
+
+var (
+	_ conformance.Admin        = ledgerHub{}
+	_ conformance.SliceRemover = ledgerHub{}
+	_ conformance.Payee        = ledgerHub{}
+)
 
 func newLedgerHub(t *testing.T, terms *nipcash.WithdrawTerms) ledgerHub {
 	fault := &atomic.Pointer[cashtest.Fault]{}

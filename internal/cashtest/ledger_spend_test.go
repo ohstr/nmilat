@@ -195,3 +195,16 @@ func TestLedgerOwnerDeleteAndRemove(t *testing.T) {
 		t.Fatalf("delete twice: %v", err)
 	}
 }
+
+// Balance: a quote moves nothing; a withdrawal sets one coin aside.
+func TestLedgerBalance(t *testing.T) {
+	e := newWDEnv(t)
+	before := e.l.Balance()
+	if before == 0 {
+		t.Fatal("the ledger holds no coins")
+	}
+	e.withdraw(t, e.bill(t, 21_000_000))
+	if after := e.l.Balance(); after != before-100_000_000_000 {
+		t.Fatalf("balance %d after a withdrawal, from %d: want one coin set aside", after, before)
+	}
+}

@@ -405,3 +405,17 @@ func (l *WithdrawLedger) RemoveSlice(wallet, identityType, identityValue string)
 	}
 	return ErrNoSuchBill
 }
+
+// Balance is the Hub's node wallet as far as the ledger keeps it: the value of
+// its coins no payout has set aside, in millis.
+func (l *WithdrawLedger) Balance() uint64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var n uint64
+	for _, c := range l.coins {
+		if _, taken := l.setAside[c]; !taken {
+			n += ledgerCoinSats * 1000
+		}
+	}
+	return n
+}
