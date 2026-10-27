@@ -29,6 +29,10 @@ type TransferFromSourcesParams struct {
 	// anything moves.
 	InterimIdentity   nipcash.Target
 	InterimCredential nipcash.Credential // proves control of InterimIdentity afterward
+	// Journal and Device are where and as whom each call is written ahead
+	// (every step carries a request_id).
+	Journal Journal
+	Device  string
 }
 
 // TransferFromSourcesResult is TransferFromSources' outcome.
@@ -104,7 +108,7 @@ func transferFromSources(ctx context.Context, c transferFromSourcesClient, p Tra
 			To:            p.To,
 			CurrentAmount: src.Amount,
 			SplitAmount:   &p.Amount,
-		})
+		}, p.Journal, p.Device)
 		if err != nil {
 			return nil, err
 		}
@@ -117,7 +121,7 @@ func transferFromSources(ctx context.Context, c transferFromSourcesClient, p Tra
 	consolidateResult, err := c.CashConsolidate(ctx, nipcash.CashConsolidateParams{
 		Sources: p.Sources,
 		To:      p.InterimIdentity,
-	})
+	}, p.Journal, p.Device)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +137,7 @@ func transferFromSources(ctx context.Context, c transferFromSourcesClient, p Tra
 		To:            p.To,
 		CurrentAmount: consolidateResult.AmountMillis,
 		SplitAmount:   &p.Amount,
-	})
+	}, p.Journal, p.Device)
 	if err != nil {
 		return nil, &PartialProgressError{Consolidated: consolidateResult, Cause: err}
 	}

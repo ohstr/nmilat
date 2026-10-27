@@ -30,6 +30,11 @@ type itemBuilder struct {
 	ID string
 	// Build returns the item for a given envelope binding.
 	Build func(id string, b nipcash.ItemBinding) (transport.Item, error)
+	// RequestID is the request_id the item carries, "" for a call without one.
+	RequestID string
+	// Pending returns the call to write ahead for the envelope deadline it was
+	// packed under; nil for an item that writes nothing ahead.
+	Pending func(deadline int64) nipcash.PendingCall
 }
 
 // packedEnvelope is one request envelope, built and ready to wrap.

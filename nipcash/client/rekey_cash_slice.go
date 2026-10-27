@@ -73,6 +73,10 @@ type RekeyCashSliceParams struct {
 	// the secret lives in. A nil is refused rather than silently minted, so the
 	// requirement cannot be missed by omission.
 	NewTarget *nipcash.CashTarget
+	// Journal and Device are where and as whom each call is written ahead
+	// (every step carries a request_id).
+	Journal Journal
+	Device  string
 }
 
 // RekeyCashSliceResult is RekeyCashSlice's outcome. NewToken == ""
@@ -126,7 +130,7 @@ func rekeyCashSlice(ctx context.Context, c transferConsolidater, p RekeyCashSlic
 			Credential:    p.CashSlice.Credential,
 			To:            bt,
 			CurrentAmount: p.CashSlice.Amount,
-		})
+		}, p.Journal, p.Device)
 		if err != nil {
 			return nil, err
 		}
@@ -145,7 +149,7 @@ func rekeyCashSlice(ctx context.Context, c transferConsolidater, p RekeyCashSlic
 		Credential:    p.CashSlice.Credential,
 		To:            p.InterimIdentity,
 		CurrentAmount: p.CashSlice.Amount,
-	})
+	}, p.Journal, p.Device)
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +165,7 @@ func rekeyCashSlice(ctx context.Context, c transferConsolidater, p RekeyCashSlic
 	result, err := c.CashConsolidate(ctx, nipcash.CashConsolidateParams{
 		Sources: sources,
 		To:      bt,
-	})
+	}, p.Journal, p.Device)
 	if err != nil {
 		return nil, &PartialProgressError{Transferred: interimResult, Cause: err}
 	}

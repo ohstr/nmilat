@@ -11,65 +11,78 @@ import (
 	"github.com/google/uuid"
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip44"
+	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/nipcash/transport"
 	relayclient "github.com/ohstr/nmilat/relay/client"
 	"github.com/ohstr/nmilat/wire"
 )
 
-// defaultNotAfterWindow is how long a batch stays valid.
-//
-// Comfortably inside any horizon H a Hub may announce, which bounds how far ahead a hub will
-// accept — a hub need only remember a nonce until the envelope carrying it can no longer
-// be accepted, so asking for the maximum would make a hub remember more for no gain.
-const defaultNotAfterWindow = 60 * time.Second
+// sendOptions carry what a bill-creating call needs on the send path.
+type sendOptions struct {
+	journal Journal
+	device  string
+}
 
-// sendBatch packs builders into envelopes, publishes each, and joins every reply back to
-// the items that asked.
+// deadlineWindow is how far ahead an envelope's not_after is set: DeadlineWindow
+// of the announced H, or 30 s when the Hub announced none.
+func (s *BatchSession) deadlineWindow() time.Duration {
+	h := s.MaxRequestAge()
+	if h < nipcash.MinMaxRequestAge {
+		return 30 * time.Second
+	}
+	return time.Duration(nipcash.DeadlineWindow(h)) * time.Second
+}
+
+// sendBatch packs builders into envelopes lazily, one at a time, publishes each,
+// and joins every reply back to the items that asked.
 //
-// One outcome per requested item, always, whatever happened. An envelope that could not
-// be published, or got no reply, yields OutcomeUnanswered for everything it carried:
-// nothing is known about those bills, and unlike an omission it is not the hub's final
-// word. The Envelope field on each outcome is what lets a caller
-// notice the correlation rather than read N independent omissions.
-//
-// Nothing here retries. cash_redeem has no idempotency key and a double redemption is
-// unrecoverable, so a caller decides — ItemOutcome.SafeToResend tells them which items
-// they may.
-func (s *BatchSession) sendBatch(ctx context.Context, builders []itemBuilder) ([]ItemOutcome, error) {
+// Each envelope's not_after is set when it is packed (now + the deadline window),
+// its calls carrying a request_id are written ahead with that exact deadline,
+// and, immediately before publishing, at least MinPublishMargin seconds must be
+// left (else ErrNotSent wrapping ErrDeadlineTooClose). One outcome per requested
+// item, always; an envelope that got no reply yields OutcomeUnanswered for
+// everything it carried.
+func (s *BatchSession) sendBatch(ctx context.Context, builders []itemBuilder, opts sendOptions) ([]ItemOutcome, error) {
 	if len(builders) == 0 {
 		return nil, nil
 	}
-
-	packed, err := packItems(builders, s.HubIdentity(), s.Limits(), defaultNotAfterWindow)
-	if err != nil {
-		// A packing failure is the caller's own — an item that cannot be built, or one
-		// too large for any envelope. It must surface rather than become an unserved
-		// outcome, which the caller would misread as the hub's choice.
+	if err := s.checkBillCalls(builders, opts); err != nil {
 		return nil, err
+	}
+	limits := s.Limits()
+	if err := limits.Validate(); err != nil {
+		return nil, fmt.Errorf("nipcash/client: hub announced an unusable envelope policy: %w", err)
 	}
 
 	outcomes := make([]ItemOutcome, 0, len(builders))
-	// Collected rather than returned immediately: one envelope arriving incompletely
-	// must not hide the other envelopes' results, and the caller needs both the
-	// outcomes and the knowledge that part of the picture is missing.
 	var incomplete []error
-	for i, p := range packed {
-		got, err := s.sendOne(ctx, p, i)
-		if err != nil && isStalePolicy(err) {
-			// A refetch is worth exactly one retry, and only of the SEND: if the hub
-			// changed its limits or inbox, the cached policy is stale and the envelope
-			// was never served. Re-packing is not attempted here because the whole
-			// batch's envelopes were sized against the old limits; the caller reruns
-			// with a refreshed session instead, which is why the error surfaces.
+	remaining := builders
+	for i := 0; len(remaining) > 0; i++ {
+		notAfter := time.Now().Add(s.deadlineWindow()).Unix()
+		env, ids, consumed, err := packOne(remaining, s.HubIdentity(), limits, notAfter)
+		if err != nil {
+			return outcomes, err
+		}
+		p := packedEnvelope{Envelope: env, ItemIDs: ids}
+		packedNow := remaining[:consumed]
+		remaining = remaining[consumed:]
+
+		written, err := writeAhead(ctx, packedNow, notAfter, opts)
+		if err != nil {
+			return outcomes, fmt.Errorf("%w: write ahead: %v", ErrNotSent, err)
+		}
+		got, err := s.sendOne(ctx, p, i, opts)
+		if err != nil && isStalePolicy(err) && !errors.Is(err, ErrNotSent) {
 			if s.Refresh(ctx) == nil {
-				got, err = s.sendOne(ctx, p, i)
+				got, err = s.sendOne(ctx, p, i, opts)
 			}
 		}
-
-		// An incomplete reply still carries real answers for the chunks that did
-		// arrive, so those are kept rather than thrown away and replaced with
-		// wholesale ignorance. Only when nothing usable came back is the whole
-		// envelope marked unserved.
+		if err != nil && len(got) == 0 && errors.Is(err, ErrNotSent) {
+			// Nothing of this envelope was published: its items get no outcome,
+			// and the caller closes their written-ahead calls as not sent.
+			return outcomes, err
+		}
+		got = withRequestIDs(got, packedNow, written)
 		if len(got) > 0 {
 			outcomes = append(outcomes, got...)
 			if err != nil {
@@ -78,54 +91,120 @@ func (s *BatchSession) sendBatch(ctx context.Context, builders []itemBuilder) ([
 			continue
 		}
 		if err != nil {
-			// Nothing came back at all: everything this envelope carried is unknown,
-			// which is not the same as failed.
-			outcomes = append(outcomes, unansweredOutcomes(p.ItemIDs, i)...)
+			outcomes = append(outcomes, withRequestIDs(unansweredOutcomes(p.ItemIDs, i), packedNow, written)...)
 			incomplete = append(incomplete, err)
-			continue
 		}
 	}
 	if len(incomplete) > 0 {
-		// Joined rather than first-wins: with several envelopes in flight, which one
-		// failed is part of the answer, and a caller reading only the first would
-		// under-report.
 		return outcomes, errors.Join(incomplete...)
 	}
 	return outcomes, nil
 }
 
+// checkBillCalls is the check before anything is written: a call carrying a
+// request_id needs a journal, a Hub announcing a usable max_request_age, and an
+// id no other item of the batch carries.
+func (s *BatchSession) checkBillCalls(builders []itemBuilder, opts sendOptions) error {
+	seen := map[string]bool{}
+	for _, b := range builders {
+		if b.RequestID == "" {
+			continue
+		}
+		if opts.journal == nil {
+			return ErrNoJournal
+		}
+		if seen[b.RequestID] {
+			return ErrDuplicateRequestID
+		}
+		seen[b.RequestID] = true
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	ann := s.announcement
+	unusable := s.unusable
+	s.mu.Unlock()
+	if unusable != nil {
+		return unusable
+	}
+	if ann == nil {
+		return ErrHubUnusable
+	}
+	return ann.ValidateForBillCalls()
+}
+
+// writeAhead writes the envelope's calls carrying a request_id, with its exact
+// deadline, before anything is published.
+func writeAhead(ctx context.Context, packed []itemBuilder, deadline int64, opts sendOptions) (map[string]*nipcash.PendingCall, error) {
+	var calls []nipcash.PendingCall
+	byID := map[string]*nipcash.PendingCall{}
+	for _, b := range packed {
+		if b.Pending == nil {
+			continue
+		}
+		pc := b.Pending(deadline)
+		pc.Deadline, pc.Device = deadline, opts.device
+		calls = append(calls, pc)
+		byID[b.ID] = &calls[len(calls)-1]
+	}
+	if len(calls) == 0 {
+		return nil, nil
+	}
+	if err := opts.journal.WriteAhead(ctx, calls); err != nil {
+		return nil, err
+	}
+	return byID, nil
+}
+
+// withRequestIDs stamps each outcome with the request_id its item carried.
+func withRequestIDs(out []ItemOutcome, packed []itemBuilder, written map[string]*nipcash.PendingCall) []ItemOutcome {
+	ids := map[string]string{}
+	for _, b := range packed {
+		ids[b.ID] = b.RequestID
+	}
+	for i := range out {
+		out[i].RequestID = ids[out[i].ID]
+		if pc, ok := written[out[i].ID]; ok {
+			cp := *pc
+			out[i].pending = &cp
+		}
+	}
+	return out
+}
+
 // sendOne publishes one envelope and waits for its reply.
-func (s *BatchSession) sendOne(ctx context.Context, p packedEnvelope, index int) ([]ItemOutcome, error) {
+func (s *BatchSession) sendOne(ctx context.Context, p packedEnvelope, index int, opts sendOptions) ([]ItemOutcome, error) {
 	limits := s.Limits()
 	inbox := s.Inbox()
 	if inbox == "" {
-		return nil, fmt.Errorf("nipcash/client: session has no announced inbox")
+		return nil, fmt.Errorf("%w: session has no announced inbox", ErrNotSent)
 	}
-
 	plaintext, err := p.Envelope.Encode(limits)
 	if err != nil {
-		return nil, fmt.Errorf("encode envelope %d: %w", index, err)
+		return nil, fmt.Errorf("%w: encode envelope %d: %v", ErrNotSent, index, err)
 	}
-	request, conversationKey, err := transport.WrapRequest(plaintext, inbox)
+	req, conversationKey, err := s.wrap(ctx, plaintext, inbox, p.Envelope.NotAfter)
 	if err != nil {
-		return nil, fmt.Errorf("wrap envelope %d: %w", index, err)
+		return nil, err
 	}
-
-	// The conversation key comes back from WrapRequest because it cannot be recovered
-	// any other way: it is ECDH(ephemeral_priv, inbox_pub), and the ephemeral private
-	// key is discarded inside WrapRequest so it can never be reused. The hub derives
-	// the same key from its own inbox key and this event's author.
+	if time.Until(time.Unix(p.Envelope.NotAfter, 0)) < nipcash.MinPublishMargin*time.Second {
+		return nil, fmt.Errorf("%w: %w", ErrNotSent, ErrDeadlineTooClose)
+	}
 	replyKey, err := transport.DeriveReplyKey(conversationKey, p.Envelope.ReplyTo)
 	if err != nil {
-		return nil, fmt.Errorf("reply key for envelope %d: %w", index, err)
+		return nil, fmt.Errorf("%w: reply key for envelope %d: %v", ErrNotSent, index, err)
 	}
-
-	replies, stop, err := s.subscribeAndPublish(ctx, p.Envelope.ReplyTo, request)
+	replies, accepted, stop, err := s.subscribeAndPublish(ctx, p.Envelope.ReplyTo, req)
 	if err != nil {
 		return nil, fmt.Errorf("send envelope %d: %w", index, err)
 	}
 	defer stop()
-
+	if rec, ok := opts.journal.(AcceptedRecorder); ok && len(accepted) > 0 {
+		for _, id := range p.ItemIDs {
+			_ = rec.RecordAccepted(ctx, id, accepted) // a failure never fails the call
+		}
+	}
 	return s.collectReply(ctx, replies, replyKey, p, index)
 }
 
@@ -255,16 +334,17 @@ const subscriptionAckWait = 2 * time.Second
 // still have reached the hub, whose reply then lands there; a client that sent to
 // several relays listens on all of them. The returned stream merges every one and
 // closes once all of them have.
-func (s *BatchSession) subscribeAndPublish(ctx context.Context, replyTo string, request *nip01.Event) (<-chan *nip01.Event, func(), error) {
+func (s *BatchSession) subscribeAndPublish(ctx context.Context, replyTo string, req *outgoing) (<-chan *nip01.Event, []string, func(), error) {
 	relays := s.Relays()
 	if len(relays) == 0 {
-		return nil, nil, errors.New("nipcash/client: session has no relays")
+		return nil, nil, nil, fmt.Errorf("%w: session has no relays", ErrNotSent)
 	}
 
 	var (
-		streams  []<-chan *nip01.Event
-		stops    []func()
-		failures []error
+		streams   []<-chan *nip01.Event
+		stops     []func()
+		failures  []error
+		attempted bool
 	)
 	stopAll := func() {
 		for _, stop := range stops {
@@ -294,22 +374,24 @@ func (s *BatchSession) subscribeAndPublish(ctx context.Context, replyTo string, 
 		case <-time.After(subscriptionAckWait):
 		case <-ctx.Done():
 		}
-		ok, err := relayclient.PublishEventToRelay(ctx, relayURL, request)
-		if err == nil && !ok.Accepted {
-			// A refusal comes back as an OK, not an error: the request is not on this
-			// relay, and waiting here for a reply would only run out not_after.
-			err = fmt.Errorf("refused: %s", ok.Message)
-		}
+		attempted = true
+		err = s.publishTo(ctx, relayURL, req)
 		if err != nil {
 			failures = append(failures, fmt.Errorf("relay %q: %w", raw, err))
 			continue
 		}
-		return mergeEvents(ctx, streams), stopAll, nil
+		if f := afterPublishFrom(ctx); f != nil {
+			f()
+		}
+		return mergeEvents(ctx, streams), []string{raw}, stopAll, nil
 	}
 	stopAll()
 	// Every relay's failure is kept, not just the last: with failover the useful
 	// question is why all of them failed (NIP-CASH §Multiple Relay Hints).
-	return nil, nil, fmt.Errorf("nipcash/client: no relay took the request: %w", errors.Join(failures...))
+	if !attempted {
+		return nil, nil, nil, fmt.Errorf("%w: no relay could be reached: %w", ErrNotSent, errors.Join(failures...))
+	}
+	return nil, nil, nil, fmt.Errorf("nipcash/client: no relay took the request: %w", errors.Join(failures...))
 }
 
 // mergeEvents forwards every stream into one, closed once all of them are.

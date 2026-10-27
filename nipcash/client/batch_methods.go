@@ -85,7 +85,7 @@ func (s *BatchSession) StatusMany(ctx context.Context, items []BatchStatus) ([]S
 	// sendBatch can return outcomes AND an error, when a reply arrived in fewer chunks
 	// than the hub sent. Those outcomes are real answers and must not be discarded —
 	// the error says part of the picture is missing, not that none of it is.
-	outcomes, sendErr := s.sendBatch(ctx, builders)
+	outcomes, sendErr := s.sendBatch(ctx, builders, sendOptions{})
 	if sendErr != nil && len(outcomes) == 0 {
 		return nil, sendErr
 	}
@@ -155,7 +155,7 @@ func (s *BatchSession) RedeemMany(ctx context.Context, items []BatchRedeem) ([]R
 	// sendBatch can return outcomes AND an error, when a reply arrived in fewer chunks
 	// than the hub sent. Those outcomes are real answers and must not be discarded —
 	// the error says part of the picture is missing, not that none of it is.
-	outcomes, sendErr := s.sendBatch(ctx, builders)
+	outcomes, sendErr := s.sendBatch(ctx, builders, sendOptions{})
 	if sendErr != nil && len(outcomes) == 0 {
 		return nil, sendErr
 	}
@@ -191,8 +191,11 @@ type TransferOutcome struct {
 	Result *nipcash.CashTransferResult
 }
 
-// TransferMany transfers or splits several bills in one request.
-func (s *BatchSession) TransferMany(ctx context.Context, items []BatchTransfer) ([]TransferOutcome, error) {
+// TransferMany transfers or splits several bills in one request. Every item
+// carries a request_id (one is generated when Params has none) and is written
+// ahead to j, as device's, with its envelope's exact deadline before anything is
+// published. Outcomes carry the request_id; NeedsLookup says which to look up.
+func (s *BatchSession) TransferMany(ctx context.Context, items []BatchTransfer, j Journal, device string) ([]TransferOutcome, error) {
 	builders := make([]itemBuilder, 0, len(items))
 	// Kept so each result can be parsed through the SAME params that authorized it —
 	// the delivered token is encrypted to that credential.
@@ -206,6 +209,13 @@ func (s *BatchSession) TransferMany(ctx context.Context, items []BatchTransfer) 
 			}
 			it.Params.RequestID = rid
 		}
+		if err := it.Bill.check(itemID(it.ID, i), s.HubIdentity()); err != nil {
+			return nil, err
+		}
+		pc, err := it.Params.Pending(it.Bill.target)
+		if err != nil {
+			return nil, err
+		}
 		paramsByID[itemID(it.ID, i)] = it.Params
 		builders = append(builders, itemBuilder{
 			ID: itemID(it.ID, i),
@@ -215,13 +225,15 @@ func (s *BatchSession) TransferMany(ctx context.Context, items []BatchTransfer) 
 				}
 				return it.Params.Item(id, it.Bill.target, it.Bill.connSecret, b)
 			},
+			RequestID: it.Params.RequestID,
+			Pending:   s.pendingAt(pc),
 		})
 	}
 
 	// sendBatch can return outcomes AND an error, when a reply arrived in fewer chunks
 	// than the hub sent. Those outcomes are real answers and must not be discarded —
 	// the error says part of the picture is missing, not that none of it is.
-	outcomes, sendErr := s.sendBatch(ctx, builders)
+	outcomes, sendErr := s.sendBatch(ctx, builders, sendOptions{journal: j, device: device})
 	if sendErr != nil && len(outcomes) == 0 {
 		return nil, sendErr
 	}
@@ -272,7 +284,9 @@ type ConsolidateOutcome struct {
 // batch of redemptions — and the SDK splits across envelopes rather than refusing. A
 // single consolidation whose sources alone exceed the hub's announced max_bytes cannot
 // be split at all and returns ErrItemTooLarge: the caller must consolidate in stages.
-func (s *BatchSession) ConsolidateMany(ctx context.Context, items []BatchConsolidate) ([]ConsolidateOutcome, error) {
+//
+// Every item carries a request_id and is written ahead to j, as TransferMany's.
+func (s *BatchSession) ConsolidateMany(ctx context.Context, items []BatchConsolidate, j Journal, device string) ([]ConsolidateOutcome, error) {
 	builders := make([]itemBuilder, 0, len(items))
 	// Same reason as TransferMany: the merged wallet's token is delivered encrypted.
 	paramsByID := make(map[string]nipcash.CashConsolidateParams, len(items))
@@ -285,6 +299,13 @@ func (s *BatchSession) ConsolidateMany(ctx context.Context, items []BatchConsoli
 			}
 			it.Params.RequestID = rid
 		}
+		if err := it.Bill.check(itemID(it.ID, i), s.HubIdentity()); err != nil {
+			return nil, err
+		}
+		pc, err := it.Params.Pending()
+		if err != nil {
+			return nil, err
+		}
 		paramsByID[itemID(it.ID, i)] = it.Params
 		builders = append(builders, itemBuilder{
 			ID: itemID(it.ID, i),
@@ -294,13 +315,15 @@ func (s *BatchSession) ConsolidateMany(ctx context.Context, items []BatchConsoli
 				}
 				return it.Params.Item(id, it.Bill.target, it.Bill.connSecret, b)
 			},
+			RequestID: it.Params.RequestID,
+			Pending:   s.pendingAt(pc),
 		})
 	}
 
 	// sendBatch can return outcomes AND an error, when a reply arrived in fewer chunks
 	// than the hub sent. Those outcomes are real answers and must not be discarded —
 	// the error says part of the picture is missing, not that none of it is.
-	outcomes, sendErr := s.sendBatch(ctx, builders)
+	outcomes, sendErr := s.sendBatch(ctx, builders, sendOptions{journal: j, device: device})
 	if sendErr != nil && len(outcomes) == 0 {
 		return nil, sendErr
 	}
@@ -357,4 +380,13 @@ func parseFailure(o ItemOutcome, err error) ItemOutcome {
 	o.Error = decodeError(o.ID, err)
 	o.Undecodable = true
 	return o
+}
+
+// pendingAt completes a call for the send path: the Hub identity and H read
+// before sending, and the deadline of the envelope it was packed into.
+func (s *BatchSession) pendingAt(pc nipcash.PendingCall) func(int64) nipcash.PendingCall {
+	return func(deadline int64) nipcash.PendingCall {
+		pc.Deadline, pc.HubIdentity, pc.MaxRequestAge = deadline, s.HubIdentity(), s.MaxRequestAge()
+		return pc
+	}
 }

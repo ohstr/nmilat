@@ -48,7 +48,7 @@ func (s *BatchSession) CreateCircleWalletMany(ctx context.Context, items []Batch
 		})
 	}
 
-	outcomes, sendErr := s.sendBatch(ctx, builders)
+	outcomes, sendErr := s.sendBatch(ctx, builders, sendOptions{})
 	if sendErr != nil && len(outcomes) == 0 {
 		return nil, sendErr
 	}

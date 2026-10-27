@@ -100,6 +100,10 @@ type ItemOutcome struct {
 	// NotServed for a reason that has nothing to do with those bills. Without this a
 	// caller cannot tell that from N unrelated omissions.
 	Envelope int
+	// RequestID is the request_id the item carried, "" for a call without one.
+	RequestID string
+	// pending is the call written ahead for this item, with its exact deadline.
+	pending *nipcash.PendingCall
 }
 
 // Succeeded reports whether this item was served and did not fail. Provided because

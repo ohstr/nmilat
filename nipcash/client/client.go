@@ -53,6 +53,9 @@ type Client struct {
 	// every bill method on this connection addresses the same hub.
 	sessionMu sync.Mutex
 	session   *BatchSession
+
+	// sessionOpts are passed to every session this client opens.
+	sessionOpts []SessionOption
 }
 
 // bill returns this connection's own Bill — the bill every single-item method acts

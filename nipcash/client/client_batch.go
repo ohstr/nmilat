@@ -43,12 +43,12 @@ func (c *Client) RedeemMany(ctx context.Context, items []BatchRedeem) ([]RedeemO
 }
 
 // TransferMany transfers or splits several bills in one request.
-func (c *Client) TransferMany(ctx context.Context, items []BatchTransfer) ([]TransferOutcome, error) {
+func (c *Client) TransferMany(ctx context.Context, items []BatchTransfer, j Journal, device string) ([]TransferOutcome, error) {
 	session, err := c.billSession(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return session.TransferMany(ctx, items)
+	return session.TransferMany(ctx, items, j, device)
 }
 
 // ConsolidateMany performs several consolidations in one request.
@@ -58,10 +58,10 @@ func (c *Client) TransferMany(ctx context.Context, items []BatchTransfer) ([]Tra
 // rather than refusing. A single consolidation whose sources alone exceed the hub's
 // announced max_bytes cannot be split at all and returns ErrItemTooLarge: consolidate
 // in stages.
-func (c *Client) ConsolidateMany(ctx context.Context, items []BatchConsolidate) ([]ConsolidateOutcome, error) {
+func (c *Client) ConsolidateMany(ctx context.Context, items []BatchConsolidate, j Journal, device string) ([]ConsolidateOutcome, error) {
 	session, err := c.billSession(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return session.ConsolidateMany(ctx, items)
+	return session.ConsolidateMany(ctx, items, j, device)
 }

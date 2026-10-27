@@ -110,11 +110,11 @@ func TestBatchMethods_RejectAZeroBillByName(t *testing.T) {
 			return err
 		}},
 		{"TransferMany", func() error {
-			_, err := s.TransferMany(ctx, []BatchTransfer{{ID: "x"}})
+			_, err := s.TransferMany(ctx, []BatchTransfer{{ID: "x"}}, newTestJournal(), "d")
 			return err
 		}},
 		{"ConsolidateMany", func() error {
-			_, err := s.ConsolidateMany(ctx, []BatchConsolidate{{ID: "x"}})
+			_, err := s.ConsolidateMany(ctx, []BatchConsolidate{{ID: "x"}}, newTestJournal(), "d")
 			return err
 		}},
 	} {

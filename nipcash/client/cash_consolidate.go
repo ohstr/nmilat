@@ -16,7 +16,7 @@ import (
 //
 // The merged wallet's token arrives encrypted to its new owner and is decrypted on the
 // way back.
-func (c *Client) CashConsolidate(ctx context.Context, params nipcash.CashConsolidateParams) (*nipcash.CashConsolidateResult, error) {
+func (c *Client) CashConsolidate(ctx context.Context, params nipcash.CashConsolidateParams, j Journal, device string) (*nipcash.CashConsolidateResult, error) {
 	bill, err := c.bill()
 	if err != nil {
 		return nil, err
@@ -27,12 +27,15 @@ func (c *Client) CashConsolidate(ctx context.Context, params nipcash.CashConsoli
 	}
 	outcomes, sendErr := session.ConsolidateMany(ctx, []BatchConsolidate{{
 		ID: "1", Bill: bill, Params: params,
-	}})
+	}}, j, device)
 	if len(outcomes) == 0 {
-		return nil, oneItemOutcome(OutcomeNotServed, nil, sendErr, nipcash.MethodCashConsolidate)
+		if sendErr == nil {
+			sendErr = &NotServedError{Method: nipcash.MethodCashConsolidate}
+		}
+		return nil, sendErr
 	}
 	o := outcomes[0]
-	if err := oneItemOutcome(o.State, o.Error, sendErr, nipcash.MethodCashConsolidate); err != nil {
+	if err := oneCall(o.ItemOutcome, sendErr, nipcash.MethodCashConsolidate); err != nil {
 		return nil, err
 	}
 	return o.Result, nil

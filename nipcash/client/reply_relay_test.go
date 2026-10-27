@@ -127,7 +127,7 @@ func TestSubscribeAndPublish_ListensOnTheRelayItSentTo(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	events, stop, err := s.subscribeAndPublish(ctx, replyTo, nip01.NewEvent(transport.KindPrivateRequest, "req"))
+	events, _, stop, err := s.subscribeAndPublish(ctx, replyTo, &outgoing{ev: nip01.NewEvent(transport.KindPrivateRequest, "req")})
 	if err != nil {
 		t.Fatalf("subscribeAndPublish: %v", err)
 	}
@@ -194,7 +194,7 @@ func TestSubscribeAndPublish_ARefusedRequestIsNotSent(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, _, err := s.subscribeAndPublish(ctx, replyTo, nip01.NewEvent(transport.KindPrivateRequest, "req"))
+	_, _, _, err := s.subscribeAndPublish(ctx, replyTo, &outgoing{ev: nip01.NewEvent(transport.KindPrivateRequest, "req")})
 	if err == nil || !strings.Contains(err.Error(), "refused") {
 		t.Fatalf("err = %v, want the relay's refusal", err)
 	}
@@ -254,7 +254,7 @@ func TestSubscribeAndPublish_WaitsForTheSubscriptionBeforePublishing(t *testing.
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	events, stop, err := s.subscribeAndPublish(ctx, replyTo, nip01.NewEvent(transport.KindPrivateRequest, "req"))
+	events, _, stop, err := s.subscribeAndPublish(ctx, replyTo, &outgoing{ev: nip01.NewEvent(transport.KindPrivateRequest, "req")})
 	if err != nil {
 		t.Fatalf("subscribeAndPublish: %v", err)
 	}

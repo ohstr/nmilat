@@ -29,7 +29,7 @@ func TestTransferMany_UndecodableSuccessIsNotSafeToResend(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	out, err := c.session.TransferMany(ctx, []BatchTransfer{{ID: "1", Bill: bill,
-		Params: nipcash.CashTransferParams{To: nipcash.Pubkey(target), Credential: nipcash.BySecret(connSecretFor(target)), CurrentAmount: 7000}}})
+		Params: nipcash.CashTransferParams{To: nipcash.Pubkey(target), Credential: nipcash.BySecret(connSecretFor(target)), CurrentAmount: 7000}}}, newTestJournal(), "d")
 	if err != nil {
 		t.Fatalf("TransferMany: %v", err)
 	}

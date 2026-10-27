@@ -24,12 +24,12 @@ type fakeTransferConsolidater struct {
 	closed           int
 }
 
-func (f *fakeTransferConsolidater) CashTransfer(_ context.Context, params nipcash.CashTransferParams) (*nipcash.CashTransferResult, error) {
+func (f *fakeTransferConsolidater) CashTransfer(_ context.Context, params nipcash.CashTransferParams, _ Journal, _ string) (*nipcash.CashTransferResult, error) {
 	f.transferCalls = append(f.transferCalls, params)
 	return f.transferFunc(params)
 }
 
-func (f *fakeTransferConsolidater) CashConsolidate(_ context.Context, params nipcash.CashConsolidateParams) (*nipcash.CashConsolidateResult, error) {
+func (f *fakeTransferConsolidater) CashConsolidate(_ context.Context, params nipcash.CashConsolidateParams, _ Journal, _ string) (*nipcash.CashConsolidateResult, error) {
 	f.consolidateCalls = append(f.consolidateCalls, params)
 	return f.consolidateFunc(params)
 }
