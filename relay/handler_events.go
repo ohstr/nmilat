@@ -145,7 +145,7 @@ func (h *eventsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := runEventValidators(r.Context(), &ev); err != nil {
-		http.Error(w, "invalid: "+err.Error(), http.StatusBadRequest)
+		http.Error(w, rejectMessage(err), http.StatusBadRequest)
 		return
 	}
 

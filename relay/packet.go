@@ -354,7 +354,44 @@ func (s *Session) processCount(parent context.Context, cp *wire.CountPacket) err
 // EVENT
 /////////////////////////////////////////////////////////////////////
 
+// EventValidator checks an event of the kind it is registered for. A
+// non-nil error refuses the event, the OK message being "invalid: " and the
+// error's text, unless the error is (or wraps) a *RejectError, which names
+// its own NIP-01 prefix.
 type EventValidator func(context.Context, *nip01.Event) error
+
+// RejectError is a validator's refusal under a NIP-01 machine-readable
+// prefix other than "invalid" (e.g. "blocked", "restricted"). Build one
+// with Reject.
+type RejectError struct {
+	// Prefix is the NIP-01 prefix, without the colon.
+	Prefix string
+	// Err is the reason, sent after the prefix.
+	Err error
+}
+
+func (e *RejectError) Error() string { return e.Err.Error() }
+
+// Unwrap returns Err, so errors.Is sees through the prefix.
+func (e *RejectError) Unwrap() error { return e.Err }
+
+// Reject returns err as a refusal under prefix (e.g. "blocked"): a
+// validator returning it is answered "<prefix>: <err>" instead of
+// "invalid: <err>". An empty prefix means "invalid".
+func Reject(prefix string, err error) error {
+	return &RejectError{Prefix: prefix, Err: err}
+}
+
+// rejectMessage is the OK message for a validator's error: its
+// RejectError prefix, else "invalid".
+func rejectMessage(err error) string {
+	prefix := "invalid"
+	var re *RejectError
+	if errors.As(err, &re) && re.Prefix != "" {
+		prefix = re.Prefix
+	}
+	return prefix + ": " + err.Error()
+}
 
 // EventPolicy decides whether a relay takes an event, after validation: ""
 // accepts it; anything else refuses it, with that text as the OK message.
@@ -493,7 +530,7 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 	if err := runEventValidators(ctx, ep.Event); err != nil {
 		s.config.Logger.Debug().Err(err).Str("id", ep.Event.ID).Int("kind", ep.Event.Kind).Msg("event rejected: kind validation failed")
 
-		s.finishEvent(ep.Event, start, false, fmt.Sprintf("invalid: %s", err.Error()))
+		s.finishEvent(ep.Event, start, false, rejectMessage(err))
 
 		return nil
 	}
