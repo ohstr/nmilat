@@ -14,6 +14,7 @@ import (
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip11"
 	"github.com/ohstr/nmilat/nip19"
+	"github.com/ohstr/nmilat/nip44"
 	"github.com/ohstr/nmilat/nip46"
 	"github.com/ohstr/nmilat/relay"
 	relayclient "github.com/ohstr/nmilat/relay/client"
@@ -424,6 +425,20 @@ func TestCryptoAndTransportKey(t *testing.T) {
 		if _, err := c.Encrypt(ctx5(t), nip46.EncryptionNIP44V2, peer.PubKey(), nsec); !errors.Is(err, nip46.ErrDenied) {
 			t.Errorf("transport key not guarded: %v", err)
 		}
+	}
+}
+
+func TestMessageKeysOverRelay(t *testing.T) {
+	h := startServer(t, ServerConfig{})
+	c := dial(t, h, ClientOptions{})
+	peer, _ := nip46.NewLocalKey(peerPriv)
+	payload, _ := peer.Encrypt(ctx5(t), nip46.EncryptionNIP44V2, c.PubKey(), "one")
+	keys, err := c.MessageKeys(ctx5(t), peer.PubKey(), payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pt, err := nip44.OpenWithKeys(keys, payload); err != nil || pt != "one" {
+		t.Fatalf("%q %v", pt, err)
 	}
 }
 

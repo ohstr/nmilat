@@ -3,10 +3,9 @@
 // (kind 1059, signed by a throwaway key) so the relay learns nothing about
 // who sent it.
 //
-// Only the send path exists here. There is deliberately no Unwrap/Unseal: no
-// caller in this module needs one yet, and a receive path written ahead of its
-// first user is a receive path nobody has exercised against real ciphertext.
-// Add it together with the code that consumes it.
+// Wrap seals with a private key held here. Seal, WrapSeal and Unwrap take a
+// Sealer or Opener instead, so the key can stay in a signer; Prove and
+// VerifyProof show one seal's content to a third party.
 package nip59
 
 import (

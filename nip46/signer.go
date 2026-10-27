@@ -34,7 +34,16 @@ type Key interface {
 	Decrypt(ctx context.Context, scheme, peerPubKey, ciphertext string) (string, error)
 }
 
-var _ Key = (*LocalKey)(nil)
+// MessageKeyer returns one NIP-44 payload's message keys (the
+// nip44_message_keys method), after checking its MAC.
+type MessageKeyer interface {
+	MessageKeys(ctx context.Context, peerPubKey, payload string) (nip44.Keys, error)
+}
+
+var (
+	_ Key          = (*LocalKey)(nil)
+	_ MessageKeyer = (*LocalKey)(nil)
+)
 
 // LocalKey is a Key held in this process's memory.
 type LocalKey struct {
@@ -105,6 +114,15 @@ func (k *LocalKey) Decrypt(_ context.Context, scheme, peerPubKey, ciphertext str
 		return nip44.Decrypt(ciphertext, ck)
 	}
 	return "", fmt.Errorf("%w: %q", ErrUnsupportedEncryption, scheme)
+}
+
+// MessageKeys returns the keys that open payload, exchanged with peerPubKey.
+func (k *LocalKey) MessageKeys(_ context.Context, peerPubKey, payload string) (nip44.Keys, error) {
+	ck, err := k.conversationKey(peerPubKey)
+	if err != nil {
+		return nip44.Keys{}, err
+	}
+	return nip44.MessageKeys(ck, payload)
 }
 
 func (k *LocalKey) conversationKey(peerPubKey string) ([]byte, error) {

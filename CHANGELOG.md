@@ -8,6 +8,25 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `nip44.MessageKeys` and `nip44.OpenWithKeys`: one payload's message
+  keys, MAC checked, which open that payload and no other. The package now
+  tests against the official NIP-44 v2 vectors.
+  ([#207](https://github.com/ohstr/nmilat/pull/207))
+- Adds the `nip44_message_keys` method to `nipLS` and `nip46/bunker` (server
+  and client), and `nipLS.ResultPolicy`, which sees an encrypt or decrypt
+  result before it is returned.
+  ([#207](https://github.com/ohstr/nmilat/pull/207))
+- Adds `nip59.Seal`, `WrapSeal` and `Unwrap`, which take the key as a signer
+  and never open a seal from a sender not asked for. `Prove` and
+  `VerifyProof` show one seal's content to a third party without any key.
+  ([#207](https://github.com/ohstr/nmilat/pull/207))
+- Adds NIP-17 recipient, subject and reply tags, `ParseChatMessage`, and
+  kind 10050 DM relay lists.
+  ([#207](https://github.com/ohstr/nmilat/pull/207))
+- Adds builders for NIP-25 reactions, NIP-10 replies, NIP-18 reposts and
+  NIP-09 deletion requests, and NIP-02/NIP-51 list edits that keep every
+  other item.
+  ([#207](https://github.com/ohstr/nmilat/pull/207))
 - Adds `WithSearchBatch` and `WithSearchInFlight`: `SearchIndexer` keeps
   several batches enqueued with a `search.Enqueuer` engine and acknowledges
   them in order, only past what was applied. A large relay's search can then
