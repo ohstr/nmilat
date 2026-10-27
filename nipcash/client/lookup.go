@@ -83,19 +83,23 @@ func (s *BatchSession) lookupItem(ctx context.Context, bill Bill, build func(id 
 		}
 		return LookupOutcome{}, sendErr
 	}
-	o := outcomes[0]
+	return lookupOutcomeOf(outcomes[0]), nil
+}
+
+// lookupOutcomeOf reads one cash_lookup item's outcome.
+func lookupOutcomeOf(o ItemOutcome) LookupOutcome {
 	switch o.State {
 	case OutcomeResult:
 		r, err := nipcash.ParseCashLookupResult(o.Result)
 		if err != nil {
-			return LookupOutcome{Malformed: true}, nil
+			return LookupOutcome{Malformed: true}
 		}
-		return LookupOutcome{Status: r.Status, RetryAfter: r.RetryAfter, Result: r.Result}, nil
+		return LookupOutcome{Status: r.Status, RetryAfter: r.RetryAfter, Result: r.Result}
 	case OutcomeError:
 		if o.Undecodable || o.Error == nil {
-			return LookupOutcome{Malformed: true}, nil
+			return LookupOutcome{Malformed: true}
 		}
-		return LookupOutcome{Code: o.Error.Code}, nil
+		return LookupOutcome{Code: o.Error.Code}
 	}
-	return LookupOutcome{NotServed: true}, nil
+	return LookupOutcome{NotServed: true}
 }

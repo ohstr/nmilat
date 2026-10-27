@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/ohstr/nmilat/nip01"
+	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/nipcash/transport"
 	relayclient "github.com/ohstr/nmilat/relay/client"
 )
@@ -260,3 +261,18 @@ func appendMissing(dst, extra []string) []string {
 	}
 	return dst
 }
+
+// BillCallsUsable reports whether this Hub takes calls carrying a request_id:
+// its newest announcement was usable and validates for bill calls (a usable
+// max_request_age); else ErrHubUnusable or the announcement's own refusal. A
+// caller checks it before writing anything ahead.
+func (s *BatchSession) BillCallsUsable() error {
+	return s.checkBillCalls([]itemBuilder{{RequestID: "check"}}, sendOptions{journal: noJournal{}})
+}
+
+// noJournal stands in for a journal in BillCallsUsable, which writes nothing.
+type noJournal struct{}
+
+func (noJournal) WriteAhead(context.Context, []nipcash.PendingCall) error { return nil }
+func (noJournal) RecordDerived(context.Context, string, int64) error      { return nil }
+func (noJournal) DerivedPlaced(context.Context, string) (bool, error)     { return false, nil }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ohstr/nmilat/nipCO"
 	"github.com/ohstr/nmilat/nipcash"
 )
 
@@ -163,7 +164,7 @@ func Replace(ctx context.Context, pc nipcash.PendingCall, j Journal, o ReplaceOp
 	next := pc
 	next.RequestID, next.DerivedFrom, next.Attempt, next.LastCode, next.SawReused = id, pc.RequestID, pc.Attempt+1, "", false
 	if pc.Method == nipcash.MethodCashOrder {
-		notify, err := nipcash.NewRequestID()
+		notify, err := nipCO.NewNotify()
 		if err != nil {
 			return Action{}, err
 		}
