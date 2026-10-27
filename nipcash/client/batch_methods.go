@@ -201,6 +201,14 @@ type TransferOutcome struct {
 	Ordered bool
 }
 
+// CallError is the caller's error for one transfer outcome: nil for a result;
+// *nipcash.BillGone for a tombstone; *FinalError for BAD_REQUEST; else
+// *IndeterminateError (look it up), whose Call carries the refusal code
+// (LastCode, SawReused) that Recover reads.
+func (o TransferOutcome) CallError(sendErr error) error {
+	return oneCall(o.ItemOutcome, sendErr, nipcash.MethodCashTransfer)
+}
+
 // TransferMany transfers or splits several bills in one request. Every item
 // carries a request_id (one is generated when Params has none) and is written
 // ahead to j, as device's, with its envelope's exact deadline before anything is
@@ -300,6 +308,14 @@ type ConsolidateOutcome struct {
 	// Ordered is set when every source was ordered: the merged bill is ordered
 	// too (NIP-CASH §Consolidating Tokens). A local mark, never on the wire.
 	Ordered bool
+}
+
+// CallError is the caller's error for one consolidate outcome: nil for a
+// result; *nipcash.BillGone for a tombstone; *FinalError for BAD_REQUEST;
+// else *IndeterminateError (look it up), whose Call carries the refusal code
+// (LastCode, SawReused) that Recover reads.
+func (o ConsolidateOutcome) CallError(sendErr error) error {
+	return oneCall(o.ItemOutcome, sendErr, nipcash.MethodCashConsolidate)
 }
 
 // ConsolidateMany performs several consolidations in one request.
