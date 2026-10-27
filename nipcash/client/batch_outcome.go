@@ -140,7 +140,28 @@ func (o ItemOutcome) Succeeded() bool { return o.State == OutcomeResult }
 // will say whether it is still live.
 //
 // Nor is a success this client could not decode (Undecodable): the hub ran it.
-func (o ItemOutcome) SafeToResend() bool { return o.State == OutcomeError && !o.Undecodable }
+//
+// Nor is any error on a call carrying a request_id other than BAD_REQUEST: its
+// outcome is open and it is looked up, never resent (NIP-CASH §Errors), and a
+// BAD_REQUEST'd call is re-placed only under a fresh request_id. Nor is
+// INTERNAL, which a redeem answers while its payment may still settle, nor
+// REQUEST_REUSED.
+func (o ItemOutcome) SafeToResend() bool {
+	if o.State != OutcomeError || o.Undecodable {
+		return false
+	}
+	var code string
+	if o.Error != nil {
+		code = o.Error.Code
+	}
+	switch code {
+	case nipcash.ErrCodeInternal, nipcash.ErrCodeRequestReused:
+		return false
+	case nipcash.ErrCodeBadRequest:
+		return true
+	}
+	return o.RequestID == ""
+}
 
 // ErrReplyConflict means the chunks of one reply contradict each other: they
 // disagree about total, two different events carry one seq, a seq lies outside 1 to
