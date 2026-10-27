@@ -8,6 +8,19 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `nipAZ.ServerPolicy` and `ReceiptPolicy`, so a server applies every
+  NIP-AZ request rule (advertised chain, callback amount, own endpoint,
+  trusted `ia`) and every receipt rule including rule 10, `SupportsAltZap`,
+  `AltZapRequest.EconomicSender`, `Endpoint`, `AltZapReceipt.Amount` and
+  `NormalizeEndpoint`. ([#193](https://github.com/ohstr/nmilat/pull/193))
+- Adds `ia` to alt-zap requests and receipts, `nipAZ.ResolveIdentity` and
+  `SweepAllowed` (with `HeldValue`), which resolve a ConnectionKey or
+  release held value only through the request's IA's current attestation,
+  and `AltZapReceiptParams.LinkAuthorized`, without which `r`/`R` are
+  refused (`ErrLinkNotAuthorized`).
+  ([#193](https://github.com/ohstr/nmilat/pull/193))
+- Adds `nip57test.Spec.IA`, `TestIA` and `AltZapLnurl`.
+  ([#193](https://github.com/ohstr/nmilat/pull/193))
 - Adds the NIP-CW join building blocks: `nipcw.Terms`, `TermsTag`,
   `ParseTerms`, `RenewalAtLeast`, `ValidRenewal`,
   `CreateCircleWalletParams.Prepare` with a single-use `*PreparedJoin`
@@ -377,6 +390,13 @@ privacy and performance fixes.
 
 ### Changed
 
+- Changes `nipAZ.ValidateAltZapRequest` to take a `ServerPolicy` and
+  `ValidateAltZapReceipt` a `ReceiptPolicy`. `p`/`P` tags must be 64
+  lowercase hex with a NIP-IC platform name and are never lowercased;
+  `amount` must be a plain positive integer; an `lnurl` is accepted in
+  either case, not mixed. The relay validators apply the SHOULD rules too,
+  and the builders refuse to sign an event that would fail validation.
+  ([#193](https://github.com/ohstr/nmilat/pull/193))
 - Changes `nipcw.CircleHubConnection` to require TLV 4, 5 and 6 (`Pubkey`,
   `Relays`, `HubIdentity`, `Signature`, `Chain`); encoding refuses an
   unsigned connection. `nipcw/client.Connect` takes a `circlehub1` string
