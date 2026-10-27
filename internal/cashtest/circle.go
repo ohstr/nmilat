@@ -2,6 +2,7 @@ package cashtest
 
 import (
 	"encoding/json"
+	"maps"
 
 	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/nipcw"
@@ -109,13 +110,24 @@ func (h *FakeHub) SetCircleChain(chain string) {
 	h.circle.chain = chain
 }
 
-// circleInfo is the Circle Hub's get_info result.
+// circleInfo is the Circle Hub's get_info result. With a ledger serving the
+// circle, available_millis is its live room.
 func (h *FakeHub) circleInfo() json.RawMessage {
+	var avail uint64
+	served := false
+	if h.ledger != nil {
+		avail, served = h.ledger.circleAvailable()
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	block := h.circle.wallet
+	if served {
+		block = maps.Clone(block)
+		block["available_millis"] = avail
+	}
 	raw, err := json.Marshal(map[string]any{
 		"methods": []string{"get_info"}, "private_methods": CirclePrivateMethods,
-		"network": FakeNetwork, "chain": h.circle.chain, "circle_wallet": h.circle.wallet,
+		"network": FakeNetwork, "chain": h.circle.chain, "circle_wallet": block,
 	})
 	if err != nil {
 		h.t.Errorf("cashtest: circle get_info: %v", err)

@@ -108,7 +108,7 @@ type WithdrawLedger struct {
 	invoices map[string]*fakeInvoice
 	// calls are the records of the transfers the ledger committed.
 	calls map[string]*callRecord
-	// ext is the rest: caps and lineages (ledger_merge.go).
+	// ext is the rest: caps, lineages and the circle (ledger_merge.go).
 	ext ledgerExt
 }
 
@@ -190,8 +190,12 @@ func (h *FakeHub) ServeWithdrawals(t testing.TB, terms *nipcash.WithdrawTerms) *
 
 	h.mu.Lock()
 	h.ledger, h.Withdrawals = l, true
+	l.initCircleLocked()
 	prev := h.Decide
 	h.Decide = func(c ItemCtx) *transport.Result {
+		if l.circleTarget(c.Item.Target) {
+			return l.decideCircle(c)
+		}
 		l.mu.Lock()
 		_, mine := l.bills[c.Item.Target]
 		l.mu.Unlock()

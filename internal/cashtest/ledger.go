@@ -18,7 +18,9 @@ import (
 // Cash Hub connection (or MintBill), their slices, cash_status, and the private
 // transport's per-item order I2 to I9 for items naming them. cash_redeem (paid
 // to the fake payee's invoices, ledger_spend.go), cash_transfer (in place,
-// split, spin-off and zap) and cash_consolidate (ledger_merge.go) are served.
+// split, spin-off and zap) and cash_consolidate (ledger_merge.go) are served,
+// and with WithCircleHub the circle's joins and join lookups
+// (ledger_circle.go).
 
 // Fee terms every slice the ledger mints carries (fixed at creation, never the
 // Hub's current terms): a redeem fee of 5000 ppm, so a 21000000-millis slice

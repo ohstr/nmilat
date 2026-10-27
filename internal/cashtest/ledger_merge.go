@@ -24,6 +24,7 @@ type ledgerExt struct {
 	spinPer  time.Duration
 	spins    map[string][]int64
 	root     map[string]string // wallet -> the minted bill its lineage starts at
+	circle   *circleDesk
 }
 
 // SetLiveWalletCap bounds the Cash Hub's live wallets at n (0 lifts it): a
