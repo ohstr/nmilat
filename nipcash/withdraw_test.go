@@ -772,3 +772,26 @@ func FuzzWithdrawParsers(f *testing.F) {
 		}
 	})
 }
+
+// QuoteForSlice binds the quote to the bill, the slice's identity and the
+// slice's committed amount: the same identity with another amount (an in-place
+// transfer gave it another slice) is quote_invalid.
+func TestQuoteForSlice(t *testing.T) {
+	q := kwq1Quote(t)
+	if err := QuoteForSlice(q, wdHub, wdBill, wdSlice, "", 21000000); err != nil {
+		t.Fatalf("matching quote: %v", err)
+	}
+	for name, err := range map[string]error{
+		"another amount": QuoteForSlice(q, wdHub, wdBill, wdSlice, "", 10000),
+		"another bill":   QuoteForSlice(q, wdHub, wdSlice, wdSlice, "", 21000000),
+		"another slice":  QuoteForSlice(q, wdHub, wdBill, wdBill, "", 21000000),
+		"another ia":     QuoteForSlice(q, wdHub, wdBill, wdSlice, wdBill, 21000000),
+		"another hub":    QuoteForSlice(q, wdBill, wdBill, wdSlice, "", 21000000),
+		"no quote":       QuoteForSlice(nil, wdHub, wdBill, wdSlice, "", 21000000),
+	} {
+		var we *WithdrawError
+		if !errors.As(err, &we) || we.Code != ErrCodeRestricted || we.Detail != DetailQuoteInvalid {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}

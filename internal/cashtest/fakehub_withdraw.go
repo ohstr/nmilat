@@ -547,7 +547,7 @@ func (l *WithdrawLedger) withdrawLocked(it *ledgerItem) *transport.Result {
 	}
 	l.used[req.RequestID] = true
 	// Step 3: check the payout.
-	quoteOK := nipcash.VerifyWithdrawQuote(q, l.h.nodeXOnly) == nil && q.Wallet == b.wallet && q.IdentityValue == s.idValue && q.IAPubkey == s.ia
+	quoteOK := nipcash.QuoteForSlice(q, l.h.nodeXOnly, b.wallet, s.idValue, s.ia, s.amount) == nil
 	coin, haveCoin := l.pickCoinLocked()
 	var unconfirmed uint64
 	for _, p := range l.payouts {

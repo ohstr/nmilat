@@ -341,6 +341,24 @@ func VerifyWithdrawQuote(q *WithdrawQuote, hubXOnly string) error {
 	return nil
 }
 
+// QuoteForSlice is the Hub's cash_withdraw step-3 row-1 check (NIP-CASH
+// §Processing Algorithm): q verifies as VerifyWithdrawQuote with hubXOnly, and
+// it is for this bill and slice: d is wallet, i is the slice's identity value
+// and IA pubkey (empty unless connection_key), and amount_millis is the slice's
+// committed amount now. The amount matters: an in-place transfer can give the
+// same identity another slice of another amount on the same wallet, and a
+// quote for the old amount must not pay out against it. A failure is
+// RESTRICTED with detail quote_invalid.
+func QuoteForSlice(q *WithdrawQuote, hubXOnly, wallet, identityValue, iaPubkey string, amountMillis uint64) error {
+	if err := VerifyWithdrawQuote(q, hubXOnly); err != nil {
+		return err
+	}
+	if q.Wallet != wallet || q.IdentityValue != identityValue || q.IAPubkey != iaPubkey || q.AmountMillis != amountMillis {
+		return withdrawErr(ErrCodeRestricted, DetailQuoteInvalid, 1, "the quote is not for this bill and slice")
+	}
+	return nil
+}
+
 // QuoteExpectation is what the client asked about, to check a quote answer
 // against: the Hub's identity (x-only), the bill, the slice, the address as
 // sent, any send_before, and from the caller's own cash_status row the slice's

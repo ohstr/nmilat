@@ -56,6 +56,7 @@ var withdrawCases = []ctCase{
 	{id: "CT-WD-23", needs: []need{needWithdrawChain, needClock}, run: ctWd23},
 	{id: "CT-WD-25", needs: []need{needFaulty, needWithdrawChain}, run: ctWd25},
 	{id: "CT-WD-26", needs: []need{needWithdrawChain, needClock}, run: ctWd26},
+	{id: "CT-WD-27", run: ctWd27},
 	{id: "CT-STAT-13", run: ctStat13},
 	{id: "CT-ENV-16", run: ctEnv16},
 	{id: "CT-SCOPE-05", run: ctScope05},
@@ -503,6 +504,39 @@ func ctWd07(t *testing.T, s *suite) {
 	good["request_id"], _ = nipcash.NewRequestID()
 	if res := s.raw(t, a, nipcash.MethodCashWithdraw, good, a.priv); res == nil || res["error"] != nil {
 		t.Errorf("the claim proof of a refused call did not commit later: %v", res)
+	}
+}
+
+// CT-WD-27 (CASH-WD-09): step 3 binds the quote to the slice's amount, not
+// just its identity. A slice is quoted; its holder moves it in place to
+// another key, and the bill's other, smaller slice moves in place to the
+// holder's key. The old quote names the same bill and identity, but another
+// amount: quote_invalid, and the smaller slice stays claimable.
+func ctWd27(t *testing.T, s *suite) {
+	s.withdrawals(t)
+	addr := s.address(t, p2wpkh)
+	pa, xa := keypair(t)
+	pb, xb := keypair(t)
+	_, xalt := keypair(t)
+	big, small := uint64(2*wdAmount), uint64(wdAmount)
+	tok := s.mint(t, 0, nipcash.Send(nipcash.Pubkey(xa), big), nipcash.Send(nipcash.Pubkey(xb), small))
+	a, b := s.holderOf(t, tok), s.holderOf(t, tok)
+	a.priv, a.cred, a.amount = pa, nipcash.BySigning(pa), big
+	b.priv, b.cred, b.amount = pb, nipcash.BySigning(pb), small
+	old := s.quoteOK(t, a, addr)
+	if o, _ := s.transfer(t, a, nipcash.CashTransferParams{To: nipcash.Pubkey(xalt)}); o.Result == nil {
+		t.Fatalf("in-place transfer of the quoted slice: %+v", o.Error)
+	}
+	if o, _ := s.transfer(t, b, nipcash.CashTransferParams{To: nipcash.Pubkey(xa)}); o.Result == nil {
+		t.Fatalf("in-place transfer of the other slice to the quoted key: %+v", o.Error)
+	}
+	now := s.holderOf(t, tok)
+	now.priv, now.cred, now.amount = pa, nipcash.BySigning(pa), small
+	own := s.quoteOK(t, now, addr)
+	wantCode(t, "a quote for the same identity at another amount", s.raw(t, now, nipcash.MethodCashWithdraw, paramsWithQuote(t, now, own, old), now.priv),
+		nipcash.ErrCodeRestricted, nipcash.DetailQuoteInvalid)
+	if row := s.status(t, now, nipcash.ScopeMine).Recipients[0]; row.Claimed {
+		t.Fatalf("a quote_invalid refusal claimed the slice")
 	}
 }
 

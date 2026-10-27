@@ -71,7 +71,7 @@ func CheckQuoteRequest(c QuoteCheck) error {
 
 // PayoutCheck is what a Hub knows at cash_withdraw step 3 (NIP-CASH
 // §Processing Algorithm). QuoteOK: signed by this Hub's node identity and for
-// this bill and slice; QuoteValid: QuoteValidAt the tip; OrderedUnfinal: an
+// this bill and slice, its amount included (QuoteForSlice); QuoteValid: QuoteValidAt the tip; OrderedUnfinal: an
 // ordered slice made from a payment not yet at final_depth; RefuseUnfinal: the
 // Hub's choice to refuse one; OwnAddress: an address the Hub's node wallet
 // controls, a NIP-CO order address included.
