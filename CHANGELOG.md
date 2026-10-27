@@ -8,6 +8,18 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `relay.Reject(prefix, err)`, so an event validator chooses its NIP-01
+  prefix (other errors stay `invalid:`); `nipCP/relayreg` now refuses a bare
+  kind 9525 as `blocked:`.
+  ([#204](https://github.com/ohstr/nmilat/pull/204))
+- Adds `relay.WithRecipientOnlyKinds` (`SessionConfig.RecipientOnlyKinds`):
+  an opt-in rule serving a kind only to a connection AUTHed as one of its
+  `p`, on REQ, COUNT, NEG-OPEN and the live tail, and
+  `SessionHandler.QueryHandler` for POST /query.
+  ([#204](https://github.com/ohstr/nmilat/pull/204))
+- Adds `nipcw/relayreg`, which refuses a follow set dated more than 15
+  minutes ahead, and `nipcw.FollowSetMaxFuture`.
+  ([#204](https://github.com/ohstr/nmilat/pull/204))
 - Adds `nip46/signeruri.Dial`, which opens a signer from a `bunker://`,
   `bunker+unix://` or `unix://` URI or a bare absolute socket path and
   refuses any other scheme, `nipLS.DenyAll`, and `nipLS.ErrMessageTooLarge`
@@ -512,6 +524,8 @@ privacy and performance fixes.
 
 ### Changed
 
+- Changes `relay.ClassifyKind` to count kinds 9522 and 9523 as zaps.
+  ([#204](https://github.com/ohstr/nmilat/pull/204))
 - Changes the Hub-side encoding of `expires_at` in `mint_cash`,
   `cash_consolidate` and `cash_status` results: omitted for a bill that
   never expires (clients still read absent, null and 0 as never).
