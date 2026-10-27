@@ -335,25 +335,17 @@ func (i Item) VerificationCost() int {
 	// Every signed event the params carry costs one: a claim proof
 	// (identity_event, a 23198 or a join's 23199), an attestation (35522), a
 	// withdraw quote (23187), and each source's own pair for a consolidate.
-	var params struct {
-		IdentityEvent    json.RawMessage   `json:"identity_event"`
-		AttestationEvent json.RawMessage   `json:"attestation_event"`
-		Quote            json.RawMessage   `json:"quote"`
-		Sources          []json.RawMessage `json:"sources"`
+	// Each field is read on its own, so a mistyped neighbour (say "sources":5)
+	// cannot hide the others from the count.
+	fields := paramFields(i.Params)
+	cost += countSigned(fields["identity_event"]) + countSigned(fields["attestation_event"]) + countSigned(fields["quote"])
+	var sources []json.RawMessage
+	if json.Unmarshal(fields["sources"], &sources) != nil {
+		sources = nil // not an array: no sources to verify
 	}
-	if err := json.Unmarshal(i.Params, &params); err != nil {
-		return cost
-	}
-	cost += countSigned(params.IdentityEvent) + countSigned(params.AttestationEvent) + countSigned(params.Quote)
-	for _, raw := range params.Sources {
-		var source struct {
-			IdentityEvent    json.RawMessage `json:"identity_event"`
-			AttestationEvent json.RawMessage `json:"attestation_event"`
-		}
-		if json.Unmarshal(raw, &source) != nil {
-			continue // a non-object element costs nothing
-		}
-		cost += countSigned(source.IdentityEvent) + countSigned(source.AttestationEvent)
+	for _, raw := range sources {
+		source := paramFields(raw)
+		cost += countSigned(source["identity_event"]) + countSigned(source["attestation_event"])
 	}
 	return cost
 }
@@ -403,6 +395,17 @@ func (i Item) SourceCount() int {
 		return 0
 	}
 	return len(params.Sources)
+}
+
+// paramFields is a JSON object's members, each left raw, or nil when raw is
+// not an object. Reading members one by one keeps a mistyped member from
+// hiding the others, as one typed decode of the whole object would.
+func paramFields(raw json.RawMessage) map[string]json.RawMessage {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(raw, &m) != nil {
+		return nil
+	}
+	return m
 }
 
 // Encode serialises the envelope, pads it to a bucket boundary and returns the

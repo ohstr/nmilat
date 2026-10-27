@@ -227,6 +227,9 @@ func TestItem_VerificationCost(t *testing.T) {
 		"source with attestation": {`{"sources":[{"identity_event":"{}","attestation_event":"{}"}]}`, 4},
 		"sources without proofs":  {`{"sources":[{"wallet_pubkey":"aa"},{"wallet_pubkey":"bb"}]}`, 2},
 		"unparseable params":      {`{oops`, 2},
+		// A mistyped member hides nothing else from the count (E6).
+		"mistyped sources": {`{"sources":5,"identity_event":"{}","attestation_event":"{}","quote":"{}"}`, 5},
+		"mistyped amount":  {`{"amount_millis":"x","identity_event":"{}","quote":"{}"}`, 4},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
