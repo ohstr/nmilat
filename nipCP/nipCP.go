@@ -8,9 +8,9 @@
 //
 // Writing follows NIP-CP §Writing: PendingEntry is the entry written ahead of a
 // call (PocketJournal does it for nipcash/client, reading it back before the
-// call is sent); ApplyResult, ApplyLookup and ApplyOrder turn a reply or lookup
-// into the entries to write and the batch that closes the call; Close and
-// DeletionFor close and supersede entries. MapStatus maps a status answer to a
+// call is sent); ApplyResult, ApplyLookup, ApplyOrder and ApplyWithdraw turn a
+// reply or lookup into the entries to write and the batch that closes the call;
+// Close, WithdrawDoneRewrite and DeletionFor close, trim and supersede entries. MapStatus maps a status answer to a
 // state, final only when the answer is definitive.
 //
 // Spec: https://github.com/ohstr/nips/blob/main/NIP-CP.md

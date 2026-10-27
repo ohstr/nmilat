@@ -50,6 +50,10 @@ const (
 // SecretRoleRemainder marks the secret of a split's remainder.
 const SecretRoleRemainder = "remainder"
 
+// SecretRoleRemint marks, on a cash_withdraw pending entry, the secret behind
+// its remint_commitment: the bill a cancelled payout re-mints.
+const SecretRoleRemint = nipcash.SecretRoleRemint
+
 // EntryIdentity is who can claim a bill: pubkey <Value>, connection_key <Value>
 // <IA>, or cash (no value). The zero value is "no identity tag".
 type EntryIdentity struct {
@@ -84,7 +88,9 @@ func (id EntryIdentity) valid() bool {
 // A held token carries Cash and Identity; an entry written from a tombstone
 // carries Identity and no Cash, in a final state; a pending (or done) entry
 // carries RequestID, Deadline, Target and Device, and neither Cash, Identity nor
-// ExpiresAt. OrderKey and Notify are a cash_order's.
+// ExpiresAt. OrderKey and Notify are a cash_order's; Notify, Address, Quote
+// and Receipt a cash_withdraw's (Quote and Receipt the events as JSON strings,
+// Receipt once received).
 //
 // RumorID, RumorCreatedAt, WrapID and RawState are read, never written:
 // RawState is the state as found, set (and State left empty) when this reader
@@ -109,6 +115,9 @@ type Entry struct {
 	Device    string
 	OrderKey  string
 	Notify    string
+	Address   string
+	Quote     string
+	Receipt   string
 
 	RumorID        string
 	RumorCreatedAt int64
@@ -157,6 +166,10 @@ func (e Entry) Validate() error {
 		}
 		switch s.Role {
 		case "", SecretRoleRemainder:
+		case SecretRoleRemint:
+			if !e.IsCall() {
+				return bad("a remint secret is a cash_withdraw pending entry's")
+			}
 		default:
 			return bad("secret role %q", s.Role)
 		}
@@ -179,12 +192,19 @@ func (e Entry) Validate() error {
 			return bad("order_key")
 		case e.Notify != "" && !lowerHex(e.Notify, 64):
 			return bad("notify")
+		case (e.Address == "") != (e.Quote == ""):
+			return bad("a cash_withdraw entry has both address and quote, or neither once rewritten")
+		case e.Quote != "" && e.Notify == "":
+			return bad("a cash_withdraw entry keeps its notify")
+		case e.Receipt != "" && e.Quote == "":
+			return bad("a receipt is kept with its quote")
 		}
 		return nil
 	}
 	switch {
-	case e.Deadline != 0 || e.Target != "" || e.Device != "" || e.OrderKey != "" || e.Notify != "":
-		return bad("only a pending entry has deadline, target, device, order_key or notify")
+	case e.Deadline != 0 || e.Target != "" || e.Device != "" || e.OrderKey != "" || e.Notify != "" ||
+		e.Address != "" || e.Quote != "" || e.Receipt != "":
+		return bad("only a pending entry has deadline, target, device, order_key, notify, address, quote or receipt")
 	case e.State == StatePending || e.State == StateDone:
 		return bad("a bill entry is never %q", e.State)
 	case !e.Identity.valid():
@@ -243,6 +263,11 @@ func (e Entry) Rumor(user string, now int64) (*nip01.Event, error) {
 	if e.Notify != "" {
 		tags = append(tags, []string{"notify", e.Notify})
 	}
+	for _, t := range [][2]string{{"address", e.Address}, {"quote", e.Quote}, {"receipt", e.Receipt}} {
+		if t[1] != "" {
+			tags = append(tags, []string{t[0], t[1]})
+		}
+	}
 	tags = append(tags, []string{"wrap_key", e.WrapKey})
 	ev := nip01.NewUnsignedEvent(KindPocketEntry, user, "", tags...)
 	ev.CreatedAt = uint64(now)
@@ -294,7 +319,7 @@ func ParseRumor(ev *nip01.Event) (Entry, error) {
 		var v []string
 		switch t[0] {
 		case "w", "rev", "cash", "amount", "chain", "mint", "expires_at", "source", "request_id",
-			"deadline", "target", "device", "order_key", "notify", "wrap_key":
+			"deadline", "target", "device", "order_key", "notify", "address", "quote", "receipt", "wrap_key":
 			if v, err = single(t, 2); err != nil {
 				return Entry{}, err
 			}
@@ -364,6 +389,12 @@ func ParseRumor(ev *nip01.Event) (Entry, error) {
 			e.OrderKey = v[1]
 		case "notify":
 			e.Notify = v[1]
+		case "address":
+			e.Address = v[1]
+		case "quote":
+			e.Quote = v[1]
+		case "receipt":
+			e.Receipt = v[1]
 		case "wrap_key":
 			e.WrapKey = v[1]
 		}

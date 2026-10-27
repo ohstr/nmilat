@@ -51,7 +51,7 @@ func TestPendingEntryPerMethod(t *testing.T) {
 			t.Fatalf("mint: %+v %v", e, err)
 		}
 	}
-	for _, m := range []string{"cash_withdraw", nipcash.MethodCashRedeem, nipcash.MethodCashStatus} {
+	for _, m := range []string{nipcash.MethodCashRedeem, nipcash.MethodCashStatus} {
 		if _, err := PendingEntry(call(m, 1)); !errors.Is(err, ErrMethod) {
 			t.Fatalf("%s: %v", m, err)
 		}

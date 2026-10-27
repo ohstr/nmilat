@@ -13,11 +13,15 @@ import (
 // sent, target, device, chain, amount (what the call sends) and the secrets the
 // call generated; for a cash_order also its order_key (a pubkey or
 // connection_key recipient's buyer key; a cash recipient's buyer key is derived
-// from its secret) and notify. pc must carry Chain and Device. cash_withdraw
-// and calls without a request_id are ErrMethod.
+// from its secret) and notify; for a cash_withdraw (target the bill, amount the
+// slice's amount_millis) its notify, address, quote, receipt once received and,
+// for a cash-mode slice, the secret behind its remint_commitment (role
+// SecretRoleRemint). pc must carry Chain and Device. Other methods are
+// ErrMethod.
 func PendingEntry(pc nipcash.PendingCall) (Entry, error) {
 	switch pc.Method {
-	case nipcash.MethodCashTransfer, nipcash.MethodCashConsolidate, nipcash.MethodMintCash, nipcash.MethodCashOrder:
+	case nipcash.MethodCashTransfer, nipcash.MethodCashConsolidate, nipcash.MethodMintCash, nipcash.MethodCashOrder,
+		nipcash.MethodCashWithdraw:
 	default:
 		return Entry{}, fmt.Errorf("%w: %q", ErrMethod, pc.Method)
 	}
@@ -31,6 +35,15 @@ func PendingEntry(pc nipcash.PendingCall) (Entry, error) {
 		e.OrderKey, e.Notify = pc.BuyerKey, pc.Notify
 		if e.Notify == "" || (e.OrderKey == "" && len(e.Secrets) == 0) {
 			return Entry{}, bad("a cash_order entry keeps its notify, and its secret or order_key")
+		}
+	}
+	if pc.Method == nipcash.MethodCashWithdraw {
+		e.Notify, e.Address, e.Quote, e.Receipt = pc.Notify, pc.Address, pc.Quote, pc.Receipt
+		if e.Notify == "" || e.Address == "" || e.Quote == "" {
+			return Entry{}, bad("a cash_withdraw entry keeps its notify, address and quote")
+		}
+		if len(e.Secrets) > 1 || (len(e.Secrets) == 1 && e.Secrets[0].Role != SecretRoleRemint) {
+			return Entry{}, bad("a cash_withdraw entry's only secret is its remint secret")
 		}
 	}
 	if err := e.Validate(); err != nil {
@@ -223,7 +236,8 @@ type PocketActionKind int
 const (
 	// PocketWait: leave the entry pending and ask again (at Until when set). An
 	// order's or withdrawal's done answer waits too, with Result set: apply it
-	// (ApplyOrder) and close on the order's state.
+	// (ApplyOrder, or ApplyWithdraw with the parsed payout) and close on the
+	// order's or payout's state.
 	PocketWait PocketActionKind = iota
 	// PocketApply: the lookup is done; parse Result and ApplyResult it.
 	PocketApply
