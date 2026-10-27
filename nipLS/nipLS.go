@@ -134,6 +134,10 @@ func (f PolicyFunc) Authorize(ctx context.Context, req *Request) error { return 
 // permissions are the only gate you want.
 var AllowAll Policy = PolicyFunc(func(context.Context, *Request) error { return nil })
 
+// DenyAll refuses every policy-gated request. The session methods and
+// custom methods still answer.
+var DenyAll Policy = PolicyFunc(func(context.Context, *Request) error { return Deny("no request is allowed") })
+
 // Request is one call as a Policy, a custom method Handler, or a decision
 // hook sees it.
 type Request struct {
