@@ -8,6 +8,21 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `nip59.WrapWithKey`, `Unwrap` and `WithWrapExpiration`: the NIP-59
+  receive path, and wraps under a key the caller keeps.
+  ([#196](https://github.com/ohstr/nmilat/pull/196))
+- Adds `nipCP` (Cash Pocket): kind-9525 entries with a strict rumor codec,
+  sealed and opened under a recorded wrap key; resolution per `w`, balance
+  per chain and `MapStatus`; pending entries written ahead for `mint_cash`,
+  `cash_transfer`, `cash_consolidate` and `cash_order`; `ApplyResult`,
+  `ApplyLookup` and `ApplyOrder`; `PocketJournal`, a `client.Journal` that
+  reads entries back from two or more relays; sync, republish, NIP-40 wrap
+  expiration and prune helpers; and `nipCP/relayreg`, which refuses bare
+  kind-9525 events. ([#196](https://github.com/ohstr/nmilat/pull/196))
+- Adds `nipcash.ChainForHRP` (the chain a bill's token prefix names) and
+  `client.DerivedParentRecorder`, an optional Journal extension that
+  `Replace` tells the replaced call's request_id.
+  ([#196](https://github.com/ohstr/nmilat/pull/196))
 - Adds `nipCO` (Cash Orders): the `cashorder1` codec
   (`EncodeOrderConnection`, `DecodeOrderConnection`, `SignOrderConnection`,
   `OrderConnection.Verify`), selling terms (`ParseOrderInfo`,
@@ -429,6 +444,14 @@ privacy and performance fixes.
 
 ### Changed
 
+- Changes `client.Connect` and `ConnectCashSlice` to accept only a cash
+  token: no NIP-47 URI form is parsed anywhere in the cash NIPs, which an
+  import-graph test pins. ([#196](https://github.com/ohstr/nmilat/pull/196))
+- Changes `client.Replace` to leave the write-ahead of the re-placed call to
+  the send path, which writes it once with its exact deadline, `DerivedFrom`
+  and `Attempt`. ([#196](https://github.com/ohstr/nmilat/pull/196))
+- Changes the `nip59` seal to carry empty tags (`[]`) instead of `null`.
+  ([#196](https://github.com/ohstr/nmilat/pull/196))
 - Changes `nipAZ.ValidateAltZapRequest` to take a `ServerPolicy` and
   `ValidateAltZapReceipt` a `ReceiptPolicy`. `p`/`P` tags must be 64
   lowercase hex with a NIP-IC platform name and are never lowercased;
@@ -654,6 +677,9 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes `CashTransferResult.RecipientToken` to report a spin-off answered
+  with its tombstone as `*BillGone`.
+  ([#196](https://github.com/ohstr/nmilat/pull/196))
 - Fixes `client.AcceptedRecorder` being told item ids instead of
   request_ids. ([#195](https://github.com/ohstr/nmilat/pull/195))
 - Fixes chunked private replies so a chunk that contradicts another no longer
