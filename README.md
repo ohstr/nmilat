@@ -799,37 +799,35 @@ func main() {
 		panic(err)
 	}
 
-	// The member self-serves their own Circle Wallet from the host's Hub.
-	circleHub, err := cwclient.Connect(ctx, circleHubPairingURI)
+	// The member self-serves their own Circle Wallet from the host's Hub, over
+	// its circlehub1 string. Connect checks the string's signature and runs the
+	// online check against get_info.
+	circleHub, err := cwclient.Connect(ctx, circleHubConnection, cwclient.Options{})
 	if err != nil {
 		panic(err)
 	}
 	defer circleHub.Close()
 
 	// The wallet's connection key is generated here, on the member's side; the
-	// Hub only ever sees its pubkey. Set Connection yourself to save the secret
-	// before sending.
-	//
-	// Join goes over NIP-CASH's private transport when the Hub offers it, so the
-	// join isn't visible on the shared Hub connection, and reports a fallback.
-	wallet, err := circleHub.Join(ctx, nipcw.CreateCircleWalletParams{
-		Credential:      nipcw.BySigning(memberPrivKeyHex),
-		MaxAmountMillis: 100_000_000,
-	}, cwclient.JoinOptions{})
+	// Hub only ever sees its pubkey. The join travels only over NIP-CASH's
+	// private transport, and is written ahead to joinJournal (secret and
+	// deadline) before it is sent, so a lost reply can be looked up.
+	joined, err := circleHub.Join(ctx, nipcw.CreateCircleWalletParams{
+		Credential:       nipcw.BySigning(memberPrivKeyHex),
+		MaxAmountMillis:  100_000_000,
+		MaxReceiveMillis: 100_000_000,
+	}, cwclient.JoinOptions{WarnNoRotation: warnAndOfferBackup}, joinJournal)
 	if err != nil {
 		panic(err)
-	}
-	if wallet.FallbackReason != nil {
-		fmt.Println("joined, but not privately:", wallet.FallbackReason)
 	}
 
 	// Invoice from their own Circle Wallet — same host as the Cash Hub, so
-	// this redemption always resolves same-node: full amount, zero fee.
-	memberPairing, err := nip47.ParsePairingURI(wallet.PairingURI)
-	if err != nil {
-		panic(err)
-	}
-	member, err := relayclient.NewNWCClient(ctx, memberPairing, nip47.EncryptionNIP44V2)
+	// this redemption always resolves same-node: full amount, zero fee. The
+	// wallet is wallet_pubkey + relays + the member's own secret, held as fields.
+	w := joined.Wallet()
+	member, err := relayclient.NewNWCClient(ctx, &nip47.PairingInfo{
+		WalletPubkey: w.WalletPubkey, RelayURLs: w.Relays, Secret: w.Secret,
+	}, nip47.EncryptionNIP44V2)
 	if err != nil {
 		panic(err)
 	}
