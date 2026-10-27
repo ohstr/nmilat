@@ -126,7 +126,10 @@ func (f *fx) zap(t *testing.T, o zapOpts) (*nip01.Event, nipcash.Token) {
 		o.amount = 21000
 	}
 	if o.issuedAt == 0 {
-		o.issuedAt = 1760000000
+		o.issuedAt = f.note.CreatedAt + 60
+		if f.article.CreatedAt+60 > o.issuedAt {
+			o.issuedAt = f.article.CreatedAt + 60
+		}
 	}
 	if o.signer == "" {
 		o.signer = f.senderPriv

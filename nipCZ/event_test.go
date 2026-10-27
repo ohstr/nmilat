@@ -1,6 +1,7 @@
 package nipCZ
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -30,7 +31,7 @@ func TestParseCashZap_Valid(t *testing.T) {
 	if z.Recipient != (Identity{Value: f.recip}) || z.Amount != 21000 || z.W != tok.WalletPubkey || z.E != f.note.ID || z.A != "" || z.K != "1" {
 		t.Fatalf("parsed %+v", z)
 	}
-	if *z.IssuedAt != 1760000000 || *z.ExpiresAt != 0 || z.HasExpirationTag || z.Sender != nil {
+	if *z.IssuedAt != f.note.CreatedAt+60 || *z.ExpiresAt != 0 || z.HasExpirationTag || z.Sender != nil {
 		t.Fatalf("times/flags %+v", z)
 	}
 }
@@ -187,7 +188,7 @@ func TestZapContextFromEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := nipcash.ZapContext{Recipient: f.recip, Sender: f.sender, ZapTarget: z.A, IssuedAt: 1760000000, ExpiresAt: 1790000000}
+	want := nipcash.ZapContext{Recipient: f.recip, Sender: f.sender, ZapTarget: z.A, IssuedAt: *z.IssuedAt, ExpiresAt: 1790000000}
 	if zc != want {
 		t.Fatalf("%+v want %+v", zc, want)
 	}
@@ -222,5 +223,7 @@ func FuzzParseCashZap(f *testing.F) {
 		ev := &nip01.Event{Kind: KindCashZap, Tags: [][]string{{a, b}, {c, d}, {e, g}, {a}, {}}}
 		_, _ = ParseCashZap(ev)
 		_, _ = parseCashZap(ev)
+		_ = VerifyClient(ev, nil, nil, nil)
+		_ = VerifyWallet(context.Background(), ev, nil, nil, true, nil)
 	})
 }
