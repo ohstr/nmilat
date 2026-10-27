@@ -47,7 +47,7 @@ func TestT10_01_MintRequest(t *testing.T) {
 		"dup":      {[]Allocation{Send(pk, 1), Send(pk, 2)}, ErrDuplicateRecipient},
 		"cash+pk":  {[]Allocation{Send(mustCashTarget(t), 1), Send(pk, 1)}, ErrMixedCashAllocation},
 		"two cash": {[]Allocation{Send(mustCashTarget(t), 1), Send(mustCashTarget(t), 1)}, ErrMixedCashAllocation},
-		"ck no ia": {[]Allocation{Send(attestedKey(t, "discord", "u", ""), 1)}, ErrMissingIAPubkey},
+		"ck no ia": {[]Allocation{Send(attestedKey(t, "discord", "2002", ""), 1)}, ErrMissingIAPubkey},
 	} {
 		if _, err := (MintCashParams{RequestID: testRID, Recipients: tc.r}).Request(); !errors.Is(err, tc.want) {
 			t.Errorf("%s: %v, want %v", name, err, tc.want)
@@ -109,7 +109,7 @@ func TestT10_07_TransferRequest(t *testing.T) {
 		"zap ck source":   {func(p *CashTransferParams) { p.ZapTarget, p.Credential = "e", ck }, ErrZapCKSource},
 		"zap cash target": {func(p *CashTransferParams) { p.ZapTarget, p.To = "e", mustCashTarget(t) }, ErrZapTargetIdentity},
 		"zap ck target": {func(p *CashTransferParams) {
-			p.ZapTarget, p.To = "e", attestedKey(t, "discord", "u", strings.Repeat("c", 64))
+			p.ZapTarget, p.To = "e", attestedKey(t, "discord", "2002", strings.Repeat("c", 64))
 		}, ErrZapTargetIdentity},
 		"split 0":           {func(p *CashTransferParams) { p.SplitAmount = u64(0) }, ErrSplitAmount},
 		"split too big":     {func(p *CashTransferParams) { p.SplitAmount = u64(5001) }, ErrSplitAmount},

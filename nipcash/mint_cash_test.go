@@ -9,7 +9,7 @@ func TestMintCashParams_Request_HappyPath(t *testing.T) {
 	p := MintCashParams{RequestID: testRID,
 		Recipients: []Allocation{
 			Send(Pubkey("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), 10_000_000),
-			Send(attestedKey(t, "discord", "some.user", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"), 5_000_000),
+			Send(attestedKey(t, "discord", "2004", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"), 5_000_000),
 		},
 		Expiry: 24 * time.Hour,
 	}

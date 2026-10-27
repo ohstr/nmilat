@@ -82,13 +82,13 @@ func TestCashTransferParams_Request_SplitBindsNewIdentityAndAmount(t *testing.T)
 	priv, _ := generateTestKeypair(t)
 	wallet := randomKeyHex(t)
 	ia := randomKeyHex(t)
-	to := attestedKey(t, "discord", "bob", ia)
+	to := attestedKey(t, "discord", "2003", ia)
 	split := uint64(4000)
 	req, err := CashTransferParams{RequestID: testRID, To: to, Credential: BySigning(priv), CurrentAmount: 15000, SplitAmount: &split}.Request(wallet)
 	if err != nil {
 		t.Fatal(err)
 	}
-	bob, _ := nipIC.ConnectionKeyFromAttested("discord", "bob")
+	bob, _ := nipIC.ConnectionKeyFromAttested("discord", "2003")
 	key := bob.String()
 	if got, want := proofTag(t, req.IdentityEvent, "new_identity_hash"), sha256Hex("connection_key:"+key+":"+ia); got != want {
 		t.Errorf("new_identity_hash = %q, want sha256(type:value:ia) = %s", got, want)
@@ -105,7 +105,7 @@ func TestCashTransferParams_Request_SplitBindsNewIdentityAndAmount(t *testing.T)
 
 	// A different Identity Authority must change the hash, or a proof for one IA
 	// could be replayed under another.
-	other := CashTransferParams{RequestID: testRID, To: attestedKey(t, "discord", "bob", randomKeyHex(t)), Credential: BySigning(priv), CurrentAmount: 15000, SplitAmount: &split}
+	other := CashTransferParams{RequestID: testRID, To: attestedKey(t, "discord", "2003", randomKeyHex(t)), Credential: BySigning(priv), CurrentAmount: 15000, SplitAmount: &split}
 	otherReq, err := other.Request(wallet)
 	if err != nil {
 		t.Fatal(err)

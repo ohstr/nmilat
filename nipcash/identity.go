@@ -1,6 +1,7 @@
 package nipcash
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/ohstr/nmilat/nipAZ"
@@ -78,8 +79,22 @@ func ConnectionKeyFromAttestation(att *nipIC.Attestation) (namedIdentity, error)
 	if att == nil || att.Event == nil {
 		return namedIdentity{}, fmt.Errorf("nipcash: no attestation")
 	}
+	// d must be the ConnectionKey of the evidence's user id, and on a platform
+	// with a canonical form that user id must be canonical (NIP-IC
+	// §Terminology): an attestation keyed otherwise addresses no account.
+	key, err := nipIC.ConnectionKeyFromAttested(att.Platform, att.Evidence.UserID)
+	if err != nil {
+		return namedIdentity{}, err
+	}
+	if key != att.ConnectionKey {
+		return namedIdentity{}, ErrAttestationKey
+	}
 	return ResolvedConnectionKey(att.ConnectionKey, att.Platform, att.PubKey)
 }
+
+// ErrAttestationKey is an attestation whose d is not the ConnectionKey of its
+// platform and evidence user id.
+var ErrAttestationKey = errors.New("nipcash: the attestation's d is not the ConnectionKey of its platform and user id")
 
 // ConnectionKeyFromNConnection builds a Recipient/Target from the key and
 // platform an nconnection carries, with the IA the sender trusts for it. The IA

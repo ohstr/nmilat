@@ -8,7 +8,7 @@ import "testing"
 func TestMintCashParams_Request_IdentityTypeLiterals(t *testing.T) {
 	for want, r := range map[string]Recipient{
 		"pubkey":         Pubkey(randomKeyHex(t)),
-		"connection_key": attestedKey(t, "discord", "u", randomKeyHex(t)),
+		"connection_key": attestedKey(t, "discord", "2002", randomKeyHex(t)),
 		"cash":           mustCashTarget(t),
 	} {
 		req, err := MintCashParams{RequestID: testRID, Recipients: []Allocation{Send(r, 1000)}}.Request()

@@ -69,7 +69,7 @@ func TestCashConsolidateParams_Request_ConnectionKeyTargetAccepted(t *testing.T)
 			From(randomKeyHex(t), 1000, BySigning(privKeyHex)),
 			From(randomKeyHex(t), 1000, BySigning(privKeyHex)),
 		},
-		To: attestedKey(t, "discord", "someone", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"),
+		To: attestedKey(t, "discord", "2001", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"),
 	}
 	req, err := p.Request()
 	if err != nil {
@@ -238,7 +238,7 @@ func TestCashConsolidateParams_ParseResult_ConnectionKeyTarget_PassesThroughPlai
 
 	p := CashConsolidateParams{RequestID: testRID,
 		Sources: []Source{From(randomKeyHex(t), 1000, BySigning(callerPrivHex))},
-		To:      attestedKey(t, "discord", "someone", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"),
+		To:      attestedKey(t, "discord", "2001", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"),
 	}
 	raw, err := json.Marshal(cashConsolidateResponseWire{
 		AmountMillis:    1000,

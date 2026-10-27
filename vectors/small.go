@@ -3,13 +3,16 @@ package vectors
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	mrand "math/rand/v2"
 	"strings"
 
+	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nipIC"
 	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/nipcw"
+	"github.com/ohstr/nmilat/utils"
 )
 
 // ---- hub-group.json
@@ -135,6 +138,18 @@ type connectionKeyFile struct {
 	Legacy     []legacyCKCase   `json:"legacy"`
 	FromSecret []fromSecretCase `json:"fromSecret"`
 	IDNACorpus []userIDCase     `json:"idna_corpus"`
+	// Attestations: nipcash.ConnectionKeyFromAttestation of a parsed 35522,
+	// refused unless d is the ConnectionKey of its platform and evidence
+	// user id and, on a platform with a canonical form, that user id is
+	// canonical.
+	Attestations []attestationKeyCase `json:"attestations"`
+}
+
+type attestationKeyCase struct {
+	Name  string      `json:"name"`
+	Event nip01.Event `json:"event"`
+	Key   string      `json:"key,omitempty"`
+	Error string      `json:"error,omitempty"`
 }
 
 // ckKATCase: K-CK-*: the connection key of Input on Platform, typed (through
@@ -197,6 +212,10 @@ func buildConnectionKey() (any, error) {
 	kat("K-CK-1", "discord", "80351110224678912", "typed")
 	kat("K-CK-1 (neg)", "discord", "080351110224678912", "typed")
 	kat("K-CK-1 (neg: the hash never produced)", "discord", "080351110224678912", "attested")
+	// The hash a client must never produce: key is the raw hash for
+	// reference, and error is ConnectionKeyFromAttested's refusal of the
+	// non-canonical user id.
+	f.KATs[len(f.KATs)-1].Key = sha256Hex("discord:080351110224678912")
 	kat("K-CK-2", "x", "12345", "typed")
 	kat("K-CK-3", "x", "12", "typed")
 	kat("K-CK-4", "email", "  Alice@Example.COM ", "typed")
@@ -258,6 +277,71 @@ func buildConnectionKey() (any, error) {
 		k, err := nipcw.ConnectionKeyFromSecret(s)
 		f.FromSecret = append(f.FromSecret, fromSecretCase{Secret: s, Pubkey: k.Pubkey(), Error: errString(err)})
 	}
+
+	// Attestations by IA key 0x11×32 for user key 0x22×32, created at
+	// 1720000000, with no expiry; a tampered one is re-signed by the IA.
+	iaPriv, userPub := strings.Repeat("11", 32), must(utils.GetPublicKey(strings.Repeat("22", 32)))
+	attest := func(platform nipIC.WebIdentity, userID string) *nip01.Event {
+		ev := must(nipIC.NewAttestation(nipIC.AttestationParams{PrivateKey: iaPriv, UserPubkey: userPub, Platform: platform,
+			Evidence: nipIC.Evidence{Version: 1, Platform: platform, UserID: userID, VerifiedAt: 1720000000}, AuthType: "oauth", NoExpiry: true}))
+		ev.CreatedAt = 1720000000
+		if err := ev.Sign(iaPriv); err != nil {
+			panic(err)
+		}
+		return ev
+	}
+	retag := func(ev *nip01.Event, edit func(*nip01.Event)) *nip01.Event {
+		c := ev.Copy()
+		edit(c)
+		if err := c.Sign(iaPriv); err != nil {
+			panic(err)
+		}
+		return c
+	}
+	setD := func(d string) func(*nip01.Event) {
+		return func(e *nip01.Event) {
+			for _, t := range e.Tags {
+				if len(t) >= 2 && t[0] == "d" {
+					t[1] = d
+				}
+			}
+		}
+	}
+	setUserID := func(id string) func(*nip01.Event) {
+		return func(e *nip01.Event) {
+			for _, t := range e.Tags {
+				if len(t) >= 2 && t[0] == nipIC.TagEvidence {
+					var ev map[string]any
+					_ = json.Unmarshal([]byte(t[1]), &ev)
+					ev["user_id"] = id
+					b, _ := json.Marshal(ev)
+					t[1] = string(b)
+				}
+			}
+		}
+	}
+	addAtt := func(name string, ev *nip01.Event) {
+		c := attestationKeyCase{Name: name, Event: *ev}
+		att, err := nipIC.ParseAttestation(ev)
+		if err == nil {
+			var id nipcash.Target
+			id, err = nipcash.ConnectionKeyFromAttestation(att)
+			if err == nil {
+				c.Key = string(att.ConnectionKey)
+				_ = id
+			}
+		}
+		c.Error = errString(err)
+		f.Attestations = append(f.Attestations, c)
+	}
+	gh := attest("github", "Alice")
+	dc := attest("discord", "80351110224678912")
+	addAtt("github, d = sha256(github:Alice)", gh)
+	addAtt("discord, canonical user id", dc)
+	addAtt("d is not sha256(platform:user id)", retag(gh, setD(strings.Repeat("ab", 32))))
+	nonCanonical := retag(dc, setUserID("080351110224678912"))
+	nonCanonical = retag(nonCanonical, setD(string(nipIC.ConnectionKey(sha256Hex("discord:080351110224678912")))))
+	addAtt("discord, a non-canonical user id (its own hash as d)", nonCanonical)
 	return f, nil
 }
 

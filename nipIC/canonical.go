@@ -97,10 +97,17 @@ func NewConnectionKey(p WebIdentity, typed string) (ConnectionKey, error) {
 
 // ConnectionKeyFromAttested is the ConnectionKey of a user id exactly as an IA
 // attested it (a 35522's platform tag and evidence.user_id), hashed byte for
-// byte with no normalization. Any valid platform name.
+// byte with no normalization. Any valid platform name; on a platform with a
+// canonical form the user id must already be canonical (ErrNotCanonical), since
+// every client hashes that form (NIP-IC §Terminology).
 func ConnectionKeyFromAttested(p WebIdentity, userID string) (ConnectionKey, error) {
 	if !ValidPlatformName(p) {
 		return "", ErrPlatformName
+	}
+	if HasCanonicalForm(p) {
+		if c, err := CanonicalUserID(p, userID); err != nil || c != userID {
+			return "", ErrNotCanonical
+		}
 	}
 	return hashKey(p, userID), nil
 }

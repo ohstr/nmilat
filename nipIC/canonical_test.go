@@ -174,3 +174,16 @@ func encodeNpvString(t *testing.T, hrp string, data []byte) string {
 	}
 	return s
 }
+
+// On a platform with a canonical form an attested user id must already be
+// canonical; elsewhere it is hashed byte for byte (NIP-IC §Terminology).
+func TestConnectionKeyFromAttested_CanonicalPlatforms(t *testing.T) {
+	for _, c := range [][2]string{{"discord", "080351110224678912"}, {"discord", "@alice"}, {"x", "0"}, {"email", "Alice@Example.COM"}, {"dns", "BÜCHER.example"}} {
+		if _, err := ConnectionKeyFromAttested(WebIdentity(c[0]), c[1]); !errors.Is(err, ErrNotCanonical) {
+			t.Errorf("%s %q: %v, want ErrNotCanonical", c[0], c[1], err)
+		}
+	}
+	if k, err := ConnectionKeyFromAttested("discord", "80351110224678912"); err != nil || k != "22ced17fc7b3a6f7262d2dbe00b42d302948595468e025f4392b0a5022b8319d" {
+		t.Errorf("canonical discord: %s %v", k, err)
+	}
+}

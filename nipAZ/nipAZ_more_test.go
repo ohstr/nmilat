@@ -82,7 +82,7 @@ func TestNewAltZapRequest(t *testing.T) {
 
 	// The signer is a 9520's sender, so a separate sender is refused.
 	withSender := params
-	withSender.Sender = attested("discord", "sender-external-id")
+	withSender.Sender = attested("discord", "1001")
 	if _, err := NewAltZapRequest(withSender); !errors.Is(err, ErrSenderTagNotAllowed) {
 		t.Fatalf("Sender on a 9520: got %v, want ErrSenderTagNotAllowed", err)
 	}
@@ -149,11 +149,11 @@ func TestNewAltZapRequest_InvalidPrivateKeyErrors(t *testing.T) {
 func TestNewAltZapOnBehalfRequest(t *testing.T) {
 	relays := []string{"wss://relay.example.com"}
 	ev, err := NewAltZapOnBehalfRequest(
-		attested("discord", "sender-external-id"),
+		attested("discord", "1001"),
 		AltZapRequestParams{
 			PrivateKey:  zapsTestPrivKey,
 			Chain:       "flokicoin",
-			Recipient:   attested("discord", "recipient-external-id"),
+			Recipient:   attested("discord", "1002"),
 			Lnurl:       validTestLnurl,
 			AmountMloki: 5000,
 			Relays:      relays,
@@ -249,7 +249,7 @@ func TestNewAltZapReceipt_RecipientNeverOverriddenByDescription(t *testing.T) {
 		return &nip57.Invoice{Currency: "fc", PaymentHash: testPaymentHash, AmountMloki: 1000, DescriptionHash: DescriptionHash(string(descBytes))}, nil
 	}
 	preimage := testPreimage
-	verifiedRecipient := attested("discord", "server-verified-id").WithHandle("server-verified-handle")
+	verifiedRecipient := attested("discord", "1003").WithHandle("server-verified-handle")
 	// Receipt rule 6: a p that differs from the embedded request's is
 	// refused, never silently replaced by either side.
 	receipt, err := NewAltZapReceipt(AltZapReceiptParams{
@@ -278,7 +278,7 @@ func TestNewAltZapReceipt_HandleRoundTrips(t *testing.T) {
 	receipt, err := NewAltZapReceipt(AltZapReceiptParams{
 		PrivateKey: zapsTestPrivKey,
 		Chain:      "flokicoin",
-		Recipient:  attested("discord", "id1").WithHandle("cool_username"),
+		Recipient:  attested("discord", "1004").WithHandle("cool_username"),
 		Bolt11:     "lnfc-invoice",
 		Preimage:   &preimage,
 	})
@@ -311,7 +311,7 @@ func TestNewAltZapReceipt_ProxySenderWithResolvedSender(t *testing.T) {
 		PrivateKey:           zapsTestPrivKey,
 		Chain:                "flokicoin",
 		Recipient:            Pubkey(testHex("recipientpubkey")),
-		Sender:               attested("discord", "someconnectionkey-external-id").WithHandle(""),
+		Sender:               attested("discord", "1005").WithHandle(""),
 		ResolvedSenderPubkey: "actualsenderpubkey",
 		LinkAuthorized:       true,
 		Bolt11:               "lnbc1...",
@@ -343,7 +343,7 @@ func TestNewAltZapRequest_NeverEmitsHandleOnRequests(t *testing.T) {
 	ev, err := NewAltZapRequest(AltZapRequestParams{
 		PrivateKey:  zapsTestPrivKey,
 		Chain:       "flokicoin",
-		Recipient:   attested("discord", "id1").WithHandle("should-not-appear"),
+		Recipient:   attested("discord", "1004").WithHandle("should-not-appear"),
 		Lnurl:       validTestLnurl,
 		AmountMloki: 5000,
 		Relays:      []string{"wss://relay.example.com"},

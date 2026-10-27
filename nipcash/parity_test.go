@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ohstr/nmilat/nip57/nip57test"
+	"github.com/ohstr/nmilat/nipIC"
 )
 
 // amount MUST NOT alter an invoice that carries one; it may set an amountless
@@ -43,5 +44,28 @@ func TestPubkeyTarget_LowercaseHexOnly(t *testing.T) {
 	}
 	if _, err := (CashTransferParams{RequestID: testRID, Credential: BySigning(priv), To: Pubkey(strings.ToLower(up)), CurrentAmount: 1000}).Request(randomKeyHex(t)); err != nil {
 		t.Errorf("lowercase: %v", err)
+	}
+}
+
+// An attestation whose d is not the ConnectionKey of its platform and user id
+// addresses no account.
+func TestConnectionKeyFromAttestation_DMustMatch(t *testing.T) {
+	ia := strings.Repeat("11", 32)
+	user := randomKeyHex(t)
+	ev, err := nipIC.NewAttestation(nipIC.AttestationParams{PrivateKey: ia, UserPubkey: user, Platform: "github",
+		Evidence: nipIC.Evidence{Version: 1, Platform: "github", UserID: "Alice", VerifiedAt: 1720000000}, AuthType: "oauth", NoExpiry: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	att, err := nipIC.ParseAttestation(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ConnectionKeyFromAttestation(att); err != nil {
+		t.Fatalf("a matching d: %v", err)
+	}
+	att.ConnectionKey = nipIC.ConnectionKey(strings.Repeat("ab", 32))
+	if _, err := ConnectionKeyFromAttestation(att); !errors.Is(err, ErrAttestationKey) {
+		t.Fatalf("another d: %v, want ErrAttestationKey", err)
 	}
 }
