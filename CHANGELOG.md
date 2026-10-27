@@ -8,6 +8,21 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `MintCashResult.MarshalJSON`/`UnmarshalJSON`, so a Hub encodes its
+  `mint_cash` reply from the result type, and `Expiry.IsZero`.
+  ([#201](https://github.com/ohstr/nmilat/pull/201))
+- Adds `nipcw/client.(*Client).Info`, the `get_info` read at the online
+  check. ([#201](https://github.com/ohstr/nmilat/pull/201))
+- Adds `nipCP` withdraw entries: `Entry.Address`, `Quote` and `Receipt`, the
+  `remint` secret role, pending `cash_withdraw` entries, `ApplyWithdraw`
+  (receipt checked first, source spent, re-minted bill on `cancelled`,
+  `done` on `final` or `cancelled`) and `WithdrawDoneRewrite`; and
+  `DialRelaysWith(DialConfig{AuthWait})`.
+  ([#201](https://github.com/ohstr/nmilat/pull/201))
+- Adds `relay/client.WithPublishFilter`, `WithAfterPublish`,
+  `PublishFilterFrom` and `AfterPublishFrom`; the `nipcash/client` hooks of
+  the same names delegate to them.
+  ([#201](https://github.com/ohstr/nmilat/pull/201))
 - Adds `niplsp`, the NIP-LSP Lightning Service Provider Announcement (kind
   10735): `FromLSPSInfo` builds the fields from an LSP's LSPS0/1/2/5 answers
   in either unit dialect, `NewAnnouncement`, `SigningPayload` and `Sign` (an
@@ -482,6 +497,16 @@ privacy and performance fixes.
 
 ### Changed
 
+- Changes the Hub-side encoding of `expires_at` in `mint_cash`,
+  `cash_consolidate` and `cash_status` results: omitted for a bill that
+  never expires (clients still read absent, null and 0 as never).
+  ([#201](https://github.com/ohstr/nmilat/pull/201))
+- Changes `HubClient.MintCash` to apply
+  `WithPublishFilter`/`WithAfterPublish` to the mint's NIP-47 request.
+  ([#201](https://github.com/ohstr/nmilat/pull/201))
+- Changes `niplsp` and `nipcash/listing` to share one text sanitizer;
+  `niplsp` now also drops an emoji variation selector left after a stripped
+  check-mark look-alike. ([#201](https://github.com/ohstr/nmilat/pull/201))
 - Changes `nipCO/client` to check order addresses with nipcash's witness
   address helpers, and `FinalError.Detail`/`IndeterminateError.Detail` to
   carry `ParseDetail` of the answer.
@@ -719,6 +744,8 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes `nipCP` relay queries losing an event that arrived just before EOSE.
+  ([#201](https://github.com/ohstr/nmilat/pull/201))
 - Fixes `IndeterminateError`'s text including the call's request_id.
   ([#197](https://github.com/ohstr/nmilat/pull/197))
 - Fixes `CashTransferResult.RecipientToken` to report a spin-off answered
