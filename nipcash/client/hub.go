@@ -97,7 +97,9 @@ func (h *HubClient) batchSession(ctx context.Context) (*BatchSession, error) {
 	return s, nil
 }
 
-// MintCash mints over the connection. Before anything is written: the online
+// MintCash mints over the connection. WithPublishFilter and WithAfterPublish
+// on ctx apply to the mint request (not to the get_info read before it).
+// Before anything is written: the online
 // check, cash_lookup among private_methods, and a usable max_request_age (else
 // ErrHubUnusable). Then the call is written ahead to j, as device's, with its
 // exact deadline, and sent with that deadline as its NIP-47 expiration.
@@ -110,7 +112,8 @@ func (h *HubClient) MintCash(ctx context.Context, p nipcash.MintCashParams, j Jo
 	if j == nil {
 		return nil, ErrNoJournal
 	}
-	info, err := h.Info(ctx)
+	// The publish hooks are for the mint request alone, not the get_info read.
+	info, err := h.Info(withoutPublishHooks(ctx))
 	if err != nil {
 		return nil, err
 	}

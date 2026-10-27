@@ -163,26 +163,27 @@ func (s *BatchSession) publishTo(ctx context.Context, relayURL *url.URL, req *ou
 	}
 }
 
-type publishFilterKey struct{}
-type afterPublishKey struct{}
-
 // WithPublishFilter is a test hook: keep is asked before each publish of a
-// request, and a request it refuses is dropped as if lost on the way.
+// request (a private-transport envelope or a NIP-47 call such as a mint), and
+// a request it refuses is dropped as if lost on the way.
 func WithPublishFilter(ctx context.Context, keep func(*nip01.Event) bool) context.Context {
-	return context.WithValue(ctx, publishFilterKey{}, keep)
+	return relayclient.WithPublishFilter(ctx, keep)
 }
 
-// WithAfterPublish is a test hook: f runs right after a request was published.
+// WithAfterPublish is a test hook: f runs right after a request was published
+// (a private-transport envelope or a NIP-47 call such as a mint).
 func WithAfterPublish(ctx context.Context, f func()) context.Context {
-	return context.WithValue(ctx, afterPublishKey{}, f)
+	return relayclient.WithAfterPublish(ctx, f)
+}
+
+// withoutPublishHooks is ctx with both publish hooks cleared, for a read made
+// on the way to the request the hooks are meant for.
+func withoutPublishHooks(ctx context.Context) context.Context {
+	return relayclient.WithAfterPublish(relayclient.WithPublishFilter(ctx, nil), nil)
 }
 
 func publishFilterFrom(ctx context.Context) func(*nip01.Event) bool {
-	f, _ := ctx.Value(publishFilterKey{}).(func(*nip01.Event) bool)
-	return f
+	return relayclient.PublishFilterFrom(ctx)
 }
 
-func afterPublishFrom(ctx context.Context) func() {
-	f, _ := ctx.Value(afterPublishKey{}).(func())
-	return f
-}
+func afterPublishFrom(ctx context.Context) func() { return relayclient.AfterPublishFrom(ctx) }

@@ -454,9 +454,15 @@ func (c *NWCClient) subscribeAndSend(ctx context.Context, method string, params 
 		cleanup()
 		return nil, func() {}, ErrConnectionClosed
 	}
+	if keep := PublishFilterFrom(ctx); keep != nil && !keep(reqEvent) {
+		return sub, cleanup, nil // dropped by a test hook: as if lost on the way
+	}
 	if !c.conn.Send(reqEvent) {
 		cleanup()
 		return nil, func() {}, ErrConnectionClosed
+	}
+	if f := AfterPublishFrom(ctx); f != nil {
+		f()
 	}
 	return sub, cleanup, nil
 }

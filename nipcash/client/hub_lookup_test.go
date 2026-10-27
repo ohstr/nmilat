@@ -6,8 +6,10 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ohstr/nmilat/internal/cashtest"
+	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/nipcash/transport"
 )
@@ -144,5 +146,36 @@ func TestZapBill_NeedsItsContext(t *testing.T) {
 	}
 	if _, err := SelectVerifiedCopy([]nipcash.Token{tok}, nil, strings.Repeat("ab", 32)); !errors.Is(err, ErrZapContextRequired) {
 		t.Fatalf("SelectVerifiedCopy err = %v", err)
+	}
+}
+
+// The publish hooks apply to a mint, a NIP-47 call: the after hook fires once
+// the request is sent, and a filtered request is lost, leaving the call pending.
+func TestHubClient_MintPublishHooks(t *testing.T) {
+	hub := cashtest.NewFakeHub(t)
+	ctx, cancel := e2eContext(t)
+	defer cancel()
+	h, err := ConnectCashHub(ctx, hub.CashHubConnection())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close()
+	p := nipcash.MintCashParams{Recipients: []nipcash.Allocation{nipcash.Send(mustCashTarget(t), 1000)}}
+
+	fired := 0
+	if _, err := h.MintCash(WithAfterPublish(ctx, func() { fired++ }), p, newTestJournal(), "dev"); err == nil {
+		t.Fatal("the fake serves no mint_cash")
+	}
+	if fired != 1 {
+		t.Fatalf("after-publish hook fired %d times, want 1", fired)
+	}
+
+	short, cancelShort := context.WithTimeout(ctx, 2*time.Second)
+	defer cancelShort()
+	short = WithPublishFilter(short, func(ev *nip01.Event) bool { return ev.Kind != 23194 })
+	_, err = h.MintCash(short, p, newTestJournal(), "dev")
+	var ie *IndeterminateError
+	if !errors.As(err, &ie) || ie.Call.LastCode != "" {
+		t.Fatalf("a lost mint request: %v, want a pending call with no code", err)
 	}
 }
