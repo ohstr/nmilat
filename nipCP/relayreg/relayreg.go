@@ -17,12 +17,13 @@ import (
 	"github.com/ohstr/nmilat/relay"
 )
 
-// ErrBareEntry is the refusal of a kind 9525 offered to the relay.
+// ErrBareEntry is the refusal of a kind 9525 offered to the relay, answered
+// "blocked: kind 9525 travels only inside a gift wrap".
 var ErrBareEntry = errors.New("kind 9525 travels only inside a gift wrap")
 
 func init() {
 	relay.RegisterLetteredNIP("CP")
 	relay.RegisterEventValidator(nipCP.KindPocketEntry, func(context.Context, *nip01.Event) error {
-		return ErrBareEntry
+		return relay.Reject("blocked", ErrBareEntry)
 	})
 }

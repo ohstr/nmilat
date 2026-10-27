@@ -82,7 +82,7 @@ func TestRelayRefusesBarePocketEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	ok, msg := publish(t, conn, ev)
-	if ok || !strings.Contains(msg, "gift wrap") {
+	if ok || msg != "blocked: kind 9525 travels only inside a gift wrap" {
 		t.Fatalf("bare 9525: %v %q", ok, msg)
 	}
 	other, err := nip01.NewSignedEvent(1, "hi", priv)
