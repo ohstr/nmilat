@@ -56,6 +56,9 @@ type queryHandler struct {
 	membership *MembershipService
 	// groups applies the same NIP-29 visibility REQ does, for the signer.
 	groups *GroupsService
+	// recipientOnly, when set, withholds its RecipientOnlyKinds from all
+	// but their recipient, the signer standing in for the AUTHed pubkey.
+	recipientOnly *SessionConfig
 }
 
 func (h *queryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -111,6 +114,8 @@ func (h *queryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	checkRecipient := h.recipientOnly.mayMatchRecipientOnlyKind(filters...)
+
 	// Filters are OR'd together per NIP-01: an event matching more than one
 	// of them is still delivered once.
 	seen := make(map[uint64]bool)
@@ -123,7 +128,8 @@ func (h *queryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for _, pe := range potEvents {
-			if seen[pe.Evsid] || h.groups.deniedPrivateGroupPotentialEvent(reader, pe) {
+			if seen[pe.Evsid] || h.groups.deniedPrivateGroupPotentialEvent(reader, pe) ||
+				(checkRecipient && h.recipientOnly.deniedRecipientOnlyPotentialEvent(reader, pe)) {
 				continue
 			}
 			seen[pe.Evsid] = true

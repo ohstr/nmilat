@@ -112,6 +112,10 @@ func (s *Session) processRequest(ctx context.Context, rp *wire.RequestPacket) er
 		return nil
 	}
 
+	if s.refuseRecipientOnlyRead(rp.SubscriptionID, allFilters(rp.Filters)...) {
+		return nil
+	}
+
 	// The embedder's handlers go first, then the built-in chain.
 	if s.runRequestHandlers(ctx, rp, s.config.RequestHandlers) {
 		return nil
@@ -306,6 +310,10 @@ func (s *Session) processCount(parent context.Context, cp *wire.CountPacket) err
 		return nil
 	}
 
+	if s.refuseRecipientOnlyRead(cp.SubscriptionID, allFilters(cp.Filters)...) {
+		return nil
+	}
+
 	// We calculate count immediately and return.
 	//
 	// NIP-29: deniedPrivateGroupFilter above only catches a filter that
@@ -326,9 +334,12 @@ func (s *Session) processCount(parent context.Context, cp *wire.CountPacket) err
 	var count int64
 	var approx bool
 	var err error
-	if s.groups.needsPrivacyCheck(cp.Filters) {
+	checkGroups := s.groups.needsPrivacyCheck(cp.Filters)
+	checkRecipient := s.config.mayMatchRecipientOnlyKind(allFilters(cp.Filters)...)
+	if checkGroups || checkRecipient {
 		count, approx, err = s.store.CountEventsApprox(parent, cp.Filters, func(pe *PotentialEvent) bool {
-			return s.groups.deniedPrivateGroupPotentialEvent(s, pe)
+			return (checkGroups && s.groups.deniedPrivateGroupPotentialEvent(s, pe)) ||
+				(checkRecipient && s.config.deniedRecipientOnlyPotentialEvent(s, pe))
 		})
 	} else if n, ok := s.store.CountFromCounters(cp.Filters); ok {
 		count = n
@@ -735,7 +746,18 @@ func (r *replyer) reply(sr wire.SubscriptionResponse) {
 
 func (s *Session) processNegOpen(ctx context.Context, p *wire.NegOpenPacket) error {
 
-	items, err := s.store.QueryNip77Items(ctx, p.Filter)
+	// Recipient-only kinds: the same rule as REQ, since an id list is a
+	// read too. NIP-77 has no CLOSED, so the refusal is a NEG-ERR.
+	if s.AuthedPubkey() == "" && s.config.namesRecipientOnlyKind(p.Filter) {
+		s.reply(&wire.NegErrPacket{SubscriptionID: p.SubscriptionID, Code: recipientOnlyRefusal(s.config.RecipientOnlyKinds)})
+		return nil
+	}
+	var skip func(*PotentialEvent) bool
+	if s.config.mayMatchRecipientOnlyKind(p.Filter) {
+		skip = func(pe *PotentialEvent) bool { return s.config.deniedRecipientOnlyPotentialEvent(s, pe) }
+	}
+
+	items, err := s.store.queryNip77Items(ctx, p.Filter, skip)
 	if err != nil {
 		return fmt.Errorf("failed to query items: %w", err)
 	}

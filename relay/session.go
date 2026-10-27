@@ -432,12 +432,12 @@ func (s *Session) Info() *ClientInfo {
 // RequestHandler that ranks its own results (NIP-50: best match first).
 // It closes any open subscription with that id, since this REQ replaces
 // it, and withholds events from private NIP-29 groups the session can't
-// read, as a store query would. Follow it with SendEOSE. Safe to call
-// from another goroutine.
+// read and recipient-only kinds not addressed to it, as a store query
+// would. Follow it with SendEOSE. Safe to call from another goroutine.
 func (s *Session) SendEvents(subID string, events []*nip01.Event) {
 	s.subscriptions.Close(subID)
 	for _, ev := range events {
-		if s.groups.deniedPrivateGroupEvent(s, ev) {
+		if s.groups.deniedPrivateGroupEvent(s, ev) || s.config.deniedRecipientOnlyEvent(s, ev) {
 			continue
 		}
 		s.reply(&wire.EventSubscriptionResponse{SubscriptionID: subID, Event: ev})

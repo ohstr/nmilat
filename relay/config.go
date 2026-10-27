@@ -102,6 +102,12 @@ type SessionConfig struct {
 	// concurrent use.
 	EventPolicy EventPolicy
 
+	// RecipientOnlyKinds are served only to a connection authenticated
+	// (NIP-42) as a pubkey in the event's "p" tags; an unauthenticated read
+	// naming one by kind is refused "auth-required:". Empty (the default)
+	// serves every kind to anyone. See WithRecipientOnlyKinds.
+	RecipientOnlyKinds []int
+
 	// RequestHandlers run, in order, ahead of the built-in REQ handlers
 	// (NIP-50 search, cache, NIP-43, NIP-01), after the auth and NIP-29
 	// gates. A handler that returns true ends the chain; one that returns

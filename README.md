@@ -130,6 +130,15 @@ what [`ncli`](https://github.com/ohstr/ncli) does internally. Optional
 NIPs opt in by `relayreg` blank-import (above), not by the relay package
 importing them.
 
+### Serving gift wraps only to their recipient
+
+`relay.WithRecipientOnlyKinds(1059)` (off by default) serves a kind 1059
+only to a connection that has AUTHed (NIP-42) as a pubkey in its `p` tag,
+over REQ, COUNT, NEG-OPEN and the live tail; an un-AUTHed read naming the
+kind is refused `auth-required:`. `SessionHandler.QueryHandler()` applies
+the same rule to POST /query, the NIP-98 signer standing in for the AUTHed
+pubkey.
+
 ### Keeping a search engine in step
 
 `relay.NewSearchIndexer(store, w, opts...)` follows the store's profiles
