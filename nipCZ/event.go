@@ -24,8 +24,11 @@ func (i Identity) tag(name string) []string {
 	return []string{name, i.Value, i.Platform}
 }
 
+// valid reports a 64-lowercase-hex value and either no platform or a valid
+// platform name other than "nostr" (a pubkey is written with Platform "").
 func (i Identity) valid() bool {
-	return isLowerHex(i.Value, 64) && (i.Platform == "" || nipIC.ValidPlatformName(nipIC.WebIdentity(i.Platform)))
+	return isLowerHex(i.Value, 64) && (i.Platform == "" ||
+		(i.Platform != "nostr" && nipIC.ValidPlatformName(nipIC.WebIdentity(i.Platform))))
 }
 
 // PubkeyIdentity is a Nostr pubkey recipient, 64 lowercase hex, never

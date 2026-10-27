@@ -71,14 +71,14 @@ func (f *fx) token(t *testing.T, o tokenOpts) (nipcash.Token, string) {
 	amt := o.amount
 	tok := nipcash.Token{HRP: o.hrp, WalletPubkey: hexKey(t), Secret: hexKey(t), RelayURLs: o.relays,
 		IdentityRequired: o.idReq, AttestedAmountMillis: &amt}
-	signer, err := nipcash.LocalMintSigner(o.signer, "satscash")
-	if err != nil {
-		t.Fatal(err)
-	}
 	// An unknown HRP is signed under the satscash prefix so the token encodes.
 	signHRP := tok.HRP
 	if _, ok := nipcash.SignedMessagePrefix(o.hrp); !ok {
 		tok.HRP = "satscash"
+	}
+	signer, err := nipcash.LocalMintSigner(o.signer, tok.HRP)
+	if err != nil {
+		t.Fatal(err)
 	}
 	tok, err = nipcash.SignToken(tok, o.scheme, o.z, o.minterX, signer)
 	if err != nil {
