@@ -88,6 +88,11 @@ func ParseCreateCircleWalletRequest(raw []byte) (CreateCircleWalletRequest, erro
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return CreateCircleWalletRequest{}, badRequest(err.Error())
 	}
+	// Omitted means never; present, it is one of the five values, and an empty
+	// string is none of them (NIP-CW §Processing Algorithm step 1).
+	if v, ok := keys["budget_renewal"]; ok && string(v) != "null" && req.BudgetRenewal == "" {
+		return CreateCircleWalletRequest{}, badRequest("budget_renewal is empty")
+	}
 	return req, nil
 }
 

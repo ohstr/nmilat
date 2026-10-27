@@ -162,11 +162,15 @@ func TestParseCreateCircleWalletRequest(t *testing.T) {
 	if r, err := ParseCreateCircleWalletRequest([]byte(good)); err != nil || r.MaxReceive != 2 {
 		t.Fatalf("good: %+v %v", r, err)
 	}
+	if r, err := ParseCreateCircleWalletRequest([]byte(`{"pubkey":"a","connection_pubkey":"b","max_amount":1,"max_receive":2,"budget_renewal":"weekly","identity_event":"{}"}`)); err != nil || r.BudgetRenewal != "weekly" {
+		t.Fatalf("weekly: %+v %v", r, err)
+	}
 	for _, s := range []string{
 		`{"pubkey":"a","connection_pubkey":"b","max_amount":1,"identity_event":"{}"}`,
 		`{"pubkey":"a","connection_pubkey":"b","max_amount":1.5,"max_receive":2,"identity_event":"{}"}`,
 		`{"pubkey":"a","connection_pubkey":"b","max_amount":-1,"max_receive":2,"identity_event":"{}"}`,
 		`{"pubkey":"a","connection_pubkey":"b","max_amount":1,"max_receive":2,"identity_event":{}}`,
+		`{"pubkey":"a","connection_pubkey":"b","max_amount":1,"max_receive":2,"budget_renewal":"","identity_event":"{}"}`,
 		`[]`,
 	} {
 		if _, err := ParseCreateCircleWalletRequest([]byte(s)); codeOf(err) != ErrBadRequest {
