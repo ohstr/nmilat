@@ -174,3 +174,19 @@ func TestCheckLiveRowsAndGaps(t *testing.T) {
 		t.Fatal("String")
 	}
 }
+
+// A live LSPS1 answer with no known option was asked: every announced option
+// comes out worse, never same.
+func TestCheckLiveEmptyLSPS1(t *testing.T) {
+	a := exampleAnnouncement(t)
+	l := exampleLive(t)
+	l1, err := ParseLSPS1Info(json.RawMessage(`{}`))
+	if err != nil || l1 == nil {
+		t.Fatalf("%v %v", l1, err)
+	}
+	l.LSPS1 = l1
+	d := CheckLive(a, l)
+	if d.Same() || len(a.LSPS1) == 0 || d.count(Worse) < len(a.LSPS1) {
+		t.Fatalf("%+v", d)
+	}
+}

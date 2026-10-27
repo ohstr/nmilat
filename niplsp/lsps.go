@@ -100,7 +100,9 @@ func ParseLSPS1Info(raw json.RawMessage) ([]Option, error) {
 	if err != nil {
 		return nil, err
 	}
-	var out []Option
+	// Never nil: an answer with no known option was still asked, so every
+	// announced option compares as worse (CheckLive tests LSPS1 != nil).
+	out := []Option{}
 	for _, k := range lsps1Options {
 		if v, ok := values[k.Name]; ok {
 			out = append(out, Option{Name: k.Name, Value: v})
