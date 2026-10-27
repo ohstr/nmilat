@@ -190,3 +190,12 @@ func TestCheckLiveEmptyLSPS1(t *testing.T) {
 		t.Fatalf("%+v", d)
 	}
 }
+
+// list_protocols not asked: never usable, whatever else matches.
+func TestCheckLiveProtocolsNotAsked(t *testing.T) {
+	l := exampleLive(t)
+	l.Protocols = nil
+	if d := CheckLive(exampleAnnouncement(t), l); d.Usable() || d.Same() {
+		t.Fatalf("%+v", d)
+	}
+}

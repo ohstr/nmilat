@@ -60,10 +60,13 @@ type LiveDiff struct {
 	MissingProtocol []int
 	// Fields are the compared values, in announcement order.
 	Fields []FieldDiff
+
+	asked bool // list_protocols was answered (Live.Protocols non-nil)
 }
 
-// Usable reports that list_protocols lists every announced protocol.
-func (d LiveDiff) Usable() bool { return len(d.MissingProtocol) == 0 }
+// Usable reports that list_protocols was asked and lists every announced
+// protocol.
+func (d LiveDiff) Usable() bool { return d.asked && len(d.MissingProtocol) == 0 }
 
 // Worse reports any live value worse for the buyer than announced. The client
 // SHOULD show both and ask again before buying.
@@ -108,6 +111,7 @@ func CheckLive(a *Announcement, l Live) LiveDiff {
 		return d
 	}
 	if l.Protocols != nil {
+		d.asked = true
 		listed := map[int]bool{}
 		for _, p := range l.Protocols {
 			listed[p] = true
