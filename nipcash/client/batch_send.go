@@ -218,6 +218,9 @@ func writeAhead(ctx context.Context, packed []itemBuilder, deadline int64, opts 
 	if err := opts.journal.WriteAhead(ctx, calls); err != nil {
 		return nil, err
 	}
+	if err := derivedWritten(ctx, calls); err != nil {
+		return nil, err
+	}
 	return byID, nil
 }
 

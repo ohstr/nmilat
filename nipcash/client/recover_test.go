@@ -237,3 +237,26 @@ func TestReplace_RefusesAFreshIDOrAChangedCall(t *testing.T) {
 		t.Fatalf("journal holds %d calls, want only the original", len(j.writes))
 	}
 }
+
+// L4: a re-placement whose send fails before the derived call is written ahead
+// records nothing, so a later Replace still places it instead of closing it as
+// derived_already_placed.
+func TestReplace_FailureBeforeWriteAheadRecordsNothing(t *testing.T) {
+	ctx := context.Background()
+	pc := nipcash.PendingCall{RequestID: testRequestID, Method: nipcash.MethodCashTransfer, Device: "a", MaxRequestAge: 300, Amount: 5}
+	j := newTestJournal()
+	if _, err := Replace(ctx, pc, j, ReplaceOptions{}, func(context.Context, nipcash.PendingCall) error {
+		return ErrHubUnusable
+	}); !errors.Is(err, ErrHubUnusable) {
+		t.Fatalf("err = %v", err)
+	}
+	derived, _ := nipcash.DerivedRequestID(testRequestID)
+	if placed, _ := j.DerivedPlaced(ctx, derived); placed {
+		t.Fatal("the derived id was recorded although nothing was written ahead")
+	}
+	sent := false
+	act, err := Replace(ctx, pc, j, ReplaceOptions{}, func(context.Context, nipcash.PendingCall) error { sent = true; return nil })
+	if err != nil || act.Kind != ActionWait || !sent {
+		t.Fatalf("second Replace = %+v, %v, sent %v", act, err, sent)
+	}
+}

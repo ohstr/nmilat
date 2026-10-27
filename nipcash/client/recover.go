@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/ohstr/nmilat/nipCO"
@@ -220,8 +221,9 @@ func sameSecrets(a, b []nipcash.PendingSecret) bool {
 
 // Replace re-places a call after an unknown lookup: under its derived id, never
 // a fresh one, and never twice (a derived id already placed or written ahead
-// closes the call instead). It records the derived id, then sends the derived
-// call through send, which must go through an SDK entry point taking a
+// closes the call instead). It sends the derived call through send, and
+// records the derived id once the send path has written it ahead (or once send
+// returns nil without the SDK writing it); send must go through an SDK entry point taking a
 // Journal (CashTransfer, TransferMany, HubClient.MintCash, ...) with the ctx it
 // is given: that path writes the call ahead exactly once, with its exact
 // deadline, DerivedFrom and Attempt, and builds fresh proofs. It refuses,
@@ -290,21 +292,69 @@ func Replace(ctx context.Context, pc nipcash.PendingCall, j Journal, o ReplaceOp
 	h := max64(pc.MaxRequestAge, nipcash.MinMaxRequestAge)
 	next.Deadline = time.Now().Unix() + nipcash.DeadlineWindow(h)
 	keepUntil := next.Deadline + h
-	if r, ok := j.(DerivedParentRecorder); ok {
-		err = r.RecordDerivedFrom(ctx, id, pc.RequestID, keepUntil)
-	} else {
-		err = j.RecordDerived(ctx, id, keepUntil)
-	}
-	if err != nil {
-		return Action{}, fmt.Errorf("nipcash/client: record derived id: %w", err)
-	}
+	rec := &derivedRecord{id: id, record: func(ctx context.Context) error {
+		var err error
+		if r, ok := j.(DerivedParentRecorder); ok {
+			err = r.RecordDerivedFrom(ctx, id, pc.RequestID, keepUntil)
+		} else {
+			err = j.RecordDerived(ctx, id, keepUntil)
+		}
+		if err != nil {
+			return fmt.Errorf("nipcash/client: record derived id: %w", err)
+		}
+		return nil
+	}}
 	// The derived call is written ahead once, by the send path, with the exact
 	// deadline it is packed under; the context carries what the send path
 	// cannot rebuild from the params (DerivedFrom, Attempt, a fresh notify).
-	if err := send(withReplacement(ctx, next), next); err != nil {
+	// The derived id is recorded once that write-ahead succeeds, so a send that
+	// failed before it (an unusable Hub, a refused re-placement) records
+	// nothing, and a later Replace can still place it.
+	err = send(context.WithValue(withReplacement(ctx, next), derivedRecordKey{}, rec), next)
+	if !rec.fired {
+		if err != nil {
+			return Action{}, err
+		}
+		// A send that wrote nothing ahead through the SDK still placed the id.
+		if err := rec.fire(ctx); err != nil {
+			return Action{}, err
+		}
+	}
+	if err != nil {
 		return Action{}, err
 	}
 	return Action{Kind: ActionWait}, nil
+}
+
+type derivedRecordKey struct{}
+
+// derivedRecord records a re-placement's derived id once.
+type derivedRecord struct {
+	id     string
+	once   sync.Once
+	fired  bool
+	err    error
+	record func(context.Context) error
+}
+
+func (r *derivedRecord) fire(ctx context.Context) error {
+	r.once.Do(func() { r.fired, r.err = true, r.record(ctx) })
+	return r.err
+}
+
+// derivedWritten records the derived id of the re-placement ctx carries once
+// calls holding it were written ahead.
+func derivedWritten(ctx context.Context, calls []nipcash.PendingCall) error {
+	r, ok := ctx.Value(derivedRecordKey{}).(*derivedRecord)
+	if !ok {
+		return nil
+	}
+	for _, pc := range calls {
+		if pc.RequestID == r.id {
+			return r.fire(ctx)
+		}
+	}
+	return nil
 }
 
 // errNoWithdrawQuote is a withdrawal re-placed without its quote: a call

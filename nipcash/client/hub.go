@@ -149,6 +149,9 @@ func (h *HubClient) MintCash(ctx context.Context, p nipcash.MintCashParams, j Jo
 	if err := j.WriteAhead(ctx, []nipcash.PendingCall{pc}); err != nil {
 		return nil, fmt.Errorf("%w: write ahead: %v", ErrNotSent, err)
 	}
+	if err := derivedWritten(ctx, []nipcash.PendingCall{pc}); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrNotSent, err)
+	}
 	if time.Until(time.Unix(pc.Deadline, 0)) < nipcash.MinPublishMargin*time.Second {
 		return nil, fmt.Errorf("%w: %w", ErrNotSent, ErrDeadlineTooClose)
 	}
