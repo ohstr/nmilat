@@ -51,3 +51,9 @@ func TestAgainstFakeOrderHub(t *testing.T) {
 	}
 	conformance.Run(t, h, conformance.Options{Only: only})
 }
+
+// TestAgainstFakeWithdrawHub runs the withdrawal cases against a fake Hub that
+// offers withdrawals.
+func TestAgainstFakeWithdrawHub(t *testing.T) {
+	conformance.Run(t, cashtest.NewFakeHub(t, cashtest.WithWithdrawals()), conformance.Options{Only: []string{"CT-WD-01", "CT-SCOPE-05"}})
+}

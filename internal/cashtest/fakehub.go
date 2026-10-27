@@ -47,6 +47,10 @@ type FakeHub struct {
 	ChunkSize int
 	// DropChunk, when > 0, is a seq the Hub never publishes.
 	DropChunk int
+	// Withdrawals lists cash_withdraw_quote and cash_withdraw in the Cash Hub
+	// connection's private_methods (WithWithdrawals). What each withdrawal item
+	// gets is still Decide's.
+	Withdrawals bool
 
 	t                     testing.TB
 	nodeXOnly, inboxXOnly string
@@ -91,6 +95,9 @@ func WithKeys(nodePriv, inboxPriv string) Option {
 func WithChunks(size, drop int) Option {
 	return func(h *FakeHub) { h.ChunkSize, h.DropChunk = size, drop }
 }
+
+// WithWithdrawals makes the Hub offer on-chain withdrawals in get_info.
+func WithWithdrawals() Option { return func(h *FakeHub) { h.Withdrawals = true } }
 
 // NewFakeHub starts a Hub, publishes its announcement on its relays and serves
 // every kind-23190 and kind-23194 event they accept, until the test ends.

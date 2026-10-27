@@ -13,6 +13,19 @@ const kindNWCRequest = nip47.KindNWCRequest
 // private transport only (NIP-CASH §Which Methods a Hub Serves).
 var PrivateMethods = []string{"cash_status", "cash_redeem", "cash_transfer", "cash_consolidate", "cash_lookup"}
 
+// WithdrawMethods are the methods a Hub offering on-chain withdrawals adds to
+// its private_methods.
+var WithdrawMethods = []string{"cash_withdraw_quote", "cash_withdraw"}
+
+// privateMethods is PrivateMethods, with WithdrawMethods when the fake offers
+// withdrawals.
+func (h *FakeHub) privateMethods() []string {
+	if !h.Withdrawals {
+		return PrivateMethods
+	}
+	return append(append([]string(nil), PrivateMethods...), WithdrawMethods...)
+}
+
 // FakeNetwork is the network every get_info of the fake reports.
 const FakeNetwork = "regtest"
 
@@ -58,7 +71,7 @@ func (h *FakeHub) serveNWC(r *Relay, ev *nip01.Event) {
 			Network:        FakeNetwork,
 			Chain:          FakeChain,
 			Methods:        []string{"get_info"},
-			PrivateMethods: PrivateMethods,
+			PrivateMethods: h.privateMethods(),
 		}, ev, encryption)
 	default:
 		resp, err = nip47.NewErrorResponseEvent(h.walletPriv, ev.PubKey, req.Method, nip47.Error{
