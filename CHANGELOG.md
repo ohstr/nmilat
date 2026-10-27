@@ -8,6 +8,9 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `nip57.Invoice.Timestamp`, `Expiry` (3600 when the invoice has no `x`
+  field, `DefaultBolt11Expiry`) and `ExpiresAt`.
+  ([#210](https://github.com/ohstr/nmilat/pull/210))
 - Adds `nipCO.CheckOrderInvoice`, `nip57test.SignedBolt11` (a signed BOLT11
   invoice builder), `nipcash.ErrRedeemAmountOnAmountInvoice`,
   `ErrPubkeyNotLowerHex` and `ErrAttestationKey`.
@@ -543,6 +546,8 @@ privacy and performance fixes.
 
 ### Changed
 
+- Changes `nipCO.CheckOrderInvoice` to refuse an order invoice that does not
+  expire at `pay_by`. ([#210](https://github.com/ohstr/nmilat/pull/210))
 - Changes `nipCO/client.Place` to refuse a Lightning reply whose invoice is
   not a BOLT11 invoice for exactly `pay_millis`; the fake Hub answers orders
   with a signed invoice for exactly `pay_millis`, expiring at `pay_by`.
