@@ -17,6 +17,8 @@ privacy and performance fixes.
 - Adds `nip59.Seal`, `WrapSeal` and `Unwrap`, which take the key as a signer
   and never open a seal from a sender not asked for. `Prove` and
   `VerifyProof` show one seal's content to a third party without any key.
+- Adds NIP-17 recipient, subject and reply tags, `ParseChatMessage`, and
+  kind 10050 DM relay lists.
 - Adds `WithSearchBatch` and `WithSearchInFlight`: `SearchIndexer` keeps
   several batches enqueued with a `search.Enqueuer` engine and acknowledges
   them in order, only past what was applied. A large relay's search can then
