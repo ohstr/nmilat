@@ -2,6 +2,7 @@ package nipcash
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/hex"
 	"testing"
 
@@ -13,6 +14,51 @@ import (
 // Frozen known-answer vectors. Each value was computed outside the code under
 // test, so a change to a prefix, separator, payload scheme or kind number turns
 // these red instead of moving both sides of a round trip together.
+//
+// The plan's K-* literals for this package are frozen beside the code they
+// pin: K-TOK-1, K-RH-1..8 and K-HG-1 in token_codec_test.go; K-PAY-1..4,
+// K-ZAP-1, K-ONL-1 in provenance_test.go; K-CLAIM-1..5 in claim_proof_test.go
+// and withdraw_test.go; K-CMT-1..3 and K-FEE-1..6 in wire_types_test.go;
+// K-RID-1, K-DID-1..2, K-DL-1, K-LK-1..7, K-JLK-1 in deadline_lookup_test.go;
+// K-CH-1..2, K-CSIG-1, K-CHAIN-1 in cashhub_connection_test.go; K-VB-2 in
+// reuse_test.go; K-WQ-*, K-WR-*, K-WDET-*, K-WCAN-*, K-WREM-*, K-WRET-*,
+// K-WHOLD-1 in withdraw_test.go and K-ADDR-*, K-WFEE-* in
+// withdraw_address_test.go. The negatives below complete them; package
+// vectors exports every value to testdata/vectors.
+
+// K-RH-2, K-RH-3, K-RH-6: the relay hash a wrong construction computes (no
+// length bytes, no secret, the secret as hex text). The literals are
+// reproduced from their construction here, and RelayHash produces none of
+// them.
+func TestKRH_NegativeVectors(t *testing.T) {
+	r1, r2 := "wss://relay.example.com", "wss://backup.example.net"
+	secret := make([]byte, 32)
+	for i := range secret {
+		secret[i] = byte(i)
+	}
+	lp := func(s string) []byte { return append([]byte{byte(len(s))}, s...) }
+	cat := func(parts ...[]byte) []byte { return bytes.Join(parts, nil) }
+	got, err := RelayHash([]string{r1, r2}, hex.EncodeToString(secret))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		id, want string
+		input    []byte
+	}{
+		{"K-RH-2", "1105ab44514b1aa0f20b14313c7c801448daa546a3ef06dcc4cb25b8c4fd7740", cat([]byte(r1), []byte(r2), secret)},
+		{"K-RH-3", "69900c591bcd6978a183599c4d21f355da493a4b26e440035c511739562045a7", cat(lp(r1), lp(r2))},
+		{"K-RH-6", "a6a986b2e479b623370ae8d4b6f27a0ebcdb9de06ddf65357e0b40977c342d0f", cat(lp(r1), lp(r2), []byte(hex.EncodeToString(secret)))},
+	} {
+		sum := sha256.Sum256(c.input)
+		if hex.EncodeToString(sum[:]) != c.want {
+			t.Errorf("%s = %x, want %s", c.id, sum, c.want)
+		}
+		if got == c.want {
+			t.Errorf("%s: RelayHash produced the negative vector", c.id)
+		}
+	}
+}
 
 // T04-05: a signature over the removed lokicash-mint:v1:<hrp>:<wallet>:<amount>
 // payload carries no provenance: without TLV 8 the decoder marks the set
