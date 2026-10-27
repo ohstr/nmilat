@@ -86,8 +86,10 @@ func (h *FakeHub) ServeOrders(t testing.TB, terms string) *OrderBook {
 	return b
 }
 
-// OrderConnection is the book's cashorder1 string, signed by the node identity.
-func (b *OrderBook) OrderConnection(t testing.TB) string {
+// SignedOrderConnection is the book's Order connection record, signed by the
+// node identity: what the Hub lists (a listing is built from records, never
+// from a string).
+func (b *OrderBook) SignedOrderConnection(t testing.TB) nipCO.OrderConnection {
 	t.Helper()
 	sign, err := nipcash.LocalChainSigner(b.h.NodePriv, FakeChain)
 	if err != nil {
@@ -99,7 +101,13 @@ func (b *OrderBook) OrderConnection(t testing.TB) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := nipCO.EncodeOrderConnection(c)
+	return c
+}
+
+// OrderConnection is the book's cashorder1 string, signed by the node identity.
+func (b *OrderBook) OrderConnection(t testing.TB) string {
+	t.Helper()
+	s, err := nipCO.EncodeOrderConnection(b.SignedOrderConnection(t))
 	if err != nil {
 		t.Fatal(err)
 	}

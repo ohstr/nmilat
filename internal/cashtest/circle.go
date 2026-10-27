@@ -59,6 +59,16 @@ func (h *FakeHub) CircleHubConnection() string {
 	if h.circle == nil {
 		return ""
 	}
+	s, err := nipcw.EncodeCircleHubConnection(h.SignedCircleHubConnection())
+	if err != nil {
+		h.t.Fatalf("cashtest: circle hub connection: %v", err)
+	}
+	return s
+}
+
+// SignedCircleHubConnection is the Circle Hub connection record, signed by the
+// node identity (WithCircleHub only).
+func (h *FakeHub) SignedCircleHubConnection() nipcw.CircleHubConnection {
 	sign, err := nipcash.LocalChainSigner(h.NodePriv, FakeChain)
 	if err != nil {
 		h.t.Fatalf("cashtest: signer: %v", err)
@@ -70,11 +80,7 @@ func (h *FakeHub) CircleHubConnection() string {
 	if err != nil {
 		h.t.Fatalf("cashtest: sign circle hub connection: %v", err)
 	}
-	s, err := nipcw.EncodeCircleHubConnection(c)
-	if err != nil {
-		h.t.Fatalf("cashtest: circle hub connection: %v", err)
-	}
-	return s
+	return c
 }
 
 // CirclePubkey is the Circle Hub connection's pubkey (TLV 0), and CirclePriv its
