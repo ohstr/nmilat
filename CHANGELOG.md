@@ -495,7 +495,8 @@ privacy and performance fixes.
 
 ### Removed
 
-- Removes `MintCashParams.IdempotencyKey`, `nipcash.Anyone()`,
+- Removes `MintCashParams.IdempotencyKey`, `nipcash.Anyone()` and
+  `ErrWrongCredentialForTarget`,
   `RecipientResult.CashSecret`, `CashStatusResult.Error`/`IsSpent`,
   `CashStatusParams.AttestationEvent`, and `nipcash.MatchClaim`,
   `MatchClaimAuto`, `NoLocalIdentity` and `ErrSpent` (use `OwnRow`,
