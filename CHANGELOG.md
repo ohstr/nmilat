@@ -8,6 +8,10 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `nipCO.CheckOrderInvoice`, `nip57test.SignedBolt11` (a signed BOLT11
+  invoice builder), `nipcash.ErrRedeemAmountOnAmountInvoice`,
+  `ErrPubkeyNotLowerHex` and `ErrAttestationKey`.
+  ([#208](https://github.com/ohstr/nmilat/pull/208))
 - Adds `nipcash.ErrBech32m` and `nipIC.ErrNConnectionBech32m`.
   ([#206](https://github.com/ohstr/nmilat/pull/206))
 - Adds to the fake Hub a `cash_redeem` fake payee and `cash_transfer` splits
@@ -539,6 +543,21 @@ privacy and performance fixes.
 
 ### Changed
 
+- Changes `nipCO/client.Place` to refuse a Lightning reply whose invoice is
+  not a BOLT11 invoice for exactly `pay_millis`; the fake Hub answers orders
+  with a signed invoice for exactly `pay_millis`, expiring at `pay_by`.
+  ([#208](https://github.com/ohstr/nmilat/pull/208))
+- Changes `CashRedeemParams.Request` to refuse an `amount` with an invoice
+  that carries one, and a pubkey recipient, target or `ia_pubkey` that is
+  not 64 lowercase hex. ([#208](https://github.com/ohstr/nmilat/pull/208))
+- Changes `nipIC.ConnectionKeyFromAttested` to refuse a non-canonical user
+  id on a platform with a canonical form, and
+  `nipcash.ConnectionKeyFromAttestation` to refuse an attestation whose `d`
+  is not the ConnectionKey of its platform and user id.
+  ([#208](https://github.com/ohstr/nmilat/pull/208))
+- Changes `nip44` to refuse a plaintext over 65535 bytes and the extended
+  length prefix (`MaxPlaintextSize` is 65535).
+  ([#208](https://github.com/ohstr/nmilat/pull/208))
 - Changes `NormalizeAddress` to report a base58check address as
   `ErrAddressNoWitness` rather than a mixed-case error, and
   `WithdrawTerms.Validate` to refuse an empty `script_types`.
