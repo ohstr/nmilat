@@ -70,6 +70,13 @@ func Files() []File {
 		{"nconnection.json", buildNConnection},
 		{"pow.json", buildPow},
 		{"connection.json", buildConnection},
+		{"withdraw.json", buildWithdraw},
+		{"order.json", buildOrder},
+		{"pocket.json", buildPocket},
+		{"zap.json", buildZap},
+		{"altzap.json", buildAltZap},
+		{"listing.json", buildListing},
+		{"lsp-announcement.json", buildLSP},
 	}
 }
 

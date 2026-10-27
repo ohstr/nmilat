@@ -228,3 +228,157 @@ func init() {
 	}
 	noKATs["announcement.json"] = true
 }
+
+func init() {
+	w := []kat{
+		k("K-WQ-1", "bd16a92aef27ec468b00c715f9c3bf4f3cf4d148fa6cd62cbac0773c30f85a22", "quotes", "[id=K-WQ-1]", "event", "id"),
+		k("K-WQ-1 fee", "1742000", "quotes", "[id=K-WQ-1]", "feeMillis"),
+		k("K-WQ-2", "484362992237afca0ec22c8ab27a6abb6214ac0294e38f702a5bb75e4678d276", "quotes", "[id=K-WQ-2]", "event", "id"),
+		k("K-WQ-3", "a913107c809253d590766e54f89cd2d323b460303f00650e7df9660d539227be", "quotes", "[id=K-WQ-3]", "event", "id"),
+		k("K-WQ-3 verifies", "", "quotes", "[id=K-WQ-3]", "verify"),
+		k("K-WR-1", "5947d7c33d783f94b3b4c1a96ebc8991ed28f1b069b71e03376cba8caa98a720", "requestHash", "[id=K-WR-1]", "hash"),
+		k("K-WR-2", "2b376b910505799c6f92edcb3c3543e47e73fc210b877cdd91738c367d21cfef", "receipts", "[id=K-WR-2]", "event", "id"),
+		k("K-WR-3 hash", "0f5019117b865df3d86a6856ba8cf5383850ae9d833ecf7cc9a609552cb6c413", "requestHash", "[id=K-WR-3]", "hash"),
+		k("K-WR-3 id", "7060d4c8e4f8ab862a5105a4d0573465a70f62f9ec8e11e6c8d22595f73f4c90", "receipts", "[id=K-WR-3]", "event", "id"),
+		k("K-WR-4", "a8faed6abbf35c12a4b26e40f6feb19d736d90045c83b9f9a31f638d323e6811", "requestHash", "[id=K-WR-4]", "hash"),
+		k("K-WR-4 refused", "nipcash: the withdrawal receipt is invalid: request_hash", "verifyReceipt", "[id=K-WR-4]", "error"),
+		k("K-CLAIM-5", "d21236b945c9ae88e23fe8fd9bc3559b08b9a6ec6d4a74acd15825314b3d7428", "claimProof", "want"),
+		k("K-WFEE-6", "nipcash: a ppm rate is at most 1000000: withdraw_fee_ppm 1000001", "withdrawFee", "[id=K-WFEE-6]", "error"),
+		k("K-ADDR-6", "network", "address", "[id=K-ADDR-6]", "class"),
+		k("K-ADDR-12", "script_type", "address", "[id=K-ADDR-12]", "class"),
+		k("K-ADDR-10 normalize", kAddr1lit, "normalizeAddress", "[id=K-ADDR-10]", "output"),
+		k("K-ADDR-13 tb", "tb", "classifyAddressAmong", "[address=tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx]", "hrp"),
+		k("K-ADDR-13 bcrt", "bcrt", "classifyAddressAmong", "[address=bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080]", "hrp"),
+		k("K-ADDR-13 zz", "network", "classifyAddressAmong", "[address=zz1qw508d6qejxtdg4y5r3zarvary0c5xw7k3c49eg]", "class"),
+		k("K-WDET-1", "own_address", "detail", "[id=K-WDET-1]", "detail"),
+		k("K-WDET-2", "", "detail", "[id=K-WDET-2]", "detail"),
+		k("K-WDET-3", "", "detail", "[id=K-WDET-3]", "detail"),
+		k("K-WHOLD-1 870413", "true", "quoteValidAt", "[tip=870413]", "valid"),
+		k("K-WHOLD-1 870414", "false", "quoteValidAt", "[tip=870414]", "valid"),
+		k("K-WCAN-1", "not_due", "cancel", "[id=K-WCAN-1]", "step"),
+		k("K-WCAN-2", "cancel_now", "cancel", "[id=K-WCAN-2]", "step"),
+		k("K-WCAN-3", "invalidate_then_cancel", "cancel", "[id=K-WCAN-3]", "step"),
+		k("K-WCAN-4", "RESTRICTED", "cancel", "[id=K-WCAN-4]", "code"),
+		k("K-WCAN-5", "true", "cancel", "[id=K-WCAN-5]", "invalidate"),
+		k("K-WCAN-6", "false", "cancel", "[id=K-WCAN-6]", "invalidate"),
+		k("K-WREM-1", "1722682000", "remintExpiry", "[id=K-WREM-1]", "expiresAt"),
+		k("K-WREM-2", "<nil>", "remintExpiry", "[id=K-WREM-2]", "expiresAt"),
+		k("K-WREM-3", "1730000000", "remintExpiry", "[id=K-WREM-3]", "expiresAt"),
+		k("K-WREM-4", "<nil>", "remintExpiry", "[id=K-WREM-4]", "expiresAt"),
+		k("K-WRET-1", "true", "retention", "[id=K-WRET-1,now=1099511627776]", "retained"),
+		k("K-WRET-2 at", "true", "retention", "[id=K-WRET-2,now=1722692000]", "retained"),
+		k("K-WRET-2 after", "false", "retention", "[id=K-WRET-2,now=1722692001]", "retained"),
+		k("K-WRET-3", "true", "retention", "[id=K-WRET-3]", "retained"),
+	}
+	for i, r := range []struct{ id, addr, st string }{
+		{"K-ADDR-1", "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", "[0 20]"},
+		{"K-ADDR-2", "", "[0 32]"}, {"K-ADDR-3", "", "[1 32]"}, {"K-ADDR-4", "", "[2 16]"}, {"K-ADDR-5", "", "[1 20]"},
+	} {
+		_ = i
+		w = append(w, k(r.id, r.st, "address", "[id="+r.id+"]", "scriptType"))
+	}
+	for _, id := range []string{"K-ADDR-7", "K-ADDR-8", "K-ADDR-9", "K-ADDR-10", "K-ADDR-11"} {
+		w = append(w, k(id, "malformed", "address", "[id="+id+"]", "class"))
+	}
+	for _, c := range []struct{ id, hub, fee, payout string }{
+		{"K-WFEE-1", "542000", "1742000", "19258000"}, {"K-WFEE-2", "542000", "1743000", "19257000"}, {"K-WFEE-3", "0", "205000", "20795000"},
+		{"K-WFEE-4", "502000", "1000000", "0"}, {"K-WFEE-5", "542001", "1742500", "19258000"},
+	} {
+		w = append(w, k(c.id+" hub", c.hub, "withdrawFee", "[id="+c.id+"]", "hubFeeMillis"),
+			k(c.id+" fee", c.fee, "withdrawFee", "[id="+c.id+"]", "feeMillis"),
+			k(c.id+" payout", c.payout, "withdrawFee", "[id="+c.id+"]", "payoutMillis"))
+	}
+	for _, c := range []struct{ name, want string }{
+		{"pubkey quote", "2"}, {"CK quote", "3"}, {"cash-mode quote", "1"}, {"pubkey withdraw", "4"},
+		{"CK withdraw", "5"}, {"bearer withdraw", "2"}, {"cancel by pubkey", "2"}, {"bearer cancel", "1"},
+	} {
+		w = append(w, k("K-VB-2 "+c.name, c.want, "verificationCost", "[name="+c.name+"]", "cost"))
+	}
+	katChecks["withdraw.json"] = w
+
+	katChecks["order.json"] = []kat{
+		k("K-BK-1 sk", "c853759de7b777f3588569e48461ec8ad52dbea4c8829b759a05e352cf649dea", "buyerKey", "[id=K-BK-1]", "buyerSk"),
+		k("K-BK-1 pk", "a5a70781e66224a1a4e26614b36328c1a8913f1a2c80bca00fbb2e5af993c8a3", "buyerKey", "[id=K-BK-1]", "buyerPk"),
+		k("K-BK-1 commitment", "630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd", "buyerKey", "[id=K-BK-1]", "commitment"),
+		k("K-OFEE-1 fee", "22000", "orderFee", "[id=K-OFEE-1]", "feeMillis"),
+		k("K-OFEE-1 pay", "21022000", "orderFee", "[id=K-OFEE-1]", "payMillis"),
+		k("K-OFEE-2 fee", "63000", "orderFee", "[id=K-OFEE-2]", "feeMillis"),
+		k("K-OFEE-2 pay", "21063000", "orderFee", "[id=K-OFEE-2]", "payMillis"),
+		k("K-OFEE-3 fee", "64000", "orderFee", "[id=K-OFEE-3]", "feeMillis"),
+		k("K-OFEE-3 pay", "21064000", "orderFee", "[id=K-OFEE-3]", "payMillis"),
+		k("K-OFEE-2 confirmations", "1", "confirmations", "[id=K-TIER-1]", "n"),
+		k("K-TIER-1", "1", "confirmations", "[id=K-TIER-1]", "n"),
+		k("K-TIER-2", "3", "confirmations", "[id=K-TIER-2]", "n"),
+		k("K-TIER-3", "6", "confirmations", "[id=K-TIER-3]", "n"),
+		k("K-SPLIT-1", "[1000000000 1000000000 500000000]", "mintSplit", "[id=K-SPLIT-1]", "bills"),
+		k("K-OMINT-1", "[21000000]", "mintSplit", "[id=K-OMINT-1]", "bills"),
+		k("K-OMINT-2", "[19937000]", "mintSplit", "[id=K-OMINT-2]", "bills"),
+		k("K-OMINT-3", "[24937000]", "mintSplit", "[id=K-OMINT-3]", "bills"),
+		k("K-OMINT-4", "[9937000]", "mintSplit", "[id=K-OMINT-4]", "bills"),
+		k("K-OMINT-5", "[]", "mintSplit", "[id=K-OMINT-5]", "bills"),
+		k("K-ON-1 filter", "map[#p:[0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef] kinds:[23189]]", "notice", "filter"),
+		k("K-ON-1 tags", "[[p 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef]]", "notice", "noticeTags"),
+		k("K-ON-1 content", "", "notice", "noticeContent"),
+		k("retired connection", "true", "getInfo", "[name=a retired connection: cash_order {}]", "sellsNothing"),
+	}
+	katChecks["pocket.json"] = []kat{
+		k("K-POCKET-6 pending", "c49dbd482343b3c68e9ba59ae6d120b991f17bd88b98620145eac562ad6b2c39", "withdraw", "[name=the pending entry: pubkey slice]", "rumor", "id"),
+		k("K-POCKET-6 cash mode", "1add82fd822acf561e8934d09f063894eb5dbb38979794c392135676899ba246", "withdraw", "[name=the pending entry: cash-mode slice (remint secret)]", "rumor", "id"),
+		k("K-POCKET-6 receipt", "37e38de3fba644966e59095d2da2b7d51277137ee6ee43024ea0b227dcf7a661", "applyWithdraw", "[name=first receipt (queued)]", "writes", "[id=K-POCKET-6]", "rumor", "id"),
+		k("K-POCKET-6 rewrite", "3137f0f66c68af647fe3f2f2942042c8346ce4e6c63ad952c5aea820373fa0e4", "withdraw", "[name=the done entry rewritten]", "rumor", "id"),
+		k("K-POCKET-4", "map[bitcoin:42000 flokicoin:7000]", "balance", "balance"),
+		k("K-POCKET-3 winner", "0000000000000000000000000000000000000000000000000000000000000000", "resolve", "[id=K-POCKET-3]", "winnerRumorId"),
+		k("K-POCKET-1", "e284c7c39231796c650f29c2ac6b092e778a6386b558db678c678fedd6ff9489", "rumors", "[id=K-POCKET-1]", "rumor", "id"),
+		k("K-POCKET-2", "b606d719b13bf64c36333ac4c0855dd2768e9b657cda69b7604a1aac5dca85eb", "rumors", "[id=K-POCKET-2]", "rumor", "id"),
+		k("K-POCKET-5", "a6f66587e3af2ee863db7d34b5bef056648aef576ae03cb50abafa6aa168c7d0", "rumors", "[id=K-POCKET-5]", "rumor", "id"),
+		k("K-POCKET-5 close (Lightning minted)", "true", "order", "[name=Lightning minted: the bill then done]", "done"),
+		k("K-POCKET-5 open (on-chain minted)", "false", "order", "[name=on-chain minted stays open]", "done"),
+	}
+	katChecks["zap.json"] = []kat{
+		k("K-CZ-1", "0", "parse", "[id=K-CZ-1]", "rule"),
+		k("K-CZ-2", "2", "parse", "[id=K-CZ-2]", "rule"),
+		k("K-CZ-3", "2", "parse", "[id=K-CZ-3]", "rule"),
+		k("K-CZ-4", "2", "parse", "[id=K-CZ-4]", "rule"),
+		k("K-CZ-5", "2", "parse", "[id=K-CZ-5]", "rule"),
+		k("K-CZ-6", "2", "parse", "[id=K-CZ-6]", "rule"),
+	}
+	katChecks["altzap.json"] = []kat{
+		k("K-AZ-1", "e0f32bed48057944056e7fb1d74c00569ecb2349882d0e2985f2ae480b71f4c5", "kat", "event", "id"),
+		k("K-AZ-1 ck", "ffed85070e86f6ac651aa82b91310ca01895a7432bb0f8224fe74d7b21ab18c1", "kat", "connectionKey"),
+	}
+	katChecks["listing.json"] = []kat{
+		k("K-LIST-1", "a2aeaaa40b57de5807c1a466060e58111c23eaa96390a0b894982bcafbe555b0", "events", "[id=K-LIST-1]", "event", "id"),
+		k("K-LIST-1 address", "31190:79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798:f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9", "parseListing", "[name=K-LIST-1]", "want", "address"),
+		k("K-LIST-2", "25d3a99b0b593aa70ad5d848a91cd300062f6c4a479bc7005d66277897a96506", "events", "[id=K-LIST-2]", "event", "id"),
+		k("K-LDEL-1", "5aa2a615eb258246769d21389dee11481066e3ef3809e9a25a7847acd848d37b", "events", "[id=K-LDEL-1]", "event", "id"),
+		k("K-OPS-1", "3b74fc1d53fa35a72ba235ce398dc29e599f19e202fc5c16bec156179e1480a0", "events", "[id=K-OPS-1]", "event", "id"),
+		k("K-REC-1", "1ffb32f70209a551300255197aad28472ef74130e432011039d6b5da5d45a5f8", "events", "[id=K-REC-1]", "event", "id"),
+		k("K-REP-1", "00cc61c6f4914fac8dfc65a4a29057f687f4af1be394213658e7d53d5e1c1abd", "events", "[id=K-REP-1]", "event", "id"),
+		k("K-REP-1 reason", "no_payout", "reports", "[name=K-REP-1]", "want", "reason"),
+		k("K-LEXP-1", "1795305600", "expiresAt", "[id=K-LEXP-1]", "expiresAt"),
+		k("K-LEXP-2", "1795305600", "expiresAt", "[id=K-LEXP-2]", "expiresAt"),
+		k("K-LEXP-3", "1793000000", "expiresAt", "[id=K-LEXP-3]", "expiresAt"),
+		k("K-LEXP 900 s", "[true]", "versions", "[name=seen 900 s ahead: accepted]", "accepted"),
+		k("K-LEXP 901 s", "[false]", "versions", "[name=seen 901 s ahead: ignored]", "accepted"),
+		k("K-LVER-1 refused", "[true false]", "versions", "[name=K-LIST-1 offered after K-LIST-2: refused]", "accepted"),
+		k("K-LVER-1 remembered", "[true false]", "versions", "[name=K-LIST-2 expired then K-LIST-1 again: still refused]", "accepted"),
+		k("K-OPS-1 verified", "true", "operatorVerified", "[name=K-OPS-1 with K-LIST-1: verified]", "verified"),
+		k("K-TXT-1 1", "Alice's cash counter", "sanitizeText", "[in=Alice​'s‮ cash counter]", "out"),
+		k("K-TXT-1 2", " Alice", "sanitizeText", "[in=✔ Alice]", "out"),
+		k("K-TXT-1 3", "A B", "sanitizeText", "[in=A\nB]", "out"),
+	}
+	l := []kat{}
+	for _, c := range []struct{ id, ev, step string }{
+		{"K-LSP-1", "d87841c795e01ba75208a603bc0bdfe7f2015ab3876860501e2f09d0c257a45b", "0"},
+		{"K-LSP-2", "4888cfb893cec3cd2ab49f26504f9914e841933a8e3f3e5725eb27313b951158", "0"},
+		{"K-LSP-3", "9e63298039c075dc61ff438ff8b642ed7463d15f6d9e10b14f738f9cddf1c0ba", "2"},
+		{"K-LSP-4", "b9d668ad9b8dc89a01df7fe8f8c429204e946110c9a8768bafbf76c9503d4b8c", "3"},
+		{"K-LSP-5", "c49b0d6188e1829ffd507ee217589a05cd4eeaed22014bcf3a57d41c58b9adff", "4"},
+		{"K-LSP-6", "b9601b6f837a62e054285d0b2c62ece02d3db65be8f1d27c2ea107806ed3b974", "5"},
+	} {
+		l = append(l, k(c.id, c.ev, "events", "[id="+c.id+"]", "event", "id"), k(c.id+" step", c.step, "events", "[id="+c.id+"]", "step"))
+	}
+	katChecks["lsp-announcement.json"] = l
+}
+
+const kAddr1lit = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
