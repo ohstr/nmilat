@@ -66,3 +66,6 @@ func hubReply(t *testing.T, fromPriv, memberPub, details string) []byte {
 	}
 	return raw
 }
+
+// encryptRaw is NIP-44 of any plaintext, for malformed hidden_p entries.
+func encryptRaw(plain string, key []byte) (string, error) { return nip44.Encrypt(plain, key) }
