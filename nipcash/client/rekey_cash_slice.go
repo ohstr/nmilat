@@ -88,6 +88,9 @@ type RekeyCashSliceResult struct {
 	NewWalletPubkey string
 	NewToken        string
 	AmountMillis    uint64
+	// Ordered is the local ordered mark of the re-keyed bill: CashSlice's own
+	// mark, or, after a consolidate, set when every source was ordered.
+	Ordered bool
 }
 
 // RekeyCashSlice moves CashSlice out of shared cash-mode custody: its
@@ -124,6 +127,12 @@ func rekeyCashSlice(ctx context.Context, c transferConsolidater, p RekeyCashSlic
 		return nil, ErrNewTargetNotCash
 	}
 	bt := p.NewTarget
+	// Refused before the interim transfer: a mixed consolidate would be
+	// refused RESTRICTED after CashSlice's secret was already consumed.
+	ordered, err := sourcesOrdered(append([]nipcash.Source{p.CashSlice}, p.ConsolidateWith...))
+	if err != nil {
+		return nil, err
+	}
 
 	if len(p.ConsolidateWith) == 0 {
 		result, err := c.CashTransfer(ctx, nipcash.CashTransferParams{
@@ -138,6 +147,7 @@ func rekeyCashSlice(ctx context.Context, c transferConsolidater, p RekeyCashSlic
 			NewSecret:       bt.Secret(),
 			NewWalletPubkey: p.CashSlice.WalletPubkey,
 			AmountMillis:    result.AmountMillis,
+			Ordered:         ordered,
 		}, nil
 	}
 
@@ -158,6 +168,7 @@ func rekeyCashSlice(ctx context.Context, c transferConsolidater, p RekeyCashSlic
 		WalletPubkey: p.CashSlice.WalletPubkey,
 		Amount:       p.CashSlice.Amount,
 		Credential:   p.InterimCredential,
+		Ordered:      p.CashSlice.Ordered,
 	}
 	sources := append([]nipcash.Source{thisSource}, p.ConsolidateWith...)
 	// Authorized by this slice's own interim credential — the same one proving
@@ -175,5 +186,6 @@ func rekeyCashSlice(ctx context.Context, c transferConsolidater, p RekeyCashSlic
 		NewWalletPubkey: result.NewWalletPubkey,
 		NewToken:        result.NewWalletToken,
 		AmountMillis:    result.AmountMillis,
+		Ordered:         ordered,
 	}, nil
 }

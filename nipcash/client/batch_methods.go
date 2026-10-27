@@ -189,6 +189,10 @@ type BatchTransfer struct {
 type TransferOutcome struct {
 	ItemOutcome
 	Result *nipcash.CashTransferResult
+	// Ordered is the item's Bill.Ordered, a local mark the bills the transfer
+	// makes keep (NIP-CASH §Data Model: a new wallet made from an ordered slice
+	// is ordered, and an in-place reassignment keeps the mark).
+	Ordered bool
 }
 
 // TransferMany transfers or splits several bills in one request. Every item
@@ -200,6 +204,7 @@ func (s *BatchSession) TransferMany(ctx context.Context, items []BatchTransfer, 
 	// Kept so each result can be parsed through the SAME params that authorized it —
 	// the delivered token is encrypted to that credential.
 	paramsByID := make(map[string]nipcash.CashTransferParams, len(items))
+	orderedByID := make(map[string]bool, len(items))
 	for i, it := range items {
 		it := it
 		if it.Params.RequestID == "" {
@@ -217,6 +222,7 @@ func (s *BatchSession) TransferMany(ctx context.Context, items []BatchTransfer, 
 			return nil, err
 		}
 		paramsByID[itemID(it.ID, i)] = it.Params
+		orderedByID[itemID(it.ID, i)] = it.Bill.Ordered
 		builders = append(builders, itemBuilder{
 			ID: itemID(it.ID, i),
 			Build: func(id string, b nipcash.ItemBinding) (transport.Item, error) {
@@ -239,7 +245,7 @@ func (s *BatchSession) TransferMany(ctx context.Context, items []BatchTransfer, 
 	}
 	out := make([]TransferOutcome, 0, len(outcomes))
 	for _, o := range outcomes {
-		to := TransferOutcome{ItemOutcome: o}
+		to := TransferOutcome{ItemOutcome: o, Ordered: orderedByID[o.ID]}
 		if o.Succeeded() {
 			// ParseResult, never a plain unmarshal: a spun-off wallet's token
 			// arrives ENCRYPTED to its new owner, and only the credential that
@@ -275,6 +281,9 @@ type BatchConsolidate struct {
 type ConsolidateOutcome struct {
 	ItemOutcome
 	Result *nipcash.CashConsolidateResult
+	// Ordered is set when every source was ordered: the merged bill is ordered
+	// too (NIP-CASH §Consolidating Tokens). A local mark, never on the wire.
+	Ordered bool
 }
 
 // ConsolidateMany performs several consolidations in one request.
@@ -286,10 +295,16 @@ type ConsolidateOutcome struct {
 // be split at all and returns ErrItemTooLarge: the caller must consolidate in stages.
 //
 // Every item carries a request_id and is written ahead to j, as TransferMany's.
+//
+// An item whose sources' ordered marks differ (nipcash.Source.Ordered, or the
+// item's Bill.Ordered for the source that is its bill) is refused with
+// ErrMixedOrdered before anything is written or sent: a Hub refuses that mix
+// with RESTRICTED (NIP-CASH §Consolidating Tokens, step 3).
 func (s *BatchSession) ConsolidateMany(ctx context.Context, items []BatchConsolidate, j Journal, device string) ([]ConsolidateOutcome, error) {
 	builders := make([]itemBuilder, 0, len(items))
 	// Same reason as TransferMany: the merged wallet's token is delivered encrypted.
 	paramsByID := make(map[string]nipcash.CashConsolidateParams, len(items))
+	orderedByID := make(map[string]bool, len(items))
 	for i, it := range items {
 		it := it
 		if it.Params.RequestID == "" {
@@ -302,11 +317,16 @@ func (s *BatchSession) ConsolidateMany(ctx context.Context, items []BatchConsoli
 		if err := it.Bill.check(itemID(it.ID, i), s.HubIdentity()); err != nil {
 			return nil, err
 		}
+		ordered, err := consolidateOrdered(it.Bill, it.Params.Sources)
+		if err != nil {
+			return nil, mixedItem(itemID(it.ID, i))
+		}
 		pc, err := it.Params.Pending()
 		if err != nil {
 			return nil, err
 		}
 		paramsByID[itemID(it.ID, i)] = it.Params
+		orderedByID[itemID(it.ID, i)] = ordered
 		builders = append(builders, itemBuilder{
 			ID: itemID(it.ID, i),
 			Build: func(id string, b nipcash.ItemBinding) (transport.Item, error) {
@@ -329,7 +349,7 @@ func (s *BatchSession) ConsolidateMany(ctx context.Context, items []BatchConsoli
 	}
 	out := make([]ConsolidateOutcome, 0, len(outcomes))
 	for _, o := range outcomes {
-		co := ConsolidateOutcome{ItemOutcome: o}
+		co := ConsolidateOutcome{ItemOutcome: o, Ordered: orderedByID[o.ID]}
 		if o.Succeeded() {
 			// ParseResult for the reason TransferMany uses it: the merged wallet's
 			// token is delivered encrypted to its new owner.

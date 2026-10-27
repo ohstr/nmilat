@@ -179,6 +179,12 @@ type Source struct {
 	// CashStatus.
 	Amount     uint64
 	Credential Credential
+	// Ordered is a local mark, never sent: the source is an ordered slice
+	// (§Data Model: minted for an order, or made from ordered slices only). A
+	// consolidate whose sources' marks differ is refused locally
+	// (nipcash/client.ErrMixedOrdered) rather than sent for a RESTRICTED
+	// refusal. A slice received from someone else carries no mark.
+	Ordered bool
 }
 
 // From pairs walletPubkey and its current amount with a Credential.

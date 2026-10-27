@@ -41,6 +41,9 @@ type TransferFromSourcesParams struct {
 type TransferFromSourcesResult struct {
 	ConsolidatedFirst *nipcash.CashConsolidateResult
 	Transfer          *nipcash.CashTransferResult
+	// Ordered is the local ordered mark of the bills built: set when every
+	// source was ordered (nipcash.Source.Ordered).
+	Ordered bool
 }
 
 // transferConsolidaterCloser is a transferConsolidater that can also be
@@ -101,6 +104,12 @@ func (c *Client) TransferFromSources(ctx context.Context, p TransferFromSourcesP
 // no-network-testability reasoning, extended here with a reconnect step
 // a fake can assert on independently).
 func transferFromSources(ctx context.Context, c transferFromSourcesClient, p TransferFromSourcesParams) (*TransferFromSourcesResult, error) {
+	// Refused before the first call: a mixed consolidate would be refused
+	// RESTRICTED, and nothing must move first.
+	ordered, err := sourcesOrdered(p.Sources)
+	if err != nil {
+		return nil, err
+	}
 	if len(p.Sources) == 1 {
 		src := p.Sources[0]
 		result, err := c.CashTransfer(ctx, nipcash.CashTransferParams{
@@ -112,7 +121,7 @@ func transferFromSources(ctx context.Context, c transferFromSourcesClient, p Tra
 		if err != nil {
 			return nil, err
 		}
-		return &TransferFromSourcesResult{Transfer: result}, nil
+		return &TransferFromSourcesResult{Transfer: result, Ordered: ordered}, nil
 	}
 
 	// The call is authorized by the first source's own credential: the caller proves
@@ -155,5 +164,5 @@ func transferFromSources(ctx context.Context, c transferFromSourcesClient, p Tra
 		transferResult.NewWalletPubkey = consolidateResult.NewWalletPubkey
 	}
 
-	return &TransferFromSourcesResult{ConsolidatedFirst: consolidateResult, Transfer: transferResult}, nil
+	return &TransferFromSourcesResult{ConsolidatedFirst: consolidateResult, Transfer: transferResult, Ordered: ordered}, nil
 }
