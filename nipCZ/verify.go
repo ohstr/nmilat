@@ -227,6 +227,9 @@ func zapSignature(z *CashZap, target *nip01.Event) (bool, string) {
 	var author string
 	switch {
 	case target != nil:
+		if target.Verify(nip01.WithoutPowCheck()) != nil {
+			return false, "the target event does not verify"
+		}
 		want, err := ZapTargetFor(target)
 		if err != nil {
 			return false, "the target event has no zap target"
@@ -262,7 +265,7 @@ func minterTrust(minter, chain string, info *CashZapInfo, trust Trust, recipient
 	if trust != nil && trust.TrustsMinter(x, chain) {
 		return true
 	}
-	if info != nil && !recipient.IsConnectionKey() && (info.Pubkey == "" || info.Pubkey == recipient.Value) {
+	if info != nil && !recipient.IsConnectionKey() && info.Pubkey == recipient.Value {
 		return info.ListsMinter(x, chain)
 	}
 	return false

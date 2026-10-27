@@ -169,6 +169,17 @@ func TestVerifyClient_Rule7(t *testing.T) {
 			t.Fatalf("%+v", v)
 		}
 	})
+	t.Run("forged target", func(t *testing.T) {
+		// An e-only zap on other's note, with the note's author rewritten to
+		// p: the target does not verify, so the zap does not count.
+		theirs, _ := nip01.NewSignedEvent(1, "theirs", other.recipPriv)
+		forged := *theirs
+		forged.PubKey = f.recip
+		ev, _ := f.zap(t, zapOpts{target: &forged})
+		if v := countable(ev, &forged); v.Countable || firstFailure(v) != 7 {
+			t.Fatalf("%+v", v)
+		}
+	})
 	t.Run("issued before its target", func(t *testing.T) {
 		ev, _ := f.zap(t, zapOpts{target: f.note, issuedAt: f.note.CreatedAt - 1})
 		if v := countable(ev, f.note); v.Countable || firstFailure(v) != 7 {
@@ -249,6 +260,13 @@ func TestVerifyClient_Rule8(t *testing.T) {
 	t.Run("someone else's 10522 does not list for p", func(t *testing.T) {
 		other := newFx(t)
 		i, _ := ParseCashZapInfo(signInfo(t, other.recipPriv, []string{"mint", c02, "bitcoin"}))
+		if v := VerifyClient(ev, f.note, i, nil); v.Countable {
+			t.Fatalf("%+v", v)
+		}
+	})
+	t.Run("a 10522 with no author does not list for p", func(t *testing.T) {
+		i := listed([]string{"mint", c02, "bitcoin"})
+		i.Pubkey = ""
 		if v := VerifyClient(ev, f.note, i, nil); v.Countable {
 			t.Fatalf("%+v", v)
 		}
