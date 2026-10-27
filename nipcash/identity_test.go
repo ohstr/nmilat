@@ -20,7 +20,7 @@ import (
 var (
 	_ Recipient = namedIdentity{}
 	_ Target    = namedIdentity{}
-	_ Recipient = cashRecipient{}
+	_ Recipient = (*CashTarget)(nil)
 	_ Target    = (*CashTarget)(nil)
 )
 
@@ -44,9 +44,9 @@ func TestPubkeyConnectionKeyAnyone_IdentityTypes(t *testing.T) {
 		t.Fatal("ConnectionKey must be deterministic for the same (platform, externalID)")
 	}
 
-	anyone := Anyone().(targetFields)
-	if anyone.identityType() != identityTypeCash {
-		t.Fatalf("Anyone: got type=%s", anyone.identityType())
+	cash := targetFields(mustCashTarget(t))
+	if cash.identityType() != identityTypeCash || !ValidCommitment(cash.identityValue()) {
+		t.Fatalf("CashTarget: got type=%s value=%s", cash.identityType(), cash.identityValue())
 	}
 }
 
@@ -78,7 +78,7 @@ func TestResolvedConnectionKey_MatchesConnectionKeyWithoutRehashing(t *testing.T
 }
 
 func TestNewCashTarget_SecretAndCommitmentDiffer(t *testing.T) {
-	bt := NewCashTarget()
+	bt := mustCashTarget(t)
 	f := Target(bt).(targetFields)
 	if f.identityType() != identityTypeCash {
 		t.Fatalf("identityType: got %s", f.identityType())
@@ -91,7 +91,7 @@ func TestNewCashTarget_SecretAndCommitmentDiffer(t *testing.T) {
 	}
 
 	// Two calls must never collide.
-	other := NewCashTarget()
+	other := mustCashTarget(t)
 	if bt.Secret() == other.Secret() {
 		t.Fatal("NewCashTarget must generate a fresh secret every call")
 	}
@@ -102,7 +102,7 @@ func TestNewCashTarget_SecretAndCommitmentDiffer(t *testing.T) {
 // and "differs from the secret" alone would not notice.
 func TestNewCashTarget_CommitmentIsSHA256OfSecret(t *testing.T) {
 	for range 8 {
-		bt := NewCashTarget()
+		bt := mustCashTarget(t)
 		raw, err := hex.DecodeString(bt.Secret())
 		if err != nil {
 			t.Fatalf("Secret is not hex: %v", err)

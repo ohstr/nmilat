@@ -133,14 +133,14 @@ func TestEnvelope_RejectsMalformedShape(t *testing.T) {
 		tamper func(*Envelope)
 		want   error
 	}{
-		"no items":           {func(e *Envelope) { e.Items = nil }, ErrEnvelopeNoItems},
-		"short nonce":        {func(e *Envelope) { e.Nonce = "abcd" }, ErrEnvelopeMalformed},
-		"uppercase nonce":    {func(e *Envelope) { e.Nonce = strings.ToUpper(e.Nonce) }, ErrEnvelopeMalformed},
-		"short reply_to":     {func(e *Envelope) { e.ReplyTo = "00" }, ErrEnvelopeMalformed},
-		"item without id":    {func(e *Envelope) { e.Items[0].ID = "" }, ErrEnvelopeMalformed},
-		"item without proof": {func(e *Envelope) { e.Items[0].Proof = nil }, ErrEnvelopeMalformed},
-		"item bad target":    {func(e *Envelope) { e.Items[0].Target = "xyz" }, ErrEnvelopeMalformed},
-		"item no method":     {func(e *Envelope) { e.Items[0].Method = "" }, ErrEnvelopeMalformed},
+		"no items":            {func(e *Envelope) { e.Items = nil }, ErrEnvelopeNoItems},
+		"short nonce":         {func(e *Envelope) { e.Nonce = "abcd" }, ErrEnvelopeMalformed},
+		"uppercase nonce":     {func(e *Envelope) { e.Nonce = strings.ToUpper(e.Nonce) }, ErrEnvelopeMalformed},
+		"short reply_to":      {func(e *Envelope) { e.ReplyTo = "00" }, ErrEnvelopeMalformed},
+		"item without id":     {func(e *Envelope) { e.Items[0].ID = "" }, ErrEnvelopeMalformed},
+		"spend without proof": {func(e *Envelope) { e.Items[0].Proof, e.Items[0].Method = nil, "cash_redeem" }, ErrEnvelopeMalformed},
+		"item bad target":     {func(e *Envelope) { e.Items[0].Target = "xyz" }, ErrEnvelopeMalformed},
+		"item no method":      {func(e *Envelope) { e.Items[0].Method = "" }, ErrEnvelopeMalformed},
 	}
 
 	for name, tc := range tests {

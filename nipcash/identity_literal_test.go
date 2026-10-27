@@ -9,9 +9,9 @@ func TestMintCashParams_Request_IdentityTypeLiterals(t *testing.T) {
 	for want, r := range map[string]Recipient{
 		"pubkey":         Pubkey(randomKeyHex(t)),
 		"connection_key": attestedKey(t, "discord", "u", randomKeyHex(t)),
-		"cash":           Anyone(),
+		"cash":           mustCashTarget(t),
 	} {
-		req, err := MintCashParams{Recipients: []Allocation{Send(r, 1000)}}.Request()
+		req, err := MintCashParams{RequestID: testRID, Recipients: []Allocation{Send(r, 1000)}}.Request()
 		if err != nil {
 			t.Fatalf("%s: %v", want, err)
 		}

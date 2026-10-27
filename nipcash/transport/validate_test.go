@@ -293,6 +293,7 @@ func TestProoflessItem_WithoutASecretIsStillRejected(t *testing.T) {
 
 	env := coherentEnvelope(t, hub, 1)
 	env.Items[0].Proof = nil // no proof, and params carry no cash_secret
+	env.Items[0].Method = "cash_redeem"
 
 	if _, err := env.Encode(DefaultLimits()); !errors.Is(err, ErrEnvelopeMalformed) {
 		t.Fatalf("Encode() error = %v, want ErrEnvelopeMalformed", err)

@@ -7,7 +7,7 @@ import (
 
 func TestCashConsolidateParams_Request_TooFewSources(t *testing.T) {
 	privKeyHex, _ := generateTestKeypair(t)
-	p := CashConsolidateParams{
+	p := CashConsolidateParams{RequestID: testRID,
 		Sources: []Source{From(randomKeyHex(t), 1000, BySigning(privKeyHex))},
 		To:      Pubkey("merged"),
 	}
@@ -17,7 +17,7 @@ func TestCashConsolidateParams_Request_TooFewSources(t *testing.T) {
 }
 
 func TestCashConsolidateParams_Request_CashSourceRejected(t *testing.T) {
-	p := CashConsolidateParams{
+	p := CashConsolidateParams{RequestID: testRID,
 		Sources: []Source{
 			From(randomKeyHex(t), 1000, BySecret("s1")),
 			From(randomKeyHex(t), 1000, BySecret("s2")),
@@ -31,7 +31,7 @@ func TestCashConsolidateParams_Request_CashSourceRejected(t *testing.T) {
 
 func TestCashConsolidateParams_Request_NilTargetRejected(t *testing.T) {
 	privKeyHex, _ := generateTestKeypair(t)
-	p := CashConsolidateParams{
+	p := CashConsolidateParams{RequestID: testRID,
 		Sources: []Source{
 			From(randomKeyHex(t), 1000, BySigning(privKeyHex)),
 			From(randomKeyHex(t), 1000, BySigning(privKeyHex)),
@@ -45,8 +45,8 @@ func TestCashConsolidateParams_Request_NilTargetRejected(t *testing.T) {
 
 func TestCashConsolidateParams_Request_CashTargetAccepted(t *testing.T) {
 	privKeyHex, _ := generateTestKeypair(t)
-	bt := NewCashTarget()
-	p := CashConsolidateParams{
+	bt := mustCashTarget(t)
+	p := CashConsolidateParams{RequestID: testRID,
 		Sources: []Source{
 			From(randomKeyHex(t), 1000, BySigning(privKeyHex)),
 			From(randomKeyHex(t), 1000, BySigning(privKeyHex)),
@@ -64,7 +64,7 @@ func TestCashConsolidateParams_Request_CashTargetAccepted(t *testing.T) {
 
 func TestCashConsolidateParams_Request_ConnectionKeyTargetAccepted(t *testing.T) {
 	privKeyHex, _ := generateTestKeypair(t)
-	p := CashConsolidateParams{
+	p := CashConsolidateParams{RequestID: testRID,
 		Sources: []Source{
 			From(randomKeyHex(t), 1000, BySigning(privKeyHex)),
 			From(randomKeyHex(t), 1000, BySigning(privKeyHex)),
@@ -86,7 +86,7 @@ func TestCashConsolidateParams_Request_ConnectionKeyTargetAccepted(t *testing.T)
 func TestCashConsolidateParams_Request_HappyPath(t *testing.T) {
 	privKeyHex, pubKeyHex := generateTestKeypair(t)
 	walletA, walletB := randomKeyHex(t), randomKeyHex(t)
-	p := CashConsolidateParams{
+	p := CashConsolidateParams{RequestID: testRID,
 		Sources: []Source{
 			From(walletA, 10_000, BySigning(privKeyHex)),
 			From(walletB, 15_000, BySigning(privKeyHex)),
@@ -128,14 +128,14 @@ func TestCashConsolidateParams_ParseResult_SelfTarget_Decrypts(t *testing.T) {
 	// with.
 	ciphertext := encryptForTest(t, newWalletPrivHex, callerPubHex, "lokicash1thetoken")
 
-	p := CashConsolidateParams{
+	p := CashConsolidateParams{RequestID: testRID,
 		Sources: []Source{From(randomKeyHex(t), 1000, BySigning(callerPrivHex))},
 		To:      Pubkey(callerPubHex),
 	}
 	raw, err := json.Marshal(cashConsolidateResponseWire{
 		AmountMillis:    1000,
 		NewWalletPubkey: newWalletPubHex,
-		NewWalletToken:  ciphertext,
+		NewWalletToken:  TokenOrTombstone{Token: ciphertext},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -159,14 +159,14 @@ func TestCashConsolidateParams_ParseResult_ThirdPartyPubkeyTarget_Decrypts(t *te
 	// hands Carol a plain token out of band.
 	ciphertext := encryptForTest(t, newWalletPrivHex, callerPubHex, "lokicash1forcarol")
 
-	p := CashConsolidateParams{
+	p := CashConsolidateParams{RequestID: testRID,
 		Sources: []Source{From(randomKeyHex(t), 1000, BySigning(callerPrivHex))},
 		To:      Pubkey(carolPubHex),
 	}
 	raw, err := json.Marshal(cashConsolidateResponseWire{
 		AmountMillis:    1000,
 		NewWalletPubkey: newWalletPubHex,
-		NewWalletToken:  ciphertext,
+		NewWalletToken:  TokenOrTombstone{Token: ciphertext},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -190,14 +190,14 @@ func TestCashConsolidateParams_ParseResult_UndecryptableDeliveryIsAnError(t *tes
 	// error to say so.
 	ciphertext := encryptForTest(t, newWalletPrivHex, carolPubHex, "lokicash1forcarol")
 
-	p := CashConsolidateParams{
+	p := CashConsolidateParams{RequestID: testRID,
 		Sources: []Source{From(randomKeyHex(t), 1000, BySigning(callerPrivHex))},
 		To:      Pubkey(carolPubHex),
 	}
 	raw, err := json.Marshal(cashConsolidateResponseWire{
 		AmountMillis:    1000,
 		NewWalletPubkey: newWalletPubHex,
-		NewWalletToken:  ciphertext,
+		NewWalletToken:  TokenOrTombstone{Token: ciphertext},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -210,16 +210,16 @@ func TestCashConsolidateParams_ParseResult_UndecryptableDeliveryIsAnError(t *tes
 
 func TestCashConsolidateParams_ParseResult_CashTarget_PassesThroughPlaintext(t *testing.T) {
 	callerPrivHex, _ := generateTestKeypair(t)
-	bt := NewCashTarget()
+	bt := mustCashTarget(t)
 
-	p := CashConsolidateParams{
+	p := CashConsolidateParams{RequestID: testRID,
 		Sources: []Source{From(randomKeyHex(t), 1000, BySigning(callerPrivHex))},
 		To:      bt,
 	}
 	raw, err := json.Marshal(cashConsolidateResponseWire{
 		AmountMillis:    1000,
 		NewWalletPubkey: randomKeyHex(t),
-		NewWalletToken:  "lokicash1plaintext",
+		NewWalletToken:  TokenOrTombstone{Token: "lokicash1plaintext"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -236,14 +236,14 @@ func TestCashConsolidateParams_ParseResult_CashTarget_PassesThroughPlaintext(t *
 func TestCashConsolidateParams_ParseResult_ConnectionKeyTarget_PassesThroughPlaintext(t *testing.T) {
 	callerPrivHex, _ := generateTestKeypair(t)
 
-	p := CashConsolidateParams{
+	p := CashConsolidateParams{RequestID: testRID,
 		Sources: []Source{From(randomKeyHex(t), 1000, BySigning(callerPrivHex))},
 		To:      attestedKey(t, "discord", "someone", "iapub"),
 	}
 	raw, err := json.Marshal(cashConsolidateResponseWire{
 		AmountMillis:    1000,
 		NewWalletPubkey: randomKeyHex(t),
-		NewWalletToken:  "lokicash1plaintext",
+		NewWalletToken:  TokenOrTombstone{Token: "lokicash1plaintext"},
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -8,6 +8,14 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `request_id` to `mint_cash`, `cash_transfer` and `cash_consolidate`
+  (`RequestID`, filled with a fresh id by the SDK until the journal lands),
+  `zap_target` and `remainder_commitment` to `cash_transfer`, a zap bill's
+  `issued_at` and `expires_at`, `cash_lookup` (`CashLookupParams`,
+  `ParseCashLookupResult`), tombstones (`Tombstone`, `ParseTombstone`,
+  `*BillGone`, `TombstoneReason`), `RedeemFee`, `RequiredInvoiceAmount`,
+  cash secrets and commitments, `OrderedResult`, the `withdraw` terms of
+  `cash_status`, and `OwnRow` and `Claimable`.
 - Adds the Hub-side serving helpers of the private transport:
   `transport.ClassifyEnvelope` (E1 to E6 in order), `ItemShapeOK`,
   `BearerShapeOK`, `VerifyBillProofAny`, `WrapResponseChunk`,
@@ -315,6 +323,17 @@ privacy and performance fixes.
 
 ### Changed
 
+- Changes `cash_status` to the final wire: no `cash_secret` for a cash-mode
+  bill, scope `mine` by default, a destroyed bill answered with a
+  `{"status":"spent","reason":…}` tombstone for every bill method, and
+  `RecipientStatus.ExpiresAt` an `Expiry` (absent, null or 0 is never).
+- Changes `client.CheckClaim` to read the caller's own row from its
+  credential, matching a `connection_key` row by its value and its IA, and to
+  report a spent or withdrawn slice as not claimable rather than as not found.
+- Changes `NewCashTarget` and `RecipientToken` to return an error, the
+  `cash_consolidate` item to target `Sources[0]` and be signed by its
+  credential, and a cash-mode mint recipient to a caller-generated
+  `*CashTarget` commitment.
 - Changes the private transport to the final serving rules: no `v` on
   envelopes or replies; `cash_lookup`, `cash_order` and the withdrawal methods
   servable; `Decode` keeps proofless, secretless and repeated items for the
@@ -476,6 +495,11 @@ privacy and performance fixes.
 
 ### Removed
 
+- Removes `MintCashParams.IdempotencyKey`, `nipcash.Anyone()`,
+  `RecipientResult.CashSecret`, `CashStatusResult.Error`/`IsSpent`,
+  `CashStatusParams.AttestationEvent`, and `nipcash.MatchClaim`,
+  `MatchClaimAuto`, `NoLocalIdentity` and `ErrSpent` (use `OwnRow`,
+  `Claimable` and `*BillGone`).
 - Removes `nipcash.MintPayload` and the `lokicash-mint:v1` payload: a token
   signed over it carries no valid provenance.
   ([#184](https://github.com/ohstr/nmilat/pull/184))

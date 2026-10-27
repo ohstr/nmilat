@@ -165,9 +165,9 @@ func TestNewIdentityHash_Deterministic(t *testing.T) {
 // from the request's own new_identity fields, so any drift here (e.g. a
 // stale "bearer:" prefix) fails every cash-mode transfer's proof check.
 func TestNewIdentityHash_CashTargetPreimage(t *testing.T) {
-	ct := NewCashTarget()
+	ct := mustCashTarget(t)
 	sum := sha256.Sum256([]byte("cash:" + ct.identityValue() + ":"))
 	if got, want := newIdentityHash(ct), hex.EncodeToString(sum[:]); got != want {
-		t.Fatalf("newIdentityHash(NewCashTarget()) = %s, want sha256(\"cash:<commit>:\") = %s", got, want)
+		t.Fatalf("newIdentityHash(mustCashTarget(t)) = %s, want sha256(\"cash:<commit>:\") = %s", got, want)
 	}
 }

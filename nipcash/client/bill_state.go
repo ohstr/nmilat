@@ -72,7 +72,7 @@ func classify(result *nipcash.CashStatusResult, err error) (BillState, *nipcash.
 	if result == nil {
 		return BillIndeterminate, nil, errors.New("cash_status returned no result")
 	}
-	if result.IsSpent() {
+	if result.Tombstone != nil {
 		return BillSpent, result, nil
 	}
 	return BillAvailable, result, nil

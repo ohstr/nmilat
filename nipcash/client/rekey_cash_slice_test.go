@@ -16,7 +16,7 @@ func TestRekeyCashSlice_NoConsolidateWith_OneTransferOnly(t *testing.T) {
 	}
 	result, err := rekeyCashSlice(context.Background(), fake, RekeyCashSliceParams{
 		CashSlice: nipcash.Source{WalletPubkey: "wallet1", Amount: 5000, Credential: nipcash.BySecret("old-secret")},
-		NewTarget: nipcash.NewCashTarget(),
+		NewTarget: mustCashTarget(t),
 	})
 	if err != nil {
 		t.Fatalf("rekeyCashSlice: %v", err)
@@ -50,7 +50,7 @@ func TestRekeyCashSlice_ConsolidateWith_TransfersThenConsolidates(t *testing.T) 
 		InterimIdentity:   nipcash.Pubkey("myPubHex"),
 		InterimCredential: nipcash.BySigning(privKeyHex),
 		ConsolidateWith:   []nipcash.Source{{WalletPubkey: "wallet2", Amount: 3000, Credential: nipcash.BySigning(privKeyHex)}},
-		NewTarget:         nipcash.NewCashTarget(),
+		NewTarget:         mustCashTarget(t),
 	})
 	if err != nil {
 		t.Fatalf("rekeyCashSlice: %v", err)
@@ -86,9 +86,9 @@ func TestRekeyCashSlice_BadInterimIdentity_RejectedBeforeAnyWireCall(t *testing.
 	}
 	_, err := rekeyCashSlice(context.Background(), fake, RekeyCashSliceParams{
 		CashSlice:       nipcash.Source{WalletPubkey: "wallet1", Amount: 5000, Credential: nipcash.BySecret("old-secret")},
-		InterimIdentity: nipcash.NewCashTarget(), // invalid: not a pubkey target
+		InterimIdentity: mustCashTarget(t), // invalid: not a pubkey target
 		ConsolidateWith: []nipcash.Source{{WalletPubkey: "wallet2", Amount: 3000}},
-		NewTarget:       nipcash.NewCashTarget(),
+		NewTarget:       mustCashTarget(t),
 	})
 	if !errors.Is(err, ErrInterimIdentityNotPubkey) {
 		t.Fatalf("got %v, want ErrInterimIdentityNotPubkey", err)
@@ -114,7 +114,7 @@ func TestRekeyCashSlice_InterimTransferLandsButConsolidateFails_PartialProgress(
 		InterimIdentity:   nipcash.Pubkey("myPubHex"),
 		InterimCredential: nipcash.BySigning(privKeyHex),
 		ConsolidateWith:   []nipcash.Source{{WalletPubkey: "wallet2", Amount: 3000}},
-		NewTarget:         nipcash.NewCashTarget(),
+		NewTarget:         mustCashTarget(t),
 	})
 	var partial *PartialProgressError
 	if !errors.As(err, &partial) {

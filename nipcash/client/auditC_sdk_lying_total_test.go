@@ -325,7 +325,7 @@ func TestAuditC_LyingTotal_SingleItemDiscardsARealResult(t *testing.T) {
 // because that is what a caller is told to use to RECOVER from an omission.
 func TestAuditC_LyingTotal_StatusAlsoDiscarded(t *testing.T) {
 	body, err := json.Marshal(nipcash.CashStatusResult{
-		Recipients: []nipcash.RecipientStatus{{AmountMillis: 4242}},
+		Recipients: []nipcash.RecipientStatus{{IdentityType: "pubkey", IdentityValue: strings.Repeat("ab", 32), AmountMillis: 4242}},
 	})
 	if err != nil {
 		t.Fatal(err)

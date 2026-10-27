@@ -1,89 +1,90 @@
 package nipcash
 
-import "errors"
+import (
+	"errors"
+	"fmt"
 
-// NoLocalIdentity documents an absent identity at CheckClaim/MatchClaim
-// call sites — same pattern as the stdlib's http.NoBody: the underlying
-// type is still a plain string ("" can never be a valid hex pubkey, so
-// it's already an unambiguous sentinel on its own, the same convention
-// cashRecipient.identityValue() already uses for "not applicable"),
-// this just gives call sites a name instead of an unexplained "".
-const NoLocalIdentity = ""
+	"github.com/ohstr/nmilat/utils"
+)
 
-// ErrClaimNotFound is returned by CheckClaim when tok has no matching,
-// unclaimed recipient on the Cash Hub it's checked against.
-var ErrClaimNotFound = errors.New("nipcash: no matching, unclaimed recipient on this Cash Hub")
+var (
+	// ErrClaimNotFound is a bill that has no row for the caller: the Hub answered
+	// NOT_FOUND, or a scope-all roster holds none of the caller's rows.
+	ErrClaimNotFound = errors.New("nipcash: this bill has no slice for the caller")
+	// ErrMineWidened is a mine answer that is not exactly the caller's one row: a
+	// Hub MUST NOT widen it.
+	ErrMineWidened = errors.New("nipcash: a scope-mine answer is not exactly the caller's row")
+)
 
-// ErrSpent is returned by CheckClaim when the Hub answers with a tombstone: the
-// bill existed, was spent, and is gone (NIP-CASH §Answering About a Destroyed
-// Bill). Distinct from ErrClaimNotFound, which says the token does not name the
-// caller. Only an explicit tombstone produces it, never a timeout or an omission.
-var ErrSpent = errors.New("nipcash: this bill has been spent")
+// OwnRow finds the caller's row, taking the identity from the credential, never
+// from the caller's word: a signing credential's pubkey matches a pubkey row; a
+// connection_key credential matches its key and its IA; a cash credential
+// matches the cash row its secret commits to. With scope mine (or empty) the
+// answer must be exactly that row (ErrMineWidened otherwise); with all, the
+// matching row, else ErrClaimNotFound.
+func OwnRow(rows []RecipientStatus, cred Credential, scope string) (RecipientStatus, error) {
+	match, err := rowMatcher(cred)
+	if err != nil {
+		return RecipientStatus{}, err
+	}
+	if scope == "" || scope == ScopeMine {
+		if len(rows) != 1 || !match(rows[0]) {
+			return RecipientStatus{}, fmt.Errorf("%w: %d rows", ErrMineWidened, len(rows))
+		}
+		return rows[0], nil
+	}
+	for _, r := range rows {
+		if match(r) {
+			return r, nil
+		}
+	}
+	return RecipientStatus{}, ErrClaimNotFound
+}
 
-// CheckClaimResult is everything a caller needs to decide whether/how to
-// act on a cash bill, resolved by actually asking its Cash Hub — no
-// local storage concept; that's entirely the caller's own.
+func rowMatcher(cred Credential) (func(RecipientStatus) bool, error) {
+	switch c := cred.(type) {
+	case signingCredential:
+		pub, err := utils.GetPublicKey(c.privKeyHex)
+		if err != nil {
+			return nil, err
+		}
+		return func(r RecipientStatus) bool { return r.IdentityType == identityTypePubkey && r.IdentityValue == pub }, nil
+	case connectionKeyCredential:
+		key, ia := string(c.attestation.ConnectionKey), c.attestation.PubKey
+		return func(r RecipientStatus) bool {
+			return r.IdentityType == identityTypeConnectionKey && r.IdentityValue == key && r.IAPubkey == ia
+		}, nil
+	case secretCredential:
+		commit, err := CashCommitment(c.secret)
+		if err != nil {
+			return nil, err
+		}
+		return func(r RecipientStatus) bool {
+			return r.IdentityType == identityTypeCash && CommitmentsEqual(r.IdentityValue, commit)
+		}, nil
+	}
+	return nil, errors.New("nipcash: no identity to match a row by")
+}
+
+// Claimable reports whether a row can still be spent at now, and if not why:
+// claimed, withdrawn (a cash_withdraw ended it) or expired.
+func Claimable(row RecipientStatus, now int64) (ok bool, reason string) {
+	switch {
+	case row.Claimed:
+		return false, "claimed"
+	case row.WithdrawRequestID != "":
+		return false, "withdrawn"
+	case !SliceLive(now, row.ExpiresAt.ptr()):
+		return false, "expired"
+	}
+	return true, ""
+}
+
+// CheckClaimResult is the caller's own row, whether it can be spent, and the
+// bill's verified minter (x-only, empty without a verified provenance).
 type CheckClaimResult struct {
-	IsCash       bool
-	AmountMillis uint64  // authoritative, from cash_status
-	MinterPubkey *string // non-nil only if a verified mint-provenance signature is present
-	// RedeemFeeMillis/NetRedeemableMillis/ExpiresAt mirror the matched
-	// RecipientStatus row's own fields — surfaced here so a caller
-	// building a pre-spend preview doesn't need a second lookup.
-	RedeemFeeMillis     uint64
-	NetRedeemableMillis uint64
-	ExpiresAt           *int64
-}
-
-// MatchClaim is the pure matching rule CheckClaim uses — kept as its own
-// function (not inlined into the network-calling method) so it's
-// unit-testable with a hand-built []RecipientStatus, no dial needed,
-// mirroring VerifyProvenance's own split (protocol logic lives in
-// nipcash, not nipcash/client). Only ever considers an unclaimed
-// recipient a match: cash-mode matches any unclaimed cash-mode entry,
-// non-cash-mode matches only an unclaimed entry whose IdentityValue equals
-// asPubkeyHex exactly. asPubkeyHex == NoLocalIdentity never matches a
-// non-cash-mode entry (no local identity to compare against).
-//
-// connection_key matching isn't implemented — a caller checking a
-// connection_key-bound token gets no match today, same as before this
-// existed.
-func MatchClaim(recipients []RecipientStatus, isCash bool, asPubkeyHex string) (amountMillis uint64, ok bool) {
-	for _, r := range recipients {
-		if r.Claimed {
-			continue
-		}
-		matched := (isCash && r.IdentityType == identityTypeCash) ||
-			(!isCash && r.IdentityType == identityTypePubkey && asPubkeyHex != NoLocalIdentity && r.IdentityValue == asPubkeyHex)
-		if matched {
-			return r.AmountMillis, true
-		}
-	}
-	return 0, false
-}
-
-// MatchClaimAuto is MatchClaim's caller-friendly wrapper: a caller
-// checking a bill doesn't reliably know in advance whether it's
-// cash-mode or identity-bound — a token's identity_required TLV is
-// only "a best-effort hint... NOT a live guarantee" (§Redemption
-// Metadata), since it can go stale after the wallet it describes is
-// reassigned. Tries a pubkey match (if asPubkeyHex is given) then a
-// cash-mode match, live. Safe, not ambiguous: a wallet is always all-cash-mode
-// or all identity-bound, never mixed, so at most one attempt can match.
-//
-// Returns the full matched RecipientStatus row, not just its amount, so
-// a caller can also read net_redeemable/redeem_fee/expires_at off it
-// without a second lookup.
-func MatchClaimAuto(recipients []RecipientStatus, asPubkeyHex string) (recipient RecipientStatus, ok bool) {
-	for _, r := range recipients {
-		if r.Claimed {
-			continue
-		}
-		matched := r.IsCash() ||
-			(r.IdentityType == identityTypePubkey && asPubkeyHex != NoLocalIdentity && r.IdentityValue == asPubkeyHex)
-		if matched {
-			return r, true
-		}
-	}
-	return RecipientStatus{}, false
+	Row         RecipientStatus
+	Claimable   bool
+	Reason      string
+	MinterXOnly string
 }

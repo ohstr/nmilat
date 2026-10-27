@@ -654,15 +654,14 @@ func checkItem(i int, item Item, limits Limits) (string, error) {
 	if item.Method == "" {
 		return "", fmt.Errorf("%w: item %q has no method", ErrEnvelopeMalformed, item.ID)
 	}
-	// A proof is required EXCEPT for a cash-mode item, which has no signing key
-	// to make one with — its secret, carried in params, is the whole
-	// authorization (NIP-CASH §Bearer Items). Note this check is a client-side
-	// coherence aid only: a hub decides what a bill actually is from its own
-	// records, never from what the item claims, so omitting a proof cannot be
-	// used to escape authorization on an identity-bound bill.
-	if !item.HasProof() && !item.IsBearer() {
-		return "", fmt.Errorf("%w: item %q has no proof and carries no cash secret",
-			ErrEnvelopeMalformed, item.ID)
+	// The I8 shapes a Hub refuses (NIP-CASH §Serving an Envelope): never both a
+	// proof and a cash_secret; a spend carries one of them; cash_status and
+	// cash_withdraw_quote carry no secret, and with neither are served on the
+	// bill proof alone for a cash-mode slice. Client-side coherence only: a Hub
+	// decides from its own records.
+	if !BearerShapeOK(item.Method, item.HasProof(), item.IsBearer()) {
+		return "", fmt.Errorf("%w: item %q has a proof and cash_secret combination %s refuses",
+			ErrEnvelopeMalformed, item.ID, item.Method)
 	}
 	// A BILL proof is required unconditionally — cash-mode included. The slice
 	// proof above says which slice; this says the sender holds the bill at all,

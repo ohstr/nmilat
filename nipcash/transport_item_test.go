@@ -205,34 +205,28 @@ func TestStatusItem_ScopeTravelsInParams(t *testing.T) {
 	}
 }
 
-// TestStatusItem_CashModeCarriesItsSecret is the regression test for a bug that made
-// cash-mode bills unreadable over the private transport entirely.
-//
-// buildItem returns early for a cash-mode credential, on the explicit assumption
-// that the secret is already inside wireParams because "every params type puts it
-// there via buildProof". cash_status had no such field and no such path, so its item
-// came out with NEITHER a proof NOR a secret — malformed, refused by the codec, and
-// therefore never even sent. The failure surfaced only against a live hub.
-func TestStatusItem_CashModeCarriesItsSecret(t *testing.T) {
+// T10-19: a cash-mode cash_status item carries no proof and no cash_secret
+// (NIP-CASH §Scoping the Roster): its bill proof alone names the row, and the
+// codec accepts it.
+func TestStatusItem_CashModeCarriesNoSecret(t *testing.T) {
 	_, pub := itemTestKeypair(t)
 	b := ItemBinding{HubXOnly: pub, Nonce: strings.Repeat("11", 32), NotAfter: time.Now().Add(time.Minute).Unix()}
-
-	item, err := StatusItem("s1", pub, connSecretFor(pub), CashStatusParams{Scope: ScopeMine}, BySecret("the-secret"), b)
+	ct := mustCashTarget(t)
+	item, err := StatusItem("s1", pub, connSecretFor(pub), CashStatusParams{}, BySecret(ct.Secret()), b)
 	if err != nil {
 		t.Fatalf("StatusItem(cash-mode): %v", err)
 	}
-	if len(item.Proof) != 0 {
-		t.Error("a cash-mode item must carry no proof — there is no key to sign with")
+	if len(item.Proof) != 0 || item.IsBearer() || string(item.Params) != "{}" || !item.HasBillProof() {
+		t.Fatalf("cash-mode status item: proof %d params %s", len(item.Proof), item.Params)
 	}
-	if !item.IsBearer() {
-		t.Fatalf("a cash-mode item must be recognisable as a bearer item, or the codec refuses it as malformed: params=%s", item.Params)
+	env := transport.Envelope{Nonce: b.Nonce, ReplyTo: strings.Repeat("22", 32), NotAfter: b.NotAfter, Items: []transport.Item{item}}
+	if _, err := env.Encode(transport.DefaultLimits()); err != nil {
+		t.Fatalf("the codec refuses it: %v", err)
 	}
-	if !strings.Contains(string(item.Params), "the-secret") {
-		t.Errorf("the cash secret never reached the params: %s", item.Params)
-	}
-	// The scope must survive alongside it.
-	if !strings.Contains(string(item.Params), `"scope":"mine"`) {
-		t.Errorf("the scope was lost when the request type changed: %s", item.Params)
+	priv, _ := itemTestKeypair(t)
+	signed, _ := StatusItem("s2", pub, connSecretFor(pub), CashStatusParams{Scope: ScopeAll}, BySigning(priv), b)
+	if string(signed.Params) != `{"scope":"all"}` || len(signed.Proof) == 0 {
+		t.Errorf("pubkey status item: %s", signed.Params)
 	}
 }
 

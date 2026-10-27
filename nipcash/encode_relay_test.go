@@ -58,3 +58,16 @@ func withTestProvenance(t Token) Token {
 	}
 	return t
 }
+
+// mustCashTarget is a fresh cash target, failing the test on a CSPRNG error.
+func mustCashTarget(t *testing.T) *CashTarget {
+	t.Helper()
+	c, err := NewCashTarget()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// testRID is a well-formed request_id for building requests in tests.
+const testRID = "00112233445566778899aabbccddeeff"

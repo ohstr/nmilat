@@ -13,7 +13,7 @@ import (
 
 func TestCashTransferParams_Request_FullTransfer(t *testing.T) {
 	privKeyHex, _ := generateTestKeypair(t)
-	p := CashTransferParams{
+	p := CashTransferParams{RequestID: testRID,
 		Credential:    BySigning(privKeyHex),
 		To:            Pubkey("recipienthex"),
 		CurrentAmount: 15000,
@@ -51,7 +51,7 @@ func TestCashTransferParams_Request_FullTransfer(t *testing.T) {
 func TestCashTransferParams_Request_Split(t *testing.T) {
 	privKeyHex, _ := generateTestKeypair(t)
 	split := uint64(5000)
-	p := CashTransferParams{
+	p := CashTransferParams{RequestID: testRID,
 		Credential:    BySigning(privKeyHex),
 		To:            Pubkey("recipienthex"),
 		CurrentAmount: 15000,
@@ -68,7 +68,7 @@ func TestCashTransferParams_Request_Split(t *testing.T) {
 
 func TestCashTransferParams_ParseResult_InPlace(t *testing.T) {
 	privKeyHex, _ := generateTestKeypair(t)
-	p := CashTransferParams{Credential: BySigning(privKeyHex), To: Pubkey("aa"), CurrentAmount: 1000}
+	p := CashTransferParams{RequestID: testRID, Credential: BySigning(privKeyHex), To: Pubkey("aa"), CurrentAmount: 1000}
 	raw := []byte(`{"amount_millis":1000,"identity_type":"pubkey","identity_value":"aa"}`)
 	result, err := p.ParseResult(raw)
 	if err != nil {
@@ -88,11 +88,11 @@ func TestCashTransferParams_ParseResult_SpinOff_DecryptsToken(t *testing.T) {
 	// decryptFromPubkey (the caller side) must invert.
 	ciphertext := encryptForTest(t, newWalletPrivHex, callerPubHex, "lokicash1thetoken")
 
-	p := CashTransferParams{Credential: BySigning(callerPrivHex), To: Pubkey("bb"), CurrentAmount: 1000}
+	p := CashTransferParams{RequestID: testRID, Credential: BySigning(callerPrivHex), To: Pubkey("bb"), CurrentAmount: 1000}
 	raw, err := json.Marshal(cashTransferResponseWire{
 		AmountMillis:    1000,
 		NewWalletPubkey: newWalletPubHex,
-		NewWalletToken:  ciphertext,
+		NewWalletToken:  TokenOrTombstone{Token: ciphertext},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -108,7 +108,7 @@ func TestCashTransferParams_ParseResult_SpinOff_DecryptsToken(t *testing.T) {
 
 func TestCashTransferResult_RecipientToken_InPlaceFallsBackToOriginal(t *testing.T) {
 	result := &CashTransferResult{NewWalletToken: ""}
-	got := result.RecipientToken("lokicash1original")
+	got, _ := result.RecipientToken("lokicash1original")
 	if got != "lokicash1original" {
 		t.Fatalf("RecipientToken() = %q, want the original token (in-place reassignment)", got)
 	}
@@ -116,7 +116,7 @@ func TestCashTransferResult_RecipientToken_InPlaceFallsBackToOriginal(t *testing
 
 func TestCashTransferResult_RecipientToken_SpinOffUsesNewWalletToken(t *testing.T) {
 	result := &CashTransferResult{NewWalletToken: "lokicash1spunoff"}
-	got := result.RecipientToken("lokicash1original")
+	got, _ := result.RecipientToken("lokicash1original")
 	if got != "lokicash1spunoff" {
 		t.Fatalf("RecipientToken() = %q, want the spun-off NewWalletToken", got)
 	}
@@ -128,7 +128,7 @@ func TestCashTransferResult_RecipientToken_PartialSplitUsesNewWalletToken(t *tes
 	// RecipientToken's — this only ever answers "what does the recipient
 	// need."
 	result := &CashTransferResult{NewWalletToken: "lokicash1carvedoff", RemainderWalletToken: "lokicash1remainder"}
-	got := result.RecipientToken("lokicash1original")
+	got, _ := result.RecipientToken("lokicash1original")
 	if got != "lokicash1carvedoff" {
 		t.Fatalf("RecipientToken() = %q, want the carved-off NewWalletToken, not the caller's own remainder", got)
 	}

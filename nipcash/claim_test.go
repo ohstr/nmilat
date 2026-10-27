@@ -1,150 +1,69 @@
 package nipcash
 
-import "testing"
+import (
+	"errors"
+	"strings"
+	"testing"
+)
 
-func TestMatchClaim_CashUnclaimedMatches(t *testing.T) {
-	recipients := []RecipientStatus{
-		{IdentityType: identityTypeCash, AmountMillis: 5000, Claimed: false},
+// T10-61: OwnRow takes the identity from the credential.
+func TestT10_61_OwnRow(t *testing.T) {
+	privA, pubA := generateTestKeypair(t)
+	_, pubB := generateTestKeypair(t)
+	a := RecipientStatus{IdentityType: "pubkey", IdentityValue: pubA, AmountMillis: 1}
+	b := RecipientStatus{IdentityType: "pubkey", IdentityValue: pubB, AmountMillis: 2}
+	if r, err := OwnRow([]RecipientStatus{a, b}, BySigning(privA), ScopeAll); err != nil || r.IdentityValue != pubA {
+		t.Errorf("all: %+v %v", r, err)
 	}
-	amount, ok := MatchClaim(recipients, true, NoLocalIdentity)
-	if !ok || amount != 5000 {
-		t.Fatalf("MatchClaim() = (%d, %v), want (5000, true)", amount, ok)
+	if _, err := OwnRow([]RecipientStatus{b}, BySigning(privA), ScopeAll); !errors.Is(err, ErrClaimNotFound) {
+		t.Errorf("all without mine: %v", err)
+	}
+	for name, rows := range map[string][]RecipientStatus{"two rows": {a, b}, "another's": {b}, "none": nil} {
+		if _, err := OwnRow(rows, BySigning(privA), ScopeMine); !errors.Is(err, ErrMineWidened) {
+			t.Errorf("mine %s: %v", name, err)
+		}
+	}
+	// connection_key: key and IA both.
+	iaPriv, iaPub := generateTestKeypair(t)
+	userPriv, userPub := generateTestKeypair(t)
+	att := buildTestAttestation(t, iaPriv, userPub, testDiscordKey(t), 1)
+	cred := mustConnCred(t, userPriv, att)
+	key := string(att.ConnectionKey)
+	_, otherIA := generateTestKeypair(t)
+	rows := []RecipientStatus{
+		{IdentityType: "connection_key", IdentityValue: key, IAPubkey: otherIA},
+		{IdentityType: "connection_key", IdentityValue: key, IAPubkey: iaPub, AmountMillis: 7},
+	}
+	if r, err := OwnRow(rows, cred, ScopeAll); err != nil || r.AmountMillis != 7 {
+		t.Errorf("connection_key: %+v %v", r, err)
+	}
+	// cash: the row the secret commits to.
+	ct := mustCashTarget(t)
+	cash := RecipientStatus{IdentityType: "cash", IdentityValue: ct.Commitment(), AmountMillis: 9}
+	if r, err := OwnRow([]RecipientStatus{cash}, BySecret(ct.Secret()), ScopeMine); err != nil || r.AmountMillis != 9 {
+		t.Errorf("cash: %+v %v", r, err)
+	}
+	if _, err := OwnRow([]RecipientStatus{{IdentityType: "cash", IdentityValue: strings.Repeat("0", 64)}}, BySecret(ct.Secret()), ScopeMine); !errors.Is(err, ErrMineWidened) {
+		t.Errorf("another cash row: %v", err)
 	}
 }
 
-func TestMatchClaim_CashAlreadyClaimedDoesNotMatch(t *testing.T) {
-	// The exact regression independent review caught: an already-redeemed
-	// cash-mode recipient must not be reported as a live match just because
-	// its identity_type still says "cash".
-	recipients := []RecipientStatus{
-		{IdentityType: identityTypeCash, AmountMillis: 5000, Claimed: true},
+// T10-62.
+func TestT10_62_Claimable(t *testing.T) {
+	const now = int64(1720000000)
+	if ok, _ := Claimable(RecipientStatus{}, now); !ok {
+		t.Error("unclaimed live")
 	}
-	if _, ok := MatchClaim(recipients, true, NoLocalIdentity); ok {
-		t.Fatal("MatchClaim() matched an already-claimed cash-mode recipient")
+	if ok, why := Claimable(RecipientStatus{Claimed: true}, now); ok || why != "claimed" {
+		t.Error("claimed")
 	}
-}
-
-func TestMatchClaim_PubkeyExactMatchUnclaimed(t *testing.T) {
-	recipients := []RecipientStatus{
-		{IdentityType: identityTypePubkey, IdentityValue: "abc123", AmountMillis: 3000, Claimed: false},
+	if ok, why := Claimable(RecipientStatus{WithdrawRequestID: strings.Repeat("a", 32)}, now); ok || why != "withdrawn" {
+		t.Error("withdrawn")
 	}
-	amount, ok := MatchClaim(recipients, false, "abc123")
-	if !ok || amount != 3000 {
-		t.Fatalf("MatchClaim() = (%d, %v), want (3000, true)", amount, ok)
+	if ok, _ := Claimable(RecipientStatus{ExpiresAt: Expiry{At: now, Present: true}}, now); !ok {
+		t.Error("expires_at = now")
 	}
-}
-
-func TestMatchClaim_PubkeyAlreadyClaimedDoesNotMatch(t *testing.T) {
-	recipients := []RecipientStatus{
-		{IdentityType: identityTypePubkey, IdentityValue: "abc123", AmountMillis: 3000, Claimed: true},
-	}
-	if _, ok := MatchClaim(recipients, false, "abc123"); ok {
-		t.Fatal("MatchClaim() matched an already-claimed pubkey recipient")
-	}
-}
-
-func TestMatchClaim_NoLocalIdentityNeverMatchesPubkey(t *testing.T) {
-	recipients := []RecipientStatus{
-		{IdentityType: identityTypePubkey, IdentityValue: "abc123", AmountMillis: 3000, Claimed: false},
-	}
-	if _, ok := MatchClaim(recipients, false, NoLocalIdentity); ok {
-		t.Fatal("MatchClaim() matched a pubkey recipient with no local identity supplied")
-	}
-}
-
-func TestMatchClaim_WrongPubkeyDoesNotMatch(t *testing.T) {
-	recipients := []RecipientStatus{
-		{IdentityType: identityTypePubkey, IdentityValue: "abc123", AmountMillis: 3000, Claimed: false},
-	}
-	if _, ok := MatchClaim(recipients, false, "someone-else"); ok {
-		t.Fatal("MatchClaim() matched a pubkey recipient belonging to a different identity")
-	}
-}
-
-func TestMatchClaim_NoRecipientsNoMatch(t *testing.T) {
-	if _, ok := MatchClaim(nil, true, NoLocalIdentity); ok {
-		t.Fatal("MatchClaim() matched against an empty recipient list")
-	}
-}
-
-func TestMatchClaimAuto_CashWalletMatchesRegardlessOfSuppliedPubkey(t *testing.T) {
-	// A pubkey is supplied but the wallet is actually cash-mode —
-	// must still find the real cash-mode recipient.
-	recipients := []RecipientStatus{
-		{IdentityType: identityTypeCash, AmountMillis: 7000, Claimed: false},
-	}
-	recipient, ok := MatchClaimAuto(recipients, "some-caller-pubkey")
-	if !ok || !recipient.IsCash() || recipient.AmountMillis != 7000 {
-		t.Fatalf("MatchClaimAuto() = (%+v, %v), want (amount 7000, cash, true)", recipient, ok)
-	}
-}
-
-func TestMatchClaimAuto_PubkeyWalletMatchesWithoutNeedingACashHint(t *testing.T) {
-	recipients := []RecipientStatus{
-		{IdentityType: identityTypePubkey, IdentityValue: "abc123", AmountMillis: 4000, Claimed: false},
-	}
-	recipient, ok := MatchClaimAuto(recipients, "abc123")
-	if !ok || recipient.IsCash() || recipient.AmountMillis != 4000 {
-		t.Fatalf("MatchClaimAuto() = (%+v, %v), want (amount 4000, not cash, true)", recipient, ok)
-	}
-}
-
-func TestMatchClaimAuto_NoLocalIdentitySkipsPubkeyAttemptButStillFindsCash(t *testing.T) {
-	recipients := []RecipientStatus{
-		{IdentityType: identityTypeCash, AmountMillis: 2500, Claimed: false},
-	}
-	recipient, ok := MatchClaimAuto(recipients, NoLocalIdentity)
-	if !ok || !recipient.IsCash() || recipient.AmountMillis != 2500 {
-		t.Fatalf("MatchClaimAuto() = (%+v, %v), want (amount 2500, cash, true)", recipient, ok)
-	}
-}
-
-func TestMatchClaimAuto_WrongPubkeyAndNoCashRecipientNoMatch(t *testing.T) {
-	recipients := []RecipientStatus{
-		{IdentityType: identityTypePubkey, IdentityValue: "abc123", AmountMillis: 4000, Claimed: false},
-	}
-	if _, ok := MatchClaimAuto(recipients, "someone-else"); ok {
-		t.Fatal("MatchClaimAuto() matched a pubkey recipient belonging to a different identity")
-	}
-}
-
-func TestMatchClaimAuto_AlreadyClaimedRecipientNoMatch(t *testing.T) {
-	recipients := []RecipientStatus{
-		{IdentityType: identityTypeCash, AmountMillis: 5000, Claimed: true},
-	}
-	if _, ok := MatchClaimAuto(recipients, NoLocalIdentity); ok {
-		t.Fatal("MatchClaimAuto() matched an already-claimed recipient")
-	}
-}
-
-func TestMatchClaimAuto_NoRecipientsNoMatch(t *testing.T) {
-	if _, ok := MatchClaimAuto(nil, "abc123"); ok {
-		t.Fatal("MatchClaimAuto() matched against an empty recipient list")
-	}
-}
-
-// TestMatchClaimAuto_ReturnsFullRowNotJustAmount confirms fee/expiry
-// data rides along with the match, not just the amount.
-func TestMatchClaimAuto_ReturnsFullRowNotJustAmount(t *testing.T) {
-	expiresAt := int64(1234567890)
-	recipients := []RecipientStatus{
-		{
-			IdentityType:        identityTypePubkey,
-			IdentityValue:       "abc123",
-			AmountMillis:        4000,
-			RedeemFeeMillis:     50,
-			NetRedeemableMillis: 3950,
-			ExpiresAt:           &expiresAt,
-		},
-	}
-	recipient, ok := MatchClaimAuto(recipients, "abc123")
-	if !ok {
-		t.Fatal("MatchClaimAuto() unexpectedly found no match")
-	}
-	if recipient.RedeemFeeMillis != 50 || recipient.NetRedeemableMillis != 3950 {
-		t.Errorf("MatchClaimAuto() fee fields = (%d, %d), want (50, 3950)", recipient.RedeemFeeMillis, recipient.NetRedeemableMillis)
-	}
-	if recipient.ExpiresAt == nil || *recipient.ExpiresAt != expiresAt {
-		t.Errorf("MatchClaimAuto() ExpiresAt = %v, want %d", recipient.ExpiresAt, expiresAt)
+	if ok, why := Claimable(RecipientStatus{ExpiresAt: Expiry{At: now, Present: true}}, now+1); ok || why != "expired" {
+		t.Error("expired")
 	}
 }

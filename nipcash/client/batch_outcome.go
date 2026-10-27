@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/nipcash/transport"
 )
 
@@ -88,6 +89,9 @@ type ItemOutcome struct {
 	// could not decode. State is then OutcomeError with an INTERNAL Error, but the
 	// item DID run, so it is not safe to resend.
 	Undecodable bool
+	// Gone is the tombstone a value method was answered with: the bill is
+	// destroyed and nothing moved. State is then OutcomeError.
+	Gone *nipcash.Tombstone
 	// Envelope identifies which request envelope carried this item, counting from
 	// 0, for a batch the SDK split across several.
 	//

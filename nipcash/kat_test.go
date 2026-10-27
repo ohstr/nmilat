@@ -102,12 +102,3 @@ func TestDecode_IgnoresUnknownTLVTypes(t *testing.T) {
 		t.Fatalf("decoded %+v, want the known fields intact", got)
 	}
 }
-
-// NIP-CASH §Terminology: implementations MUST reject `bearer` as an unknown
-// identity type, so a roster row typed `bearer` is never matched as cash-mode.
-func TestMatchClaimAuto_BearerIsNotCash(t *testing.T) {
-	rows := []RecipientStatus{{IdentityType: "bearer", AmountMillis: 1000}}
-	if r, ok := MatchClaimAuto(rows, NoLocalIdentity); ok {
-		t.Fatalf("a bearer row matched: %+v", r)
-	}
-}

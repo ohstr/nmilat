@@ -114,7 +114,7 @@ func TestBatchMethods_RejectAZeroBillByName(t *testing.T) {
 			return err
 		}},
 		{"ConsolidateMany", func() error {
-			_, err := s.ConsolidateMany(ctx, []BatchConsolidate{{ID: "x", Credential: cred}})
+			_, err := s.ConsolidateMany(ctx, []BatchConsolidate{{ID: "x"}})
 			return err
 		}},
 	} {

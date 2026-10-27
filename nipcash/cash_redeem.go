@@ -1,7 +1,10 @@
 package nipcash
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/ohstr/nmilat/nip57"
 )
@@ -72,4 +75,27 @@ type CashRedeemResult struct {
 	// same-node redemption) — never the real Lightning routing cost, which
 	// is never charged to the recipient (NIP-CASH §The Redeem Fee).
 	FeesPaid uint64 `json:"fees_paid"`
+}
+
+// ParseCashRedeemResult reads a cash_redeem answer: a tombstone is *BillGone;
+// otherwise a 64 lowercase hex preimage and an unsigned integer fees_paid.
+func ParseCashRedeemResult(raw json.RawMessage) (*CashRedeemResult, error) {
+	if err := goneIf(MethodCashRedeem, raw); err != nil {
+		return nil, err
+	}
+	var w struct {
+		Preimage string          `json:"preimage"`
+		FeesPaid json.RawMessage `json:"fees_paid"`
+	}
+	if err := json.Unmarshal(raw, &w); err != nil {
+		return nil, fmt.Errorf("nipcash: cash_redeem result: %w", err)
+	}
+	if !isLowerHex64(w.Preimage) {
+		return nil, errors.New("nipcash: cash_redeem preimage is not 64 lowercase hex")
+	}
+	fees, err := strconv.ParseUint(string(w.FeesPaid), 10, 64)
+	if err != nil {
+		return nil, errors.New("nipcash: cash_redeem fees_paid is not an unsigned integer")
+	}
+	return &CashRedeemResult{Preimage: w.Preimage, FeesPaid: fees}, nil
 }

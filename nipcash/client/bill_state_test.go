@@ -54,7 +54,7 @@ func TestClassify_Roster(t *testing.T) {
 // A tombstone is definitive, and carries the deadline through.
 func TestClassify_Tombstone(t *testing.T) {
 	until := int64(1758800000)
-	result := &nipcash.CashStatusResult{Error: nipcash.ErrorSpent, RetainedUntil: &until}
+	result := &nipcash.CashStatusResult{Tombstone: &nipcash.Tombstone{Status: nipcash.StatusSpent, RetainedUntil: &until}}
 
 	state, got, err := classify(result, nil)
 	if err != nil {
@@ -63,7 +63,7 @@ func TestClassify_Tombstone(t *testing.T) {
 	if state != BillSpent {
 		t.Fatalf("state = %v, want BillSpent", state)
 	}
-	if got == nil || got.RetainedUntil == nil || *got.RetainedUntil != until {
+	if got == nil || got.Tombstone == nil || got.Tombstone.RetainedUntil == nil || *got.Tombstone.RetainedUntil != until {
 		t.Fatal("retained_until must survive so a caller can show when the Hub will stop answering")
 	}
 }
@@ -99,7 +99,7 @@ func TestClassify_SilenceIsNeverSpent(t *testing.T) {
 // the same reason: a half-answer is not a statement that the bill is gone.
 func TestClassify_ErrorWinsOverResult(t *testing.T) {
 	until := int64(1758800000)
-	result := &nipcash.CashStatusResult{Error: nipcash.ErrorSpent, RetainedUntil: &until}
+	result := &nipcash.CashStatusResult{Tombstone: &nipcash.Tombstone{Status: nipcash.StatusSpent, RetainedUntil: &until}}
 
 	state, got, err := classify(result, context.DeadlineExceeded)
 	if state != BillIndeterminate {

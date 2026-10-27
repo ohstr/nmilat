@@ -6,7 +6,7 @@ import (
 )
 
 func TestMintCashParams_Request_HappyPath(t *testing.T) {
-	p := MintCashParams{
+	p := MintCashParams{RequestID: testRID,
 		Recipients: []Allocation{
 			Send(Pubkey("aa"), 10_000_000),
 			Send(attestedKey(t, "discord", "some.user", "iapub"), 5_000_000),
@@ -32,7 +32,7 @@ func TestMintCashParams_Request_HappyPath(t *testing.T) {
 }
 
 func TestMintCashParams_Request_ZeroExpiry(t *testing.T) {
-	p := MintCashParams{Recipients: []Allocation{Send(Pubkey("aa"), 1000)}}
+	p := MintCashParams{RequestID: testRID, Recipients: []Allocation{Send(Pubkey("aa"), 1000)}}
 	req, err := p.Request()
 	if err != nil {
 		t.Fatalf("Request: %v", err)
@@ -43,7 +43,7 @@ func TestMintCashParams_Request_ZeroExpiry(t *testing.T) {
 }
 
 func TestMintCashParams_Request_SingleCashAllowed(t *testing.T) {
-	p := MintCashParams{Recipients: []Allocation{Send(Anyone(), 3000)}}
+	p := MintCashParams{RequestID: testRID, Recipients: []Allocation{Send(mustCashTarget(t), 3000)}}
 	req, err := p.Request()
 	if err != nil {
 		t.Fatalf("Request: %v", err)
@@ -54,8 +54,8 @@ func TestMintCashParams_Request_SingleCashAllowed(t *testing.T) {
 }
 
 func TestMintCashParams_Request_MixedCashRejected(t *testing.T) {
-	p := MintCashParams{Recipients: []Allocation{
-		Send(Anyone(), 1000),
+	p := MintCashParams{RequestID: testRID, Recipients: []Allocation{
+		Send(mustCashTarget(t), 1000),
 		Send(Pubkey("aa"), 1000),
 	}}
 	if _, err := p.Request(); err != ErrMixedCashAllocation {

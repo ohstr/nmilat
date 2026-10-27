@@ -1,9 +1,6 @@
 package nipcash
 
 import (
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 
 	"github.com/ohstr/nmilat/nipAZ"
@@ -11,7 +8,7 @@ import (
 )
 
 // Recipient is who mint_cash funds a slice for — build one with Pubkey,
-// ConnectionKey, or Anyone. No identity_type string ever appears in caller
+// ConnectionKey, or a *CashTarget. No identity_type string ever appears in caller
 // code: each constructor encodes its own wire shape internally.
 type Recipient interface {
 	// recipient is an unexported marker: only types this package constructs
@@ -107,57 +104,18 @@ func ResolvedConnectionKey(key nipIC.ConnectionKey, platform nipIC.WebIdentity, 
 	return namedIdentity{identity: nipAZ.ResolvedConnection(key, platform), ia: iaPubkey}, nil
 }
 
-// cashRecipient is Anyone()'s concrete Recipient — plain cash, no
-// registered identity, redeemable by whoever holds the wallet's secret.
-// Deliberately satisfies only Recipient, not Target: see CashTarget.
-type cashRecipient struct{}
-
-func (cashRecipient) recipient()            {}
-func (cashRecipient) identityType() string  { return identityTypeCash }
-func (cashRecipient) identityValue() string { return "" }
-func (cashRecipient) iaPubkey() string      { return "" }
-
-// Anyone builds a Recipient for plain, unbound cash — the Hub mints its
-// cash secret and returns it once, in MintCash's own response
-// (MintCashResult.Recipients[i].CashSecret). Not usable as a
-// CashTransfer/CashConsolidate Target — use NewCashTarget for that case
-// instead, which has different, caller-side secret-generation requirements.
-func Anyone() Recipient { return cashRecipient{} }
-
-// CashTarget is a not-yet-realized cash-mode identity, used only as a
-// CashTransfer/CashConsolidate Target. It is NOT the same as Anyone():
-// mint_cash's cash-mode recipient gets its secret minted by the Hub, over the
-// Hub's own single-owner connection — safe to return in that response.
-// cash_transfer's cash-mode target is the opposite: NIP-CASH requires the
-// *caller* to generate the secret and submit only its commitment, because
-// the response travels back over the shared *source* connection,
-// decryptable by every co-recipient it's ever had (NIP-CASH §Security
-// Considerations — an implementation that minted a fresh secret here and
-// handed it back would leak it to exactly the audience this mechanism
-// exists to keep it from). NewCashTarget generates that secret locally —
-// it never appears in any request or response — and exposes it via Secret
-// so the caller can hand it to whoever they're transferring to, alongside
-// the returned wallet token.
+// CashTarget is a cash-mode identity: a secret the caller generated and its
+// commitment, which is all that travels. It is a mint_cash recipient and a
+// cash_transfer/cash_consolidate target alike: a Hub never generates a cash
+// secret (NIP-CASH §Cash-Mode Slices). The caller persists Secret() before the
+// call goes out and hands it on with the returned token.
 type CashTarget struct {
 	secret string
 	commit string // hex sha256(secret) — the value actually sent on the wire
 }
 
-func (*CashTarget) target() {}
-
-// NewCashTarget generates a fresh, high-entropy cash secret locally and
-// its commitment, ready to use as a CashTransfer/CashConsolidate Target.
-func NewCashTarget() *CashTarget {
-	var raw [32]byte
-	// crypto/rand.Read never returns a partial read without an error on any
-	// platform Go supports; a non-nil error here means the platform's CSPRNG
-	// is unavailable, which nothing downstream could recover from either.
-	if _, err := rand.Read(raw[:]); err != nil {
-		panic("nipcash: crypto/rand unavailable: " + err.Error())
-	}
-	sum := sha256.Sum256(raw[:])
-	return &CashTarget{secret: hex.EncodeToString(raw[:]), commit: hex.EncodeToString(sum[:])}
-}
+func (*CashTarget) target()    {}
+func (*CashTarget) recipient() {}
 
 // Secret returns the cash secret to hand to whoever this target's
 // CashTransfer/CashConsolidate call is for — alongside the call's own

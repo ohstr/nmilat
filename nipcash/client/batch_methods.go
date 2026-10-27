@@ -2,7 +2,7 @@ package client
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -93,16 +93,15 @@ func (s *BatchSession) StatusMany(ctx context.Context, items []BatchStatus) ([]S
 	for _, o := range outcomes {
 		so := StatusOutcome{ItemOutcome: o}
 		if o.Succeeded() {
-			var result nipcash.CashStatusResult
-			if err := json.Unmarshal(o.Result, &result); err != nil {
+			result, err := nipcash.ParseCashStatusResult(o.Result)
+			if err != nil {
 				// A served item whose body will not decode is a hub-side problem, not
-				// an omission. Downgrading it to an error keeps the distinction honest:
-				// the hub DID answer, and the answer was unusable.
+				// an omission: the hub DID answer, and the answer was unusable.
 				so.State = OutcomeError
 				so.Error = decodeError(o.ID, err)
 				so.Undecodable = true
 			} else {
-				so.Result = &result
+				so.Result = result
 			}
 		}
 		out = append(out, so)
@@ -164,13 +163,11 @@ func (s *BatchSession) RedeemMany(ctx context.Context, items []BatchRedeem) ([]R
 	for _, o := range outcomes {
 		ro := RedeemOutcome{ItemOutcome: o}
 		if o.Succeeded() {
-			var result nipcash.CashRedeemResult
-			if err := json.Unmarshal(o.Result, &result); err != nil {
-				ro.State = OutcomeError
-				ro.Error = decodeError(o.ID, err)
-				ro.Undecodable = true
+			result, err := nipcash.ParseCashRedeemResult(o.Result)
+			if err != nil {
+				ro.ItemOutcome = parseFailure(ro.ItemOutcome, err)
 			} else {
-				ro.Result = &result
+				ro.Result = result
 			}
 		}
 		out = append(out, ro)
@@ -202,6 +199,13 @@ func (s *BatchSession) TransferMany(ctx context.Context, items []BatchTransfer) 
 	paramsByID := make(map[string]nipcash.CashTransferParams, len(items))
 	for i, it := range items {
 		it := it
+		if it.Params.RequestID == "" {
+			rid, err := nipcash.NewRequestID()
+			if err != nil {
+				return nil, err
+			}
+			it.Params.RequestID = rid
+		}
 		paramsByID[itemID(it.ID, i)] = it.Params
 		builders = append(builders, itemBuilder{
 			ID: itemID(it.ID, i),
@@ -231,9 +235,7 @@ func (s *BatchSession) TransferMany(ctx context.Context, items []BatchTransfer) 
 			// ciphertext in a field named for a token — usable-looking and useless.
 			result, err := paramsByID[o.ID].ParseResult(o.Result)
 			if err != nil {
-				to.State = OutcomeError
-				to.Error = decodeError(o.ID, err)
-				to.Undecodable = true
+				to.ItemOutcome = parseFailure(to.ItemOutcome, err)
 			} else {
 				to.Result = result
 			}
@@ -253,10 +255,8 @@ type BatchConsolidate struct {
 	// it. Build it with BillFor(token) — the two halves come from one token and are
 	// deliberately not separately settable (see Bill).
 	Bill Bill
-	// Credential authorizes the call itself, separately from each source's own
-	// credential inside Params.
-	Credential nipcash.Credential
-	Params     nipcash.CashConsolidateParams
+	// Params' Sources[0] is the item's target and signs its item proof.
+	Params nipcash.CashConsolidateParams
 }
 
 // ConsolidateOutcome is one consolidation's answer.
@@ -278,6 +278,13 @@ func (s *BatchSession) ConsolidateMany(ctx context.Context, items []BatchConsoli
 	paramsByID := make(map[string]nipcash.CashConsolidateParams, len(items))
 	for i, it := range items {
 		it := it
+		if it.Params.RequestID == "" {
+			rid, err := nipcash.NewRequestID()
+			if err != nil {
+				return nil, err
+			}
+			it.Params.RequestID = rid
+		}
 		paramsByID[itemID(it.ID, i)] = it.Params
 		builders = append(builders, itemBuilder{
 			ID: itemID(it.ID, i),
@@ -285,7 +292,7 @@ func (s *BatchSession) ConsolidateMany(ctx context.Context, items []BatchConsoli
 				if err := it.Bill.check(id, s.HubIdentity()); err != nil {
 					return transport.Item{}, err
 				}
-				return it.Params.Item(id, it.Bill.target, it.Bill.connSecret, it.Credential, b)
+				return it.Params.Item(id, it.Bill.target, it.Bill.connSecret, b)
 			},
 		})
 	}
@@ -305,9 +312,7 @@ func (s *BatchSession) ConsolidateMany(ctx context.Context, items []BatchConsoli
 			// token is delivered encrypted to its new owner.
 			result, err := paramsByID[o.ID].ParseResult(o.Result)
 			if err != nil {
-				co.State = OutcomeError
-				co.Error = decodeError(o.ID, err)
-				co.Undecodable = true
+				co.ItemOutcome = parseFailure(co.ItemOutcome, err)
 			} else {
 				co.Result = result
 			}
@@ -334,4 +339,22 @@ func decodeError(id string, err error) *transport.ResultError {
 		Code:    "INTERNAL",
 		Message: fmt.Sprintf("hub answered item %q with a body this client could not decode: %v", id, err),
 	}
+}
+
+// parseFailure turns a result that did not parse into its outcome: a tombstone
+// (the bill is gone; nothing moved) is OutcomeError carrying Gone, never a
+// success; anything else is an undecodable answer.
+func parseFailure(o ItemOutcome, err error) ItemOutcome {
+	var gone *nipcash.BillGone
+	if errors.As(err, &gone) {
+		o.State = OutcomeError
+		o.Error = &transport.ResultError{Message: gone.Error()}
+		t := gone.Tombstone
+		o.Gone = &t
+		return o
+	}
+	o.State = OutcomeError
+	o.Error = decodeError(o.ID, err)
+	o.Undecodable = true
+	return o
 }

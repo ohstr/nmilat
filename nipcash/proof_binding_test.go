@@ -84,7 +84,7 @@ func TestCashTransferParams_Request_SplitBindsNewIdentityAndAmount(t *testing.T)
 	ia := randomKeyHex(t)
 	to := attestedKey(t, "discord", "bob", ia)
 	split := uint64(4000)
-	req, err := CashTransferParams{To: to, Credential: BySigning(priv), CurrentAmount: 15000, SplitAmount: &split}.Request(wallet)
+	req, err := CashTransferParams{RequestID: testRID, To: to, Credential: BySigning(priv), CurrentAmount: 15000, SplitAmount: &split}.Request(wallet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestCashTransferParams_Request_SplitBindsNewIdentityAndAmount(t *testing.T)
 
 	// A different Identity Authority must change the hash, or a proof for one IA
 	// could be replayed under another.
-	other := CashTransferParams{To: attestedKey(t, "discord", "bob", randomKeyHex(t)), Credential: BySigning(priv), CurrentAmount: 15000, SplitAmount: &split}
+	other := CashTransferParams{RequestID: testRID, To: attestedKey(t, "discord", "bob", randomKeyHex(t)), Credential: BySigning(priv), CurrentAmount: 15000, SplitAmount: &split}
 	otherReq, err := other.Request(wallet)
 	if err != nil {
 		t.Fatal(err)
@@ -118,7 +118,7 @@ func TestCashTransferParams_Request_SplitBindsNewIdentityAndAmount(t *testing.T)
 // NIP-CASH §Transferring and Splitting a Slice: a cash-mode slice sends its
 // cash_secret in place of a proof (the cashctl protect path).
 func TestCashTransferParams_Request_CashSlicePresentsSecret(t *testing.T) {
-	req, err := CashTransferParams{To: Pubkey(randomKeyHex(t)), Credential: BySecret("the-secret"), CurrentAmount: 1000}.Request(randomKeyHex(t))
+	req, err := CashTransferParams{RequestID: testRID, To: Pubkey(randomKeyHex(t)), Credential: BySecret("the-secret"), CurrentAmount: 1000}.Request(randomKeyHex(t))
 	if err != nil {
 		t.Fatal(err)
 	}

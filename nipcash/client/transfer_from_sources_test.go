@@ -194,7 +194,7 @@ func TestTransferFromSources_ExactMatchFinalTransfer_SurfacesInterimWalletAsReci
 	if result.Transfer.NewWalletPubkey != "interim-pub" {
 		t.Fatalf("Transfer.NewWalletPubkey = %q, want %q", result.Transfer.NewWalletPubkey, "interim-pub")
 	}
-	if got := result.Transfer.RecipientToken("wallet1-original-token"); got != "interim-token" {
+	if got, _ := result.Transfer.RecipientToken("wallet1-original-token"); got != "interim-token" {
 		t.Fatalf("RecipientToken() = %q, want the interim wallet's token, not a consolidated-away source token", got)
 	}
 }

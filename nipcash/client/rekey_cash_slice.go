@@ -158,7 +158,7 @@ func rekeyCashSlice(ctx context.Context, c transferConsolidater, p RekeyCashSlic
 	sources := append([]nipcash.Source{thisSource}, p.ConsolidateWith...)
 	// Authorized by this slice's own interim credential — the same one proving
 	// control of the first source below.
-	result, err := c.CashConsolidate(ctx, p.InterimCredential, nipcash.CashConsolidateParams{
+	result, err := c.CashConsolidate(ctx, nipcash.CashConsolidateParams{
 		Sources: sources,
 		To:      bt,
 	})
