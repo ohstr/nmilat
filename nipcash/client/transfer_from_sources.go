@@ -64,9 +64,8 @@ type transferConsolidaterCloser interface {
 // the newly-consolidated wallet through the *original* client would
 // therefore bind the final transfer's proof to the wrong wallet pubkey
 // entirely, and the Hub would reject it (confirmed live: NOT_FOUND).
-// RekeyCashSlice never needs this — its own interim step is a
-// CashTransfer, which (per NIP-CASH's own rules) is always in-place for
-// a cash-mode source, so its Client binding never goes stale.
+// RekeyCashSlice never needs this: it sends nothing after its last
+// CashTransfer, and its consolidate names the interim wallet in its sources.
 type transferFromSourcesClient interface {
 	transferConsolidater
 	reconnect(ctx context.Context, walletToken string) (transferConsolidaterCloser, error)
@@ -74,7 +73,9 @@ type transferFromSourcesClient interface {
 
 // reconnect dials a fresh client bound to walletToken.
 func (c *Client) reconnect(ctx context.Context, walletToken string) (transferConsolidaterCloser, error) {
-	return Connect(ctx, walletToken)
+	// The same session options as c, so a WithPowBudget or other setting the
+	// caller chose carries over to the new wallet's client.
+	return Connect(ctx, walletToken, c.sessionOpts...)
 }
 
 // TransferFromSources transfers Amount to To, drawing from Sources. A
