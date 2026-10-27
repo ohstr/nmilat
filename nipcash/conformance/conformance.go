@@ -82,7 +82,8 @@ type Admin interface {
 	// RevokeCircleConnection revokes one; its bill proofs then verify nothing.
 	RevokeCircleConnection(t testing.TB, circlehub1 string)
 	// SetLiveWalletCap and SetSpinOffRate bound new wallets (CASH-CSEC-02,
-	// CASH-S-35).
+	// CASH-S-35): a call over the cap is QUOTA_EXCEEDED, a spin-off over the
+	// rate RATE_LIMITED. n 0 lifts either; CT-XFER-20 lifts them when done.
 	SetLiveWalletCap(t testing.TB, n int)
 	SetSpinOffRate(t testing.TB, n int, per time.Duration)
 	// DropArchive drops a destroyed bill's archive while its pairing key stays
