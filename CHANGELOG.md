@@ -15,6 +15,7 @@ privacy and performance fixes.
   receive budgets, the NIP-CASH and NIP-CW error codes and rotation
   notifications, `delete_circle_wallet`, and `nip47.WithExpiration`,
   `RequestExpiration` and `NWCClient.CallWithOptions`.
+  ([#188](https://github.com/ohstr/nmilat/pull/188))
 - Adds `request_id` and lookup helpers for NIP-CASH: `ValidRequestID`,
   `NewRequestID`, `DerivedRequestID`, `CheckDeadline`, `CommitAllowed`,
   `DeadlineWindow`, `DecideLookup`, `RecordRetained`, `TombstoneAnswerable`,
