@@ -41,6 +41,22 @@ func TestRemove(t *testing.T) {
 	}
 }
 
+func TestWordsKeepCaseAndKindsDontMix(t *testing.T) {
+	old := &nip01.Event{Kind: KindMuteList, Tags: [][]string{{"word", "Foo"}, {"word", "foo"}, {"p", "AA"}}}
+	out, removed := Remove(old, KindMuteList, "word", "Foo")
+	if len(removed) != 1 || !Has(out, "word", "foo") || Has(out, "word", "Foo") {
+		t.Fatalf("words: %v %v", removed, out.Tags)
+	}
+	if _, removed = Remove(old, KindMuteList, "p", "aa"); len(removed) != 1 {
+		t.Fatal("pubkeys must match without case")
+	}
+	// A list of another kind is not copied into this one.
+	out, _ = Add(old, 3, []string{"p", "bb"})
+	if out.Kind != 3 || len(out.Tags) != 1 {
+		t.Fatalf("mixed kinds: %+v", out)
+	}
+}
+
 func TestNilList(t *testing.T) {
 	out, added := Add(nil, KindSimpleGroups, []string{"group", "id", "wss://r"})
 	if out.Kind != KindSimpleGroups || len(added) != 1 || !Has(out, "group", "id") {

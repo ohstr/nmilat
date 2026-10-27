@@ -44,6 +44,12 @@ func Prove(ctx context.Context, key MessageKeyer, seal *nip01.Event, counterpart
 // VerifyProof checks p with no private key and returns the rumor: the seal
 // is a kind 13 signed by from, its MAC holds under p.Keys, it decrypts and
 // unpads, and the rumor's id is its hash and its author is from.
+//
+// The MAC binds only the HMAC key: the ChaCha key and nonce can't be tied to
+// the seal without the conversation key. What stops a forged reading is that
+// any other keystream would have to turn the signed ciphertext into valid
+// padding and rumor JSON naming from as author. Keep every one of those
+// checks.
 func VerifyProof(p *Proof, from string) (*nip01.Event, error) {
 	if p == nil || p.Seal == nil {
 		return nil, errors.New("nip59: proof has no seal")
