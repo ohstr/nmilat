@@ -106,14 +106,18 @@ func Pubkey(hex string) Identity {
 	return Identity{value: hex}
 }
 
-// Connection builds an Identity for a recipient/sender on platform who has
-// no Nostr keypair yet, computing its ConnectionKey internally — the caller
-// never hashes platform+externalID by hand.
-func Connection(platform WebIdentity, externalID string) Identity {
-	return Identity{
-		value:       nipIC.NewConnectionKey(platform, externalID).String(),
-		webIdentity: platform,
+// Connection builds an Identity for a recipient/sender on a platform with a
+// canonical user-id form (x, discord, email, dns) who has no Nostr keypair yet,
+// computing its ConnectionKey from typed input with nipIC.NewConnectionKey. A
+// value that is not canonical, or a platform without a canonical form, is an
+// error: such a key comes from the recipient's attestation or nconnection
+// (ResolvedConnection).
+func Connection(platform WebIdentity, typed string) (Identity, error) {
+	key, err := nipIC.NewConnectionKey(platform, typed)
+	if err != nil {
+		return Identity{}, err
 	}
+	return Identity{value: key.String(), webIdentity: platform}, nil
 }
 
 // ResolvedConnection builds an Identity from a ConnectionKey the caller has

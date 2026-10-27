@@ -12,6 +12,7 @@ import (
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip57"
 	"github.com/ohstr/nmilat/nipAZ"
+	"github.com/ohstr/nmilat/nipIC"
 	"github.com/ohstr/nmilat/utils"
 )
 
@@ -122,7 +123,13 @@ func Receipt(z Spec) (*nip01.Event, error) {
 		}
 		recipient := nipAZ.Pubkey(z.Recipient)
 		if z.Connection[0] != "" {
-			recipient = nipAZ.Connection(nipAZ.WebIdentity(z.Connection[0]), z.Connection[1])
+			// The fixtures name IA-attested accounts, so the key is the attested
+			// user id hashed byte for byte, as a sender takes it from a 35522.
+			key, err := nipIC.ConnectionKeyFromAttested(nipIC.WebIdentity(z.Connection[0]), z.Connection[1])
+			if err != nil {
+				return nil, err
+			}
+			recipient = nipAZ.ResolvedConnection(key, nipAZ.WebIdentity(z.Connection[0]))
 		}
 		req, err := nipAZ.NewAltZapRequest(nipAZ.AltZapRequestParams{
 			PrivateKey: z.Sender.Priv, Chain: z.Chain, Recipient: recipient,

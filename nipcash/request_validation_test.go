@@ -19,7 +19,7 @@ func TestMintCashParams_Request_NoRecipients(t *testing.T) {
 // NIP-CASH §Minting Cash: a connection_key entry MUST also carry ia_pubkey; so
 // must a connection_key transfer or consolidate target.
 func TestRequests_ConnectionKeyNeedsIAPubkey(t *testing.T) {
-	noIA := ConnectionKey("discord", "u", "")
+	noIA := attestedKey(t, "discord", "u", "")
 	if _, err := (MintCashParams{Recipients: []Allocation{Send(noIA, 1000)}}).Request(); !errors.Is(err, ErrMissingIAPubkey) {
 		t.Errorf("mint_cash: err = %v, want ErrMissingIAPubkey", err)
 	}
@@ -33,7 +33,7 @@ func TestRequests_ConnectionKeyNeedsIAPubkey(t *testing.T) {
 	if _, err := cons.Request(); !errors.Is(err, ErrMissingIAPubkey) {
 		t.Errorf("cash_consolidate: err = %v, want ErrMissingIAPubkey", err)
 	}
-	withIA := ConnectionKey("discord", "u", randomKeyHex(t))
+	withIA := attestedKey(t, "discord", "u", randomKeyHex(t))
 	if _, err := (MintCashParams{Recipients: []Allocation{Send(withIA, 1000)}}).Request(); err != nil {
 		t.Errorf("connection_key with ia_pubkey refused: %v", err)
 	}

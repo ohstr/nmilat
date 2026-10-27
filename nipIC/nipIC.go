@@ -85,19 +85,11 @@ var (
 // the zero value already carries that meaning for free.
 type WebIdentity string
 
-// ConnectionKey is the deterministic hash standing in for a Nostr pubkey
-// when the real recipient/sender has no keypair yet: SHA256("<platform>:<externalID>").
-// Third-party clients MUST use NewConnectionKey (not their own reimplementation)
-// so independently computed keys for the same (platform, externalID) pair agree.
+// ConnectionKey is the hash standing in for a Nostr pubkey when the recipient
+// has no keypair yet: hex(SHA256("<platform>:<platform-user-id>")). Build one
+// with NewConnectionKey (canonical platforms, typed input) or
+// ConnectionKeyFromAttested (an IA's attested user id, byte for byte).
 type ConnectionKey string
-
-// NewConnectionKey computes the ConnectionKey for externalID on platform.
-// Deterministic: the same (platform, externalID) pair always produces the
-// same key.
-func NewConnectionKey(platform WebIdentity, externalID string) ConnectionKey {
-	sum := sha256.Sum256([]byte(string(platform) + ":" + externalID))
-	return ConnectionKey(hex.EncodeToString(sum[:]))
-}
 
 // String returns the hex-encoded ConnectionKey.
 func (k ConnectionKey) String() string { return string(k) }
@@ -196,6 +188,9 @@ func sessionHash(pubkeyHex, preAuthCode string) ([]byte, error) {
 // hash. Unexported: callers verify a claimed (pubkey, preAuthCode) pair via
 // Verify, they never need the raw hash — see the design rubric's "no bare
 // wire-format decoding at the call site" rule.
+//
+// The payload must be exactly the 34-byte TLV the spec defines, 0x00 0x20 then
+// the 32-byte hash: any other type, length or size is refused.
 func (t ChallengeToken) decode() ([]byte, error) {
 	prefix, bits5, err := bech32.DecodeNoLimit(string(t))
 	if err != nil {
@@ -208,36 +203,27 @@ func (t ChallengeToken) decode() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidChallengeToken, err)
 	}
-
-	pos := 0
-	for pos+2 <= len(data) {
-		typ := data[pos]
-		length := int(data[pos+1])
-		pos += 2
-		if pos+length > len(data) {
-			break
-		}
-		if typ == tlvTypeSessionHash && length == 32 {
-			return data[pos : pos+length], nil
-		}
-		pos += length
+	if len(data) != 34 || data[0] != tlvTypeSessionHash || data[1] != 0x20 {
+		return nil, fmt.Errorf("%w: the payload is not one 32-byte session hash", ErrInvalidChallengeToken)
 	}
-	return nil, fmt.Errorf("%w: no session-hash field found", ErrInvalidChallengeToken)
+	return data[2:], nil
 }
 
+// AuthTypePublicPost is the auth_type whose evidence any IA can re-verify: a
+// public post carrying an npv1 challenge.
+const AuthTypePublicPost = "public_post"
+
 // Evidence is the cleartext v1 "evidence" tag payload of a Kind 35522
-// attestation. Version and AuthType are not caller-settable fields — v1
-// evidence is always version 1, auth_type "public_post" — NewAttestation
-// sets them internally so callers never have to pass constants that only
-// ever have one value.
+// attestation (NIP-IC §The evidence Tag).
 type Evidence struct {
-	Platform    WebIdentity    // duplicated from the outer "platform" tag, for self-contained evidence
-	UserID      string         // normalized platform account identifier
-	Username    string         // provider handle at verification time
+	Version     int            // always 1
+	Platform    WebIdentity    // duplicated from the outer "platform" tag
+	AuthType    string         // how the IA verified control; "public_post" or an IA's own value
+	UserID      string         // the platform account identifier; d is the ConnectionKey of platform and this
+	Username    string         // provider handle at verification time; never an input to the key
 	VerifiedAt  int64          // unix timestamp of successful verification
-	EvidenceURL string         // URL of the public post carrying the challenge
-	Challenge   ChallengeToken // the npv1 token published at EvidenceURL
-	// PreAuthCode enables cross-IA re-verification: Challenge.Verify(userPubkeyHex, PreAuthCode)
-	// must succeed. Required for any evidence a second IA might need to re-check.
+	EvidenceURL string         // public_post only: URL of the post carrying the challenge
+	Challenge   ChallengeToken // public_post only: the npv1 token published at EvidenceURL
+	// PreAuthCode enables cross-IA re-verification (public_post only, REQUIRED there).
 	PreAuthCode string
 }

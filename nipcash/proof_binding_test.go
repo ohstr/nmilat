@@ -56,10 +56,10 @@ func TestCashRedeemParams_Request_ProofBindsWalletAndInvoice(t *testing.T) {
 func TestCashRedeemParams_Request_ConnectionKeyCarriesAttestation(t *testing.T) {
 	iaPriv, _ := generateTestKeypair(t)
 	userPriv, userPub := generateTestKeypair(t)
-	key := nipIC.NewConnectionKey("discord", "some.user")
+	key := testDiscordKey(t)
 	att := buildTestAttestation(t, iaPriv, userPub, key, 1)
 	req, err := CashRedeemParams{Invoice: testInvoice,
-		Credential: BySigningConnectionKey(userPriv, "discord", "some.user", att)}.Request(randomKeyHex(t))
+		Credential: mustConnCred(t, userPriv, att)}.Request(randomKeyHex(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,13 +82,14 @@ func TestCashTransferParams_Request_SplitBindsNewIdentityAndAmount(t *testing.T)
 	priv, _ := generateTestKeypair(t)
 	wallet := randomKeyHex(t)
 	ia := randomKeyHex(t)
-	to := ConnectionKey("discord", "bob", ia)
+	to := attestedKey(t, "discord", "bob", ia)
 	split := uint64(4000)
 	req, err := CashTransferParams{To: to, Credential: BySigning(priv), CurrentAmount: 15000, SplitAmount: &split}.Request(wallet)
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := nipIC.NewConnectionKey("discord", "bob").String()
+	bob, _ := nipIC.ConnectionKeyFromAttested("discord", "bob")
+	key := bob.String()
 	if got, want := proofTag(t, req.IdentityEvent, "new_identity_hash"), sha256Hex("connection_key:"+key+":"+ia); got != want {
 		t.Errorf("new_identity_hash = %q, want sha256(type:value:ia) = %s", got, want)
 	}
@@ -104,7 +105,7 @@ func TestCashTransferParams_Request_SplitBindsNewIdentityAndAmount(t *testing.T)
 
 	// A different Identity Authority must change the hash, or a proof for one IA
 	// could be replayed under another.
-	other := CashTransferParams{To: ConnectionKey("discord", "bob", randomKeyHex(t)), Credential: BySigning(priv), CurrentAmount: 15000, SplitAmount: &split}
+	other := CashTransferParams{To: attestedKey(t, "discord", "bob", randomKeyHex(t)), Credential: BySigning(priv), CurrentAmount: 15000, SplitAmount: &split}
 	otherReq, err := other.Request(wallet)
 	if err != nil {
 		t.Fatal(err)

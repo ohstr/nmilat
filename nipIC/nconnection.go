@@ -10,55 +10,48 @@ import (
 // NConnectionPrefix is the bech32 human-readable prefix for nconnection strings.
 const NConnectionPrefix = "nconnection"
 
-// TLV types within an nconnection payload — same convention NIP-19 uses for
-// nprofile.
+// TLV types within an nconnection payload (NIP-IC §The nconnection Bech32
+// Encoding).
 const (
-	nconnTypeConnectionKey = 0 // 32-byte ConnectionKey, required, at most once
-	nconnTypeRelay         = 1 // relay URL, UTF-8, repeatable
-	nconnTypePlatform      = 2 // platform name, UTF-8, optional, at most once
+	nconnTypeConnectionKey = 0 // 32 bytes, exactly one
+	nconnTypeRelay         = 1 // relay URL, ASCII, repeatable
+	nconnTypePlatform      = 2 // platform name, at most one
 )
 
-// EncodeNConnection bundles a ConnectionKey with relay hints (and optionally
-// a platform name) into a portable, shareable "nconnection1..." string — the
-// same pattern NIP-19 uses for nprofile/nevent, handed e.g. from a Discord
-// bot to a mobile wallet.
+// EncodeNConnection bundles a ConnectionKey with relay hints and optionally a
+// platform. It refuses a key that is not 64 lowercase hex, a platform outside
+// ValidPlatformName, and a relay that is not ASCII or exceeds 255 bytes.
 func EncodeNConnection(key ConnectionKey, relays []string, platform WebIdentity) (string, error) {
-	keyBytes, err := hex.DecodeString(string(key))
-	if err != nil {
-		return "", fmt.Errorf("nipIC: invalid ConnectionKey hex: %w", err)
+	if !isLowerHex64(string(key)) {
+		return "", ErrConnectionKey
 	}
-	if len(keyBytes) != 32 {
-		return "", fmt.Errorf("nipIC: ConnectionKey must be 32 bytes, got %d", len(keyBytes))
-	}
-
-	var tlv []byte
-	tlv = append(tlv, nconnTypeConnectionKey, byte(len(keyBytes)))
-	tlv = append(tlv, keyBytes...)
-
+	keyBytes, _ := hex.DecodeString(string(key))
+	tlv := append([]byte{nconnTypeConnectionKey, 32}, keyBytes...)
 	for _, relay := range relays {
-		relayBytes := []byte(relay)
-		tlv = append(tlv, nconnTypeRelay, byte(len(relayBytes)))
-		tlv = append(tlv, relayBytes...)
+		if len(relay) > 255 || !isASCII(relay) {
+			return "", fmt.Errorf("nipIC: relay %q is not an ASCII URL of at most 255 bytes", relay)
+		}
+		tlv = append(tlv, nconnTypeRelay, byte(len(relay)))
+		tlv = append(tlv, relay...)
 	}
-
 	if platform != "" {
-		platformBytes := []byte(platform)
-		tlv = append(tlv, nconnTypePlatform, byte(len(platformBytes)))
-		tlv = append(tlv, platformBytes...)
+		if !ValidPlatformName(platform) || len(platform) > 255 {
+			return "", ErrPlatformName
+		}
+		tlv = append(tlv, nconnTypePlatform, byte(len(platform)))
+		tlv = append(tlv, platform...)
 	}
-
 	bits5, err := bech32.ConvertBits(tlv, 8, 5, true)
 	if err != nil {
 		return "", fmt.Errorf("nipIC: bech32 convert: %w", err)
 	}
-	encoded, err := bech32.Encode(NConnectionPrefix, bits5)
-	if err != nil {
-		return "", fmt.Errorf("nipIC: bech32 encode: %w", err)
-	}
-	return encoded, nil
+	return bech32.Encode(NConnectionPrefix, bits5)
 }
 
-// DecodeNConnection reverses EncodeNConnection.
+// DecodeNConnection parses an nconnection string. It rejects no type 0, more
+// than one type 0 or type 2, a type 0 that is not 32 bytes, a TLV running past
+// the end, and a type 2 that is not a valid platform name (no key is taken from
+// it); unknown types are ignored.
 func DecodeNConnection(s string) (key ConnectionKey, relays []string, platform WebIdentity, err error) {
 	prefix, bits5, err := bech32.DecodeNoLimit(s)
 	if err != nil {
@@ -71,21 +64,24 @@ func DecodeNConnection(s string) (key ConnectionKey, relays []string, platform W
 	if err != nil {
 		return "", nil, "", fmt.Errorf("nipIC: bech32 convert: %w", err)
 	}
-
-	pos := 0
 	var keyHex string
-	for pos+2 <= len(data) {
-		t := data[pos]
-		l := int(data[pos+1])
+	havePlatform := false
+	for pos := 0; pos < len(data); {
+		if pos+2 > len(data) {
+			return "", nil, "", fmt.Errorf("nipIC: truncated TLV at offset %d", pos)
+		}
+		t, l := data[pos], int(data[pos+1])
 		pos += 2
 		if pos+l > len(data) {
-			break
+			return "", nil, "", fmt.Errorf("nipIC: TLV at offset %d runs past the end", pos-2)
 		}
 		v := data[pos : pos+l]
 		pos += l
-
 		switch t {
 		case nconnTypeConnectionKey:
+			if keyHex != "" {
+				return "", nil, "", fmt.Errorf("nipIC: more than one ConnectionKey")
+			}
 			if l != 32 {
 				return "", nil, "", fmt.Errorf("nipIC: ConnectionKey must be 32 bytes, got %d", l)
 			}
@@ -93,12 +89,27 @@ func DecodeNConnection(s string) (key ConnectionKey, relays []string, platform W
 		case nconnTypeRelay:
 			relays = append(relays, string(v))
 		case nconnTypePlatform:
+			if havePlatform {
+				return "", nil, "", fmt.Errorf("nipIC: more than one platform")
+			}
+			havePlatform = true
 			platform = WebIdentity(v)
+			if !ValidPlatformName(platform) {
+				return "", nil, "", ErrPlatformName
+			}
 		}
 	}
-
 	if keyHex == "" {
 		return "", nil, "", fmt.Errorf("nipIC: nconnection missing ConnectionKey")
 	}
 	return ConnectionKey(keyHex), relays, platform, nil
+}
+
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] > 0x7f {
+			return false
+		}
+	}
+	return true
 }

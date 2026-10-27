@@ -25,15 +25,15 @@ func findTag(event *nip01.Event, name string) []string {
 
 func makeAttestationParams() AttestationParams {
 	return AttestationParams{
-		PrivateKey:    testIAPrivKey,
-		ConnectionKey: ConnectionKey("deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"),
-		UserPubkey:    testUserPubKey,
-		Platform:      "github",
+		PrivateKey: testIAPrivKey,
+		UserPubkey: testUserPubKey,
+		Platform:   "github",
 		Evidence: Evidence{
 			UserID:      "user42",
 			Username:    "alice",
 			EvidenceURL: "https://gist.github.com/alice/abc123",
 			Challenge:   "npv11qqsddvq9arp",
+			PreAuthCode: "123456",
 			VerifiedAt:  1700000000,
 		},
 		ExpirationDays: 90,
@@ -169,16 +169,31 @@ func TestNewAttestation_ExpirationPrecision(t *testing.T) {
 	}
 }
 
-func TestNewAttestation_NoExpirationWhenZero(t *testing.T) {
-	p := makeAttestationParams()
-	p.ExpirationDays = 0
-
-	event, err := NewAttestation(p)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+// T05-23: ExpirationDays 0 means the 90-day default; NoExpiry omits the tag and
+// refuses a day count beside it.
+func TestNewAttestation_ExpirationDefaults(t *testing.T) {
+	for days, want := range map[int]int64{0: 7776000, 30: 2592000} {
+		p := makeAttestationParams()
+		p.ExpirationDays = days
+		event, err := NewAttestation(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tag := findTag(event, TagExpiration)
+		exp, _ := strconv.ParseInt(tag[1], 10, 64)
+		if exp-int64(event.CreatedAt) != want {
+			t.Errorf("days %d: expiration - created_at = %d, want %d", days, exp-int64(event.CreatedAt), want)
+		}
 	}
-	if tag := findTag(event, TagExpiration); tag != nil {
-		t.Errorf("expected no expiration tag when ExpirationDays=0, found: %v", tag)
+	p := makeAttestationParams()
+	p.ExpirationDays, p.NoExpiry = 0, true
+	event, err := NewAttestation(p)
+	if err != nil || findTag(event, TagExpiration) != nil {
+		t.Fatalf("NoExpiry: %v", err)
+	}
+	p.ExpirationDays = 5
+	if _, err := NewAttestation(p); err == nil {
+		t.Error("NoExpiry with a day count was accepted")
 	}
 }
 
@@ -211,7 +226,7 @@ func signedAttestationEvent(t *testing.T, dValue string, extraTags ...[]string) 
 		{TagDTag, dValue},
 		{TagRecipient, testUserPubKey},
 		{TagPlatform, "discord"},
-		{TagEvidence, `{"version":1,"platform":"discord","auth_type":"public_post","evidence_url":"https://discord.com/channels/1/2/3","challenge":"npv1qqpx9er9wehxumq78f5k4q8"}`},
+		{TagEvidence, `{"version":1,"platform":"discord","auth_type":"public_post","evidence_url":"https://discord.com/channels/1/2/3","challenge":"npv1qqpx9er9wehxumq78f5k4q8","pre_auth_code":"123456"}`},
 	}
 	tags = append(tags, extraTags...)
 	evt := &nip01.Event{Kind: KindAttestation, Tags: tags}

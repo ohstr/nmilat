@@ -3,6 +3,8 @@ package nipcash
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/ohstr/nmilat/nipIC"
@@ -28,13 +30,16 @@ func TestPubkeyConnectionKeyAnyone_IdentityTypes(t *testing.T) {
 		t.Fatalf("Pubkey: got type=%s value=%s", pk.identityType(), pk.identityValue())
 	}
 
-	ck := ConnectionKey("discord", "some.user", "iapub")
+	ck, err := ConnectionKey("discord", "80351110224678912", "iapub")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if ck.identityType() != identityTypeConnectionKey || ck.iaPubkey() != "iapub" {
 		t.Fatalf("ConnectionKey: got type=%s ia=%s", ck.identityType(), ck.iaPubkey())
 	}
 	// Same (platform, externalID) must always hash to the same connection
 	// key — ConnectionKey is deterministic (nipIC.NewConnectionKey).
-	ck2 := ConnectionKey("discord", "some.user", "iapub")
+	ck2, _ := ConnectionKey("discord", "80351110224678912", "iapub")
 	if ck.identityValue() != ck2.identityValue() {
 		t.Fatal("ConnectionKey must be deterministic for the same (platform, externalID)")
 	}
@@ -51,9 +56,15 @@ func TestResolvedConnectionKey_MatchesConnectionKeyWithoutRehashing(t *testing.T
 	// string) has no externalID to feed it. ResolvedConnectionKey must
 	// produce an identical identity_type/identity_value/ia_pubkey given
 	// that same key directly, with no external ID involved at all.
-	viaExternalID := ConnectionKey("discord", "some.user", "iapub")
-	key := nipIC.NewConnectionKey("discord", "some.user")
-	viaKey := ResolvedConnectionKey(key, "discord", "iapub")
+	viaExternalID, err := ConnectionKey("discord", "80351110224678912", "iapub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _ := nipIC.NewConnectionKey("discord", "80351110224678912")
+	viaKey, err := ResolvedConnectionKey(key, "discord", "iapub")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if viaKey.identityType() != viaExternalID.identityType() {
 		t.Fatalf("identityType mismatch: got %s, want %s", viaKey.identityType(), viaExternalID.identityType())
@@ -111,5 +122,26 @@ func TestSend_PairsRecipientWithAmount(t *testing.T) {
 	f := a.Recipient.(targetFields)
 	if f.identityValue() != "aa" {
 		t.Fatalf("Recipient: got %s, want aa", f.identityValue())
+	}
+}
+
+// T05-17, T05-19: typed input must be canonical; a key from an nconnection needs
+// its IA; a resolved key must be 64 lowercase hex.
+func TestConnectionKeyConstructors_Refuse(t *testing.T) {
+	if _, err := ConnectionKey("discord", "080351110224678912", "ia"); !errors.Is(err, nipIC.ErrNotCanonical) {
+		t.Errorf("leading zero: %v", err)
+	}
+	if _, err := ConnectionKey("github", "Alice", "ia"); !errors.Is(err, nipIC.ErrTypedInputNotCanonical) {
+		t.Errorf("typed github: %v", err)
+	}
+	key, _ := nipIC.ConnectionKeyFromAttested("github", "Alice")
+	if _, err := ConnectionKeyFromNConnection(key, "github", ""); !errors.Is(err, ErrMissingIAPubkey) {
+		t.Errorf("nconnection without IA: %v", err)
+	}
+	if _, err := ResolvedConnectionKey(nipIC.ConnectionKey(strings.ToUpper(string(key))), "github", "ia"); err == nil {
+		t.Error("uppercase key resolved")
+	}
+	if id, err := ConnectionKeyFromNConnection(key, "github", "ia"); err != nil || id.identityValue() != string(key) {
+		t.Errorf("nconnection key: %v", err)
 	}
 }

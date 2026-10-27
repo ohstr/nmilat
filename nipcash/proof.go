@@ -169,28 +169,37 @@ func (c signingCredential) itemAuthorization() (privKeyHex, cashSecret string, e
 
 type connectionKeyCredential struct {
 	privKeyHex  string
-	platform    nipIC.WebIdentity
-	externalID  string
 	attestation *nipIC.Attestation
 }
 
-// BySigningConnectionKey proves control of a connection_key-identified
-// slice: privKeyHex signs the kind-23198 proof (the caller's own real
-// Nostr identity, once they have one), and attestation is the IA's
-// kind-35522 attestation — parsed once with nipIC.ParseAttestation and
-// reused here, not a raw JSON blob this package invents its own shape for.
-// buildProof enforces NIP-CASH's stricter mandatory-and-unexpired
-// expiration rule on top of nipIC's own, more permissive parse — see
-// ErrAttestationExpired.
-func BySigningConnectionKey(privKeyHex string, platform nipIC.WebIdentity, externalID string, attestation *nipIC.Attestation) Credential {
-	return connectionKeyCredential{privKeyHex: privKeyHex, platform: platform, externalID: externalID, attestation: attestation}
+// BySigningConnectionKey proves control of a connection_key-identified slice:
+// privKeyHex signs the kind-23198 proof (the caller's own Nostr identity), and
+// attestation is the IA's kind-35522, parsed with nipIC.ParseAttestation. The
+// ConnectionKey is the attestation's own d tag, never one hashed from typed
+// input. It refuses a missing attestation, one without an expiration or already
+// expired (ErrAttestationExpired) and one that does not name the signer in p.
+func BySigningConnectionKey(privKeyHex string, attestation *nipIC.Attestation) (Credential, error) {
+	if attestation == nil || attestation.ExpiresAt == nil || time.Now().After(*attestation.ExpiresAt) {
+		return nil, ErrAttestationExpired
+	}
+	if !nipIC.ValidPlatformName(attestation.Platform) {
+		return nil, nipIC.ErrPlatformName
+	}
+	pub, err := utils.GetPublicKey(privKeyHex)
+	if err != nil {
+		return nil, fmt.Errorf("nipcash: signing key: %w", err)
+	}
+	if pub != attestation.UserPubkey {
+		return nil, fmt.Errorf("nipcash: the attestation names %s, not the signer", attestation.UserPubkey)
+	}
+	return connectionKeyCredential{privKeyHex: privKeyHex, attestation: attestation}, nil
 }
 
 func (c connectionKeyCredential) buildProof(binding proofBinding) (identityType, identityValue string, identityEvent, attestationEvent []byte, cashSecret string, err error) {
 	if c.attestation == nil || c.attestation.ExpiresAt == nil || time.Now().After(*c.attestation.ExpiresAt) {
 		return "", "", nil, nil, "", ErrAttestationExpired
 	}
-	connectionKey := nipIC.NewConnectionKey(c.platform, c.externalID)
+	connectionKey := c.attestation.ConnectionKey
 	tags := append(binding.tags(),
 		[]string{"connection_key", connectionKey.String()},
 		[]string{"e", c.attestation.ID},

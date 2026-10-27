@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/ohstr/nmilat/nipIC"
 	"strings"
 	"testing"
 
@@ -81,7 +82,7 @@ func TestNewAltZapRequest(t *testing.T) {
 
 	// The signer is a 9520's sender, so a separate sender is refused.
 	withSender := params
-	withSender.Sender = Connection("discord", "sender-external-id")
+	withSender.Sender = attested("discord", "sender-external-id")
 	if _, err := NewAltZapRequest(withSender); !errors.Is(err, ErrSenderTagNotAllowed) {
 		t.Fatalf("Sender on a 9520: got %v, want ErrSenderTagNotAllowed", err)
 	}
@@ -148,11 +149,11 @@ func TestNewAltZapRequest_InvalidPrivateKeyErrors(t *testing.T) {
 func TestNewAltZapOnBehalfRequest(t *testing.T) {
 	relays := []string{"wss://relay.example.com"}
 	ev, err := NewAltZapOnBehalfRequest(
-		Connection("discord", "sender-external-id"),
+		attested("discord", "sender-external-id"),
 		AltZapRequestParams{
 			PrivateKey:  zapsTestPrivKey,
 			Chain:       "flokicoin",
-			Recipient:   Connection("discord", "recipient-external-id"),
+			Recipient:   attested("discord", "recipient-external-id"),
 			Lnurl:       validTestLnurl,
 			AmountMloki: 5000,
 			Relays:      relays,
@@ -245,7 +246,7 @@ func TestNewAltZapReceipt_RecipientNeverOverriddenByDescription(t *testing.T) {
 	}
 
 	preimage := "abc123"
-	verifiedRecipient := Connection("discord", "server-verified-id").WithHandle("server-verified-handle")
+	verifiedRecipient := attested("discord", "server-verified-id").WithHandle("server-verified-handle")
 	receipt, err := NewAltZapReceipt(AltZapReceiptParams{
 		PrivateKey:  zapsTestPrivKey,
 		Chain:       "flokicoin",
@@ -283,7 +284,7 @@ func TestNewAltZapReceipt_HandleRoundTrips(t *testing.T) {
 	receipt, err := NewAltZapReceipt(AltZapReceiptParams{
 		PrivateKey: zapsTestPrivKey,
 		Chain:      "flokicoin",
-		Recipient:  Connection("discord", "id1").WithHandle("cool_username"),
+		Recipient:  attested("discord", "id1").WithHandle("cool_username"),
 		Bolt11:     "lnfc-invoice",
 		Preimage:   &preimage,
 	})
@@ -316,7 +317,7 @@ func TestNewAltZapReceipt_ProxySenderWithResolvedSender(t *testing.T) {
 		PrivateKey:           zapsTestPrivKey,
 		Chain:                "flokicoin",
 		Recipient:            Pubkey("recipientpubkey"),
-		Sender:               Connection("discord", "someconnectionkey-external-id").WithHandle(""),
+		Sender:               attested("discord", "someconnectionkey-external-id").WithHandle(""),
 		ResolvedSenderPubkey: "actualsenderpubkey",
 		Bolt11:               "lnbc1...",
 		Preimage:             &preimage,
@@ -347,7 +348,7 @@ func TestNewAltZapRequest_NeverEmitsHandleOnRequests(t *testing.T) {
 	ev, err := NewAltZapRequest(AltZapRequestParams{
 		PrivateKey:  zapsTestPrivKey,
 		Chain:       "flokicoin",
-		Recipient:   Connection("discord", "id1").WithHandle("should-not-appear"),
+		Recipient:   attested("discord", "id1").WithHandle("should-not-appear"),
 		Lnurl:       validTestLnurl,
 		AmountMloki: 5000,
 		Relays:      []string{"wss://relay.example.com"},
@@ -461,14 +462,14 @@ func TestIdentity_PubkeyIsNotZero(t *testing.T) {
 }
 
 func TestIdentity_ConnectionComputesConnectionKeyInternally(t *testing.T) {
-	id := Connection("discord", "123456")
+	id := attested("discord", "123456")
 	if len(id.Value()) != 64 {
 		t.Errorf("expected a 64-hex-char ConnectionKey, got %d chars: %q", len(id.Value()), id.Value())
 	}
-	if id.Value() != Connection("discord", "123456").Value() {
+	if id.Value() != attested("discord", "123456").Value() {
 		t.Error("expected Connection() to be deterministic for the same (platform, externalID) pair")
 	}
-	if id.Value() == Connection("discord", "654321").Value() {
+	if id.Value() == attested("discord", "654321").Value() {
 		t.Error("expected different externalIDs to produce different ConnectionKeys")
 	}
 	if id.WebIdentity() != "discord" {
@@ -482,7 +483,7 @@ func TestIdentity_ConnectionComputesConnectionKeyInternally(t *testing.T) {
 // several layers up) must not have to pay for — or risk diverging from — a
 // second hash computation.
 func TestIdentity_ResolvedConnectionDoesNotRehash(t *testing.T) {
-	key := ConnectionKey(Connection("discord", "123456").Value())
+	key := ConnectionKey(attested("discord", "123456").Value())
 	id := ResolvedConnection(key, "discord")
 	if id.Value() != key.String() {
 		t.Errorf("expected ResolvedConnection to use the given key verbatim, got %q want %q", id.Value(), key.String())
@@ -492,13 +493,13 @@ func TestIdentity_ResolvedConnectionDoesNotRehash(t *testing.T) {
 	}
 	// Cross-check against the hashing constructor: both paths must agree for
 	// the same logical (platform, externalID) identity.
-	if id.Value() != Connection("discord", "123456").Value() {
+	if id.Value() != attested("discord", "123456").Value() {
 		t.Error("expected ResolvedConnection(NewConnectionKey(...)) to equal Connection(...) for the same inputs")
 	}
 }
 
 func TestIdentity_ResolvedConnectionSupportsHandle(t *testing.T) {
-	key := ConnectionKey(Connection("discord", "123456").Value())
+	key := ConnectionKey(attested("discord", "123456").Value())
 	id := ResolvedConnection(key, "discord").WithHandle("cool_username")
 	if id.Handle() != "cool_username" {
 		t.Errorf("expected handle to round-trip, got %q", id.Handle())
@@ -549,4 +550,14 @@ func TestIdentity_WithHandleIsImmutable(t *testing.T) {
 	if withHandle.Handle() != "alice" {
 		t.Errorf("expected handle 'alice', got %q", withHandle.Handle())
 	}
+}
+
+// attested is the Identity of an IA-attested user id, its key taken byte for
+// byte as a sender takes it from a 35522.
+func attested(platform WebIdentity, userID string) Identity {
+	k, err := nipIC.ConnectionKeyFromAttested(platform, userID)
+	if err != nil {
+		panic(err)
+	}
+	return ResolvedConnection(k, platform)
 }

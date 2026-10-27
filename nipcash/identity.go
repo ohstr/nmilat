@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 
 	"github.com/ohstr/nmilat/nipAZ"
 	"github.com/ohstr/nmilat/nipIC"
@@ -59,24 +60,51 @@ func Pubkey(hex string) namedIdentity {
 	return namedIdentity{identity: nipAZ.Pubkey(hex)}
 }
 
-// ConnectionKey builds a Recipient/Target for a Web Identity account that
-// has no Nostr keypair yet, vouched for by the Identity Authority at
-// iaPubkey — platform+externalID are hashed into a nipIC.ConnectionKey
-// internally (via nipAZ.Connection, itself built on nipIC.NewConnectionKey),
-// so no caller ever computes that hash by hand.
-func ConnectionKey(platform nipIC.WebIdentity, externalID, iaPubkey string) namedIdentity {
-	return namedIdentity{identity: nipAZ.Connection(platform, externalID), ia: iaPubkey}
+// ConnectionKey builds a Recipient/Target for an account on a platform with a
+// canonical user-id form (x, discord, email, dns), from typed input, vouched for
+// by the IA at iaPubkey. Input that is not canonical has no key and is an error
+// (nipIC.ErrNotCanonical); a platform without a canonical form is
+// nipIC.ErrTypedInputNotCanonical, since its key comes from the recipient's
+// attestation (ConnectionKeyFromAttestation) or nconnection
+// (ConnectionKeyFromNConnection), never from what a sender typed.
+func ConnectionKey(platform nipIC.WebIdentity, typed, iaPubkey string) (namedIdentity, error) {
+	id, err := nipAZ.Connection(platform, typed)
+	if err != nil {
+		return namedIdentity{}, err
+	}
+	return namedIdentity{identity: id, ia: iaPubkey}, nil
 }
 
-// ResolvedConnectionKey builds a Recipient/Target from a nipIC.ConnectionKey
-// the caller already has — e.g. one decoded from an nconnection1... string
-// via nipIC.DecodeNConnection, which carries the key itself, not the raw
-// external ID it was hashed from. Unlike ConnectionKey, this never hashes
-// anything (via nipAZ.ResolvedConnection): a caller with only the key, not
-// the external ID, has no way to reproduce ConnectionKey's own hash step
-// and shouldn't need to.
-func ResolvedConnectionKey(key nipIC.ConnectionKey, platform nipIC.WebIdentity, iaPubkey string) namedIdentity {
-	return namedIdentity{identity: nipAZ.ResolvedConnection(key, platform), ia: iaPubkey}
+// ConnectionKeyFromAttestation builds a Recipient/Target from a recipient's
+// Kind 35522: the key is its d tag, byte for byte, and the IA is its author.
+func ConnectionKeyFromAttestation(att *nipIC.Attestation) (namedIdentity, error) {
+	if att == nil || att.Event == nil {
+		return namedIdentity{}, fmt.Errorf("nipcash: no attestation")
+	}
+	return ResolvedConnectionKey(att.ConnectionKey, att.Platform, att.PubKey)
+}
+
+// ConnectionKeyFromNConnection builds a Recipient/Target from the key and
+// platform an nconnection carries, with the IA the sender trusts for it. The IA
+// is required: the key travels with the pubkey of the IA that attested it.
+func ConnectionKeyFromNConnection(key nipIC.ConnectionKey, platform nipIC.WebIdentity, iaPubkey string) (namedIdentity, error) {
+	if iaPubkey == "" {
+		return namedIdentity{}, ErrMissingIAPubkey
+	}
+	return ResolvedConnectionKey(key, platform, iaPubkey)
+}
+
+// ResolvedConnectionKey builds a Recipient/Target from a ConnectionKey the caller
+// already holds. It never hashes anything; it refuses a key that is not 64
+// lowercase hex and a platform outside nipIC.ValidPlatformName.
+func ResolvedConnectionKey(key nipIC.ConnectionKey, platform nipIC.WebIdentity, iaPubkey string) (namedIdentity, error) {
+	if _, err := nipIC.ParseConnectionKey(string(key)); err != nil {
+		return namedIdentity{}, err
+	}
+	if !nipIC.ValidPlatformName(platform) {
+		return namedIdentity{}, nipIC.ErrPlatformName
+	}
+	return namedIdentity{identity: nipAZ.ResolvedConnection(key, platform), ia: iaPubkey}, nil
 }
 
 // cashRecipient is Anyone()'s concrete Recipient — plain cash, no

@@ -55,8 +55,9 @@ func TestT04_05_RemovedPayloadHasNoProvenance(t *testing.T) {
 // hex(SHA256(platform + ":" + externalID)). Value from `printf 'github:12345' | sha256sum`.
 func TestKAT_ConnectionKey(t *testing.T) {
 	const want = "2db75fb4d7a8e3005aca09c643b4e6f40142ddcfc18c675509988c1b111d0dcf"
-	if got := string(nipIC.NewConnectionKey("github", "12345")); got != want {
-		t.Fatalf("NewConnectionKey(github, 12345) = %s, want %s", got, want)
+	got, err := nipIC.ConnectionKeyFromAttested("github", "12345")
+	if err != nil || string(got) != want {
+		t.Fatalf("ConnectionKeyFromAttested(github, 12345) = %s (%v), want %s", got, err, want)
 	}
 }
 
