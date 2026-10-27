@@ -61,3 +61,26 @@ func FuzzSanitizeText(f *testing.F) {
 		}
 	})
 }
+
+// stripped and lineBreak are the code points SanitizeText never returns: the
+// check-mark look-alikes, bidirectional controls and zero-width characters, and
+// every line break and tab.
+func stripped(r rune) bool {
+	switch {
+	case r == 0x2713, r == 0x2714, r == 0x2705, r == 0x2611, r == 0x1F5F8, r == 0x221A:
+		return true
+	case r >= 0x202A && r <= 0x202E, r >= 0x2066 && r <= 0x2069:
+		return true
+	case r >= 0x200B && r <= 0x200D, r == 0x2060, r == 0xFEFF:
+		return true
+	}
+	return false
+}
+
+func lineBreak(r rune) bool {
+	switch r {
+	case '\n', '\r', '\t', '\v', '\f', 0x85, 0x2028, 0x2029:
+		return true
+	}
+	return false
+}

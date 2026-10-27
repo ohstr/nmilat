@@ -302,6 +302,9 @@ func TestSanitizeText(t *testing.T) {
 		{strings.Repeat("👍🏽", 41), MaxTitle, true, strings.Repeat("👍🏽", 40)},
 		{"  padded  ", MaxTitle, true, "padded"},
 		{"https://evil.example", MaxTitle, true, "https://evil.example"},
+		// As listing.SanitizeText: a variation selector after a mark goes with it.
+		{"Alice \u2705\ufe0f", MaxTitle, true, "Alice"},
+		{"a\u2714\ufe0f\nb", MaxContent, false, "a\nb"},
 	}
 	for _, c := range cases {
 		if got := sanitizeText(c.in, c.max, c.oneLine); got != c.want {
