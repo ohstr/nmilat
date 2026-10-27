@@ -184,6 +184,9 @@ func (l *WithdrawLedger) redeemLocked(it *ledgerItem) *transport.Result {
 	if fi == nil || fi.paid || it.c.Fault.Is(FaultRouteOverBound) {
 		return errResult(nipcash.ErrCodePaymentFailed, "the payment failed", "")
 	}
+	if it.c.Fault.Is(FaultHoldPayments) {
+		return l.holdRedeemLocked(b, s, fi, verdict, req.IdentityEvent)
+	}
 	fi.paid = true
 	s.state, s.claimedAt = nipcash.ReasonRedeemed, l.nowLocked()
 	l.consumeLocked(verdict, req.IdentityEvent)

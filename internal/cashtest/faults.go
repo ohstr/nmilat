@@ -63,7 +63,10 @@ var (
 	// yet, so only the decision hook acts on it, through ItemCtx.Fault.
 	FaultRouteOverBound = Fault{kind: faultRouteOverBound}
 	// FaultHoldPayments keeps payments in flight until cleared (CASH-S-36).
-	// Like FaultRouteOverBound it is visible to the decision hook only.
+	// The bill ledger holds a cash_redeem's payment under it: the slice is
+	// claimed and the redeem answered INTERNAL, as a Hub whose payment may
+	// still settle answers it, until SettleHeldRedeems or FailHeldRedeems.
+	// Elsewhere it is visible to the decision hook only.
 	FaultHoldPayments = Fault{kind: faultHoldPayments}
 	// FaultHoldSign keeps the withdrawal ledger from writing any about-to-sign
 	// record until cleared (WithdrawLedger.InjectFault).

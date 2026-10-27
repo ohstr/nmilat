@@ -365,7 +365,7 @@ func (l *WithdrawLedger) tombstoneLocked(b *ledgerBill, signer string) nipcash.T
 // tombstone says the last slice's state.
 func (l *WithdrawLedger) destroyIfDrainedLocked(b *ledgerBill, last *ledgerSlice) {
 	for _, s := range b.slices {
-		if s.live() {
+		if s.live() || s.state == slicePaying {
 			return
 		}
 	}
