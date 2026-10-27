@@ -8,6 +8,31 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds the NIP-CW join building blocks: `nipcw.Terms`, `TermsTag`,
+  `ParseTerms`, `RenewalAtLeast`, `ValidRenewal`,
+  `CreateCircleWalletParams.Prepare` with a single-use `*PreparedJoin`
+  (`Item`, `ParseResult`, `ErrPreparedJoinUsed`), `CircleWalletDetails` and
+  `EncryptDetails`, `JoinLookupParams` and
+  `nipcash/client.(*BatchSession).LookupCircleJoin`.
+  ([#192](https://github.com/ohstr/nmilat/pull/192))
+- Adds NIP-CW Hub helpers: `VerifyJoinProof`,
+  `ParseCreateCircleWalletRequest`, `JoinProofError`,
+  `JoinProofRetainUntil`, `NewMemberRequest`, `VerifyMemberRequest`,
+  `MemberRequestRetainUntil`, `BudgetPeriodStart`, `BudgetPeriod`,
+  `FeeSkim`, `RoutingFeeReserve`, `MaxCost`, `ResolveFollowSet`,
+  `EncryptHiddenMember`, `DecryptHiddenMember`, `SealHiddenMembers`, and
+  every NIP-CW join and wallet error code.
+  ([#192](https://github.com/ohstr/nmilat/pull/192))
+- Adds `nipcw.SignCircleHubConnection`, `CircleHubConnection.Verify` and
+  `Fields`, `nipcw.WalletConnection`, and in `nipcw/client` `LookupJoin`,
+  `DeleteWallet`, `ParseRotationNotification`, `WalletGuard`,
+  `JoinIndeterminateError`, `PendingJoin`, `JoinJournal`,
+  `JoinResult.Wallet`, `Client.Verified`, `ErrNoAnnouncement`,
+  `ErrNotAccepting`, `ErrRotationWarningRequired`, `ErrHubNonConforming` and
+  `ErrOverHubLimit`. ([#192](https://github.com/ohstr/nmilat/pull/192))
+- Adds an optional Circle Wallet Hub connection to the fake Hub
+  (`cashtest.WithCircleHub`).
+  ([#192](https://github.com/ohstr/nmilat/pull/192))
 - Adds the client's write-ahead journal for calls carrying a `request_id`:
   `nipcash.PendingCall`, `client.Journal` (and the optional
   `AcceptedRecorder`), envelopes packed one at a time with `not_after` =
@@ -352,6 +377,20 @@ privacy and performance fixes.
 
 ### Changed
 
+- Changes `nipcw.CircleHubConnection` to require TLV 4, 5 and 6 (`Pubkey`,
+  `Relays`, `HubIdentity`, `Signature`, `Chain`); encoding refuses an
+  unsigned connection. `nipcw/client.Connect` takes a `circlehub1` string
+  and `Options` and runs the online check; `Join` joins only over the
+  private transport, with a `JoinJournal`, and warns before joining a Hub
+  without rotation. ([#192](https://github.com/ohstr/nmilat/pull/192))
+- Changes `nipcw.CreateCircleWalletRequest` to carry `max_receive`, an
+  unsigned `expiry` and an always-sent `budget_renewal`,
+  `CreateCircleWalletResponse` to report `ConnectionPubkey`,
+  `MaxReceiveMillis`, `DustThresholdMillis`, `RotationDelaySecs`,
+  `MissingTerms`, `LeakedFields` and `CapsRaised`, `ConnectionKeyFromSecret`
+  to refuse a secret that is not 64 lowercase hex, and
+  `nipcash/client.BatchCircleJoin` to carry a `*nipcw.PreparedJoin` (`Join`)
+  instead of `Params`. ([#192](https://github.com/ohstr/nmilat/pull/192))
 - Changes `TransferMany`, `ConsolidateMany`, `CashTransfer` and
   `CashConsolidate` to take a `Journal` and a device id (the composites take
   them in their params); a call without a journal is refused. A session uses
@@ -535,6 +574,12 @@ privacy and performance fixes.
 
 ### Removed
 
+- Removes `nipcw.CreateCircleWalletParams.Request`, `ParseResult` and `Item`
+  (use `Prepare`), `CreateCircleWalletResponse.PairingURI`,
+  `CircleHubConnection.WalletPubkey`/`RelayURLs`, the standard-transport
+  `nipcw/client.(*Client).CreateCircleWallet`, `JoinOptions.RequirePrivate`,
+  `JoinResult.Private`/`FallbackReason` and `ErrPrivateJoinUnavailable`.
+  ([#192](https://github.com/ohstr/nmilat/pull/192))
 - Removes `Client.MintCash` (use `HubClient.MintCash`).
   ([#191](https://github.com/ohstr/nmilat/pull/191))
 - Removes `MintCashParams.IdempotencyKey`, `nipcash.Anyone()` and
