@@ -8,6 +8,13 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `nipcash.ErrBech32m` and `nipIC.ErrNConnectionBech32m`.
+  ([#206](https://github.com/ohstr/nmilat/pull/206))
+- Adds to the fake Hub a `cash_redeem` fake payee and `cash_transfer` splits
+  on its bill ledger, `FaultStallCommit`, and the optional conformance
+  interfaces `Payee` and `SliceRemover`; CT-WD-09 now runs every leg,
+  CT-WD-22 and E-WD-14 are added.
+  ([#206](https://github.com/ohstr/nmilat/pull/206))
 - Adds `vectors` (`Files`, `Build`, `WriteAll`, `Version`), which builds
   every cross-implementation vector file (37) from nmilat with deterministic
   inputs, and `cmd/export-vectors`; the files are committed under
@@ -532,6 +539,13 @@ privacy and performance fixes.
 
 ### Changed
 
+- Changes `NormalizeAddress` to report a base58check address as
+  `ErrAddressNoWitness` rather than a mixed-case error, and
+  `WithdrawTerms.Validate` to refuse an empty `script_types`.
+  ([#206](https://github.com/ohstr/nmilat/pull/206))
+- Changes the fake Hub to answer a commit stalled past its deadline
+  `BAD_REQUEST`, as NIP-CASH requires, instead of dropping the reply.
+  ([#206](https://github.com/ohstr/nmilat/pull/206))
 - Changes `relay.ClassifyKind` to count kinds 9522 and 9523 as zaps.
   ([#204](https://github.com/ohstr/nmilat/pull/204))
 - Changes the Hub-side encoding of `expires_at` in `mint_cash`,
@@ -781,6 +795,13 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes the credential decoders and `nipIC.DecodeNConnection` accepting a
+  bech32m checksum: these strings are NIP-19 bech32 (on-chain addresses keep
+  BIP-350). ([#206](https://github.com/ohstr/nmilat/pull/206))
+- Fixes `ParseWithdrawCancel` giving a different reason from run to run when
+  several fields are bad. ([#206](https://github.com/ohstr/nmilat/pull/206))
+- Fixes `nip01.SubscriptionFilter` losing its tag filters when marshalled by
+  value. ([#206](https://github.com/ohstr/nmilat/pull/206))
 - Fixes a proof missing several tags reporting a different missing tag from
   run to run. ([#205](https://github.com/ohstr/nmilat/pull/205))
 - Fixes `nipLS` line limits: a line of exactly 1 MiB plus its newline is
