@@ -57,3 +57,25 @@ func TestAgainstFakeOrderHub(t *testing.T) {
 func TestAgainstFakeWithdrawHub(t *testing.T) {
 	conformance.Run(t, cashtest.NewFakeHub(t, cashtest.WithWithdrawals()), conformance.Options{Only: []string{"CT-WD-01", "CT-SCOPE-05"}})
 }
+
+// listHub is the fake Hub with an Order connection, a circle and their
+// listings, as a Lister.
+type listHub struct {
+	orderHub
+	*cashtest.Lister
+}
+
+// TestAgainstFakeListingHub runs the CT-LIST cases against the fake's listings
+// (T02-13).
+func TestAgainstFakeListingHub(t *testing.T) {
+	hub := cashtest.NewFakeHub(t, cashtest.WithCircleHub())
+	book := hub.ServeOrders(t, fakeOrderTerms)
+	h := listHub{orderHub: orderHub{FakeHub: hub, book: book}, Lister: hub.ServeListings(t, book)}
+	var only []string
+	for _, id := range conformance.IDs() {
+		if strings.HasPrefix(id, "CT-LIST") {
+			only = append(only, id)
+		}
+	}
+	conformance.Run(t, h, conformance.Options{Only: only})
+}

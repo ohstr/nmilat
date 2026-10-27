@@ -187,6 +187,7 @@ func allCases() []ctCase {
 	out = append(out, powCases...)
 	out = append(out, orderCases...)
 	out = append(out, withdrawCases...)
+	out = append(out, listCases...)
 	return out
 }
 
