@@ -164,6 +164,7 @@ func TestDecodeCashHubConnection_Refusals(t *testing.T) {
 		"no TLV 0":        {build(0), nil},
 		"no TLV 2":        {build(2), nil},
 		"label twice":     {build(99, tlv(3, []byte("x"))), nil},
+		"label not UTF-8": {build(3, tlv(3, []byte{0xff, 0xfe})), nil},
 		"empty relay set": {"", nil},
 	}
 	for name, tc := range cases {
@@ -310,6 +311,11 @@ func TestEncodeCashHubConnection_Refusals(t *testing.T) {
 	}
 	if _, err := EncodeCashHubConnection(half); err == nil {
 		t.Error("a label without HasLabel was encoded")
+	}
+	badUTF8 := c
+	badUTF8.Label = "\xff"
+	if _, err := EncodeCashHubConnection(badUTF8); err == nil {
+		t.Error("a label that is not UTF-8 was encoded")
 	}
 }
 

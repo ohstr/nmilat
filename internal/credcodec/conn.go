@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"unicode/utf8"
 )
 
 // TLV types of a connection string (NIP-CASH §The Cash Hub Connection,
@@ -121,6 +122,9 @@ func EncodeConn(hrp string, c Conn) (string, error) {
 	if len(c.Label) > MaxTLVValueLen {
 		return "", fmt.Errorf("label exceeds %d bytes", MaxTLVValueLen)
 	}
+	if !utf8.ValidString(c.Label) {
+		return "", errors.New("the label is not valid UTF-8")
+	}
 
 	buf := &bytes.Buffer{}
 	WriteTLV(buf, TLVPubkey, pubkey)
@@ -138,7 +142,7 @@ func EncodeConn(hrp string, c Conn) (string, error) {
 }
 
 // DecodeConn parses a connection string of HRP wantHRP. It refuses a missing
-// 0/2/4/5/6, a wrong-length 0/2/4/5, a malformed 6, a repeated single field, no
+// 0/2/4/5/6, a wrong-length 0/2/4/5, a malformed 3 (not UTF-8) or 6, a repeated single field, no
 // usable relay hint and truncated data, and ignores a type above 6. It never
 // verifies the signature.
 func DecodeConn(s, wantHRP string) (Conn, error) {
@@ -183,6 +187,9 @@ func DecodeConn(s, wantHRP string) (Conn, error) {
 			}
 			c.Secret = hex.EncodeToString(value)
 		case TLVLabel:
+			if !utf8.Valid(value) {
+				return Conn{}, errors.New("label is not valid UTF-8")
+			}
 			c.Label, c.HasLabel = string(value), true
 		case TLVHubIdentity:
 			if len(value) != keyLen {
