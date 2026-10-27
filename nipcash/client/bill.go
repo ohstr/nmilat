@@ -28,6 +28,10 @@ type Bill struct {
 	// carries, or "" when it carries none that verifies. A session sends to one
 	// node, so a bill minted by another is refused before sending (see check).
 	node string
+	// Ordered is a local mark, never on the wire: the bill came from an order
+	// (or was built from ordered sources). Ordered and unordered bills are not
+	// consolidated together (ErrMixedOrdered).
+	Ordered bool
 }
 
 // BillFor is the normal constructor: everything it needs is in the bill's own token,

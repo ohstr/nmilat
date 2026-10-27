@@ -143,3 +143,5 @@ func TestReplace(t *testing.T) {
 		}
 	})
 }
+
+func nowForTest() time.Time { return time.Unix(1_900_000_000, 0) }
