@@ -26,8 +26,9 @@ type RedeemOptions struct {
 	AutoAmount bool
 	// Payee is the identity of the node the invoice pays (x-only, or 66-hex
 	// compressed), compared with the bill's minter: the same node is paid the
-	// row's full amount, fee-free; any other, its net redeemable amount. "" reads
-	// as another node. Used only with AutoAmount.
+	// row's full amount, fee-free; any other, its net redeemable amount. ""
+	// recovers the payee from the invoice's own signature. Used only with
+	// AutoAmount.
 	Payee string
 }
 
@@ -102,6 +103,11 @@ func (c *Client) autoRedeemAmount(ctx context.Context, session *BatchSession, pa
 	invoice, err := nip57.DecodeBolt11(params.Invoice)
 	if err != nil {
 		return params, fmt.Errorf("nipcash: decode invoice: %w", err)
+	}
+	if payee == "" {
+		if payee, err = invoicePayee(params.Invoice); err != nil {
+			return params, err
+		}
 	}
 	status, err := c.CashStatus(ctx, params.Credential, nipcash.ScopeMine)
 	if err != nil {

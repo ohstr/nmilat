@@ -7,6 +7,8 @@ import (
 	"errors"
 	"strconv"
 
+	"github.com/decred/dcrd/dcrec/secp256k1/v4"
+	"github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
 	"github.com/flokiorg/go-flokicoin/chainutil/bech32"
 
 	"github.com/ohstr/nmilat/nip01"
@@ -58,9 +60,24 @@ func (l *WithdrawLedger) Invoice(millis uint64) string {
 	return inv
 }
 
-// FakeBolt11 is an unsigned BOLT11 string (zero timestamp and signature) under
-// FakeInvoiceHRP carrying paymentHash and millis (0: amountless): enough for
-// nip57.DecodeBolt11, never payable on a real network.
+// fakePayeeKey signs the fake payee's invoices: a node that is never the
+// Hub's, so a client recovering the payee from the signature reads another
+// node.
+var fakePayeeKey = func() *secp256k1.PrivateKey {
+	k := sha256.Sum256([]byte("nmilat cashtest fake lightning payee"))
+	return secp256k1.PrivKeyFromBytes(k[:])
+}()
+
+// FakePayeeXOnly is the fake payee's node identity (x-only hex), the key its
+// invoices are signed by.
+func FakePayeeXOnly() string {
+	return hex.EncodeToString(fakePayeeKey.PubKey().SerializeCompressed()[1:])
+}
+
+// FakeBolt11 is a BOLT11 string (zero timestamp) under FakeInvoiceHRP carrying
+// paymentHash and millis (0: amountless), signed by the fake payee's node key:
+// enough for nip57.DecodeBolt11 and payee recovery, never payable on a real
+// network.
 func FakeBolt11(paymentHash []byte, millis uint64) string {
 	hrp := FakeInvoiceHRP
 	if millis > 0 {
@@ -73,7 +90,17 @@ func FakeBolt11(paymentHash []byte, millis uint64) string {
 	}
 	words = append(words, 1, byte(len(data)/32), byte(len(data)%32))
 	words = append(words, data...)
-	words = append(words, make([]byte, 104)...)
+	msg, err := bech32.ConvertBits(words, 5, 8, true)
+	if err != nil {
+		panic("cashtest: invoice: " + err.Error())
+	}
+	h := sha256.Sum256(append([]byte(hrp), msg...))
+	compact := ecdsa.SignCompact(fakePayeeKey, h[:], true)
+	sig, err := bech32.ConvertBits(append(append([]byte{}, compact[1:]...), compact[0]-27-4), 8, 5, true)
+	if err != nil {
+		panic("cashtest: invoice: " + err.Error())
+	}
+	words = append(words, sig...)
 	s, err := bech32.Encode(hrp, words)
 	if err != nil {
 		panic("cashtest: invoice: " + err.Error())
