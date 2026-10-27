@@ -142,10 +142,15 @@ func ClassifyAddressAmong(addr string, hrps []string) (ScriptType, string, error
 }
 
 // NormalizeAddress is the client's form of an address typed by a person:
-// trimmed, and lowercased when it is all uppercase. A string mixing cases is
-// ErrAddressMalformed. It checks nothing else; ClassifyAddress does.
+// trimmed, and lowercased when it is all uppercase. A valid base58check address
+// (which is case-sensitive and has no witness program) is ErrAddressNoWitness;
+// any other string mixing cases is ErrAddressMalformed. It checks nothing else;
+// ClassifyAddress does.
 func NormalizeAddress(s string) (string, error) {
 	s = strings.TrimSpace(s)
+	if _, _, err := base58.CheckDecode(s); err == nil {
+		return "", ErrAddressNoWitness
+	}
 	lower, upper := strings.ToLower(s), strings.ToUpper(s)
 	switch s {
 	case lower:

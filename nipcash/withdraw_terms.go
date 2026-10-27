@@ -26,6 +26,9 @@ func (w WithdrawTerms) Validate() error {
 	if w.MinMillis != nil && w.MaxMillis != nil && *w.MinMillis > *w.MaxMillis {
 		return errors.New("nipcash: min_millis exceeds max_millis")
 	}
+	if len(w.ScriptTypes) == 0 {
+		return errors.New("nipcash: script_types lists no script type")
+	}
 	for _, st := range w.ScriptTypes {
 		v, n := st[0], st[1]
 		switch {

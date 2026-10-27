@@ -35,19 +35,23 @@ func ParseWithdrawCancel(params json.RawMessage) (req *CashWithdrawCancelRequest
 		return nil, true, bad("cancel must be true")
 	}
 	r := &CashWithdrawCancelRequest{Cancel: true}
-	for k, v := range fields {
+	// Checked in a fixed order, so the reason does not depend on map order: an
+	// unknown field first, then request_id, then cash_secret.
+	for k := range fields {
 		switch k {
-		case "cancel":
-		case "request_id":
-			if json.Unmarshal(v, &r.RequestID) != nil || !ValidRequestID(r.RequestID) {
-				return nil, true, bad("request_id")
-			}
-		case "cash_secret":
-			if json.Unmarshal(v, &r.CashSecret) != nil || !ValidCashSecret(r.CashSecret) {
-				return nil, true, bad("cash_secret")
-			}
+		case "cancel", "request_id", "cash_secret":
 		default:
 			return nil, true, bad("a field other than cancel, request_id and cash_secret")
+		}
+	}
+	if v, ok := fields["request_id"]; ok {
+		if json.Unmarshal(v, &r.RequestID) != nil || !ValidRequestID(r.RequestID) {
+			return nil, true, bad("request_id")
+		}
+	}
+	if v, ok := fields["cash_secret"]; ok {
+		if json.Unmarshal(v, &r.CashSecret) != nil || !ValidCashSecret(r.CashSecret) {
+			return nil, true, bad("cash_secret")
 		}
 	}
 	if r.RequestID == "" {
