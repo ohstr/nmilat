@@ -175,6 +175,22 @@ func (w *wdHub) decide(item transport.Item) *transport.Result {
 	return nil
 }
 
+// locked runs f under the hub's lock. The hooks, and what decide records, are
+// shared with the relays' goroutines, and a reply over a websocket is no
+// happens-before edge the race detector can see.
+func (w *wdHub) locked(f func()) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	f()
+}
+
+// lastPayout is a copy of the last committed payout.
+func (w *wdHub) lastPayout() nipcash.Payout {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return *w.payout
+}
+
 // lookupDone answers a lookup done with p.
 func lookupDone(item transport.Item, p *nipcash.Payout) *transport.Result {
 	b, _ := json.Marshal(p)
@@ -195,7 +211,7 @@ func (w *wdHub) quote(t *testing.T, addr string) *nipcash.WithdrawQuote {
 // T21-20: no withdraw object → ErrWithdrawNotOffered, no quote sent.
 func TestT21_20_NotOffered(t *testing.T) {
 	w := newWDHub(t, false)
-	w.offered = false
+	w.locked(func() { w.offered = false })
 	ctx, cancel := e2eContext(t)
 	defer cancel()
 	if _, err := w.s.quoteWithdraw(ctx, w.bill, "bitcoin", nipcash.CashWithdrawQuoteParams{Address: wdAddr, Credential: w.cred()}); !errors.Is(err, ErrWithdrawNotOffered) {
@@ -207,8 +223,8 @@ func TestT21_20_NotOffered(t *testing.T) {
 		}
 	}
 	// A quote refused NOT_IMPLEMENTED is ErrWithdrawNotOffered too.
-	w.offered = true
-	w.quoteErr = &transport.ResultError{Code: nipcash.ErrCodeNotImplemented, Message: "off"}
+	w.locked(func() { w.offered = true })
+	w.locked(func() { w.quoteErr = &transport.ResultError{Code: nipcash.ErrCodeNotImplemented, Message: "off"} })
 	if _, err := w.s.quoteWithdraw(ctx, w.bill, "bitcoin", nipcash.CashWithdrawQuoteParams{Address: wdAddr, Credential: w.cred()}); !errors.Is(err, ErrWithdrawNotOffered) {
 		t.Fatalf("NOT_IMPLEMENTED: %v", err)
 	}
@@ -306,11 +322,11 @@ func TestWithdraw_QuoteThenWithdraw(t *testing.T) {
 			t.Errorf("watch relays %v", got)
 		}
 		// Recover on the done (T11-51): waits with the payout, never closes.
-		act, err := Recover(context.Background(), pc, answered(LookupOutcome{Status: nipcash.LookupDone, Result: mustJSON(t, w.payout)}), "dev", time.Now())
+		act, err := Recover(context.Background(), pc, answered(LookupOutcome{Status: nipcash.LookupDone, Result: mustJSON(t, w.lastPayout())}), "dev", time.Now())
 		if err != nil || act.Kind != ActionWait || act.Result == nil {
 			t.Errorf("Recover done: %+v %v", act, err)
 		}
-		bad := *w.payout
+		bad := w.lastPayout()
 		bad.PayoutMillis, bad.FeeMillis = wdPayout-1000, wdAmount-wdPayout+1000
 		act, _ = Recover(context.Background(), pc, answered(LookupOutcome{Status: nipcash.LookupDone, Result: mustJSON(t, &bad)}), "dev", time.Now())
 		if act.Kind != ActionWait || act.Reason != "lookup_malformed" {
@@ -336,7 +352,7 @@ func TestWithdraw_Answers(t *testing.T) {
 
 	w := newWDHub(t, false)
 	q := w.quote(t, wdAddr)
-	w.badHash = true
+	w.locked(func() { w.badHash = true })
 	_, err := w.s.withdraw(ctx, w.bill, nipcash.CashWithdrawParams{Quote: q, Credential: w.cred()}, newTestJournal(), "dev")
 	var ind *IndeterminateError
 	if !errors.As(err, &ind) || !errors.Is(err, nipcash.ErrReceiptInvalid) {
@@ -345,24 +361,28 @@ func TestWithdraw_Answers(t *testing.T) {
 
 	w = newWDHub(t, false)
 	q = w.quote(t, wdAddr)
-	w.callErr = &transport.ResultError{Code: nipcash.ErrCodeBadRequest, Message: "x"}
+	w.locked(func() { w.callErr = &transport.ResultError{Code: nipcash.ErrCodeBadRequest, Message: "x"} })
 	var fin *FinalError
 	if _, err := w.s.withdraw(ctx, w.bill, nipcash.CashWithdrawParams{Quote: q, Credential: w.cred()}, newTestJournal(), "dev"); !errors.As(err, &fin) {
 		t.Errorf("BAD_REQUEST: %v", err)
 	}
 	for _, code := range []string{nipcash.ErrCodeRestricted, nipcash.ErrCodeNotImplemented} {
-		w.callErr = &transport.ResultError{Code: code, Message: "x", Detail: "quote_expired"}
+		w.locked(func() { w.callErr = &transport.ResultError{Code: code, Message: "x", Detail: "quote_expired"} })
 		_, err := w.s.withdraw(ctx, w.bill, nipcash.CashWithdrawParams{Quote: q, Credential: w.cred()}, newTestJournal(), "dev")
 		if !errors.As(err, &ind) || ind.Code != code || ind.Detail != "quote_expired" || ind.Call.LastDetail != nipcash.DetailQuoteExpired || ind.Call.LastCode != code {
 			t.Errorf("%s: %v", code, err)
 		}
 	}
-	w.callErr = &transport.ResultError{Code: nipcash.ErrCodeRestricted, Message: "x", Detail: "fee_over_cap"}
+	w.locked(func() {
+		w.callErr = &transport.ResultError{Code: nipcash.ErrCodeRestricted, Message: "x", Detail: "fee_over_cap"}
+	})
 	if _, err := w.s.withdraw(ctx, w.bill, nipcash.CashWithdrawParams{Quote: q, Credential: w.cred()}, newTestJournal(), "dev"); !errors.As(err, &ind) || ind.Detail != "" {
 		t.Errorf("unknown detail kept: %v", err)
 	}
 	// A quote refusal is definitive, with its detail.
-	w.quoteErr = &transport.ResultError{Code: nipcash.ErrCodeRestricted, Message: "x", Detail: "network"}
+	w.locked(func() {
+		w.quoteErr = &transport.ResultError{Code: nipcash.ErrCodeRestricted, Message: "x", Detail: "network"}
+	})
 	if _, err := w.s.quoteWithdraw(ctx, w.bill, "bitcoin", nipcash.CashWithdrawQuoteParams{Address: wdAddr, Credential: w.cred()}); !errors.As(err, &fin) || fin.Detail != "network" {
 		t.Errorf("quote refusal: %v", err)
 	}
@@ -388,39 +408,43 @@ func TestT21_26_LookupWithdraw(t *testing.T) {
 
 	// A bearer lookup goes first without the secret, then with it after UNAUTHORIZED.
 	var lookups []nipcash.CashLookupRequest
-	broadcast := *w.payout
+	broadcast := w.lastPayout()
 	vout, depth := uint32(1), uint32(0)
 	txHex, txid := payoutTx(t, wdPayout/1000)
 	broadcast.State, broadcast.Signed, broadcast.Tx, broadcast.Txid, broadcast.Vout, broadcast.Depth = nipcash.PayoutBroadcast, true, txHex, txid, &vout, &depth
-	w.lookup = func(item transport.Item) *transport.Result {
-		var r nipcash.CashLookupRequest
-		_ = json.Unmarshal(item.Params, &r)
-		lookups = append(lookups, r)
-		if r.CashSecret == "" {
-			return &transport.Result{ID: item.ID, Error: &transport.ResultError{Code: nipcash.ErrCodeUnauthorized, Message: "x"}}
+	w.locked(func() {
+		w.lookup = func(item transport.Item) *transport.Result {
+			var r nipcash.CashLookupRequest
+			_ = json.Unmarshal(item.Params, &r)
+			lookups = append(lookups, r)
+			if r.CashSecret == "" {
+				return &transport.Result{ID: item.ID, Error: &transport.ResultError{Code: nipcash.ErrCodeUnauthorized, Message: "x"}}
+			}
+			return lookupDone(item, &broadcast)
 		}
-		return lookupDone(item, &broadcast)
-	}
+	})
 	lo, p, err := w.s.lookupWithdraw(ctx, w.bill, pc, w.cred())
 	if err != nil || lo.Status != nipcash.LookupDone || p == nil || p.State != nipcash.PayoutBroadcast || p.TxErr != nil {
 		t.Fatalf("lookup: %+v %+v %v", lo, p, err)
 	}
-	if len(lookups) != 2 || lookups[0].CashSecret != "" || lookups[1].CashSecret != w.secret || lookups[0].RequestID != pc.RequestID {
-		t.Errorf("lookups %+v", lookups)
-	}
+	w.locked(func() {
+		if len(lookups) != 2 || lookups[0].CashSecret != "" || lookups[1].CashSecret != w.secret || lookups[0].RequestID != pc.RequestID {
+			t.Errorf("lookups %+v", lookups)
+		}
+	})
 	// A tx that does not pay the payout: TxErr, the payout and its state kept.
 	short, shortID := payoutTx(t, wdPayout/1000-1)
-	broadcast.Tx, broadcast.Txid = short, shortID
+	w.locked(func() { broadcast.Tx, broadcast.Txid = short, shortID })
 	_, p, _ = w.s.lookupWithdraw(ctx, w.bill, pc, w.cred())
 	if p == nil || p.TxErr == nil || p.State != nipcash.PayoutBroadcast {
 		t.Errorf("tx check: %+v", p)
 	}
 	// A cancelled cash-mode payout: the re-minted bill in the clear, verified.
 	tok := remintToken(t, w.hub.hubPriv, w.hub.hubXOnly)
-	cancelled := *w.payout
+	cancelled := w.lastPayout()
 	cancelled.State, cancelled.NewWalletPubkey = nipcash.PayoutCancelled, strings.Repeat("22", 32)
 	cancelled.NewWalletToken = nipcash.TokenOrTombstone{Token: tok}
-	w.lookup = func(item transport.Item) *transport.Result { return lookupDone(item, &cancelled) }
+	w.locked(func() { w.lookup = func(item transport.Item) *transport.Result { return lookupDone(item, &cancelled) } })
 	pcNoSecret := pc
 	pcNoSecret.SourceSecret = ""
 	_, p, err = w.s.lookupWithdraw(ctx, w.bill, pcNoSecret, w.cred())
@@ -429,20 +453,23 @@ func TestT21_26_LookupWithdraw(t *testing.T) {
 	}
 	// Another Hub's re-minted bill reads as malformed.
 	otherPriv, otherX := sessionKeypair(t)
-	cancelled.NewWalletToken = nipcash.TokenOrTombstone{Token: remintToken(t, otherPriv, otherX)}
+	foreign := remintToken(t, otherPriv, otherX)
+	w.locked(func() { cancelled.NewWalletToken = nipcash.TokenOrTombstone{Token: foreign} })
 	if lo, p, _ := w.s.lookupWithdraw(ctx, w.bill, pcNoSecret, w.cred()); !lo.Malformed || p != nil {
 		t.Errorf("foreign re-mint: %+v", lo)
 	}
 	// A recovered call (no quote, no deadline): the receipt is checked against the payout.
 	recovered := nipcash.PendingCall{RequestID: pc.RequestID, Method: nipcash.MethodCashWithdraw, Target: pc.Target, HubIdentity: pc.HubIdentity}
-	w.lookup = func(item transport.Item) *transport.Result {
-		var r nipcash.CashLookupRequest
-		_ = json.Unmarshal(item.Params, &r)
-		if r.Deadline == 0 {
-			t.Error("a recovered lookup without a deadline")
+	w.locked(func() {
+		w.lookup = func(item transport.Item) *transport.Result {
+			var r nipcash.CashLookupRequest
+			_ = json.Unmarshal(item.Params, &r)
+			if r.Deadline == 0 {
+				t.Error("a recovered lookup without a deadline")
+			}
+			return lookupDone(item, w.payout)
 		}
-		return lookupDone(item, w.payout)
-	}
+	})
 	if lo, p, err := w.s.lookupWithdraw(ctx, w.bill, recovered, w.cred()); err != nil || p == nil || lo.Malformed {
 		t.Errorf("recovered: %+v %v", lo, err)
 	} else if id, _ := nipcash.ReceiptQuoteID(p.Receipt); id != q.ID {
@@ -491,7 +518,7 @@ func TestWithdraw_Cancel(t *testing.T) {
 	ctx, cancel := e2eContext(t)
 	defer cancel()
 	w := newWDHub(t, false)
-	w.sentBy = time.Now().Unix() - nipcash.CancelRequestAfter - 10
+	w.locked(func() { w.sentBy = time.Now().Unix() - nipcash.CancelRequestAfter - 10 })
 	q := w.quote(t, wdAddr)
 	j := newTestJournal()
 	if _, err := w.s.withdraw(ctx, w.bill, nipcash.CashWithdrawParams{Quote: q, Credential: w.cred()}, j, "dev"); err != nil {
@@ -507,27 +534,33 @@ func TestWithdraw_Cancel(t *testing.T) {
 		t.Error("the local guard sent something")
 	}
 	var sawSecret bool
-	w.cancel = func(item transport.Item) *transport.Result {
-		sawSecret = strings.Contains(string(item.Params), "cash_secret")
-		return &transport.Result{ID: item.ID, Error: &transport.ResultError{Code: nipcash.ErrCodeRestricted, Message: "too early"}}
-	}
+	w.locked(func() {
+		w.cancel = func(item transport.Item) *transport.Result {
+			sawSecret = strings.Contains(string(item.Params), "cash_secret")
+			return &transport.Result{ID: item.ID, Error: &transport.ResultError{Code: nipcash.ErrCodeRestricted, Message: "too early"}}
+		}
+	})
 	now := time.Now().Unix()
 	if _, err := w.s.cancelWithdraw(ctx, w.bill, pc, w.cred(), now); !errors.As(err, &refused) || refused.Code != nipcash.ErrCodeRestricted || refused.Local {
 		t.Errorf("RESTRICTED: %v", err)
 	}
-	if sawSecret {
-		t.Error("a pubkey cancel carries a cash_secret")
-	}
-	w.cancel = func(item transport.Item) *transport.Result {
-		return &transport.Result{ID: item.ID, Error: &transport.ResultError{Code: nipcash.ErrCodeRequestReused, Message: "x"}}
-	}
+	w.locked(func() {
+		if sawSecret {
+			t.Error("a pubkey cancel carries a cash_secret")
+		}
+	})
+	w.locked(func() {
+		w.cancel = func(item transport.Item) *transport.Result {
+			return &transport.Result{ID: item.ID, Error: &transport.ResultError{Code: nipcash.ErrCodeRequestReused, Message: "x"}}
+		}
+	})
 	if _, err := w.s.cancelWithdraw(ctx, w.bill, pc, w.cred(), now); !errors.Is(err, ErrCancelAnswer) {
 		t.Errorf("REQUEST_REUSED: %v", err)
 	}
-	broadcast := *w.payout
+	broadcast := w.lastPayout()
 	vout, depth := uint32(1), uint32(0)
 	broadcast.State, broadcast.Txid, broadcast.Vout, broadcast.Depth = nipcash.PayoutBroadcast, strings.Repeat("ab", 32), &vout, &depth
-	w.cancel = func(item transport.Item) *transport.Result { return wdResult(item, &broadcast) }
+	w.locked(func() { w.cancel = func(item transport.Item) *transport.Result { return wdResult(item, &broadcast) } })
 	if p, err := w.s.cancelWithdraw(ctx, w.bill, pc, w.cred(), now); err != nil || p.State != nipcash.PayoutBroadcast {
 		t.Errorf("answer: %+v %v", p, err)
 	}
@@ -651,16 +684,18 @@ func TestT21_28_ErrorTextPrivate(t *testing.T) {
 	q := w.quote(t, wdAddr)
 	var errs []error
 	j := newTestJournal()
-	w.badHash = true
+	w.locked(func() { w.badHash = true })
 	_, err := w.s.withdraw(ctx, w.bill, nipcash.CashWithdrawParams{Quote: q, Credential: w.cred()}, j, "dev")
 	errs = append(errs, err)
-	w.badHash = false
+	w.locked(func() { w.badHash = false })
 	for _, code := range []string{nipcash.ErrCodeBadRequest, nipcash.ErrCodeRestricted} {
-		w.callErr = &transport.ResultError{Code: code, Message: "refused", Detail: "own_address"}
+		w.locked(func() { w.callErr = &transport.ResultError{Code: code, Message: "refused", Detail: "own_address"} })
 		_, err := w.s.withdraw(ctx, w.bill, nipcash.CashWithdrawParams{Quote: q, Credential: w.cred()}, j, "dev")
 		errs = append(errs, err)
 	}
-	w.quoteErr = &transport.ResultError{Code: nipcash.ErrCodeRestricted, Message: "refused", Detail: "network"}
+	w.locked(func() {
+		w.quoteErr = &transport.ResultError{Code: nipcash.ErrCodeRestricted, Message: "refused", Detail: "network"}
+	})
 	_, err = w.s.quoteWithdraw(ctx, w.bill, "bitcoin", nipcash.CashWithdrawQuoteParams{Address: wdAddr, Credential: w.cred()})
 	errs = append(errs, err)
 	_, err = w.s.quoteWithdraw(ctx, w.bill, "bitcoin", nipcash.CashWithdrawQuoteParams{Address: wdAddrMix, Credential: w.cred()})
