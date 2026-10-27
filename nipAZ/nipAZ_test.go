@@ -376,7 +376,7 @@ func TestNewAltZapReceipt(t *testing.T) {
 			return nil, fmt.Errorf("decode failed")
 		}
 		return &nip57.Invoice{
-			AmountMloki: 123456,
+			Currency: "fc", AmountMloki: 123456, PaymentHash: testPaymentHash,
 		}, nil
 	}
 
@@ -390,14 +390,12 @@ func TestNewAltZapReceipt(t *testing.T) {
 		{
 			name:       "Valid Receipt",
 			bolt11:     "lnfc1...",
-			desc:       "{}",
 			wantErr:    false,
 			wantAmount: "123456",
 		},
 		{
 			name:       "Invalid Invoice",
 			bolt11:     "bad_invoice",
-			desc:       "{}",
 			wantErr:    true,
 			wantAmount: "",
 		},
@@ -405,12 +403,12 @@ func TestNewAltZapReceipt(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var preimage = "1122"
+			var preimage = testPreimage
 			got, err := NewAltZapReceipt(AltZapReceiptParams{
 				PrivateKey:  zapsTestPrivKey,
 				Chain:       "flokicoin",
-				Recipient:   Pubkey("recipient"),
-				Sender:      Pubkey("sender"),
+				Recipient:   Pubkey(testHex("recipient")),
+				Sender:      Pubkey(testHex("sender")),
 				Bolt11:      tt.bolt11,
 				Description: tt.desc,
 				Preimage:    &preimage,

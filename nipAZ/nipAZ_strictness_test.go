@@ -9,6 +9,7 @@ import (
 
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip57"
+	"github.com/ohstr/nmilat/utils"
 )
 
 // AltZap is deliberately stricter than NIP-57: the lnurl tag is required on
@@ -55,14 +56,14 @@ func TestAltZapReceiptHashLockAndChain(t *testing.T) {
 	wrongHash := good
 	wrongHash.PaymentHash = "00" + testPaymentHash[2:]
 	stubAltZapInvoice(t, &wrongHash)
-	if err := ValidateAltZapReceipt(receipt); !errors.Is(err, ErrHashLockMismatch) {
+	if err := legacyValidateReceipt(receipt); !errors.Is(err, ErrHashLockMismatch) {
 		t.Errorf("wrong payment hash: got %v, want ErrHashLockMismatch", err)
 	}
 
 	bitcoinInvoice := good
 	bitcoinInvoice.Currency = "bc"
 	stubAltZapInvoice(t, &bitcoinInvoice)
-	if err := ValidateAltZapReceipt(receipt); !errors.Is(err, ErrChainMismatch) {
+	if err := legacyValidateReceipt(receipt); !errors.Is(err, ErrChainMismatch) {
 		t.Errorf("bitcoin invoice on a flokicoin receipt: got %v, want ErrChainMismatch", err)
 	}
 }
@@ -101,7 +102,7 @@ func TestAltZapRejectsLightningAddressLnurl(t *testing.T) {
 	for _, kind := range []int{KindAltZapRequest, KindAltZapOnBehalfRequest} {
 		ev := altZapRequestWithTags(t, kind, zapRequestTags(kind, altZapLightningAddress))
 
-		err := ValidateAltZapRequest(ev, 0)
+		err := legacyValidateRequest(ev, 0)
 		if err == nil {
 			t.Fatalf("kind %d: AltZap accepted a lightning address in the lnurl tag", kind)
 		}
@@ -115,7 +116,7 @@ func TestAltZapRequiresLnurlTag(t *testing.T) {
 	for _, kind := range []int{KindAltZapRequest, KindAltZapOnBehalfRequest} {
 		ev := altZapRequestWithTags(t, kind, zapRequestTags(kind, ""))
 
-		err := ValidateAltZapRequest(ev, 0)
+		err := legacyValidateRequest(ev, 0)
 		if err == nil {
 			t.Fatalf("kind %d: AltZap accepted a request with no lnurl tag", kind)
 		}
@@ -131,7 +132,7 @@ func TestAltZapAcceptsBech32Lnurl(t *testing.T) {
 	for _, kind := range []int{KindAltZapRequest, KindAltZapOnBehalfRequest} {
 		ev := altZapRequestWithTags(t, kind, zapRequestTags(kind, validTestLnurl))
 
-		if err := ValidateAltZapRequest(ev, 0); err != nil {
+		if err := legacyValidateRequest(ev, 0); err != nil {
 			t.Errorf("kind %d: AltZap rejected a valid bech32 lnurl: %v", kind, err)
 		}
 	}
@@ -175,7 +176,7 @@ func TestAltZapReceiptRejectsAbsentDescriptionHash(t *testing.T) {
 	receipt, _ := signedAltZapReceipt(t)
 	stubAltZapInvoice(t, &nip57.Invoice{Currency: "fc", PaymentHash: testPaymentHash, AmountMloki: 1000})
 
-	err := ValidateAltZapReceipt(receipt)
+	err := legacyValidateReceipt(receipt)
 	if err == nil {
 		t.Fatal("AltZap accepted a receipt whose invoice carries no description hash")
 	}
@@ -193,7 +194,7 @@ func TestAltZapReceiptRejectsMismatchedDescriptionHash(t *testing.T) {
 		DescriptionHash: "0000000000000000000000000000000000000000000000000000000000000000",
 	})
 
-	err := ValidateAltZapReceipt(receipt)
+	err := legacyValidateReceipt(receipt)
 	if err == nil {
 		t.Fatal("AltZap accepted a receipt whose description hash does not bind the request")
 	}
@@ -206,7 +207,33 @@ func TestAltZapReceiptAcceptsMatchingDescriptionHash(t *testing.T) {
 	receipt, descHash := signedAltZapReceipt(t)
 	stubAltZapInvoice(t, &nip57.Invoice{Currency: "fc", PaymentHash: testPaymentHash, AmountMloki: 1000, DescriptionHash: descHash})
 
-	if err := ValidateAltZapReceipt(receipt); err != nil {
+	if err := legacyValidateReceipt(receipt); err != nil {
 		t.Fatalf("AltZap rejected a conforming receipt: %v", err)
 	}
+}
+
+// legacyValidateRequest runs the server validator against a policy that
+// accepts the fixtures' chain, endpoint and any ia; amount 0 takes the
+// request's own amount as the callback's.
+func legacyValidateRequest(ev *nip01.Event, amount int64) error {
+	endpoint, err := utils.DecodeLNURL(validTestLnurl)
+	if err != nil {
+		return err
+	}
+	if amount == 0 {
+		if zr, err := ParseAltZapRequest(ev); err == nil {
+			amount = zr.Amount
+		}
+	}
+	_, err = ValidateAltZapRequest(ev, ServerPolicy{
+		Chains: []Chain{"flokicoin"}, OwnEndpoint: endpoint, TrustedIA: func(string) bool { return true },
+	}, amount)
+	return err
+}
+
+// legacyValidateReceipt runs the strict receipt validator with rule 10
+// satisfied by the receipt's own signer.
+func legacyValidateReceipt(ev *nip01.Event) error {
+	_, err := ValidateAltZapReceipt(ev, ReceiptPolicy{NostrPubkeyFor: func(string) (string, error) { return ev.PubKey, nil }})
+	return err
 }
