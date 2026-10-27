@@ -8,6 +8,16 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `nipcash.Source.Ordered` and enforces `ErrMixedOrdered` in
+  `ConsolidateMany`, `CashConsolidate` and the composites, which carry an
+  `Ordered` mark onto the bills they build.
+  ([#213](https://github.com/ohstr/nmilat/pull/213))
+- Adds `Client.Unreconciled`, `Client.CashRedeemWith` with
+  `RedeemOptions{AutoAmount, Payee}` and `ErrInvoiceAmount`,
+  `ErrTooManySources`, `OutcomeNotSent`, and
+  `nipcw/client.WalletGuard.Check`, `ObserveRefusal` and `Do` with
+  `ErrWalletFrozen` and `ErrStaleKey`.
+  ([#213](https://github.com/ohstr/nmilat/pull/213))
 - Adds zap transfers, `cash_consolidate`, live-wallet and spin-off caps and
   archive drops to the fake ledger, and a ledger circle (joins, join
   lookups, member requests, extra and revoked connections, issued wallets);
@@ -565,6 +575,11 @@ privacy and performance fixes.
 
 ### Changed
 
+- Changes `ConsolidateMany` to refuse an item over `max_consolidate_sources`
+  or one that fits no envelope before anything is written, and
+  `CreateCircleWalletMany` to give every join an outcome, building spilled
+  joins in a later envelope.
+  ([#213](https://github.com/ohstr/nmilat/pull/213))
 - Changes `nipCO.CheckOrderInvoice` to refuse an order invoice that does not
   expire at `pay_by`. ([#210](https://github.com/ohstr/nmilat/pull/210))
 - Changes `nipCO/client.Place` to refuse a Lightning reply whose invoice is
