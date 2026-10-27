@@ -45,9 +45,10 @@ func (s *BatchSession) deadlineWindow() time.Duration {
 //
 // An envelope the Hub refuses whole with QUOTA_EXCEEDED or BAD_REQUEST ran
 // nothing (NIP-CASH §Chunked Replies). Once per batch, the announcement is then
-// re-read and, when the Hub's limits or inbox changed, the envelope's items are
-// packed again under them, written ahead again with the new deadline and sent
-// in fresh envelopes; otherwise the refusal is each item's outcome.
+// re-read and, when the Hub's limits or inbox changed, the envelope's items
+// without a request_id are packed again under them and sent in fresh envelopes;
+// otherwise, and always for a call carrying a request_id (never resent under
+// the same id, NIP-CASH §Errors), the refusal is the item's outcome.
 func (s *BatchSession) sendBatch(ctx context.Context, builders []itemBuilder, opts sendOptions) ([]ItemOutcome, error) {
 	if len(builders) == 0 {
 		return nil, nil
@@ -84,15 +85,25 @@ func (s *BatchSession) sendBatch(ctx context.Context, builders []itemBuilder, op
 				got, accepted, err = s.sendOne(ctx, p, i)
 			}
 		}
-		if !repacked && policyRefused(got) && rebuildable(packedNow) {
+		if !repacked && policyRefused(got) {
 			// The Hub refused the whole envelope for a limit it enforces: nothing
-			// ran, so its items are packed again, once, under the Hub's current
-			// announcement, when that differs from the copy they were packed under.
+			// ran, so its items without a request_id are packed again, once, under
+			// the Hub's current announcement, when that differs from the copy they
+			// were packed under. A call carrying a request_id is never resent under
+			// the same id (NIP-CASH §Errors): it keeps the refusal as its outcome,
+			// and the caller re-issues it as a new call.
 			repacked = true
-			if fresh, ok := s.refreshedPolicy(ctx, limits, packedNow, opts); ok {
-				limits = fresh
-				remaining = append(append([]itemBuilder(nil), packedNow...), remaining...)
-				continue
+			retry, keep := splitRebuildable(packedNow)
+			if len(retry) > 0 {
+				if fresh, ok := s.refreshedPolicy(ctx, limits, retry, opts); ok {
+					limits = fresh
+					if len(keep) > 0 {
+						recordAccepted(ctx, keep, accepted, opts)
+						outcomes = append(outcomes, withAccepted(withRequestIDs(outcomesFor(got, keep), keep, written), accepted)...)
+					}
+					remaining = append(retry, remaining...)
+					continue
+				}
 			}
 		}
 		recordAccepted(ctx, packedNow, accepted, opts)
@@ -568,15 +579,34 @@ func policyRefused(got []ItemOutcome) bool {
 	return true
 }
 
-// rebuildable reports whether every item can be built again for a new
-// envelope: a single-use item (a circle join, Measure set) cannot.
-func rebuildable(packed []itemBuilder) bool {
+// splitRebuildable splits an envelope's items into those that can be built
+// again for a new envelope and those that cannot: a single-use item (a circle
+// join, Measure set), and a call carrying a request_id, which is never resent
+// under the same id.
+func splitRebuildable(packed []itemBuilder) (retry, keep []itemBuilder) {
 	for _, b := range packed {
-		if b.Measure != nil {
-			return false
+		if b.Measure != nil || b.RequestID != "" || b.Pending != nil {
+			keep = append(keep, b)
+		} else {
+			retry = append(retry, b)
 		}
 	}
-	return true
+	return retry, keep
+}
+
+// outcomesFor keeps the outcomes of the items in packed.
+func outcomesFor(got []ItemOutcome, packed []itemBuilder) []ItemOutcome {
+	ids := map[string]bool{}
+	for _, b := range packed {
+		ids[b.ID] = true
+	}
+	var out []ItemOutcome
+	for _, o := range got {
+		if ids[o.ID] {
+			out = append(out, o)
+		}
+	}
+	return out
 }
 
 // refreshedPolicy re-reads the announcement after a policy refusal and returns

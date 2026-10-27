@@ -113,9 +113,10 @@ func TestT11_20_UnchangedPolicyIsNotResent(t *testing.T) {
 	}
 }
 
-// T11-20: calls carrying a request_id refused whole are written ahead again
-// with the new envelope's deadline and sent once more under the same ids.
-func TestT11_20_RepackRewritesTheDeadline(t *testing.T) {
+// T11-20, M4: calls carrying a request_id refused whole are never resent under
+// the same ids (NIP-CASH §Errors), even when a refresh shows a changed policy:
+// each keeps the envelope's refusal as its outcome, written ahead once.
+func TestT11_20_RefusedRequestIDsAreNotResent(t *testing.T) {
 	hub := newTestHub(t, alwaysSucceed)
 	hub.limits = withMaxItems(2)
 	s, relay := openTestSession(t, hub)
@@ -136,17 +137,15 @@ func TestT11_20_RepackRewritesTheDeadline(t *testing.T) {
 	if len(out) != 3 {
 		t.Fatalf("%d outcomes", len(out))
 	}
-	envs := hub.envelopes()
-	if len(envs) != 2 {
-		t.Fatalf("served %d envelopes, want 2", len(envs))
+	if n := len(hub.envelopes()); n != 0 {
+		t.Fatalf("the Hub served %d envelopes, want none", n)
 	}
 	for _, o := range out {
-		if j.writes[o.RequestID] != 2 {
-			t.Errorf("%s written ahead %d times, want 2 (refused, then repacked)", o.RequestID, j.writes[o.RequestID])
+		if o.State != OutcomeError || o.Error == nil || o.Error.Code != nipcash.ErrCodeQuotaExceeded {
+			t.Fatalf("item %s: %v %+v, want QUOTA_EXCEEDED", o.ID, o.State, o.Error)
 		}
-		pc, _ := j.call(o.RequestID)
-		if pc.Deadline != envs[o.Envelope-1].NotAfter {
-			t.Errorf("%s: journalled deadline %d, sent under %d", o.RequestID, pc.Deadline, envs[o.Envelope-1].NotAfter)
+		if j.writes[o.RequestID] != 1 {
+			t.Errorf("%s written ahead %d times, want 1 (never resent under its id)", o.RequestID, j.writes[o.RequestID])
 		}
 	}
 }
