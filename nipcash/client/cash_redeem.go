@@ -42,6 +42,14 @@ type RedeemOptions struct {
 // omission is information-free by design, so "the redeem may or may not have happened"
 // is the honest report — and for a method that moves money it is the difference
 // between asking and double-paying.
+//
+// Such an answer — an omission, an unanswered or conflicting item, a timeout
+// after publish, a result that does not decode, or INTERNAL (answered while the
+// payment may still settle) — is a *NeedsStatusError (errors.Is ErrNeedsStatus;
+// it unwraps to the underlying error too). The redeem is never resent: the
+// caller reads its own row with RedeemFollowUp. Any other code is definitive
+// (PAYMENT_FAILED: the slice is still claimable, retry with a fresh invoice and
+// proof; RATE_LIMITED: try later, the slice is not spent).
 func (c *Client) CashRedeem(ctx context.Context, params nipcash.CashRedeemParams) (*nipcash.CashRedeemResult, error) {
 	return c.CashRedeemWith(ctx, params, RedeemOptions{})
 }
@@ -72,7 +80,11 @@ func (c *Client) CashRedeemWith(ctx context.Context, params nipcash.CashRedeemPa
 		return nil, oneItemOutcome(OutcomeNotServed, nil, sendErr, nipcash.MethodCashRedeem)
 	}
 	out := outcomes[0]
-	if err := oneItemOutcome(out.State, out.Error, sendErr, nipcash.MethodCashRedeem); err != nil {
+	err = oneItemOutcome(out.State, out.Error, sendErr, nipcash.MethodCashRedeem)
+	if out.NeedsStatus() {
+		return nil, needsStatus(out, err)
+	}
+	if err != nil {
 		return nil, err
 	}
 	return out.Result, nil

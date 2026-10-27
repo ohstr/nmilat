@@ -115,6 +115,9 @@ type ItemOutcome struct {
 	Accepted []string
 	// pending is the call written ahead for this item, with its exact deadline.
 	pending *nipcash.PendingCall
+	// envelopeLevel marks an OutcomeError that is the envelope's own refusal:
+	// no item of the envelope ran (NIP-CASH §Chunked Replies).
+	envelopeLevel bool
 }
 
 // Succeeded reports whether this item was served and did not fail. Provided because
@@ -261,6 +264,7 @@ func (r *replyState) outcomes(envelope int) ([]ItemOutcome, error) {
 			// these items even when another chunk is missing.
 			o.State = OutcomeError
 			o.Error = r.envErrs[0]
+			o.envelopeLevel = true
 		case len(r.envErrs) > 1:
 			o.State = OutcomeConflict
 		case complete:
