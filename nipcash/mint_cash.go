@@ -127,7 +127,7 @@ type RecipientResult struct {
 type MintCashResult struct {
 	WalletPubkey   string            `json:"wallet_pubkey"`
 	CashToken      string            `json:"-"`
-	ExpiresAt      Expiry            `json:"expires_at"`
+	ExpiresAt      Expiry            `json:"expires_at,omitzero"`
 	Recipients     []RecipientResult `json:"recipients"`
 	TokenTombstone *Tombstone        `json:"-"`
 }
@@ -135,8 +135,34 @@ type MintCashResult struct {
 type mintCashWire struct {
 	WalletPubkey string            `json:"wallet_pubkey"`
 	CashToken    TokenOrTombstone  `json:"cash_token"`
-	ExpiresAt    Expiry            `json:"expires_at"`
+	ExpiresAt    Expiry            `json:"expires_at,omitzero"`
 	Recipients   []RecipientResult `json:"recipients"`
+}
+
+// MarshalJSON writes the result in its wire form, as a Hub answers mint_cash:
+// cash_token is CashToken, or TokenTombstone's object (a lookup's rebuilt
+// reply for a destroyed bill), and expires_at is omitted for a bill that never
+// expires.
+func (r MintCashResult) MarshalJSON() ([]byte, error) {
+	recipients := r.Recipients
+	if recipients == nil {
+		recipients = []RecipientResult{}
+	}
+	return json.Marshal(mintCashWire{WalletPubkey: r.WalletPubkey,
+		CashToken: TokenOrTombstone{Token: r.CashToken, Tombstone: r.TokenTombstone},
+		ExpiresAt: r.ExpiresAt, Recipients: recipients})
+}
+
+// UnmarshalJSON reads the wire form MarshalJSON writes, checking nothing: a
+// client reads a reply with ParseResult or ParseLookupResult.
+func (r *MintCashResult) UnmarshalJSON(data []byte) error {
+	var w mintCashWire
+	if err := json.Unmarshal(data, &w); err != nil {
+		return err
+	}
+	*r = MintCashResult{WalletPubkey: w.WalletPubkey, CashToken: w.CashToken.Token, ExpiresAt: w.ExpiresAt,
+		Recipients: w.Recipients, TokenTombstone: w.CashToken.Tombstone}
+	return nil
 }
 
 // ParseResult reads a direct mint_cash reply. Funds may already be committed,
