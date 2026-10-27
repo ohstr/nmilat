@@ -8,6 +8,14 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `niplsp`, the NIP-LSP Lightning Service Provider Announcement (kind
+  10735): `FromLSPSInfo` builds the fields from an LSP's LSPS0/1/2/5 answers
+  in either unit dialect, `NewAnnouncement`, `SigningPayload` and `Sign` (an
+  injected node signer that only signs kind 10735), `ParseAnnouncement` in
+  the NIP's client order (`*AnnouncementError{Step}`), `Seen`/`Newest`
+  (newest version per node, no fallback), `CheckLive` against the node's
+  live LSPS answers, and `NodeIDs`.
+  ([#199](https://github.com/ohstr/nmilat/pull/199))
 - Adds `nipcash/listing` (NIP-CASH §Listing Offers): kind-31190 listings
   built from signed `cashorder1`/`circlehub1` records (`NewListing`,
   `ClosedListing`, `NewListingDeletion`); the wallet's checks before showing
