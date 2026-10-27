@@ -87,6 +87,15 @@ func CheckTap(l *Listing, info *nip47.GetInfoResult, raw json.RawMessage, infoEr
 		return TapResult{Outcome: TapHideForGood, Reason: "get_info names another network than the listing"}
 	}
 	if l.Order != nil {
+		// Only a cash_order object is the Hub's closed signal: a reply without
+		// the key (an old or degraded Hub) is no answer about the terms.
+		var keys map[string]json.RawMessage
+		if json.Unmarshal(raw, &keys) != nil {
+			return TapResult{Outcome: TapUnavailable, Reason: "terms do not parse"}
+		}
+		if _, ok := keys["cash_order"]; !ok {
+			return TapResult{Outcome: TapUnavailable, Reason: "get_info carries no cash_order terms"}
+		}
 		terms, err := nipCO.ParseOrderInfo(raw)
 		if err != nil {
 			return TapResult{Outcome: TapUnavailable, Reason: "terms do not parse"}

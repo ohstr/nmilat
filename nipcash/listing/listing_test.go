@@ -676,6 +676,11 @@ func TestT22_15_TapOutcomes(t *testing.T) {
 	if r.Outcome != TapHideUntilNewer {
 		t.Fatalf("cash_order {} → %v", r.Outcome)
 	}
+	// No cash_order key at all: not the Hub's closed signal, kept.
+	noKey := `{"pubkey":"` + node + `","network":"mainnet","chain":"bitcoin","methods":["get_info"]}`
+	if r := CheckTap(l, info(node, "mainnet", "bitcoin"), json.RawMessage(noKey), nil); r.Outcome != TapUnavailable {
+		t.Fatalf("no cash_order key → %v", r.Outcome)
+	}
 	book := NewVersionBook()
 	book.Offer(l, createdList1)
 	book.Taps().Record(l, r)
