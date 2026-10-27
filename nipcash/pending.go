@@ -1,6 +1,9 @@
 package nipcash
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"math/bits"
+)
 
 // PendingSecret is a cash secret generated for a call, written ahead with it.
 // Role is "" for the call's own cash target, SecretRoleRemainder for a split's
@@ -111,7 +114,11 @@ func (p CashConsolidateParams) Pending() (PendingCall, error) {
 	}
 	var amount uint64
 	for _, s := range p.Sources {
-		amount += s.Amount
+		sum, carry := bits.Add64(amount, s.Amount, 0)
+		if carry != 0 {
+			return PendingCall{}, ErrAmountOverflow
+		}
+		amount = sum
 	}
 	return PendingCall{
 		RequestID: p.RequestID, Method: MethodCashConsolidate, Target: p.Sources[0].WalletPubkey,

@@ -256,3 +256,24 @@ func TestCashConsolidateParams_ParseResult_ConnectionKeyTarget_PassesThroughPlai
 		t.Fatalf("NewWalletToken: got %q, want the plaintext value passed through unchanged", result.NewWalletToken)
 	}
 }
+
+// Pending's amount is the sources' sum; a sum past uint64 is ErrAmountOverflow,
+// never a wrapped amount written ahead.
+func TestCashConsolidatePending_Overflow(t *testing.T) {
+	privKeyHex, _ := generateTestKeypair(t)
+	half := uint64(1)<<63 + 1
+	p := CashConsolidateParams{RequestID: testRID,
+		Sources: []Source{
+			From(randomKeyHex(t), half, BySigning(privKeyHex)),
+			From(randomKeyHex(t), half, BySigning(privKeyHex)),
+		},
+		To: Pubkey("dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"),
+	}
+	if _, err := p.Pending(); err != ErrAmountOverflow {
+		t.Fatalf("got %v, want ErrAmountOverflow", err)
+	}
+	p.Sources[1].Amount = 5
+	if pc, err := p.Pending(); err != nil || pc.Amount != half+5 {
+		t.Fatalf("got %v %v, want %d", pc.Amount, err, half+5)
+	}
+}
