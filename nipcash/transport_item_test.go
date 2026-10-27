@@ -50,7 +50,6 @@ func TestItemConstructors_ProduceEnvelopesThatValidate(t *testing.T) {
 	billPriv, billTarget := itemTestKeypair(t)
 	otherPriv, otherTarget := itemTestKeypair(t)
 
-	amount := uint64(1000)
 	items := []struct {
 		name string
 		make func() (transport.Item, error)
@@ -62,7 +61,6 @@ func TestItemConstructors_ProduceEnvelopesThatValidate(t *testing.T) {
 			return CashRedeemParams{
 				Invoice:    testInvoice,
 				Credential: BySigning(billPriv),
-				Amount:     &amount,
 			}.Item("r1", billTarget, connSecretFor(billTarget), b)
 		}},
 		{"cash_redeem, bearer", func() (transport.Item, error) {

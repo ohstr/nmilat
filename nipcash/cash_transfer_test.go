@@ -17,7 +17,7 @@ func TestCashTransferParams_Request_FullTransfer(t *testing.T) {
 	privKeyHex, _ := generateTestKeypair(t)
 	p := CashTransferParams{RequestID: testRID,
 		Credential:    BySigning(privKeyHex),
-		To:            Pubkey("recipienthex"),
+		To:            Pubkey("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
 		CurrentAmount: 15000,
 	}
 	req, err := p.Request(randomKeyHex(t))
@@ -27,7 +27,7 @@ func TestCashTransferParams_Request_FullTransfer(t *testing.T) {
 	if req.AmountMillis != nil {
 		t.Fatalf("a full transfer must omit amount_millis, got %v", *req.AmountMillis)
 	}
-	if req.NewIdentity.IdentityValue != "recipienthex" {
+	if req.NewIdentity.IdentityValue != "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" {
 		t.Fatalf("NewIdentity: got %+v", req.NewIdentity)
 	}
 	// The proof itself must still bind to a concrete amount (the slice's
@@ -55,7 +55,7 @@ func TestCashTransferParams_Request_Split(t *testing.T) {
 	split := uint64(5000)
 	p := CashTransferParams{RequestID: testRID,
 		Credential:    BySigning(privKeyHex),
-		To:            Pubkey("recipienthex"),
+		To:            Pubkey("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
 		CurrentAmount: 15000,
 		SplitAmount:   &split,
 	}
@@ -70,7 +70,7 @@ func TestCashTransferParams_Request_Split(t *testing.T) {
 
 func TestCashTransferParams_ParseResult_InPlace(t *testing.T) {
 	privKeyHex, _ := generateTestKeypair(t)
-	p := CashTransferParams{RequestID: testRID, Credential: BySigning(privKeyHex), To: Pubkey("aa"), CurrentAmount: 1000}
+	p := CashTransferParams{RequestID: testRID, Credential: BySigning(privKeyHex), To: Pubkey("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), CurrentAmount: 1000}
 	raw := []byte(`{"amount_millis":1000,"identity_type":"pubkey","identity_value":"aa"}`)
 	result, err := p.ParseResult(raw)
 	if err != nil {
@@ -90,7 +90,7 @@ func TestCashTransferParams_ParseResult_SpinOff_DecryptsToken(t *testing.T) {
 	// decryptFromPubkey (the caller side) must invert.
 	ciphertext := encryptForTest(t, newWalletPrivHex, callerPubHex, "lokicash1thetoken")
 
-	p := CashTransferParams{RequestID: testRID, Credential: BySigning(callerPrivHex), To: Pubkey("bb"), CurrentAmount: 1000}
+	p := CashTransferParams{RequestID: testRID, Credential: BySigning(callerPrivHex), To: Pubkey("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"), CurrentAmount: 1000}
 	raw, err := json.Marshal(cashTransferResponseWire{
 		AmountMillis:    1000,
 		NewWalletPubkey: newWalletPubHex,

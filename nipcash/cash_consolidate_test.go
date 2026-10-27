@@ -9,7 +9,7 @@ func TestCashConsolidateParams_Request_TooFewSources(t *testing.T) {
 	privKeyHex, _ := generateTestKeypair(t)
 	p := CashConsolidateParams{RequestID: testRID,
 		Sources: []Source{From(randomKeyHex(t), 1000, BySigning(privKeyHex))},
-		To:      Pubkey("merged"),
+		To:      Pubkey("dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"),
 	}
 	if _, err := p.Request(); err != ErrTooFewSources {
 		t.Fatalf("got %v, want ErrTooFewSources", err)
@@ -22,7 +22,7 @@ func TestCashConsolidateParams_Request_CashSourceRejected(t *testing.T) {
 			From(randomKeyHex(t), 1000, BySecret("s1")),
 			From(randomKeyHex(t), 1000, BySecret("s2")),
 		},
-		To: Pubkey("merged"),
+		To: Pubkey("dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"),
 	}
 	if _, err := p.Request(); err != ErrCashSource {
 		t.Fatalf("got %v, want ErrCashSource", err)
@@ -69,7 +69,7 @@ func TestCashConsolidateParams_Request_ConnectionKeyTargetAccepted(t *testing.T)
 			From(randomKeyHex(t), 1000, BySigning(privKeyHex)),
 			From(randomKeyHex(t), 1000, BySigning(privKeyHex)),
 		},
-		To: attestedKey(t, "discord", "someone", "iapub"),
+		To: attestedKey(t, "discord", "someone", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"),
 	}
 	req, err := p.Request()
 	if err != nil {
@@ -78,7 +78,7 @@ func TestCashConsolidateParams_Request_ConnectionKeyTargetAccepted(t *testing.T)
 	if req.NewIdentity.IdentityType != identityTypeConnectionKey {
 		t.Fatalf("NewIdentity.IdentityType: got %s, want connection_key", req.NewIdentity.IdentityType)
 	}
-	if req.NewIdentity.IAPubkey != "iapub" {
+	if req.NewIdentity.IAPubkey != "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" {
 		t.Fatalf("NewIdentity.IAPubkey: got %q, want \"iapub\" — previously dropped entirely, must now pass through", req.NewIdentity.IAPubkey)
 	}
 }
@@ -238,7 +238,7 @@ func TestCashConsolidateParams_ParseResult_ConnectionKeyTarget_PassesThroughPlai
 
 	p := CashConsolidateParams{RequestID: testRID,
 		Sources: []Source{From(randomKeyHex(t), 1000, BySigning(callerPrivHex))},
-		To:      attestedKey(t, "discord", "someone", "iapub"),
+		To:      attestedKey(t, "discord", "someone", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"),
 	}
 	raw, err := json.Marshal(cashConsolidateResponseWire{
 		AmountMillis:    1000,

@@ -22,10 +22,16 @@ type CashRedeemParams struct {
 	// a cash-mode slice; BySigning/BySigningConnectionKey for an
 	// identity-bound one.
 	Credential Credential
-	// Amount OPTIONALLY overrides an amountless invoice's amount, mirroring
-	// pay_invoice. nil uses the invoice's own encoded amount.
+	// Amount OPTIONALLY sets an amountless invoice's amount, mirroring
+	// pay_invoice. nil uses the invoice's own encoded amount. It is refused
+	// with an invoice that carries an amount (ErrRedeemAmountOnAmountInvoice):
+	// NIP-CASH §Redeeming a Slice, amount MUST NOT alter such an invoice.
 	Amount *uint64
 }
+
+// ErrRedeemAmountOnAmountInvoice is an amount given with an invoice that
+// already carries one; nothing is sent.
+var ErrRedeemAmountOnAmountInvoice = errors.New("nipcash: amount must not be sent with an invoice that carries an amount")
 
 // CashRedeemRequest is cash_redeem's wire request shape.
 type CashRedeemRequest struct {
@@ -46,6 +52,9 @@ func (p CashRedeemParams) Request(walletPubkey string) (CashRedeemRequest, error
 	invoice, err := nip57.DecodeBolt11(p.Invoice)
 	if err != nil {
 		return CashRedeemRequest{}, fmt.Errorf("nipcash: decode invoice: %w", err)
+	}
+	if p.Amount != nil && invoice.AmountMloki != 0 {
+		return CashRedeemRequest{}, ErrRedeemAmountOnAmountInvoice
 	}
 	binding := ClaimBinding{Method: MethodCashRedeem, Wallet: walletPubkey, Bolt11Hash: invoice.PaymentHash}
 	identityType, identityValue, identityEvent, attestationEvent, cashSecret, err := p.Credential.buildProof(binding)

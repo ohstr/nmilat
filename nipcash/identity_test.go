@@ -30,16 +30,16 @@ func TestPubkeyConnectionKeyAnyone_IdentityTypes(t *testing.T) {
 		t.Fatalf("Pubkey: got type=%s value=%s", pk.identityType(), pk.identityValue())
 	}
 
-	ck, err := ConnectionKey("discord", "80351110224678912", "iapub")
+	ck, err := ConnectionKey("discord", "80351110224678912", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ck.identityType() != identityTypeConnectionKey || ck.iaPubkey() != "iapub" {
+	if ck.identityType() != identityTypeConnectionKey || ck.iaPubkey() != "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" {
 		t.Fatalf("ConnectionKey: got type=%s ia=%s", ck.identityType(), ck.iaPubkey())
 	}
 	// Same (platform, externalID) must always hash to the same connection
 	// key — ConnectionKey is deterministic (nipIC.NewConnectionKey).
-	ck2, _ := ConnectionKey("discord", "80351110224678912", "iapub")
+	ck2, _ := ConnectionKey("discord", "80351110224678912", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
 	if ck.identityValue() != ck2.identityValue() {
 		t.Fatal("ConnectionKey must be deterministic for the same (platform, externalID)")
 	}
@@ -56,12 +56,12 @@ func TestResolvedConnectionKey_MatchesConnectionKeyWithoutRehashing(t *testing.T
 	// string) has no externalID to feed it. ResolvedConnectionKey must
 	// produce an identical identity_type/identity_value/ia_pubkey given
 	// that same key directly, with no external ID involved at all.
-	viaExternalID, err := ConnectionKey("discord", "80351110224678912", "iapub")
+	viaExternalID, err := ConnectionKey("discord", "80351110224678912", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
 	if err != nil {
 		t.Fatal(err)
 	}
 	key, _ := nipIC.NewConnectionKey("discord", "80351110224678912")
-	viaKey, err := ResolvedConnectionKey(key, "discord", "iapub")
+	viaKey, err := ResolvedConnectionKey(key, "discord", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestResolvedConnectionKey_MatchesConnectionKeyWithoutRehashing(t *testing.T
 	if viaKey.identityValue() != viaExternalID.identityValue() {
 		t.Fatalf("identityValue mismatch: got %s, want %s", viaKey.identityValue(), viaExternalID.identityValue())
 	}
-	if viaKey.iaPubkey() != "iapub" {
+	if viaKey.iaPubkey() != "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" {
 		t.Fatalf("iaPubkey: got %s, want iapub", viaKey.iaPubkey())
 	}
 }

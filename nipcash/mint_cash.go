@@ -110,8 +110,20 @@ func checkIAPubkey(f targetFields) error {
 	if f.identityType() == identityTypeConnectionKey && f.iaPubkey() == "" {
 		return ErrMissingIAPubkey
 	}
+	// Keys on the wire are 64 lowercase hex (XQ-43): an uppercase pubkey or
+	// ia_pubkey is refused, never lowercased.
+	if f.identityType() == identityTypePubkey && !isLowerHex64(f.identityValue()) {
+		return ErrPubkeyNotLowerHex
+	}
+	if ia := f.iaPubkey(); ia != "" && !isLowerHex64(ia) {
+		return ErrPubkeyNotLowerHex
+	}
 	return nil
 }
+
+// ErrPubkeyNotLowerHex is a pubkey recipient or target, or an ia_pubkey, that
+// is not 64 lowercase hex characters; nothing is sent.
+var ErrPubkeyNotLowerHex = errors.New("nipcash: a pubkey must be 64 lowercase hex characters")
 
 // RecipientResult is one entry of mint_cash's response recipients.
 type RecipientResult struct {

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/ohstr/nmilat/nip01"
+	"github.com/ohstr/nmilat/nip57/nip57test"
 	"github.com/ohstr/nmilat/nipIC"
 	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/utils"
@@ -273,6 +274,9 @@ func buildClaim() (any, error) {
 	}
 	req, err := nipcash.CashRedeemParams{Invoice: inv, Credential: cred["signing"], Amount: u64(500000)}.Request(wallet)
 	add("redeem with an amount", "cash_redeem", map[string]any{"wallet": wallet, "invoice": inv, "credential": "signing", "amount": 500000}, req, err)
+	amountless := must(nip57test.SignedBolt11(nip57test.Invoice{Currency: "fc", PaymentHash: seq(0x50), Timestamp: 1720000000, NodePriv: strings.Repeat("0", 63) + "1"}))
+	req, err = nipcash.CashRedeemParams{Invoice: amountless, Credential: cred["signing"], Amount: u64(500000)}.Request(wallet)
+	add("redeem an amountless invoice with an amount", "cash_redeem", map[string]any{"wallet": wallet, "invoice": amountless, "credential": "signing", "amount": 500000}, req, err)
 	req, err = nipcash.CashRedeemParams{Invoice: "lnfc1notaninvoice", Credential: cred["signing"]}.Request(wallet)
 	add("redeem with a bad invoice", "cash_redeem", map[string]any{"wallet": wallet, "invoice": "lnfc1notaninvoice", "credential": "signing"}, req, err)
 
