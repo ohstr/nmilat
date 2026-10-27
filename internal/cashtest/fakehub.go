@@ -308,7 +308,7 @@ func (h *FakeHub) serve(arrival *Relay, ev *nip01.Event) []*nip01.Event {
 	results := []transport.Result{}
 	dropReply := false
 	for i, item := range env.Items {
-		ctx := ItemCtx{Item: item, Envelope: env, Index: i, Now: now, Relay: arrival}
+		ctx := ItemCtx{Item: item, Envelope: env, Index: i, Now: now, Relay: arrival, Kind: transport.KindPrivateRequest}
 		if h.Fault != nil {
 			ctx.Fault = h.Fault(ctx)
 		}

@@ -19,6 +19,12 @@ type ItemCtx struct {
 	Fault Fault
 	// Relay is the relay the envelope arrived on, nil for one handed to Serve.
 	Relay *Relay
+	// Kind is the kind of the event the item arrived in: 0 or
+	// transport.KindPrivateRequest for an envelope's item; nip47.KindNWCRequest
+	// (23194) for a mint_cash on the Cash Hub connection, whose Item holds the
+	// NIP-47 method and params with the connection's TLV 0 as Target, and whose
+	// Envelope holds only NotAfter, the request's expiration.
+	Kind int
 }
 
 type faultKind int
@@ -38,7 +44,12 @@ const (
 	faultStallCommit
 )
 
-// Fault is what goes wrong while the fake Hub serves one item.
+// Fault is what goes wrong while the fake Hub serves one item: a private
+// transport item, or a mint_cash on the Cash Hub connection (ItemCtx.Kind
+// 23194), where FaultDropBeforeCommit sends nothing and records nothing,
+// FaultCommitThenDropReply mints and never replies, FaultInternal and
+// FaultBreakSigner answer INTERNAL with nothing minted, and a stall holds the
+// mint as it holds an item's commit.
 type Fault struct {
 	kind  faultKind
 	until time.Time

@@ -37,6 +37,9 @@ type callRecord struct {
 	authorizer     string // the claim-proof signer; "" for a cash commitment
 	cashCommitment string
 	result         json.RawMessage
+	// minted is the bill a mint_cash created, so its lookup can show the
+	// bill's tombstone in place of its token once destroyed.
+	minted *ledgerBill
 }
 
 // FakeInvoiceHRP is the human-readable part of the fake payee's invoices.

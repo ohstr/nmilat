@@ -210,6 +210,11 @@ func (l *WithdrawLedger) serveMint(ev *nip01.Event, params json.RawMessage) (any
 	if at != nil {
 		res["expires_at"] = *at
 	}
+	if raw, err := json.Marshal(res); err == nil {
+		// The record cash_lookup answers from: the connection's client key
+		// authorized the call.
+		l.calls[req.RequestID] = &callRecord{wallet: l.h.walletXOnly, authorizer: ev.PubKey, result: raw, minted: b}
+	}
 	return res, nil
 }
 
@@ -267,6 +272,9 @@ type ledgerItem struct {
 func (l *WithdrawLedger) decide(c ItemCtx) *transport.Result {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if c.Item.Target == l.h.walletXOnly {
+		return l.mintLookupLocked(c)
+	}
 	b := l.bills[c.Item.Target]
 	serving, servingErr := nipcash.ServingMethod(c.Item.Method, c.Item.Params)
 	if servingErr != nil {

@@ -85,7 +85,10 @@ func (h *FakeHub) serveNWC(r *Relay, ev *nip01.Event) {
 			PrivateMethods: h.privateMethods(),
 		}, ev, encryption)
 	case req.Method == "mint_cash" && h.ledger != nil:
-		res, refusal := h.ledger.serveMint(ev, req.Params)
+		res, refusal, reply := h.serveMintFaulted(r, ev, req.Method, req.Params)
+		if !reply {
+			return
+		}
 		if refusal != nil {
 			resp, err = nip47.NewErrorResponseEvent(h.walletPriv, ev.PubKey, req.Method, *refusal, ev, encryption)
 		} else {

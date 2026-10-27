@@ -163,8 +163,9 @@ type ArchiveFact struct {
 
 // ServeWithdrawals gives the Hub a bill ledger offering on-chain withdrawals
 // under terms (nil: DefaultWithdrawTerms) and returns it. mint_cash is then
-// served on the Cash Hub connection, both withdrawal methods are listed in its
-// private_methods, and items naming a ledger bill are served by the ledger;
+// served on the Cash Hub connection (and looked up by cash_lookup naming its
+// TLV 0), both withdrawal methods are listed in its private_methods, and items
+// naming a ledger bill are served by the ledger;
 // anything else still goes to the decision hook set before.
 func (h *FakeHub) ServeWithdrawals(t testing.TB, terms *nipcash.WithdrawTerms) *WithdrawLedger {
 	t.Helper()
@@ -199,7 +200,7 @@ func (h *FakeHub) ServeWithdrawals(t testing.TB, terms *nipcash.WithdrawTerms) *
 		l.mu.Lock()
 		_, mine := l.bills[c.Item.Target]
 		l.mu.Unlock()
-		if mine {
+		if mine || c.Item.Target == h.walletXOnly {
 			return l.decide(c)
 		}
 		if prev == nil {
