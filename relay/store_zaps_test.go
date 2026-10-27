@@ -46,11 +46,11 @@ func TestZapCacheWebIdentityScenarios(t *testing.T) {
 	}
 	events := []*nip01.Event{
 		// 1. Web-identity-linked with p[2] set and r tag → indexed under ResolvedDiscord
-		zap(zapSpec{Connection: [2]string{"discord", "user1"}, Resolved: ResolvedDiscord, Amount: 1000}),
+		zap(zapSpec{Connection: [2]string{"discord", "3001"}, Resolved: ResolvedDiscord, Amount: 1000}),
 		// 2. Web-identity-linked without p[2] but r tag present → indexed under ResolvedTelegram
 		zap(zapSpec{Recipient: ConnKeyTelegram, Resolved: ResolvedTelegram, Amount: 2000}),
 		// 3. Web-identity-unlinked: p[2] = "discord", no r tag → NOT indexed
-		zap(zapSpec{Connection: [2]string{"discord", "user2"}, Amount: 9999}),
+		zap(zapSpec{Connection: [2]string{"discord", "3002"}, Amount: 9999}),
 		// 4. Direct Nostr zap to the same pubkey as ResolvedDiscord → amounts should merge
 		zap(zapSpec{Recipient: NostrUser, Amount: 500}),
 	}
