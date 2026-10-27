@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"math"
 	"reflect"
 	"testing"
 	"time"
@@ -265,6 +266,11 @@ func TestBalance(t *testing.T) {
 	got := Balance(map[string]Entry{a.W: a, b.W: b, c.W: c, d.W: d, e.W: e})
 	if !reflect.DeepEqual(got, map[string]uint64{"bitcoin": 42000, "flokicoin": 7000}) {
 		t.Fatalf("balance %v", got)
+	}
+	// The sum saturates instead of wrapping.
+	a.Amount, e.Amount = math.MaxUint64-1, 5
+	if got := Balance(map[string]Entry{a.W: a, e.W: e}); got["bitcoin"] != math.MaxUint64 {
+		t.Fatalf("overflow %v", got)
 	}
 }
 

@@ -4,6 +4,8 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"io"
+	"math"
+	"math/bits"
 	"time"
 
 	"github.com/ohstr/nmilat/nipcash"
@@ -45,12 +47,17 @@ func MapStatus(in StatusInput) (State, bool) {
 	return StateUnknown, false
 }
 
-// Balance is, per chain, the sum of amount over the live entries.
+// Balance is, per chain, the sum of amount over the live entries, saturating
+// at the largest uint64 rather than wrapping.
 func Balance(winners map[string]Entry) map[string]uint64 {
 	out := map[string]uint64{}
 	for _, e := range winners {
 		if e.State == StateLive {
-			out[e.Chain] += e.Amount
+			sum, carry := bits.Add64(out[e.Chain], e.Amount, 0)
+			if carry != 0 {
+				sum = math.MaxUint64
+			}
+			out[e.Chain] = sum
 		}
 	}
 	return out
