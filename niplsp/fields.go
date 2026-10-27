@@ -234,7 +234,15 @@ func validOptionName(s string) bool {
 // NIP-LSP shares with the NIP-CASH Hub announcement.
 func ValidAddr(s string) bool { return transport.ValidAddr(s) }
 
+// validHTTPS is an https URL with a host and no user info, written in
+// printable ASCII only (RFC 3986): no space, control, bidirectional or
+// zero-width character can hide in what a client shows.
 func validHTTPS(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] <= ' ' || s[i] >= 0x7f {
+			return false
+		}
+	}
 	u, err := url.Parse(s)
 	return err == nil && u.Scheme == "https" && u.Host != "" && u.User == nil
 }

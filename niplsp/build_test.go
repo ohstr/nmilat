@@ -105,6 +105,8 @@ func TestNewAnnouncementRefusals(t *testing.T) {
 		{"duplicate lsps5 field", func(f *Fields) { f.LSPS5 = append(f.LSPS5, Option{"max_webhooks", "1"}) }, 0, ErrDuplicateOption},
 		{"http image", func(f *Fields) { f.Display.Image = "http://lsp.example.com/logo.png" }, 0, ErrNotHTTPS},
 		{"http website", func(f *Fields) { f.Display.Website = "http://lsp.example.com" }, 0, ErrNotHTTPS},
+		{"website with a bidi control", func(f *Fields) { f.Display.Website = "https://lsp.example.com/\u202egro" }, 0, ErrNotHTTPS},
+		{"non-ASCII website", func(f *Fields) { f.Display.Website = "https://lsp.exämple.com" }, 0, ErrNotHTTPS},
 		{"malformed addr", func(f *Fields) { f.Addrs = []string{"lsp.example.com:9735"} }, 0, ErrBadAddr},
 		{"unbracketed IPv6 addr", func(f *Fields) { f.Addrs = []string{"2001:db8::1:9735"} }, 0, ErrBadAddr},
 		{"no addr", func(f *Fields) { f.Addrs = nil }, 0, ErrBadAddr},
