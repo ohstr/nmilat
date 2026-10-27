@@ -8,6 +8,15 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `client.NeedsStatusError`/`ErrNeedsStatus` for a redeem whose outcome
+  is unknown (never resent) and `Client.RedeemFollowUp`, `BillNoSlice`,
+  `LocalReason`/`LocalRetryable` with `ReasonStatusWidened`,
+  `TransferOutcome.Remainder`, and
+  `nipcash.CashTransferParams.NeedsRemainder`/`WithRemainder` with
+  `SecretRoleRemainder`. ([#215](https://github.com/ohstr/nmilat/pull/215))
+- Adds mint lookups, faults on `mint_cash` and held redeem payments to the
+  fake Hub, and the E-MINT-02..05/07/09/11/13 tests.
+  ([#215](https://github.com/ohstr/nmilat/pull/215))
 - Adds tests covering the client scenarios of WP-11 end to end against the
   fake ledger (mint, transfer, status, redeem, lookup and envelope cases)
   and `RedeemProgressOf`, and tags existing tests with the T11 and E-* ids
@@ -579,6 +588,12 @@ privacy and performance fixes.
 
 ### Changed
 
+- Changes a batch refused whole with QUOTA_EXCEEDED or BAD_REQUEST to
+  re-read the announcement and, when the policy changed, repack and resend
+  once; `TransferMany` to generate the remainder target of a partial cash
+  split; `State` to read NOT_FOUND as `BillNoSlice` and a widened scope-mine
+  answer as indeterminate; and `cashtest.Relay.Duplicate` to reach Hub
+  listeners too. ([#215](https://github.com/ohstr/nmilat/pull/215))
 - Changes `ConsolidateMany` to refuse an item over `max_consolidate_sources`
   or one that fits no envelope before anything is written, and
   `CreateCircleWalletMany` to give every join an outcome, building spilled
