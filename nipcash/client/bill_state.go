@@ -50,6 +50,9 @@ func (s BillState) String() string {
 //	NOT_FOUND                    -> BillNoSlice, with the refusal as the error
 //	no answer (timeout, or past  -> BillIndeterminate
 //	the Hub's retention window)
+//	a roster that is not exactly -> BillIndeterminate, with an error wrapping
+//	the caller's one row            nipcash.ErrMineWidened (LocalReason
+//	                                "status_widened")
 //
 // **A timeout is never BillSpent.** Silence is indeterminate by construction —
 // a spent bill, a Hub that is down, a wrong relay and a request that was simply
@@ -65,7 +68,16 @@ func (c *Client) State(ctx context.Context, cred nipcash.Credential) (BillState,
 	// ScopeMine: this asks whether the bill is alive, which the caller's own row
 	// answers. Requesting the shared roster would learn about co-recipients for no
 	// reason, and make the reply larger for nothing.
-	return classify(c.CashStatus(ctx, cred, nipcash.ScopeMine))
+	state, result, err := classify(c.CashStatus(ctx, cred, nipcash.ScopeMine))
+	if state != BillAvailable {
+		return state, result, err
+	}
+	// A mine answer that is not exactly the caller's row decides nothing about
+	// the claim: the Hub is not conforming, and the read is tried again.
+	if _, err := nipcash.OwnRow(result.Recipients, cred, nipcash.ScopeMine); errors.Is(err, nipcash.ErrMineWidened) {
+		return BillIndeterminate, result, err
+	}
+	return state, result, nil
 }
 
 // classify is State's decision, separated from the round trip that feeds it.
