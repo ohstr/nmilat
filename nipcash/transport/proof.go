@@ -216,7 +216,7 @@ func proofTags(tags [][]string) (map[string]string, error) {
 		}
 		out[name] = tag[1]
 	}
-	for name := range proofRequiredTags {
+	for _, name := range proofTagOrder {
 		if out[name] == "" {
 			return nil, fmt.Errorf("%w: missing %q tag", ErrProofMalformed, name)
 		}
@@ -232,6 +232,10 @@ var proofRequiredTags = map[string]bool{
 	tagEnvelope:   true,
 	tagExpiration: true,
 }
+
+// proofTagOrder is the order a missing tag is reported in, so the same proof
+// always gets the same error.
+var proofTagOrder = []string{tagTarget, tagHub, tagMethod, tagParamsHash, tagEnvelope, tagExpiration}
 
 // proofHexTags are the binding tags written as 64 lowercase hex.
 var proofHexTags = map[string]bool{tagTarget: true, tagHub: true, tagParamsHash: true}
