@@ -72,9 +72,12 @@ func (sf *SubscriptionFilter) UnmarshalJSON(data []byte) error {
 // generic map[string]interface{} merge would need. Tag keys are sorted so
 // repeated calls on an unchanged filter are byte-for-byte identical
 // (map iteration order is otherwise randomized per Go's spec).
-func (sf *SubscriptionFilter) MarshalJSON() ([]byte, error) {
+//
+// A value receiver, so a filter marshalled by value (a field or slice element
+// of type SubscriptionFilter) keeps its tag filters too.
+func (sf SubscriptionFilter) MarshalJSON() ([]byte, error) {
 	type Alias SubscriptionFilter
-	data, err := json.Marshal(Alias(*sf))
+	data, err := json.Marshal(Alias(sf))
 	if err != nil {
 		return nil, err
 	}
