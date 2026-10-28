@@ -955,6 +955,9 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes GO-2026-5970 and GO-2026-5026 by updating `golang.org/x/text` to
+  v0.39.0 and `golang.org/x/net` to v0.55.0.
+  ([#218](https://github.com/ohstr/nmilat/pull/218))
 - Fixes the proof vector case "no expiration tag is fine", which expects a
   refusal: it is now "missing expiration tag is refused".
   ([#218](https://github.com/ohstr/nmilat/pull/218))
