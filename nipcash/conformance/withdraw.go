@@ -1158,6 +1158,17 @@ func (s *suite) checkRemint(t *testing.T, p *nipcash.Payout, cred nipcash.Creden
 	return r
 }
 
+// expiresNoEarlier: a re-minted bill expires no earlier than its source slice
+// did, and never when the source never expired (NIP-CASH §Cancelling a
+// Payout: also no earlier than the cancel time plus the Hub's default expiry,
+// so it may well be later).
+func expiresNoEarlier(remint, source nipcash.Expiry) bool {
+	if !source.Present || source.At == 0 {
+		return !remint.Present || remint.At == 0
+	}
+	return !remint.Present || remint.At == 0 || remint.At >= source.At
+}
+
 // CT-WD-19 (CASH-WD-14, CASH-WD-15): no about-to-sign record by sent_by + 1
 // day: cancelled, the whole amount re-minted to remint_commitment with the
 // slice's fee terms and expiry; the source's tombstone says transferred.
@@ -1188,7 +1199,7 @@ func ctWd19(t *testing.T, s *suite) {
 	nr := s.status(t, r, nipcash.ScopeMine).Recipients[0]
 	commit, _ := nipcash.CashCommitment(r.secret)
 	if nr.IdentityType != "cash" || !nipcash.CommitmentsEqual(nr.IdentityValue, commit) || nr.AmountMillis != wdAmount ||
-		nr.RedeemFeeMillis != row.RedeemFeeMillis || nr.MinTransferMillis != row.MinTransferMillis || nr.ExpiresAt != row.ExpiresAt {
+		nr.RedeemFeeMillis != row.RedeemFeeMillis || nr.MinTransferMillis != row.MinTransferMillis || !expiresNoEarlier(nr.ExpiresAt, row.ExpiresAt) {
 		t.Errorf("re-minted row %+v, from %+v", nr, row)
 	}
 	if o := s.quote(t, c, addr, nil); o.Gone == nil || o.Gone.Reason != nipcash.ReasonTransferred {
@@ -1285,17 +1296,29 @@ func ctWd22(t *testing.T, s *suite) {
 	t.Cleanup(func() { f.InjectFault(t, FaultNone) })
 	h := s.pubkeyBill(t, wdAmount, 0)
 	_, pc := s.withdrawOK(t, h, s.address(t, p2wpkh))
+	var moved time.Duration // the Hub clock's offset, which starts at 0 in every case
 	for range 10 {
 		if s.payoutNow(t, h, pc).State == nipcash.PayoutCancelled {
 			break
 		}
 		s.advance(t, 6*time.Hour)
+		moved += 6 * time.Hour
 	}
 	p := s.payoutNow(t, h, pc)
 	if p.State != nipcash.PayoutCancelled {
 		t.Fatalf("no about-to-sign record a day after sent_by: %s, want cancelled", p.State)
 	}
 	r := s.checkRemint(t, p, h.cred, wdAmount)
+	// The re-minted bill may expire as early as the cancel time plus the Hub's
+	// default expiry (NIP-CASH §Cancelling a Payout): the case looks 30 days
+	// on, or an hour before that expiry when it comes sooner.
+	later := 30 * 24 * time.Hour
+	if exp := s.status(t, r, nipcash.ScopeMine).Recipients[0].ExpiresAt; exp.Present && exp.At != 0 {
+		left := time.Until(time.Unix(exp.At, 0)) - moved - time.Hour
+		if left < later {
+			later = max(left, 0)
+		}
+	}
 	pub, err := utils.GetPublicKey(h.priv)
 	if err != nil {
 		t.Fatal(err)
@@ -1317,8 +1340,8 @@ func ctWd22(t *testing.T, s *suite) {
 	} else {
 		t.Log("the Hub does not implement SliceRemover: the removal is not exercised")
 	}
-	s.advance(t, 30*24*time.Hour)
-	live("30 days")
+	s.advance(t, later)
+	live("30 days, or until an hour before its expiry")
 	if p := s.payoutNow(t, h, pc); p.State != nipcash.PayoutCancelled || p.NewWalletPubkey != r.tok.WalletPubkey {
 		t.Errorf("the record of a payout whose re-minted slice lives: %+v", p)
 	}
