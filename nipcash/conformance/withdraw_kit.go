@@ -113,18 +113,17 @@ func (s *suite) offersWithdrawals(t *testing.T) bool {
 	return s.wd.offered
 }
 
-// probeBillInfo mints a one-slice cash bill and returns get_info on its own
-// connection.
+// probeBillInfo mints a one-slice bill and returns get_info on its own
+// connection. With a Payee it then redeems the bill, so that no live bill of
+// the suite's own outlasts a case that ends the Hub (CT-WD-24); otherwise a
+// short expiry hands its value back soon.
 func (s *suite) probeBillInfo(t *testing.T) (*nip47.GetInfoResult, error) {
 	t.Helper()
 	s.wdSession(t)
 	ctx, cancel := ctx15()
 	defer cancel()
-	target, err := nipcash.NewCashTarget()
-	if err != nil {
-		return nil, err
-	}
-	res, err := s.wd.hub.MintCash(ctx, nipcash.MintCashParams{Recipients: []nipcash.Allocation{nipcash.Send(target, wdAmount)}},
+	priv, pub := keypair(t)
+	res, err := s.wd.hub.MintCash(ctx, nipcash.MintCashParams{Recipients: []nipcash.Allocation{nipcash.Send(nipcash.Pubkey(pub), wdAmount)}, Expiry: time.Hour},
 		newMemJournal(), "conformance")
 	if err != nil {
 		return nil, fmt.Errorf("mint_cash for a probe bill: %w", err)
@@ -133,7 +132,23 @@ func (s *suite) probeBillInfo(t *testing.T) (*nip47.GetInfoResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("probe bill token: %w", err)
 	}
-	return s.billGetInfo(tok)
+	gi, err := s.billGetInfo(tok)
+	if err != nil {
+		return nil, err
+	}
+	if payee, ok := s.h.(Payee); ok {
+		h := s.holderOf(t, tok)
+		h.priv, h.cred, h.amount = priv, nipcash.BySigning(priv), wdAmount
+		net := s.status(t, h, nipcash.ScopeMine).Recipients[0].NetRedeemableMillis
+		rctx, rcancel := ctx15()
+		defer rcancel()
+		outs, err := s.wd.session.RedeemMany(rctx, []client.BatchRedeem{{ID: "1", Bill: h.bill,
+			Params: nipcash.CashRedeemParams{Invoice: payee.Invoice(t, net), Credential: h.cred}}})
+		if err != nil || len(outs) != 1 || outs[0].Result == nil {
+			t.Logf("the probe bill was not redeemed (%v %+v); it expires in an hour", err, outs)
+		}
+	}
+	return gi, nil
 }
 
 // billGetInfo is get_info on a bill's own Cash Wallet connection.
