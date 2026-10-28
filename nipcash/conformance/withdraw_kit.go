@@ -65,7 +65,7 @@ type wdState struct {
 	offerOnce sync.Once
 	offerErr  error
 	offered   bool
-	why       string                // why the suite reads no offer
+	why       string               // why the suite reads no offer
 	billInfo  *nip47.GetInfoResult // get_info on the probe bill's own connection
 }
 
