@@ -12,7 +12,7 @@ func countChars(s string) int { return uniseg.GraphemeClusterCount(s) }
 // controls and check-mark look-alikes that could pose as a verification mark,
 // turns line breaks and tabs into one space (all of them, then trims, when
 // oneLine; else only tabs and the rarer breaks, keeping "\n"), and keeps at
-// most maxChars user-perceived characters. It parses no link: the result is
+// most maxChars user-perceived characters (and maxChars*32 bytes). It parses no link: the result is
 // plain text.
 func sanitizeText(s string, maxChars int, oneLine bool) string {
 	return textsan.Sanitize(s, maxChars, textsan.Options{KeepNewlines: !oneLine, StripControls: true, TrimSpace: oneLine})

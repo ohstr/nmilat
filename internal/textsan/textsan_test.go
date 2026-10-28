@@ -34,6 +34,22 @@ func TestSanitize(t *testing.T) {
 		{strings.Repeat("\U0001F44D\U0001F3FD", 3), 2, Options{}, strings.Repeat("\U0001F44D\U0001F3FD", 2)},
 		{"abc", 0, Options{}, "abc"},
 		{"abc", -1, Options{}, "abc"},
+		// R2-N4: every other format character goes, tag characters included.
+		{"a\u206ab\u206fc\ufff9d\ufffbe\U000E0001f\U000E0041g\U000E007Fh\u0600i", 0, Options{}, "abcdefghi"},
+		// A ZWJ stays only between two emoji, after a selector or skin tone too.
+		{"\U0001F468\u200d\U0001F469\u200d\U0001F467", 0, Options{}, "\U0001F468\u200d\U0001F469\u200d\U0001F467"},
+		{"\U0001F3F3\ufe0f\u200d\U0001F308", 0, Options{}, "\U0001F3F3\ufe0f\u200d\U0001F308"},
+		{"\U0001F44D\U0001F3FD\u200d\u2642", 0, Options{}, "\U0001F44D\U0001F3FD\u200d\u2642"},
+		{"a\u200d\U0001F469", 0, Options{}, "a\U0001F469"},
+		{"\U0001F469\u200db", 0, Options{}, "\U0001F469b"},
+		{"\u2714\u200d\U0001F469", 0, Options{}, "\U0001F469"},
+		{"\U0001F469\u200d\u200d\U0001F469", 0, Options{}, "\U0001F469\u200d\U0001F469"},
+		// The byte cap: a cluster grown with combining marks is cut whole.
+		{"a" + strings.Repeat("\u0301", 40) + "b", 2, Options{}, ""},
+		{"abc" + strings.Repeat("\u0301", 60), 3, Options{}, "ab"},
+		{strings.Repeat("x", 100), 0, Options{MaxBytes: 10}, strings.Repeat("x", 10)},
+		{strings.Repeat("x", 100), 50, Options{MaxBytes: -1}, strings.Repeat("x", 50)},
+		{strings.Repeat("x", 100), 2, Options{MaxBytes: 1}, "x"},
 	} {
 		if got := Sanitize(c.in, c.max, c.o); got != c.want {
 			t.Errorf("Sanitize(%q, %d, %+v) = %q, want %q", c.in, c.max, c.o, got, c.want)
@@ -48,9 +64,12 @@ func FuzzSanitize(f *testing.F) {
 	f.Fuzz(func(t *testing.T, s string, n int, keep bool) {
 		out := Sanitize(s, n%300, Options{KeepNewlines: keep, StripControls: keep})
 		for _, r := range out {
-			if stripped(r) || (lineBreak(r) && !(keep && r == '\n')) {
+			if (stripped(r) && r != 0x200D) || (lineBreak(r) && !(keep && r == '\n')) {
 				t.Fatalf("%q kept %U", out, r)
 			}
+		}
+		if lim := (n % 300) * MaxClusterBytes; lim > 0 && len(out) > lim {
+			t.Fatalf("%q is %d bytes, over %d", out, len(out), lim)
 		}
 	})
 }
