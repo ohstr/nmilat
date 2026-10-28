@@ -166,5 +166,5 @@ func StatusItem(id, target, connSecret string, p CashStatusParams, cred Credenti
 	}
 	// A cash-mode credential gives no item proof and puts nothing in params:
 	// cash_status never carries a cash_secret (NIP-CASH §Scoping the Roster).
-	return buildItem(id, target, connSecret, MethodCashStatus, CashStatusRequest{Scope: p.Scope}, cred, b)
+	return buildItem(id, target, connSecret, MethodCashStatus, CashStatusRequest(p), cred, b)
 }

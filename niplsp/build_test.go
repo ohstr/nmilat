@@ -297,7 +297,7 @@ func TestSanitizeText(t *testing.T) {
 		want    string
 	}{
 		{"Alice's Liquidity", MaxTitle, true, "Alice's Liquidity"},
-		{"Alice​'s‮ Liq✓uidity✅", MaxTitle, true, "Alice's Liquidity"},
+		{"Alice\u200b's\u202e Liq✓uidity✅", MaxTitle, true, "Alice's Liquidity"},
 		{"two\nlines\tand\r\ntabs\x00", MaxTitle, true, "two lines and tabs"},
 		{"two\nlines\x07", MaxContent, false, "two\nlines"},
 		{strings.Repeat("a", 50), MaxTitle, true, strings.Repeat("a", 40)},

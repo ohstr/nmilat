@@ -52,7 +52,7 @@ func (h *FakeHub) serveNWC(r *Relay, ev *nip01.Event) {
 		return
 	}
 	appXOnly, err := utils.GetPublicKey(connSecret)
-	if err != nil || ev.PubKey != appXOnly && !(circle && h.ledger != nil && h.ledger.circleClient(ev.PubKey)) {
+	if err != nil || ev.PubKey != appXOnly && (!circle || h.ledger == nil || !h.ledger.circleClient(ev.PubKey)) {
 		return // not this connection's client key (nor another live one of the circle)
 	}
 	req, err := nip47.ParseRequestEvent(ev, walletPriv)

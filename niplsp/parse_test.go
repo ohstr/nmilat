@@ -337,7 +337,7 @@ func TestParseAnnouncementIgnores(t *testing.T) {
 }
 
 func TestDisplayText(t *testing.T) {
-	ev := withTags(t, set(TagTitle, "✅ Verified​ LSP\nwith a very long title that keeps going on"))
+	ev := withTags(t, set(TagTitle, "✅ Verified\u200b LSP\nwith a very long title that keeps going on"))
 	a, err := ParseAnnouncement(ev, mainnet)
 	if err != nil {
 		t.Fatal(err)

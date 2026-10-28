@@ -237,7 +237,7 @@ func TestT06_04_ConnectionKeySlice(t *testing.T) {
 		t.Errorf("untrusted IA: %v", err)
 	}
 	reattest := func(edit func(*nip01.Event), signer string) string {
-		ev := att.Event.Copy()
+		ev := att.Copy()
 		edit(ev)
 		if signer != "" {
 			_ = ev.Sign(signer)
@@ -290,7 +290,7 @@ func TestT06_04_ConnectionKeySlice(t *testing.T) {
 	// right one; the claim proof names the re-signed attestation, so only the
 	// repeat can fail it.
 	for _, name := range []string{"d", "p", "expiration"} {
-		ev := att.Event.Copy()
+		ev := att.Copy()
 		var first []string
 		for _, tag := range ev.Tags {
 			if tag[0] == name {

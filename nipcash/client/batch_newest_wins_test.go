@@ -2,12 +2,10 @@ package client
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/ohstr/nmilat/nip01"
-	"github.com/ohstr/nmilat/nipcash/transport"
 )
 
 // E-ENV-03.
@@ -29,17 +27,4 @@ func TestNewBatchSession_NewestAnnouncementWinsWhenServedFirst(t *testing.T) {
 	if s.Inbox() != currentInbox {
 		t.Errorf("adopted inbox %q, want the newest %q", s.Inbox(), currentInbox)
 	}
-}
-
-func chunkRuleSetup(t *testing.T) (packedEnvelope, [32]byte, *BatchSession, transport.Limits, string) {
-	t.Helper()
-	limits := transport.DefaultLimits()
-	nonce, err := transport.NewNonce()
-	if err != nil {
-		t.Fatal(err)
-	}
-	p := statusPacked(nonce, time.Now().Add(3*time.Second).Unix(), "a", "b", "c")
-	var k [32]byte
-	copy(k[:], strings.Repeat("g", 32))
-	return p, k, hostileSession(limits, strings.Repeat("b", 64)), limits, nonce
 }

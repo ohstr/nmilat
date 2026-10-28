@@ -43,15 +43,14 @@ func hexKey(t *testing.T) string {
 
 // tokenOpts shapes a signed token.
 type tokenOpts struct {
-	hrp      string
-	scheme   nipcash.SignatureScheme
-	amount   uint64
-	z        *nipcash.ZapContext
-	relays   []string
-	idReq    *bool
-	signer   string // minter private key; the fixture's by default
-	minterX  string
-	unsigned bool
+	hrp     string
+	scheme  nipcash.SignatureScheme
+	amount  uint64
+	z       *nipcash.ZapContext
+	relays  []string
+	idReq   *bool
+	signer  string // minter private key; the fixture's by default
+	minterX string
 }
 
 func (f *fx) token(t *testing.T, o tokenOpts) (nipcash.Token, string) {

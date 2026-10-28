@@ -188,7 +188,7 @@ func canonicalEmail(s string) (string, error) {
 }
 
 // deviation characters, which UTS #46 processing modes convert differently.
-const deviations = "ßς‌‍"
+const deviations = "ßς\u200c\u200d"
 
 var (
 	mapProfile   = idna.New(idna.MapForLookup(), idna.Transitional(false))

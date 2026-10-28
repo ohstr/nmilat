@@ -313,7 +313,7 @@ func TestAnnouncement_TagForm(t *testing.T) {
 	noH := build(func(x [][]string) [][]string {
 		var out [][]string
 		for _, tag := range x {
-			if !(tag[0] == "limit" && tag[1] == LimitMaxRequestAge) {
+			if tag[0] != "limit" || tag[1] != LimitMaxRequestAge {
 				out = append(out, tag)
 			}
 		}

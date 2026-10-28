@@ -9,7 +9,6 @@ package client
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -271,26 +270,3 @@ func (c *Client) Close() { c.nwc.Close() }
 // WalletPubkey returns this connection's own wallet pubkey — the value
 // nipcash's Request builders bind a proof to.
 func (c *Client) WalletPubkey() string { return c.walletPubkey }
-
-// call performs the subscribe -> send -> wait-for-one-response ->
-// error-or-unmarshal round trip every method below shares, built on
-// NWCClient's own exported Call (its generic nwcCall equivalent is
-// unexported, so this package can't reuse it directly — Call is the
-// documented escape hatch for exactly this: "wallet-specific/nonstandard
-// methods not covered by the typed methods" nip47 itself defines).
-func call[TResult any](ctx context.Context, c *Client, method string, params any) (*TResult, error) {
-	resp, err := c.nwc.Call(ctx, method, params)
-	if err != nil {
-		return nil, err
-	}
-	if resp.Error != nil {
-		return nil, &relayclient.WalletError{Method: method, Code: resp.Error.Code, Message: resp.Error.Message}
-	}
-	var result TResult
-	if len(resp.Result) > 0 {
-		if err := json.Unmarshal(resp.Result, &result); err != nil {
-			return nil, fmt.Errorf("nipcash/client: unmarshal %s result: %w", method, err)
-		}
-	}
-	return &result, nil
-}

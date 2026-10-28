@@ -162,7 +162,7 @@ func TestResolve(t *testing.T) {
 	if win[w].RumorID != b.RumorID || !reflect.DeepEqual(conf, []string{w}) {
 		t.Fatalf("tie: %+v %v", win[w], conf)
 	}
-	win, conf = Resolve([]Entry{a, copyOfA})
+	_, conf = Resolve([]Entry{a, copyOfA})
 	if len(conf) != 0 {
 		t.Fatal("a rewrapped copy is a conflict")
 	}

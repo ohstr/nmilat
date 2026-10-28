@@ -184,10 +184,6 @@ func toLimitsJSON(l transport.Limits) limitsJSON {
 	return limitsJSON{l.MaxEnvelopeBytes, l.MaxItems, l.PadBucketBytes, l.MaxVerifyBudget, l.MaxConsolidateSources}
 }
 
-func fromLimitsJSON(l limitsJSON) transport.Limits {
-	return transport.Limits{MaxEnvelopeBytes: l.MaxEnvelopeBytes, MaxItems: l.MaxItems, PadBucketBytes: l.PadBucketBytes, MaxVerifyBudget: l.MaxVerifyBudget, MaxConsolidateSources: l.MaxConsolidateSources}
-}
-
 type paddedCase struct {
 	ID     string     `json:"id,omitempty"`
 	Limits limitsJSON `json:"limits"`
@@ -842,8 +838,6 @@ func buildProofVectors() (any, error) {
 	verify("extra tags are ignored", "item", tagged(append(append([][]string{}, base...), []string{"x", "y"})), b, now)
 	verify("a short binding tag is refused", "item", tagged(append(append([][]string{}, base...), []string{"d"})), b, now)
 	verify("a binding tag with an extra element is refused", "item", tagged(append([][]string{append(append([]string{}, base[0]...), "extra")}, base[1:]...)), b, now)
-	badSig := strings.Replace(string(item), `"sig":"`, `"sig":"00`, 1)
-	badSig = strings.Replace(badSig, badSig[strings.Index(badSig, `"sig":"`)+7:strings.Index(badSig, `"sig":"`)+9], "", 0)
 	var ev nip01.Event
 	_ = json.Unmarshal(item, &ev)
 	ev.Sig = flipHex(ev.Sig)
@@ -947,7 +941,7 @@ func buildAnnouncement() (any, error) {
 		return func(t [][]string) [][]string {
 			var out [][]string
 			for _, tag := range t {
-				if !(tag[0] == name && (limit == "" || tag[1] == limit)) {
+				if tag[0] != name || (limit != "" && tag[1] != limit) {
 					out = append(out, tag)
 				}
 			}

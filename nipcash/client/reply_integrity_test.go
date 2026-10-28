@@ -57,7 +57,7 @@ func (f *replyFixture) raw(id, plaintext string) *nip01.Event {
 	return &nip01.Event{ID: id, Kind: transport.KindPrivateResponse, Content: sealed}
 }
 
-func (f *replyFixture) collect(p packedEnvelope, events ...*nip01.Event) ([]ItemOutcome, error, time.Duration) {
+func (f *replyFixture) collect(p packedEnvelope, events ...*nip01.Event) ([]ItemOutcome, time.Duration, error) {
 	f.t.Helper()
 	ch := make(chan *nip01.Event, len(events))
 	for _, ev := range events {
@@ -67,7 +67,7 @@ func (f *replyFixture) collect(p packedEnvelope, events ...*nip01.Event) ([]Item
 	defer cancel()
 	start := time.Now()
 	got, err := f.s.collectReply(ctx, ch, f.key, p, 0)
-	return got, err, time.Since(start)
+	return got, time.Since(start), err
 }
 
 func ok(id string) transport.Result {
@@ -106,7 +106,7 @@ func soon() int64 { return time.Now().Add(1500 * time.Millisecond).Unix() }
 func TestT01_01_DisagreeingTotalKeepsOutcomes(t *testing.T) {
 	f := newReplyFixture(t)
 	p := statusPacked(f.nonce, soon(), "a", "b", "c")
-	got, err, _ := f.collect(p, f.chunk("e1", 1, 2, ok("a")), f.chunk("e2", 2, 3, ok("b")))
+	got, _, err := f.collect(p, f.chunk("e1", 1, 2, ok("a")), f.chunk("e2", 2, 3, ok("b")))
 	if !errors.Is(err, ErrReplyConflict) || !errors.Is(err, ErrIncompleteReply) {
 		t.Fatalf("err = %v, want ErrReplyConflict wrapping ErrIncompleteReply", err)
 	}
@@ -117,7 +117,7 @@ func TestT01_01_DisagreeingTotalKeepsOutcomes(t *testing.T) {
 func TestT01_02_TwoEventsOneSeqKeepsOutcomes(t *testing.T) {
 	f := newReplyFixture(t)
 	p := statusPacked(f.nonce, soon(), "a", "b", "c")
-	got, err, _ := f.collect(p, f.chunk("e1", 1, 2, ok("a")), f.chunk("e2", 1, 2, ok("b")))
+	got, _, err := f.collect(p, f.chunk("e1", 1, 2, ok("a")), f.chunk("e2", 1, 2, ok("b")))
 	if !errors.Is(err, ErrReplyConflict) {
 		t.Fatalf("err = %v, want ErrReplyConflict", err)
 	}
@@ -133,7 +133,7 @@ func TestT01_03_SeqOutOfRangeIsIncomplete(t *testing.T) {
 			p := statusPacked(f.nonce, soon(), "a", "b", "c")
 			badChunk := f.raw("e2", `{"req_nonce":"`+f.nonce+`","seq":`+itoa(bad[0])+`,"total":`+itoa(bad[1])+
 				`,"results":[{"id":"b","result_type":"cash_status","result":{}}]}`)
-			got, err, _ := f.collect(p, f.chunk("e1", 1, 2, ok("a")), badChunk, f.chunk("e3", 2, 2, ok("c")))
+			got, _, err := f.collect(p, f.chunk("e1", 1, 2, ok("a")), badChunk, f.chunk("e3", 2, 2, ok("c")))
 			if !errors.Is(err, ErrReplyConflict) {
 				t.Fatalf("err = %v, want ErrReplyConflict", err)
 			}
@@ -158,7 +158,7 @@ func TestT01_04_ItemAnsweredInTwoChunks(t *testing.T) {
 			c2 := f.chunk("e2", 2, 3, second)
 			c3 := f.chunk("e3", 3, 3, ok("3"))
 			for _, order := range [][]*nip01.Event{{c1, c2, c3}, {c2, c3, c1}, {c3, c1, c2}} {
-				got, err, _ := f.collect(p, order...)
+				got, _, err := f.collect(p, order...)
 				if !errors.Is(err, ErrReplyConflict) {
 					t.Errorf("err = %v, want ErrReplyConflict", err)
 				}
@@ -173,7 +173,7 @@ func TestT01_04_ItemAnsweredInTwoChunks(t *testing.T) {
 func TestT01_05_ItemAnsweredTwiceInOneChunk(t *testing.T) {
 	f := newReplyFixture(t)
 	p := statusPacked(f.nonce, soon(), "a", "b")
-	got, err, _ := f.collect(p, f.chunk("e1", 1, 1, ok("a"), ok("b"), refused("b", "NOT_FOUND")))
+	got, _, err := f.collect(p, f.chunk("e1", 1, 1, ok("a"), ok("b"), refused("b", "NOT_FOUND")))
 	if !errors.Is(err, ErrReplyConflict) {
 		t.Fatalf("err = %v, want ErrReplyConflict", err)
 	}
@@ -189,7 +189,7 @@ func TestT01_06_MissingChunkIsUnansweredNotOmitted(t *testing.T) {
 	tok := func(id string) transport.Result {
 		return transport.Result{ID: id, ResultType: "cash_transfer", Result: json.RawMessage(`{"token":"` + id + `"}`)}
 	}
-	got, err, _ := f.collect(p, f.chunk("e3", 3, 3, tok("rest")), f.chunk("e1", 1, 3, tok("new")))
+	got, _, err := f.collect(p, f.chunk("e3", 3, 3, tok("rest")), f.chunk("e1", 1, 3, tok("new")))
 	if !errors.Is(err, ErrIncompleteReply) || errors.Is(err, ErrReplyConflict) {
 		t.Fatalf("err = %v, want ErrIncompleteReply only", err)
 	}
@@ -206,7 +206,7 @@ func TestT01_07_SameEventTwiceIsOneChunk(t *testing.T) {
 	f := newReplyFixture(t)
 	p := statusPacked(f.nonce, soon(), "a", "b")
 	c1 := f.chunk("e1", 1, 2, ok("a"))
-	got, err, _ := f.collect(p, c1, c1, f.chunk("e2", 2, 2, ok("b")))
+	got, _, err := f.collect(p, c1, c1, f.chunk("e2", 2, 2, ok("b")))
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -218,7 +218,7 @@ func TestT01_07_SameEventTwiceIsOneChunk(t *testing.T) {
 func TestT01_08_InflatedTotalIsBounded(t *testing.T) {
 	f := newReplyFixture(t)
 	p := statusPacked(f.nonce, time.Now().Add(5*time.Second).Unix(), "a", "b")
-	got, err, took := f.collect(p, f.chunk("e1", 1, 5, ok("a")), f.chunk("e2", 2, 5, ok("b")))
+	got, took, err := f.collect(p, f.chunk("e1", 1, 5, ok("a")), f.chunk("e2", 2, 5, ok("b")))
 	if err != nil || took > time.Second {
 		t.Fatalf("err = %v after %s, want complete at once", err, took)
 	}
@@ -230,7 +230,7 @@ func TestT01_09_EnvelopeErrorForEveryItem(t *testing.T) {
 	f := newReplyFixture(t)
 	p := statusPacked(f.nonce, soon(), "a", "b")
 	ev := f.raw("e1", `{"req_nonce":"`+f.nonce+`","seq":1,"total":1,"error":{"code":"QUOTA_EXCEEDED","message":"m"}}`)
-	got, err, _ := f.collect(p, ev)
+	got, _, err := f.collect(p, ev)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -247,7 +247,7 @@ func TestT01_10_EnvelopeErrorAndResults(t *testing.T) {
 	f := newReplyFixture(t)
 	p := statusPacked(f.nonce, soon(), "a", "b", "c")
 	envErr := f.raw("e1", `{"req_nonce":"`+f.nonce+`","seq":1,"total":2,"error":{"code":"RATE_LIMITED","message":"m"}}`)
-	got, err, _ := f.collect(p, envErr, f.chunk("e2", 2, 2, ok("a")))
+	got, _, err := f.collect(p, envErr, f.chunk("e2", 2, 2, ok("a")))
 	if !errors.Is(err, ErrReplyConflict) {
 		t.Fatalf("err = %v, want ErrReplyConflict", err)
 	}
@@ -262,7 +262,7 @@ func TestT01_10_EnvelopeErrorAndResults(t *testing.T) {
 func TestT01_11_AlienIDsAndForeignNonce(t *testing.T) {
 	f := newReplyFixture(t)
 	p := statusPacked(f.nonce, soon(), "a", "b")
-	got, err, _ := f.collect(p, f.chunk("e1", 1, 1, ok("a"), ok("never-sent")))
+	got, _, err := f.collect(p, f.chunk("e1", 1, 1, ok("a"), ok("never-sent")))
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -273,7 +273,7 @@ func TestT01_11_AlienIDsAndForeignNonce(t *testing.T) {
 		t.Fatal(err)
 	}
 	foreign := f.raw("e0", `{"req_nonce":"`+other+`","seq":1,"total":1,"results":[{"id":"a","result_type":"cash_status","result":{}}]}`)
-	got, err, _ = f.collect(p, foreign, f.chunk("e1", 1, 1, refused("a", "NOT_FOUND")))
+	got, _, err = f.collect(p, foreign, f.chunk("e1", 1, 1, refused("a", "NOT_FOUND")))
 	if err != nil {
 		t.Fatalf("err = %v: a foreign chunk must be ignored, not void the reply", err)
 	}
@@ -284,7 +284,7 @@ func TestT01_11_AlienIDsAndForeignNonce(t *testing.T) {
 func TestT01_12_CompleteReplyOmissions(t *testing.T) {
 	f := newReplyFixture(t)
 	p := statusPacked(f.nonce, soon(), "a", "b", "c")
-	got, err, _ := f.collect(p, f.chunk("e1", 1, 1, ok("b")))
+	got, _, err := f.collect(p, f.chunk("e1", 1, 1, ok("b")))
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -305,7 +305,7 @@ func TestT01_13_ForeignKeyIgnoredAuthorUnchecked(t *testing.T) {
 	forged.ID = "forged"
 	real := f.chunk("e1", 1, 1, ok("a"))
 	real.PubKey = strings.Repeat("f", 64) // any author: only the key authenticates
-	got, err, _ := f.collect(p, forged, real)
+	got, _, err := f.collect(p, forged, real)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -316,7 +316,7 @@ func TestT01_13_ForeignKeyIgnoredAuthorUnchecked(t *testing.T) {
 func TestT01_14_WaitEndsAtNotAfter(t *testing.T) {
 	f := newReplyFixture(t)
 	p := statusPacked(f.nonce, time.Now().Add(time.Second).Unix(), "a", "b")
-	got, err, took := f.collect(p, f.chunk("e1", 1, 2, ok("a")))
+	got, took, err := f.collect(p, f.chunk("e1", 1, 2, ok("a")))
 	if took > 3*time.Second {
 		t.Fatalf("waited %s, past not_after", took)
 	}
@@ -333,7 +333,7 @@ func TestT01_15_ChunkThatDecidesNothing(t *testing.T) {
 	f := newReplyFixture(t)
 	p := statusPacked(f.nonce, soon(), "a", "b")
 	empty := f.raw("e2", `{"req_nonce":"`+f.nonce+`","seq":2,"total":2}`)
-	got, err, _ := f.collect(p, f.chunk("e1", 1, 2, ok("a")), empty)
+	got, _, err := f.collect(p, f.chunk("e1", 1, 2, ok("a")), empty)
 	if !errors.Is(err, ErrIncompleteReply) || errors.Is(err, ErrReplyConflict) {
 		t.Fatalf("err = %v, want ErrIncompleteReply", err)
 	}
@@ -341,14 +341,14 @@ func TestT01_15_ChunkThatDecidesNothing(t *testing.T) {
 
 	p = statusPacked(f.nonce, soon(), "a", "b") // the first wait used up not_after
 	none := f.raw("e3", `{"req_nonce":"`+f.nonce+`","seq":1,"total":1,"results":[]}`)
-	got, err, _ = f.collect(p, none)
+	got, _, err = f.collect(p, none)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
 	wantStates(t, got, map[string]OutcomeState{"a": OutcomeNotServed, "b": OutcomeNotServed})
 
 	// And a hub encoding an all-omitted reply through EncodeResponse sends exactly that.
-	got, err, _ = f.collect(p, f.chunk("e4", 1, 1))
+	got, _, err = f.collect(p, f.chunk("e4", 1, 1))
 	if err != nil {
 		t.Fatalf("EncodeResponse of no results: err = %v", err)
 	}
@@ -363,7 +363,7 @@ func TestT01_16_ErrorDetail(t *testing.T) {
 	ev := f.raw("e1", `{"req_nonce":"`+f.nonce+`","seq":1,"total":1,"results":[`+
 		`{"id":"a","error":{"code":"RESTRICTED","message":"m","detail":"own_address"}},`+
 		`{"id":"b","error":{"code":"RESTRICTED","message":"m"}}]}`)
-	got, err, _ := f.collect(p, ev)
+	got, _, err := f.collect(p, ev)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -372,7 +372,7 @@ func TestT01_16_ErrorDetail(t *testing.T) {
 	}
 
 	env := f.raw("e2", `{"req_nonce":"`+f.nonce+`","seq":1,"total":1,"error":{"code":"RESTRICTED","message":"m","detail":"network"}}`)
-	got, err, _ = f.collect(p, env)
+	got, _, err = f.collect(p, env)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -388,7 +388,7 @@ func TestT01_16_ErrorDetail(t *testing.T) {
 func TestT01_17_ResultTypeMustMatchMethod(t *testing.T) {
 	f := newReplyFixture(t)
 	p := statusPacked(f.nonce, soon(), "wrong", "missing", "err", "good")
-	got, err, _ := f.collect(p, f.chunk("e1", 1, 1,
+	got, _, err := f.collect(p, f.chunk("e1", 1, 1,
 		transport.Result{ID: "wrong", ResultType: "cash_redeem", Result: json.RawMessage(`{}`)},
 		transport.Result{ID: "missing", Result: json.RawMessage(`{}`)},
 		refused("err", "NOT_FOUND"),

@@ -46,7 +46,7 @@ func FuzzParseListing(f *testing.F) {
 // F-LIST-1: SanitizeText never returns a stripped code point and never exceeds
 // its cap.
 func FuzzSanitizeText(f *testing.F) {
-	f.Add("Alice​'s‮ cash counter", 40)
+	f.Add("Alice\u200b's\u202e cash counter", 40)
 	f.Add("✔️ é\r\n", 3)
 	f.Fuzz(func(t *testing.T, s string, n int) {
 		n %= 300

@@ -115,12 +115,3 @@ func setKind(t *testing.T, raw json.RawMessage, kind int) json.RawMessage {
 	}
 	return b
 }
-
-func mustCreatedAt(t *testing.T, raw json.RawMessage) int64 {
-	t.Helper()
-	var ev nip01.Event
-	if err := json.Unmarshal(raw, &ev); err != nil {
-		t.Fatal(err)
-	}
-	return int64(ev.CreatedAt)
-}

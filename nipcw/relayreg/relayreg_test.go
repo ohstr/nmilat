@@ -113,7 +113,7 @@ func TestNIP11ListsCashNIPs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	data, _ := io.ReadAll(resp.Body)
 	var doc struct {
 		SupportedNips []any `json:"supported_nips"`

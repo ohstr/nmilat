@@ -83,7 +83,7 @@ func TestT05_03_DNS(t *testing.T) {
 		t.Errorf("K-CK-9 dns %s", k)
 	}
 	for _, in := range []string{"BÜCHER.example", "ｂücher.example", "bücher。example", "bücher.example", "faß.de",
-		"ς.example", "a‌b.example", "a‍b.example", "ab--c.example", "-a.example", "a_b.example", "a..example",
+		"ς.example", "a\u200cb.example", "a\u200db.example", "ab--c.example", "-a.example", "a_b.example", "a..example",
 		strings.Repeat("a", 64) + ".example", "אa.example", "example.com.", "@example.com", "xn--fa-hia.de"} {
 		if _, err := CanonicalUserID("dns", in); !errors.Is(err, ErrNotCanonical) {
 			t.Errorf("%q: %v", in, err)

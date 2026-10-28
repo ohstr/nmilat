@@ -64,7 +64,7 @@ func FuzzSanitize(f *testing.F) {
 	f.Fuzz(func(t *testing.T, s string, n int, keep bool) {
 		out := Sanitize(s, n%300, Options{KeepNewlines: keep, StripControls: keep})
 		for _, r := range out {
-			if (stripped(r) && r != 0x200D) || (lineBreak(r) && !(keep && r == '\n')) {
+			if (stripped(r) && r != 0x200D) || (lineBreak(r) && (!keep || r != '\n')) {
 				t.Fatalf("%q kept %U", out, r)
 			}
 		}

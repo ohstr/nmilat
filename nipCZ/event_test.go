@@ -95,8 +95,8 @@ func TestParseCashZap_Rule2Matrix(t *testing.T) {
 	}
 
 	t.Run("uppercase w (K-CZ-3)", func(t *testing.T) {
-		ev, tok := f.zap(t, zapOpts{target: f.note})
-		ev, _ = f.zap(t, zapOpts{target: f.note, mutate: setTag("w", strings.ToUpper(tok.WalletPubkey))})
+		_, tok := f.zap(t, zapOpts{target: f.note})
+		ev, _ := f.zap(t, zapOpts{target: f.note, mutate: setTag("w", strings.ToUpper(tok.WalletPubkey))})
 		_, err := ParseCashZap(ev)
 		wantRule(t, err, 2)
 	})
