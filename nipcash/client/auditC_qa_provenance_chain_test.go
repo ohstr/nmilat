@@ -2,17 +2,13 @@ package client
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
-	btcec "github.com/flokiorg/go-flokicoin/crypto"
-
 	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/nipcash/transport"
+	"github.com/ohstr/nmilat/utils"
 )
 
 // AUDIT-C QA: the chain bill -> minter -> announcement -> inbox has NO test.
@@ -38,36 +34,31 @@ import (
 // a failing-test set identical to the baseline. Provenance verification could be
 // deleted outright and the suite stayed green.
 
-// auditCQASignProvenance mirrors nipcash's own unexported signProvenance test
-// helper (nipcash/provenance_test.go), which this package cannot reach.
-// doubleSHA256 is unexported there too, so the two-line convention is repeated.
-func auditCQASignProvenance(t *testing.T, privHex, hrp, walletPubkeyHex string, amountMillis uint64) []byte {
-	t.Helper()
-	raw, err := hex.DecodeString(privHex)
-	if err != nil {
-		t.Fatalf("decode signing key: %v", err)
-	}
-	priv, _ := btcec.PrivKeyFromBytes(raw)
-	payload := nipcash.MintPayload(hrp, walletPubkeyHex, amountMillis)
-	first := sha256.Sum256([]byte(nipcash.LNSignedMessagePrefix + payload))
-	digest := sha256.Sum256(first[:])
-	return ecdsa.SignCompact(priv, digest[:], true)
-}
-
 // auditCQABillToken builds the bill a real holder would receive: a wallet pubkey,
 // its connection secret, relay hints, and a mint signature from the hub's node key
 // — which is the ONLY thing in the token that names the hub.
 func auditCQABillToken(t *testing.T, hubPriv, walletPubkey, connSecret, relay string) nipcash.Token {
 	t.Helper()
 	amount := uint64(40000)
-	return nipcash.Token{
+	sign, err := nipcash.LocalMintSigner(hubPriv, "lokicash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hubXOnly, err := utils.GetPublicKey(hubPriv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, err := nipcash.SignToken(nipcash.Token{
 		HRP:                  "lokicash",
 		WalletPubkey:         walletPubkey,
 		Secret:               connSecret,
 		RelayURLs:            []string{relay},
-		MintSignature:        auditCQASignProvenance(t, hubPriv, "lokicash", walletPubkey, amount),
 		AttestedAmountMillis: &amount,
+	}, nipcash.SchemeMintV1, nil, hubXOnly, sign)
+	if err != nil {
+		t.Fatal(err)
 	}
+	return tok
 }
 
 // TestAuditCQA_BillSessionWalksTheProvenanceChain is the mutation killer: the hub

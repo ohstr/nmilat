@@ -28,6 +28,10 @@ type Bill struct {
 	// carries, or "" when it carries none that verifies. A session sends to one
 	// node, so a bill minted by another is refused before sending (see check).
 	node string
+	// Ordered is a local mark, never on the wire: the bill came from an order
+	// (or was built from ordered sources). Ordered and unordered bills are not
+	// consolidated together (ErrMixedOrdered).
+	Ordered bool
 }
 
 // BillFor is the normal constructor: everything it needs is in the bill's own token,
@@ -45,9 +49,8 @@ func BillFor(tok nipcash.Token) (Bill, error) {
 	return b, nil
 }
 
-// BillFromParts is for a caller holding the bill's pairing data rather than an encoded
-// token — a connection dialled from a raw pairing URI, which carries the same wallet
-// pubkey and secret but no token envelope around them.
+// BillFromParts is for a caller holding the bill's wallet pubkey and connection
+// secret as fields rather than an encoded token.
 //
 // Both are required. An empty secret is refused HERE, where the caller can be told
 // which bill is wrong, rather than deeper down where the only available answer is an

@@ -201,3 +201,43 @@ func TestAuditC_DeriveReplyKey_LabelIsLoadBearing(t *testing.T) {
 		t.Error("two reply_to values differing in one character derive the same key")
 	}
 }
+
+// K-RK-1..5 (plan §4.2): K-RK-1..3 are the three vectors above (K-RK-3's
+// conversation key is sha256("nipcash-reply-v1")); K-RK-4 and K-RK-5 are the
+// wrong constructions, frozen so an implementation can test it does not
+// produce them.
+func TestKRK_NegativeVectors(t *testing.T) {
+	if sum := sha256.Sum256([]byte(katReplyKeyLabel)); hex.EncodeToString(sum[:]) != "0e11ac12d17df2ba09c49b400df9aa1cba33288b42a099068bbcf05f6c910741" {
+		t.Fatalf("K-RK-3 conversation key %x", sum)
+	}
+	var ck [32]byte
+	for i := range ck {
+		ck[i] = byte(i)
+	}
+	replyTo := strings.Repeat("00", 32)
+	genuine, err := DeriveReplyKey(ck, replyTo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := hex.DecodeString(replyTo)
+	extract := hmac.New(sha256.New, make([]byte, sha256.Size))
+	extract.Write(ck[:])
+	for _, c := range []struct {
+		id, want string
+		got      []byte
+	}{
+		{"K-RK-4 reply_to as raw bytes", "76fd816d6581bd072b175ea7008fb18b4a32230d17c649a01e645b16a73131f7",
+			katHKDFExpand(ck[:], append([]byte(katReplyKeyLabel), raw...), 32)},
+		{"K-RK-5 an Extract step first", "3f0cb243ab7de6ca7d11f2cc05183644fbdbef2af2efc7cd1ea429906b71569b",
+			katHKDFExpand(extract.Sum(nil), []byte(katReplyKeyLabel+replyTo), 32)},
+		{"K-RK-5 label nipcash-reply-v2", "11193f237e47b54c2a9fc9466a524b2d6d94e36b980b37fb8d94c0ed8557841b",
+			katHKDFExpand(ck[:], []byte("nipcash-reply-v2"+replyTo), 32)},
+	} {
+		if hex.EncodeToString(c.got) != c.want {
+			t.Errorf("%s = %x, want %s", c.id, c.got, c.want)
+		}
+		if hex.EncodeToString(genuine[:]) == c.want {
+			t.Errorf("%s: DeriveReplyKey produced the negative vector", c.id)
+		}
+	}
+}

@@ -176,6 +176,7 @@ func TestValidate_RejectsStaleProofs(t *testing.T) {
 	}
 }
 
+// T11-31.
 // TestValidate_RejectsAWrongHubEvenWhenInternallyConsistent: an envelope whose
 // items all agree with each other but name a hub other than the one being addressed
 // is still unservable. Consistency is not sufficient — it has to be THIS hub.
@@ -242,6 +243,42 @@ func bearerItem(t *testing.T, id string) Item {
 	}
 }
 
+// bearerItemFor is bearerItem with its bill proof bound to env and hub, as
+// Validate checks it.
+func bearerItemFor(t *testing.T, id, hub string, env Envelope) Item {
+	t.Helper()
+	it := bearerItem(t, id)
+	hash, _ := CanonicalParamsHash(it.Params)
+	billPriv, _ := testKeypair(t)
+	bp, err := BuildBillProof(billPriv, ProofBinding{Target: it.Target, HubXOnly: hub, Method: it.Method,
+		ParamsHash: hash, Nonce: env.Nonce, NotAfter: env.NotAfter})
+	if err != nil {
+		t.Fatal(err)
+	}
+	it.BillProof = bp
+	return it
+}
+
+// Validate follows the I8 shapes: a cash_status with neither proof nor secret
+// (a cash-mode slice read on its bill proof alone) validates; every item's bill
+// proof is checked against its binding.
+func TestValidate_ProoflessStatusAndBillProofs(t *testing.T) {
+	_, hub := testKeypair(t)
+	env := coherentEnvelope(t, hub, 2)
+	env.Items[0].Proof = nil
+	if err := env.Validate(hub, time.Now()); err != nil {
+		t.Fatalf("a proofless cash_status: %v", err)
+	}
+	env.Items[1].BillProof = env.Items[0].BillProof // bound to another target
+	if err := env.Validate(hub, time.Now()); !errors.Is(err, ErrProofWrongTarget) {
+		t.Fatalf("a bill proof bound to another item: %v, want ErrProofWrongTarget", err)
+	}
+	env.Items[1].BillProof = nil
+	if err := env.Validate(hub, time.Now()); !errors.Is(err, ErrEnvelopeMalformed) {
+		t.Fatalf("no bill proof: %v, want ErrEnvelopeMalformed", err)
+	}
+}
+
 // TestBearerItems_AreValidWithoutAProof is the bearer-bill decision.
 //
 // Two of the four credential kinds — BySecret and ByProof — have no signing key, so
@@ -259,7 +296,7 @@ func TestBearerItems_AreValidWithoutAProof(t *testing.T) {
 	_, hub := testKeypair(t)
 
 	env := coherentEnvelope(t, hub, 1)
-	env.Items = append(env.Items, bearerItem(t, "bearer"))
+	env.Items = append(env.Items, bearerItemFor(t, "bearer", hub, env))
 
 	if _, err := env.Encode(DefaultLimits()); err != nil {
 		t.Fatalf("Encode() error = %v; a proofless cash-mode item must encode", err)
@@ -275,7 +312,7 @@ func TestBearerItems_MixFreelyWithIdentityBoundOnes(t *testing.T) {
 	_, hub := testKeypair(t)
 
 	env := coherentEnvelope(t, hub, 3)
-	env.Items = append(env.Items, bearerItem(t, "b1"), bearerItem(t, "b2"))
+	env.Items = append(env.Items, bearerItemFor(t, "b1", hub, env), bearerItemFor(t, "b2", hub, env))
 
 	if _, err := env.Encode(DefaultLimits()); err != nil {
 		t.Fatalf("Encode() error = %v", err)
@@ -293,6 +330,7 @@ func TestProoflessItem_WithoutASecretIsStillRejected(t *testing.T) {
 
 	env := coherentEnvelope(t, hub, 1)
 	env.Items[0].Proof = nil // no proof, and params carry no cash_secret
+	env.Items[0].Method = "cash_redeem"
 
 	if _, err := env.Encode(DefaultLimits()); !errors.Is(err, ErrEnvelopeMalformed) {
 		t.Fatalf("Encode() error = %v, want ErrEnvelopeMalformed", err)

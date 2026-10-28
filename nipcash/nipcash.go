@@ -45,6 +45,25 @@ const (
 	// (CashStatusResult.Error) reads naturally here where it never did on the
 	// old name.
 	MethodCashStatus = "cash_status"
+	// MethodCashOrder is NIP-CO's order call: sent on the private transport
+	// only, against an Order connection (package nipCO).
+	MethodCashOrder = "cash_order"
+	// MethodCashWithdrawQuote asks what an on-chain withdrawal of a slice would
+	// pay; it moves nothing (NIP-CASH §Quoting a Withdrawal).
+	MethodCashWithdrawQuote = "cash_withdraw_quote"
+	// MethodCashWithdraw accepts a quote and ends the slice; the Hub then owes
+	// the payout (NIP-CASH §Redeeming On-chain).
+	MethodCashWithdraw = "cash_withdraw"
+)
+
+// Kinds of the withdrawal events. Neither is ever published: each travels
+// JSON-encoded as a string inside an answer or a request.
+const (
+	// KindWithdrawQuote is a Hub's signed quote (NIP-CASH §Quoting a Withdrawal).
+	KindWithdrawQuote = 23187
+	// KindWithdrawReceipt is a Hub's signed receipt for a committed payout
+	// (NIP-CASH §Response).
+	KindWithdrawReceipt = 23188
 )
 
 // Identity type strings used on the wire (a request/response's
@@ -84,15 +103,6 @@ var (
 	// server-side), so nothing about a real Target's own type is rejected
 	// here anymore, only a target that was never set at all.
 	ErrConsolidateTargetInvalid = errors.New("nipcash: cash_consolidate requires a new_identity target")
-
-	// ErrWrongCredentialForTarget is returned when a CashTarget is used
-	// where a Recipient is expected, or vice versa — mint_cash's cash-mode
-	// recipient gets its secret minted by the Hub (safe, since it travels
-	// over the Hub's own single-owner connection), while cash_transfer's
-	// cash-mode target requires the caller to generate the secret themselves
-	// (the response travels back over a shared connection every
-	// co-recipient can decrypt) — see CashTarget's own doc comment.
-	ErrWrongCredentialForTarget = errors.New("nipcash: Anyone() cannot be used where a CashTarget is required")
 
 	// ErrNoRecipients is returned by MintCash when no recipient is given, or one
 	// is nil: recipients MUST contain at least one entry (NIP-CASH §Minting Cash).

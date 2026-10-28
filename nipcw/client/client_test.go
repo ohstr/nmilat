@@ -5,13 +5,11 @@ import (
 	"testing"
 )
 
-// TestConnect_RejectsGarbage mirrors nipcash/client's own test — the one
-// piece of Connect's logic testable without a live relay (Connect always
-// dials out via relayclient.NewNWCClient, so a real round trip isn't
-// exercisable in this repo's own test suite).
+// Connect refuses anything that is not a circlehub1 string before dialing.
 func TestConnect_RejectsGarbage(t *testing.T) {
-	_, err := Connect(context.Background(), "not a pairing uri")
-	if err == nil {
-		t.Fatal("expected an error for a non-pairing-URI input")
+	for _, s := range []string{"not a connection", "nostr+walletconnect://x?relay=wss://r&secret=y"} {
+		if _, err := Connect(context.Background(), s, Options{}); err == nil {
+			t.Fatalf("%q accepted", s)
+		}
 	}
 }

@@ -49,7 +49,7 @@ go get github.com/ohstr/nmilat
 - **[`nip40`](https://github.com/nostr-protocol/nips/blob/master/40.md)** — Event expiration
 - **[`nip42`](https://github.com/nostr-protocol/nips/blob/master/42.md), [`nip98`](https://github.com/nostr-protocol/nips/blob/master/98.md)** — Relay/HTTP authentication
 - **[`nip43`](https://github.com/nostr-protocol/nips/blob/master/43.md)** — Relay access metadata and requests
-- **[`nip46`](https://github.com/nostr-protocol/nips/blob/master/46.md)** — Nostr Connect (remote signing); `nip46/bunker` is the relay client and signer (`bunker://`, `nostrconnect://`)
+- **[`nip46`](https://github.com/nostr-protocol/nips/blob/master/46.md)** — Nostr Connect (remote signing); `nip46/bunker` is the relay client and signer (`bunker://`, `nostrconnect://`); `nip46/signeruri` opens a signer from a `bunker://` or `bunker+unix://` URI alike
 - **[`nip47`](https://github.com/nostr-protocol/nips/blob/master/47.md)** — Wallet Connect (NWC): info/request/response/notification events, encryption negotiation, pairing URI
 - **[`nip48`](https://github.com/nostr-protocol/nips/blob/master/48.md)** — Proxy tags
 - **[`nip53`](https://github.com/nostr-protocol/nips/blob/master/53.md)** — Live streaming and spaces: live streams, meeting spaces and their rooms, listener presence, live chat
@@ -70,6 +70,7 @@ go get github.com/ohstr/nmilat
 - **[`nipcw`](https://github.com/ohstr/nips/blob/main/NIP-CW.md)** — Circle Wallet: shared self-service wallets
 - **[`nipIC`](https://github.com/ohstr/nips/blob/main/NIP-IC.md)** — Identity Connection: binds Web Identity accounts to Nostr pubkeys
 - **[`nipLS`](https://github.com/ohstr/nips/blob/main/NIP-LS.md)** — Local Signer: NIP-46 over a unix socket (`bunker+unix://`), client and policy-gated server
+- **[`niplsp`](https://github.com/ohstr/nips/blob/main/NIP-LSP.md)** — Lightning Service Provider Announcement: a node's LSPS offer in one kind 10735 event signed by its node key, built from its LSPS answers and checked against the live ones
 - **[`nipOA`](https://github.com/block/buzz/blob/main/docs/nips/NIP-OA.md)** — Owner Attestation
 
 ### Relay engine and infrastructure
@@ -128,6 +129,15 @@ for the relay + management-API + query-bridge composition, which mirrors
 what [`ncli`](https://github.com/ohstr/ncli) does internally. Optional
 NIPs opt in by `relayreg` blank-import (above), not by the relay package
 importing them.
+
+### Serving gift wraps only to their recipient
+
+`relay.WithRecipientOnlyKinds(1059)` (off by default) serves a kind 1059
+only to a connection that has AUTHed (NIP-42) as a pubkey in its `p` tag,
+over REQ, COUNT, NEG-OPEN and the live tail; an un-AUTHed read naming the
+kind is refused `auth-required:`. `SessionHandler.QueryHandler()` applies
+the same rule to POST /query, the NIP-98 signer standing in for the AUTHed
+pubkey.
 
 ### Keeping a search engine in step
 
@@ -799,37 +809,35 @@ func main() {
 		panic(err)
 	}
 
-	// The member self-serves their own Circle Wallet from the host's Hub.
-	circleHub, err := cwclient.Connect(ctx, circleHubPairingURI)
+	// The member self-serves their own Circle Wallet from the host's Hub, over
+	// its circlehub1 string. Connect checks the string's signature and runs the
+	// online check against get_info.
+	circleHub, err := cwclient.Connect(ctx, circleHubConnection, cwclient.Options{})
 	if err != nil {
 		panic(err)
 	}
 	defer circleHub.Close()
 
 	// The wallet's connection key is generated here, on the member's side; the
-	// Hub only ever sees its pubkey. Set Connection yourself to save the secret
-	// before sending.
-	//
-	// Join goes over NIP-CASH's private transport when the Hub offers it, so the
-	// join isn't visible on the shared Hub connection, and reports a fallback.
-	wallet, err := circleHub.Join(ctx, nipcw.CreateCircleWalletParams{
-		Credential:      nipcw.BySigning(memberPrivKeyHex),
-		MaxAmountMillis: 100_000_000,
-	}, cwclient.JoinOptions{})
+	// Hub only ever sees its pubkey. The join travels only over NIP-CASH's
+	// private transport, and is written ahead to joinJournal (secret and
+	// deadline) before it is sent, so a lost reply can be looked up.
+	joined, err := circleHub.Join(ctx, nipcw.CreateCircleWalletParams{
+		Credential:       nipcw.BySigning(memberPrivKeyHex),
+		MaxAmountMillis:  100_000_000,
+		MaxReceiveMillis: 100_000_000,
+	}, cwclient.JoinOptions{WarnNoRotation: warnAndOfferBackup}, joinJournal)
 	if err != nil {
 		panic(err)
-	}
-	if wallet.FallbackReason != nil {
-		fmt.Println("joined, but not privately:", wallet.FallbackReason)
 	}
 
 	// Invoice from their own Circle Wallet — same host as the Cash Hub, so
-	// this redemption always resolves same-node: full amount, zero fee.
-	memberPairing, err := nip47.ParsePairingURI(wallet.PairingURI)
-	if err != nil {
-		panic(err)
-	}
-	member, err := relayclient.NewNWCClient(ctx, memberPairing, nip47.EncryptionNIP44V2)
+	// this redemption always resolves same-node: full amount, zero fee. The
+	// wallet is wallet_pubkey + relays + the member's own secret, held as fields.
+	w := joined.Wallet()
+	member, err := relayclient.NewNWCClient(ctx, &nip47.PairingInfo{
+		WalletPubkey: w.WalletPubkey, RelayURLs: w.Relays, Secret: w.Secret,
+	}, nip47.EncryptionNIP44V2)
 	if err != nil {
 		panic(err)
 	}

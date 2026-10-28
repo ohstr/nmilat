@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -98,7 +99,14 @@ func ParseInfoEvent(event *nip01.Event) (*InfoEvent, error) {
 // nil for methods that take none (e.g. get_balance, get_info). encryption
 // must be EncryptionNIP04 or EncryptionNIP44V2. Caller must sign it with
 // appPrivKey.
-func NewRequestEvent(appPrivKey, walletPubkey, method string, params any, encryption string) (*nip01.Event, error) {
+func NewRequestEvent(appPrivKey, walletPubkey, method string, params any, encryption string, opts ...RequestOption) (*nip01.Event, error) {
+	var o requestOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	if o.expirationSet && o.expiration <= 0 {
+		return nil, fmt.Errorf("expiration %d is not a unix time", o.expiration)
+	}
 	req := Request{Method: method}
 	if params != nil {
 		paramsJSON, err := json.Marshal(params)
@@ -126,6 +134,9 @@ func NewRequestEvent(appPrivKey, walletPubkey, method string, params any, encryp
 	tags := [][]string{{"p", walletPubkey}}
 	if encryption == EncryptionNIP44V2 {
 		tags = append(tags, []string{"encryption", encryption})
+	}
+	if o.expirationSet {
+		tags = append(tags, []string{"expiration", strconv.FormatInt(o.expiration, 10)})
 	}
 
 	return &nip01.Event{
@@ -361,4 +372,42 @@ func ParseNotificationEvent(event *nip01.Event, appPrivKey string) (*Notificatio
 		return nil, fmt.Errorf("unmarshal notification: %w", err)
 	}
 	return &notif, nil
+}
+
+// RequestOption adjusts a request NewRequestEvent builds.
+type RequestOption func(*requestOptions)
+
+type requestOptions struct {
+	expiration    int64
+	expirationSet bool
+}
+
+// WithExpiration adds ["expiration", "<decimal>"] to the request (the NIP-47
+// expiration a mint_cash requires as its deadline). A value ≤ 0 is refused when
+// the request is built.
+func WithExpiration(unix int64) RequestOption {
+	return func(o *requestOptions) { o.expiration, o.expirationSet = unix, true }
+}
+
+// RequestExpiration reads a request's expiration tag: exactly one, unsigned
+// decimal with no leading zero. present is false when there is none.
+func RequestExpiration(ev *nip01.Event) (unix int64, present bool, err error) {
+	var values []string
+	for _, tag := range ev.Tags {
+		if len(tag) >= 2 && tag[0] == "expiration" {
+			values = append(values, tag[1])
+		}
+	}
+	switch len(values) {
+	case 0:
+		return 0, false, nil
+	case 1:
+	default:
+		return 0, true, fmt.Errorf("%d expiration tags", len(values))
+	}
+	v, err := strconv.ParseUint(values[0], 10, 63)
+	if err != nil || strconv.FormatUint(v, 10) != values[0] {
+		return 0, true, fmt.Errorf("expiration %q is not unsigned decimal", values[0])
+	}
+	return int64(v), true, nil //nolint:gosec // bounded to 63 bits
 }

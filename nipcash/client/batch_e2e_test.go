@@ -4,31 +4,22 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"strconv"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/gorilla/websocket"
-
+	"github.com/ohstr/nmilat/internal/cashtest"
 	"github.com/ohstr/nmilat/nip01"
-	"github.com/ohstr/nmilat/nip44"
 	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/nipcash/transport"
-	"github.com/ohstr/nmilat/wire"
 )
 
-// fakeHub is a relay that also behaves like a hub: it serves its own announcement, and
-// answers any kind-23190 it receives by doing what a real hub does — decrypt with the
-// inbox key, decode the envelope, decide per item, and publish a kind-23191 p-tagged
-// with the envelope's reply_to, encrypted under the derived reply key.
-//
-// Small, but it exercises the entire client path for real: announcement fetch and
-// signature check, packing, wrapping, publish, subscribe, reply-key derivation, decode
-// and demux. Everything below the SDK's own API is the genuine article.
+// fakeHub is the thin wrapper these tests have always used around the shared fake
+// Hub, internal/cashtest.FakeHub. The fields keep their old meaning and are read
+// when the Hub starts; the hub half (decrypt, decide per item, reply in chunks
+// under the derived reply key) is cashtest's, so every E2E test exercises the same
+// fake the conformance suite runs against.
 type fakeHub struct {
 	hubPriv, hubXOnly     string
 	inboxPriv, inboxXOnly string
@@ -38,21 +29,37 @@ type fakeHub struct {
 	// hub answers an item it cannot serve.
 	decide func(item transport.Item) *transport.Result
 
-	// chunkSize, when > 0, makes the hub split its reply into events of that many
-	// results — the real behaviour when results outgrow one envelope.
+	// chunkSize, when > 0, splits the reply into events of that many results.
+	// dropChunk, when > 0, is a seq the hub declines to publish.
 	chunkSize int
-	// dropChunk, when > 0, is a seq the hub declines to publish, simulating a lost
-	// chunk. The client must report the reply as incomplete rather than reading the
-	// missing items as omissions.
 	dropChunk int
+
+	once sync.Once
+	core *cashtest.FakeHub
 
 	mu   sync.Mutex
 	subs []chan *nip01.Event
-	// seen records the envelopes received, so a test can assert how many events a batch
-	// actually became.
-	seen []transport.Envelope
 }
 
+// hub starts the shared fake on first use, with this wrapper's settings.
+func (h *fakeHub) hub(t *testing.T, relays ...*cashtest.Relay) *cashtest.FakeHub {
+	h.once.Do(func() {
+		opts := []cashtest.Option{
+			cashtest.WithKeys(h.hubPriv, h.inboxPriv),
+			cashtest.WithLimits(h.limits),
+			cashtest.WithChunks(h.chunkSize, h.dropChunk),
+			cashtest.WithDecide(func(c cashtest.ItemCtx) *transport.Result { return h.decide(c.Item) }),
+		}
+		if len(relays) > 0 {
+			opts = append(opts, cashtest.WithRelays(relays...))
+		}
+		h.core = cashtest.NewFakeHub(t, opts...)
+	})
+	return h.core
+}
+
+// register and broadcast serve tests that run their own relay server and call
+// handleRequest themselves.
 func (h *fakeHub) register(ch chan *nip01.Event) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -72,176 +79,26 @@ func (h *fakeHub) broadcast(ev *nip01.Event) {
 }
 
 func (h *fakeHub) envelopes() []transport.Envelope {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return append([]transport.Envelope(nil), h.seen...)
+	if h.core == nil {
+		return nil
+	}
+	return h.core.Envelopes()
 }
 
-// handleRequest is the hub half: unwrap, decide per item, reply.
+// handleRequest is the hub half, for a test's own relay server.
 func (h *fakeHub) handleRequest(t *testing.T, ev *nip01.Event) {
 	t.Helper()
-
-	conversationKey, err := transport.ConversationKeyFor(ev.PubKey, h.inboxPriv)
-	if err != nil {
-		t.Errorf("hub: conversation key: %v", err)
-		return
-	}
-	plaintext, err := nip44.Decrypt(ev.Content, conversationKey[:])
-	if err != nil {
-		t.Errorf("hub: decrypt: %v", err)
-		return
-	}
-	env, err := transport.Decode([]byte(plaintext), h.limits)
-	if err != nil {
-		t.Errorf("hub: decode: %v", err)
-		return
-	}
-
-	h.mu.Lock()
-	h.seen = append(h.seen, *env)
-	h.mu.Unlock()
-
-	resp := transport.ResponseEnvelope{Version: transport.EnvelopeVersion, ReqNonce: env.Nonce}
-	for _, item := range env.Items {
-		if r := h.decide(item); r != nil {
-			resp.Results = append(resp.Results, *r)
-		}
-	}
-
-	replyKey, err := transport.DeriveReplyKey(conversationKey, env.ReplyTo)
-	if err != nil {
-		t.Errorf("hub: reply key: %v", err)
-		return
-	}
-
-	// Split into as many events as chunkSize dictates. A real hub decides this AFTER
-	// serving the items, since it cannot know result sizes in advance.
-	chunks := [][]transport.Result{resp.Results}
-	if h.chunkSize > 0 {
-		chunks = nil
-		for i := 0; i < len(resp.Results); i += h.chunkSize {
-			end := min(i+h.chunkSize, len(resp.Results))
-			chunks = append(chunks, resp.Results[i:end])
-		}
-	}
-	if len(chunks) == 0 {
-		chunks = [][]transport.Result{nil}
-	}
-
-	for i, results := range chunks {
-		seq := i + 1
-		if seq == h.dropChunk {
-			continue // lost in transit
-		}
-		part := transport.ResponseEnvelope{
-			Version: transport.EnvelopeVersion, ReqNonce: env.Nonce,
-			Results: results, Seq: seq, Total: len(chunks),
-		}
-		encoded, err := part.EncodeResponse(h.limits)
-		if err != nil {
-			t.Errorf("hub: encode response chunk %d: %v", seq, err)
-			return
-		}
-		sealed, err := nip44.Encrypt(string(encoded), replyKey[:])
-		if err != nil {
-			t.Errorf("hub: encrypt response chunk %d: %v", seq, err)
-			return
-		}
-		out := nip01.NewEvent(transport.KindPrivateResponse, sealed)
-		// Addressed by the envelope's reply_to, per NIP-CASH §Addressing the Response.
-		out.Tags = [][]string{{"p", env.ReplyTo}}
-		if err := out.Sign(h.hubPriv); err != nil {
-			t.Errorf("hub: sign response chunk %d: %v", seq, err)
-			return
-		}
+	for _, out := range h.hub(t).Serve(ev) {
 		h.broadcast(out)
 	}
 }
 
+// startFakeHub serves the hub on one in-process relay and returns its URL.
 func startFakeHub(t *testing.T, h *fakeHub) string {
 	t.Helper()
-	upgrader := websocket.Upgrader{}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			return
-		}
-		defer func() { _ = conn.Close() }()
-
-		var writeMu sync.Mutex
-		writeMsg := func(v json.Marshaler) bool {
-			b, err := v.MarshalJSON()
-			if err != nil {
-				return false
-			}
-			writeMu.Lock()
-			defer writeMu.Unlock()
-			return conn.WriteMessage(websocket.TextMessage, b) == nil
-		}
-
-		for {
-			_, data, err := conn.ReadMessage()
-			if err != nil {
-				return
-			}
-			var payload wire.RelayPayload
-			if err := json.Unmarshal(data, &payload); err != nil {
-				continue
-			}
-
-			switch p := payload.Packet.(type) {
-			case *wire.RequestPacket:
-				subID := p.SubscriptionID
-				wantsAnnouncement := false
-				for _, f := range p.Filters.GetAll() {
-					for _, k := range f.Kinds {
-						if k == transport.KindHubAnnouncement {
-							wantsAnnouncement = true
-						}
-					}
-				}
-				if wantsAnnouncement {
-					ann := signedAnnouncement(t, h.hubPriv, h.hubXOnly, h.inboxXOnly, h.limits, nil)
-					b, err := json.Marshal(ann)
-					if err != nil {
-						return
-					}
-					if !writeMsg(&wire.EventSubscriptionResponse{SubscriptionID: subID, EventBytes: b}) {
-						return
-					}
-					_ = writeMsg(&wire.EOSESubscriptionResponse{SubscriptionID: subID})
-					continue
-				}
-
-				// A reply subscription: forward anything the hub publishes.
-				ch := make(chan *nip01.Event, 4)
-				h.register(ch)
-				// As a real relay does: the subscription is live, then EOSE.
-				_ = writeMsg(&wire.EOSESubscriptionResponse{SubscriptionID: subID})
-				go func() {
-					for ev := range ch {
-						b, err := json.Marshal(ev)
-						if err != nil {
-							return
-						}
-						if !writeMsg(&wire.EventSubscriptionResponse{SubscriptionID: subID, EventBytes: b}) {
-							return
-						}
-					}
-				}()
-
-			case *wire.EventPacket:
-				_ = writeMsg(&wire.OkSubscriptionResponse{EventID: p.Event.ID, Accepted: true})
-				if p.Event.Kind == transport.KindPrivateRequest {
-					go h.handleRequest(t, p.Event)
-				}
-			}
-		}
-	})
-	server := httptest.NewServer(mux)
-	t.Cleanup(server.Close)
-	return "ws" + strings.TrimPrefix(server.URL, "http")
+	relay := cashtest.NewRelay(t)
+	h.hub(t, relay)
+	return relay.URL()
 }
 
 // alwaysSucceed answers every item with an empty successful result.
@@ -292,6 +149,7 @@ func TestBatch_EndToEnd_ManyBillsInOneEvent(t *testing.T) {
 	}
 }
 
+// E-ENV-07.
 // TestBatch_EndToEnd_OmissionSurvivesTheRoundTrip: a hub that omits an item must produce
 // OutcomeNotServed at the caller, distinct from both success and error. This is the
 // property that keeps batching from becoming an existence oracle, and it has to hold
@@ -422,6 +280,7 @@ func newTestHub(t *testing.T, decide func(transport.Item) *transport.Result) *fa
 	}
 }
 
+// E-ENV-01.
 // TestBatch_EndToEnd_ChunkedReplyReassembles: a hub that answers in several events must
 // be invisible to the caller. Same call, same outcomes, one per item.
 func TestBatch_EndToEnd_ChunkedReplyReassembles(t *testing.T) {
@@ -462,13 +321,14 @@ func TestBatch_EndToEnd_ChunkedReplyReassembles(t *testing.T) {
 	}
 }
 
+// E-XFER-11 (partial).
 // TestBatch_EndToEnd_LostChunkIsIncompleteNotOmitted is the property that protects money.
 //
 // With 2 of 3 chunks received, reporting the missing items as omissions would claim the
 // hub said nothing about work it may well have performed. For cash_redeem that is a
 // redemption the caller is told nothing about — and since an omission is never safe to
 // resend, they would be stuck. So the answers that arrived are kept, the rest are
-// NotServed, and ErrIncompleteReply says plainly that this is ignorance rather than the
+// unanswered, and ErrIncompleteReply says plainly that this is ignorance rather than the
 // hub's final word.
 func TestBatch_EndToEnd_LostChunkIsIncompleteNotOmitted(t *testing.T) {
 	hub := newTestHub(t, alwaysSucceed)
@@ -507,7 +367,7 @@ func TestBatch_EndToEnd_LostChunkIsIncompleteNotOmitted(t *testing.T) {
 		switch o.State {
 		case OutcomeResult:
 			served++
-		case OutcomeNotServed:
+		case OutcomeUnanswered:
 			unknown++
 		}
 	}
@@ -515,7 +375,7 @@ func TestBatch_EndToEnd_LostChunkIsIncompleteNotOmitted(t *testing.T) {
 		t.Error("every answer was discarded; the chunks that DID arrive carry real results")
 	}
 	if unknown == 0 {
-		t.Error("the dropped chunk's items must be NotServed, not silently successful")
+		t.Error("the dropped chunk's items must be unanswered, neither successful nor omitted")
 	}
 	if served+unknown != 6 {
 		t.Errorf("served=%d unknown=%d, want 6 total", served, unknown)

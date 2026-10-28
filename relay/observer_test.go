@@ -41,7 +41,7 @@ func TestClassifyKind(t *testing.T) {
 	cases := map[int]KindClass{
 		0: KindMetadata, 1: KindNote, 1111: KindNote, 3: KindContacts, 4: KindDM,
 		5: KindDeletion, 6: KindRepost, 7: KindReaction, 1059: KindGiftWrap,
-		42: KindChannel, 9735: KindZap, 9521: KindZap, 9007: KindGroup,
+		42: KindChannel, 9735: KindZap, 9521: KindZap, 9522: KindZap, 9523: KindZap, 9007: KindGroup,
 		39000: KindGroup, 10002: KindList, 10063: KindList, 13534: KindReplaceable,
 		22242: KindEphemeral, 30000: KindList, 30023: KindLongForm,
 		30312: KindAddressable, 1984: KindOther,

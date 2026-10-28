@@ -46,6 +46,46 @@ var (
 	ErrMissingLNURLTag      = errors.New("nipAZ: missing lnurl tag")
 	ErrMissingPreimageTag   = errors.New("nipAZ: missing preimage tag")
 	ErrInvalidInvoiceAmount = errors.New("nipAZ: invalid or missing amount in bolt11 invoice")
+
+	// ErrInvalidIdentityTag: a p or P tag whose [1] is not 64 lowercase hex,
+	// or whose [2] is neither empty, "nostr" nor a NIP-IC platform name. The
+	// value is refused, never lowercased or repaired.
+	ErrInvalidIdentityTag = errors.New("nipAZ: p/P tag must carry 64 lowercase hex and a valid platform name")
+	// ErrInvalidIATag: an ia tag that is repeated or not 64 lowercase hex.
+	ErrInvalidIATag = errors.New("nipAZ: at most one ia tag, 64 lowercase hex")
+	// ErrIARequired: p is a ConnectionKey on a platform without a canonical
+	// form, so the request must name the IA that attested it.
+	ErrIARequired = errors.New("nipAZ: a ConnectionKey on a platform without a canonical form needs an ia tag")
+	// ErrIANotAllowed: an ia tag beside a pubkey p.
+	ErrIANotAllowed = errors.New("nipAZ: a request to a Nostr pubkey must not carry an ia tag")
+	// ErrUntrustedIA: the request's ia names an IA the LNURL server does not trust.
+	ErrUntrustedIA = errors.New("nipAZ: ia names an untrusted IA")
+	// ErrChainNotAdvertised: the request's chain is not one the endpoint advertises.
+	ErrChainNotAdvertised = errors.New("nipAZ: chain is not advertised by this endpoint")
+	// ErrLnurlNotOwnEndpoint: the request's lnurl decodes to another endpoint.
+	ErrLnurlNotOwnEndpoint = errors.New("nipAZ: lnurl does not name this LNURL server's endpoint")
+	// ErrTooManyATags: more than one a tag on a request.
+	ErrTooManyATags = errors.New("nipAZ: at most one a tag allowed")
+	// ErrDuplicateTag: a single-valued tag (chain, amount, lnurl, bolt11,
+	// preimage, description, p, P) appears twice.
+	ErrDuplicateTag = errors.New("nipAZ: tag appears more than once")
+	// ErrUnknownChain: a receipt's chain has no entry in InvoiceCurrencies, so
+	// its invoice cannot be shown to belong to it.
+	ErrUnknownChain = errors.New("nipAZ: no invoice currency is known for this chain")
+	// ErrSenderMismatch: a receipt's P differs from the embedded request's
+	// sender.
+	ErrSenderMismatch = errors.New("nipAZ: receipt P does not match the embedded request's sender")
+	// ErrIAMismatch: a receipt's ia differs from the embedded request's.
+	ErrIAMismatch = errors.New("nipAZ: receipt ia does not match the embedded request's")
+	// ErrReceiptSigner: the receipt is not signed by the nostrPubkey of the
+	// endpoint the embedded request's lnurl names (receipt rule 10).
+	ErrReceiptSigner = errors.New("nipAZ: receipt is not signed by the endpoint's nostrPubkey")
+	// ErrNostrPubkeyUnknown: receipt rule 10 could not be evaluated, because
+	// ReceiptPolicy.NostrPubkeyFor is nil or failed.
+	ErrNostrPubkeyUnknown = errors.New("nipAZ: the endpoint's nostrPubkey is unknown")
+	// ErrLinkNotAuthorized: an r or R tag was asked for without the user's
+	// authorization to make the ConnectionKey-to-pubkey link public.
+	ErrLinkNotAuthorized = errors.New("nipAZ: r/R need the user's authorization to publish the link")
 )
 
 const (
@@ -76,9 +116,11 @@ func DescriptionHash(description string) string {
 type Chain string
 
 // InvoiceCurrencies maps a chain to the BOLT11 currency prefixes its invoices
-// carry (nip57.Invoice.Currency). ValidateAltZapReceipt rejects a receipt
-// whose invoice is not on its chain; chains missing from the map are not
-// checked. Add entries for other chains before validating their receipts.
+// carry (nip57.Invoice.Currency). Receipt validation rejects a receipt whose
+// invoice is not on its chain, and one whose chain is missing from the map
+// (ErrUnknownChain): without a mapping nothing shows the invoice belongs to
+// it. Add an entry (e.g. "examplecoin": {"ex"}) before validating receipts of
+// another chain.
 var InvoiceCurrencies = map[Chain][]string{
 	"flokicoin": {"fc"},
 	"bitcoin":   {"bc", "tb", "tbs", "bcrt"},
@@ -106,14 +148,18 @@ func Pubkey(hex string) Identity {
 	return Identity{value: hex}
 }
 
-// Connection builds an Identity for a recipient/sender on platform who has
-// no Nostr keypair yet, computing its ConnectionKey internally — the caller
-// never hashes platform+externalID by hand.
-func Connection(platform WebIdentity, externalID string) Identity {
-	return Identity{
-		value:       nipIC.NewConnectionKey(platform, externalID).String(),
-		webIdentity: platform,
+// Connection builds an Identity for a recipient/sender on a platform with a
+// canonical user-id form (x, discord, email, dns) who has no Nostr keypair yet,
+// computing its ConnectionKey from typed input with nipIC.NewConnectionKey. A
+// value that is not canonical, or a platform without a canonical form, is an
+// error: such a key comes from the recipient's attestation or nconnection
+// (ResolvedConnection).
+func Connection(platform WebIdentity, typed string) (Identity, error) {
+	key, err := nipIC.NewConnectionKey(platform, typed)
+	if err != nil {
+		return Identity{}, err
 	}
+	return Identity{value: key.String(), webIdentity: platform}, nil
 }
 
 // ResolvedConnection builds an Identity from a ConnectionKey the caller has
@@ -149,6 +195,21 @@ func (id Identity) Value() string { return id.value }
 // Handle returns the stable display handle, or "" if none was set.
 func (id Identity) Handle() string { return id.handle }
 
+// EconomicSender returns who pays: the P tag of a 9523, never its Proxy Agent
+// signer, and the signer of a 9520.
+func (r *AltZapRequest) EconomicSender() Identity {
+	if r.Kind == KindAltZapOnBehalfRequest {
+		return r.Sender
+	}
+	return Pubkey(r.PubKey)
+}
+
+// sameIdentity compares two identities by [1] and [2] (an empty platform and
+// "nostr" are the same), ignoring any handle.
+func sameIdentity(a, b Identity) bool {
+	return a.value == b.value && a.webIdentity == b.webIdentity
+}
+
 // toSlice renders id as a Nostr tag array under key ("p" or "P"). Requests
 // never include a handle even if one is set on id (9520/9523 cap at 3
 // elements, matching NIP-AZ's request format); receipts do, via includeHandle.
@@ -162,46 +223,109 @@ func (id Identity) toSlice(key string, includeHandle bool) []string {
 	return []string{key, id.value, string(id.webIdentity)}
 }
 
-// identityFromRequestTag builds an Identity from a parsed p/P tag on a
-// request (2 or 3 elements — requests never carry a handle). An empty or
-// literal "nostr" platform element both mean "native pubkey", matching
-// NIP-AZ.md's own rule that an omitted platform element defaults to nostr.
-func identityFromRequestTag(tag []string) Identity {
+// identityFromTag builds an Identity from a p/P tag, enforcing NIP-AZ's
+// 3-element identity tag: [1] is 64 lowercase hex; [2] omitted, empty or
+// "nostr" means a native pubkey, anything else must be a NIP-IC platform name.
+// Nothing is lowercased or repaired. Only receipts read a 4th element (the
+// handle), and it is display only.
+func identityFromTag(tag []string, withHandle bool) (Identity, error) {
+	if len(tag) < 2 || !isLowerHex64(tag[1]) {
+		return Identity{}, fmt.Errorf("%w: %s tag value", ErrInvalidIdentityTag, tag[0])
+	}
 	id := Identity{value: tag[1]}
 	if len(tag) > 2 && tag[2] != "" && tag[2] != "nostr" {
+		if !nipIC.ValidPlatformName(WebIdentity(tag[2])) {
+			return Identity{}, fmt.Errorf("%w: %s tag platform", ErrInvalidIdentityTag, tag[0])
+		}
 		id.webIdentity = WebIdentity(tag[2])
 	}
-	return id
-}
-
-// identityFromReceiptTag is identityFromRequestTag plus an optional 4th
-// element handle, which only receipts carry.
-func identityFromReceiptTag(tag []string) Identity {
-	id := identityFromRequestTag(tag)
-	if len(tag) > 3 && tag[3] != "" {
+	if withHandle && len(tag) > 3 && tag[3] != "" {
 		id.handle = tag[3]
 	}
-	return id
+	return id, nil
 }
 
-// altZapPolicy selects which actor's subset of NIP-AZ's Verification
-// Algorithm a Parse*/Validate* call enforces. Rules marked MUST for a relay —
-// signatures, the p/P tag rules, a receipt's hash lock, chain and
-// description binding — hold under every policy.
-type altZapPolicy struct {
-	// relay tolerates the rules NIP-AZ marks SHOULD or MAY at relay ingest:
-	// the lnurl, relays, amount, chain and e tags of a request, the amount
-	// cross-checks of a receipt, and malformed zap-split tags.
-	relay bool
+// isLowerHex64 reports 64 characters of 0-9a-f.
+func isLowerHex64(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
-var (
-	// policyStrict is for LNURL servers settling a request and for callers
-	// building their own events.
-	policyStrict = altZapPolicy{}
-	// policyRelay is for relays ingesting events someone else signed.
-	policyRelay = altZapPolicy{relay: true}
-)
+// parseAmount reads a positive decimal integer: ^[1-9][0-9]*$ that fits an
+// int64. "0", "-1", "+1", "01", "1.5", "1e6" and "" are refused.
+func parseAmount(s string) (int64, bool) {
+	if s == "" || s[0] < '1' || s[0] > '9' {
+		return 0, false
+	}
+	for i := 1; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return 0, false
+		}
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	return n, err == nil
+}
+
+// decodeLnurlTag decodes a bech32 lnurl tag (either case, never mixed) to its
+// URL and normalises it with NormalizeEndpoint. A lightning address is not
+// bech32 and is refused.
+func decodeLnurlTag(s string) (string, error) {
+	if s != strings.ToLower(s) && s != strings.ToUpper(s) {
+		return "", errors.New("mixed-case bech32")
+	}
+	raw, err := utils.DecodeLNURL(s)
+	if err != nil {
+		return "", err
+	}
+	return NormalizeEndpoint(raw)
+}
+
+// NormalizeEndpoint parses an LNURL-pay endpoint URL and lowercases its scheme
+// and host, the form ServerPolicy.OwnEndpoint and AltZapRequest.Endpoint are
+// compared in.
+func NormalizeEndpoint(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", err
+	}
+	if u.Scheme == "" || u.Host == "" {
+		return "", errors.New("endpoint is not an absolute URL")
+	}
+	u.Scheme = strings.ToLower(u.Scheme)
+	u.Host = strings.ToLower(u.Host)
+	return u.String(), nil
+}
+
+// checkZapSplitTag validates a zap-split tag on a request or receipt.
+func checkZapSplitTag(tag []string) error {
+	if len(tag) < 3 {
+		return ErrInvalidZapTag
+	}
+	if err := utils.Validate32Key(tag[1]); err != nil {
+		return fmt.Errorf("%w: pubkey %q: %w", ErrInvalidZapTag, tag[1], err)
+	}
+	u, err := url.ParseRequestURI(tag[2])
+	if err != nil {
+		return fmt.Errorf("%w: relay url %q: %w", ErrInvalidZapTag, tag[2], err)
+	}
+	if u.Scheme != "wss" && u.Scheme != "ws" {
+		return fmt.Errorf("%w: relay scheme %q", ErrInvalidZapTag, u.Scheme)
+	}
+	if len(tag) > 3 {
+		if _, err := strconv.Atoi(tag[3]); err != nil {
+			return fmt.Errorf("%w: weight %q: %w", ErrInvalidZapTag, tag[3], err)
+		}
+	}
+	return nil
+}
 
 // AltZapRequest is a parsed and validated AltZap request event (kind 9520
 // or 9523).
@@ -209,46 +333,66 @@ type AltZapRequest struct {
 	*nip01.Event
 	Relays    []string
 	Amount    int64
-	Lnurl     string
-	Chain     Chain    // required, to prevent cross-chain replay
-	EventID   string   // e tag
-	ATag      string   // a tag coordinate
-	KTag      string   // k tag kind limit
-	Recipient Identity // p tag
-	Sender    Identity // P tag
+	Lnurl     string // the lnurl tag as received
+	Endpoint  string // Lnurl decoded and normalised (NormalizeEndpoint); "" when not checked
+	Chain     Chain  // required, to prevent cross-chain replay
+	EventID   string // e tag
+	ATag      string // a tag coordinate
+	KTag      string // k tag kind limit
+	IA        string // ia tag: the IA that attested a ConnectionKey p, "" when absent
+	Recipient Identity
+	Sender    Identity // P tag (9523 only); see EconomicSender
 }
 
-// ParseAltZapRequest parses and validates an AltZap request event (kind
-// 9520 or 9523).
+// ParseAltZapRequest parses an AltZap request event (kind 9520 or 9523) and
+// checks every rule of NIP-AZ's request table that needs neither the
+// signature nor the LNURL server's own settings: the p, P and ia rules, a
+// present chain, a positive integer amount, a well-formed lnurl, the relays and
+// the e and a tags. It does not verify the signature; ValidateAltZapRequest
+// does, and adds the server's rules.
 func ParseAltZapRequest(event *nip01.Event) (*AltZapRequest, error) {
-	return parseAltZapRequest(event, policyStrict)
+	return parseAltZapRequest(event, false)
 }
 
-func parseAltZapRequest(event *nip01.Event, policy altZapPolicy) (*AltZapRequest, error) {
+// parseAltZapRequest checks rules 2 and 3 (MUST for everyone), the presence
+// part of 4, the positive-integer part of 5, 8 and 9 (SHOULD for a relay,
+// enforced here for both), and with relay false the well-formed part of 6, 7
+// and the zap-split tags.
+func parseAltZapRequest(event *nip01.Event, relay bool) (*AltZapRequest, error) {
+	if event == nil {
+		return nil, fmt.Errorf("%w: nil event", nip57.ErrWrongKind)
+	}
 	if event.Kind != KindAltZapRequest && event.Kind != KindAltZapOnBehalfRequest {
 		return nil, fmt.Errorf("%w: got %d, want %d or %d", nip57.ErrWrongKind, event.Kind, KindAltZapRequest, KindAltZapOnBehalfRequest)
 	}
 
 	zr := &AltZapRequest{Event: event}
-	var pTagCount, eTagCount, PTagCount int
+	var nP, nSender, nE, nA, nIA, nChain, nAmount, nLnurl, nRelays int
+	var amount string
 
 	for _, tag := range event.Tags {
+		if len(tag) == 0 {
+			continue
+		}
 		if len(tag) < 2 {
+			if tag[0] == "p" || tag[0] == "P" {
+				return nil, fmt.Errorf("%w: %s tag has no value", ErrInvalidIdentityTag, tag[0])
+			}
 			continue
 		}
 		switch tag[0] {
 		case "relays":
-			// Validate relays
+			nRelays++
 			for _, r := range tag[1:] {
 				u, err := url.ParseRequestURI(r)
 				if err != nil {
-					if policy.relay {
+					if relay {
 						continue
 					}
 					return nil, fmt.Errorf("%w %q: %w", nip57.ErrInvalidRelayURL, r, err)
 				}
 				if u.Scheme != "wss" && u.Scheme != "ws" {
-					if policy.relay {
+					if relay {
 						continue
 					}
 					return nil, fmt.Errorf("%w: %q", nip57.ErrInvalidRelayScheme, u.Scheme)
@@ -256,139 +400,205 @@ func parseAltZapRequest(event *nip01.Event, policy altZapPolicy) (*AltZapRequest
 				zr.Relays = append(zr.Relays, r)
 			}
 		case "amount":
-			// Validate amount
-			var a int64
-			n, err := fmt.Sscanf(tag[1], "%d", &a)
-			if err != nil || n != 1 {
-				if policy.relay {
-					continue
-				}
-				return nil, fmt.Errorf("%w: %q", nip57.ErrInvalidAmount, tag[1])
-			}
-			if a <= 0 && !policy.relay {
-				return nil, fmt.Errorf("%w: %d", nip57.ErrInvalidAmountValue, a)
-			}
-			zr.Amount = a
+			nAmount++
+			amount = tag[1]
 		case "lnurl":
-			if err := utils.ValidateLNURL(tag[1]); err != nil && !policy.relay {
-				return nil, fmt.Errorf("%w %q: %w", nip57.ErrInvalidLNURL, tag[1], err)
-			}
+			nLnurl++
 			zr.Lnurl = tag[1]
 		case "e":
-			if err := utils.Validate32Key(tag[1]); err != nil && !policy.relay {
-				return nil, fmt.Errorf("%w %q: %w", nip57.ErrInvalidEventTag, tag[1], err)
+			nE++
+			if !isLowerHex64(tag[1]) {
+				return nil, fmt.Errorf("%w: not 64 lowercase hex", nip57.ErrInvalidEventTag)
 			}
 			zr.EventID = tag[1]
-			eTagCount++
-		case "chain":
-			zr.Chain = Chain(tag[1])
 		case "a":
+			nA++
 			zr.ATag = tag[1]
 		case "k":
 			zr.KTag = tag[1]
+		case "chain":
+			nChain++
+			zr.Chain = Chain(tag[1])
+		case "ia":
+			nIA++
+			zr.IA = tag[1]
 		case "p":
-			zr.Recipient = identityFromRequestTag(tag)
-			pTagCount++
+			nP++
+			id, err := identityFromTag(tag, false)
+			if err != nil {
+				return nil, err
+			}
+			zr.Recipient = id
 		case "P":
-			zr.Sender = identityFromRequestTag(tag)
-			PTagCount++
+			nSender++
+			id, err := identityFromTag(tag, false)
+			if err != nil {
+				return nil, err
+			}
+			zr.Sender = id
 		case "zap":
-			if policy.relay {
+			if relay {
 				continue
 			}
-			if len(tag) < 3 {
-				return nil, ErrInvalidZapTag
-			}
-			if err := utils.Validate32Key(tag[1]); err != nil {
-				return nil, fmt.Errorf("%w: pubkey %q: %w", ErrInvalidZapTag, tag[1], err)
-			}
-			u, err := url.ParseRequestURI(tag[2])
-			if err != nil {
-				return nil, fmt.Errorf("%w: relay url %q: %w", ErrInvalidZapTag, tag[2], err)
-			}
-			if u.Scheme != "wss" && u.Scheme != "ws" {
-				return nil, fmt.Errorf("%w: relay scheme %q", ErrInvalidZapTag, u.Scheme)
-			}
-			if len(tag) > 3 {
-				if _, err := strconv.Atoi(tag[3]); err != nil {
-					return nil, fmt.Errorf("%w: weight %q: %w", ErrInvalidZapTag, tag[3], err)
-				}
+			if err := checkZapSplitTag(tag); err != nil {
+				return nil, err
 			}
 		}
 	}
 
-	// Protocol enforcements
-	if zr.Chain == "" && !policy.relay {
-		return nil, ErrMissingChainTag
+	// Rule 2: exactly one p (each p and P was checked as it was read).
+	if nP != 1 {
+		return nil, fmt.Errorf("%w: kind %d has %d", nip57.ErrRecipientTagCount, event.Kind, nP)
 	}
-
-	if pTagCount != 1 {
-		return nil, fmt.Errorf("%w: kind %d", nip57.ErrRecipientTagCount, event.Kind)
-	}
-	if zr.Lnurl == "" && !policy.relay {
-		return nil, fmt.Errorf("%w: kind %d", ErrMissingLNURLTag, event.Kind)
-	}
-
+	// Rule 3: no P on a 9520, exactly one on a 9523.
 	switch {
-	case event.Kind == KindAltZapOnBehalfRequest && PTagCount == 0:
+	case event.Kind == KindAltZapOnBehalfRequest && nSender == 0:
 		return nil, ErrMissingSenderTag
-	case event.Kind == KindAltZapOnBehalfRequest && PTagCount > 1:
-		return nil, fmt.Errorf("%w: got %d", ErrSenderTagCount, PTagCount)
-	case event.Kind == KindAltZapRequest && PTagCount > 0:
+	case event.Kind == KindAltZapOnBehalfRequest && nSender > 1:
+		return nil, fmt.Errorf("%w: got %d", ErrSenderTagCount, nSender)
+	case event.Kind == KindAltZapRequest && nSender > 0:
 		return nil, ErrSenderTagNotAllowed
 	}
-
-	// e tag is optional (0 or 1)
-	if eTagCount > 1 && !policy.relay {
+	// Rule 4, presence.
+	if nChain > 1 {
+		return nil, fmt.Errorf("%w: chain", ErrDuplicateTag)
+	}
+	if zr.Chain == "" {
+		return nil, ErrMissingChainTag
+	}
+	// Rule 5, a positive integer.
+	switch {
+	case nAmount == 0:
+		return nil, fmt.Errorf("%w: missing", nip57.ErrInvalidAmount)
+	case nAmount > 1:
+		return nil, fmt.Errorf("%w: amount", ErrDuplicateTag)
+	}
+	a, ok := parseAmount(amount)
+	if !ok {
+		return nil, fmt.Errorf("%w: %q", nip57.ErrInvalidAmount, amount)
+	}
+	zr.Amount = a
+	// Rule 8.
+	if nE > 1 {
 		return nil, nip57.ErrTooManyEventTags
 	}
-
-	// Relays tag required
-	if len(zr.Relays) == 0 && !policy.relay {
-		return nil, nip57.ErrMissingRelaysTag
+	if nA > 1 {
+		return nil, ErrTooManyATags
+	}
+	// Rule 9.
+	if nIA > 1 || (nIA == 1 && !isLowerHex64(zr.IA)) {
+		return nil, ErrInvalidIATag
+	}
+	switch platform := zr.Recipient.webIdentity; {
+	case platform == "" && nIA > 0:
+		return nil, ErrIANotAllowed
+	case platform != "" && !nipIC.HasCanonicalForm(platform) && nIA == 0:
+		return nil, fmt.Errorf("%w: platform %q", ErrIARequired, platform)
+	}
+	if relay {
+		return zr, nil
 	}
 
+	// Rule 6, well formed.
+	switch {
+	case nLnurl == 0:
+		return nil, fmt.Errorf("%w: kind %d", ErrMissingLNURLTag, event.Kind)
+	case nLnurl > 1:
+		return nil, fmt.Errorf("%w: lnurl", ErrDuplicateTag)
+	}
+	endpoint, err := decodeLnurlTag(zr.Lnurl)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", nip57.ErrInvalidLNURL, err)
+	}
+	zr.Endpoint = endpoint
+	// Rule 7.
+	if nRelays == 0 || len(zr.Relays) == 0 {
+		return nil, nip57.ErrMissingRelaysTag
+	}
 	return zr, nil
 }
 
-// ValidateAltZapRequest checks if the event is a valid AltZap request and
-// optionally enforces the amount.
-func ValidateAltZapRequest(event *nip01.Event, expectedAmountMloki int64) error {
-	return validateAltZapRequest(event, expectedAmountMloki, policyStrict)
+// ServerPolicy is what an LNURL server checks a request against at its
+// callback: the chains it advertises, its own endpoint (the decoded URL its
+// lnurl encodes) and the IAs it trusts. A nil TrustedIA trusts none.
+type ServerPolicy struct {
+	Chains      []Chain
+	OwnEndpoint string
+	TrustedIA   func(ia string) bool
 }
 
-// ValidateAltZapRequestForRelay is ValidateAltZapRequest for a relay
-// ingesting a request someone else signed: it enforces only the rules NIP-AZ
-// marks MUST for a relay (signature, exactly one p, the P rules).
+// ValidateAltZapRequest runs every rule of NIP-AZ's request table, as an
+// LNURL server must before it issues an invoice: the signature first (rule
+// 1), then the tag rules of ParseAltZapRequest, and the server's own rules:
+// chain advertised (4), amount equal to the callback's amount parameter (5),
+// lnurl decoding to p.OwnEndpoint (6) and ia trusted (10).
+func ValidateAltZapRequest(event *nip01.Event, p ServerPolicy, callbackAmount int64) (*AltZapRequest, error) {
+	if event == nil {
+		return nil, fmt.Errorf("%w: nil event", nip57.ErrWrongKind)
+	}
+	if err := event.Verify(); err != nil {
+		return nil, fmt.Errorf("%w: %w", nip57.ErrInvalidSignature, err)
+	}
+	zr, err := parseAltZapRequest(event, false)
+	if err != nil {
+		return nil, err
+	}
+	if !slices.Contains(p.Chains, zr.Chain) {
+		return nil, fmt.Errorf("%w: %q", ErrChainNotAdvertised, zr.Chain)
+	}
+	if zr.Amount != callbackAmount {
+		return nil, fmt.Errorf("%w: callback %d, tag %d", nip57.ErrAmountMismatch, callbackAmount, zr.Amount)
+	}
+	own, err := NormalizeEndpoint(p.OwnEndpoint)
+	if err != nil || own != zr.Endpoint {
+		return nil, ErrLnurlNotOwnEndpoint
+	}
+	if zr.IA != "" && (p.TrustedIA == nil || !p.TrustedIA(zr.IA)) {
+		return nil, ErrUntrustedIA
+	}
+	return zr, nil
+}
+
+// ValidateAltZapRequestForRelay is the relay subset of the request table: it
+// rejects a forged event (rule 1) and a broken p, P or ia (rules 2, 3, 9), a
+// missing chain (4), a non-positive or malformed amount (5) and repeated e or
+// a tags (8). It does not check the lnurl or relays tags (MAY), nor anything
+// only the LNURL server knows.
 func ValidateAltZapRequestForRelay(event *nip01.Event) error {
-	return validateAltZapRequest(event, 0, policyRelay)
-}
-
-func validateAltZapRequest(event *nip01.Event, expectedAmountMloki int64, policy altZapPolicy) error {
-	// 1. Signature check
+	if event == nil {
+		return fmt.Errorf("%w: nil event", nip57.ErrWrongKind)
+	}
 	if err := event.Verify(); err != nil {
 		return fmt.Errorf("%w: %w", nip57.ErrInvalidSignature, err)
 	}
+	_, err := parseAltZapRequest(event, true)
+	return err
+}
 
-	// 2. Parse and structure check
-	zr, err := parseAltZapRequest(event, policy)
-	if err != nil {
-		return err
+// SupportsAltZap reports whether an LNURL-pay endpoint accepts AltZap
+// requests: allowsNostr is true and its metadata lists at least one
+// chain/<name> entry. chains are the advertised names, in order. A client
+// must not send a 9520 or 9523 to an endpoint for which ok is false.
+func SupportsAltZap(pr utils.PayResponse) (chains []Chain, ok bool) {
+	if !pr.AllowsNostr {
+		return nil, false
 	}
-	if policy.relay {
-		return nil
+	var entries [][]any
+	if err := json.Unmarshal([]byte(pr.Metadata), &entries); err != nil {
+		return nil, false
 	}
-
-	// 3. Amount check
-	if zr.Amount <= 0 {
-		return nip57.ErrInvalidAmountValue
+	for _, entry := range entries {
+		if len(entry) == 0 {
+			continue
+		}
+		tag, isString := entry[0].(string)
+		name, found := strings.CutPrefix(tag, "chain/")
+		if !isString || !found || name == "" || slices.Contains(chains, Chain(name)) {
+			continue
+		}
+		chains = append(chains, Chain(name))
 	}
-
-	if expectedAmountMloki > 0 && zr.Amount != expectedAmountMloki {
-		return fmt.Errorf("%w: expected %d mloki, got %d mloki", nip57.ErrAmountMismatch, expectedAmountMloki, zr.Amount)
-	}
-
-	return nil
+	return chains, len(chains) > 0
 }
 
 // AltZapReceipt is a parsed and validated AltZap receipt event (kind 9521).
@@ -398,6 +608,8 @@ type AltZapReceipt struct {
 	Sender               Identity // P tag
 	ResolvedPubkey       string   // r tag
 	ResolvedSenderPubkey string   // R tag
+	IA                   string   // ia tag, copied from the request
+	Amount               int64    // amount tag; 0 when absent
 	Bolt11               string
 	Chain                Chain
 	Preimage             string
@@ -405,31 +617,51 @@ type AltZapReceipt struct {
 	Request              *AltZapRequest
 }
 
-// ParseAltZapReceipt parses and validates an AltZap receipt event (kind 9521).
+// ParseAltZapReceipt parses an AltZap receipt event (kind 9521): its tags,
+// and the embedded request, whose signature it verifies and whose tag rules
+// it checks as ParseAltZapRequest does. It verifies neither the receipt's
+// signature nor the invoice; ValidateAltZapReceipt does.
 func ParseAltZapReceipt(event *nip01.Event) (*AltZapReceipt, error) {
-	return parseAltZapReceipt(event, policyStrict)
+	return parseAltZapReceipt(event, false)
 }
 
-func parseAltZapReceipt(event *nip01.Event, policy altZapPolicy) (*AltZapReceipt, error) {
+func parseAltZapReceipt(event *nip01.Event, relay bool) (*AltZapReceipt, error) {
+	if event == nil {
+		return nil, fmt.Errorf("%w: nil event", nip57.ErrWrongKind)
+	}
 	if event.Kind != KindAltZapReceipt {
 		return nil, fmt.Errorf("%w: got %d, want %d", nip57.ErrWrongKind, event.Kind, KindAltZapReceipt)
 	}
 
 	zr := &AltZapReceipt{Event: event}
+	seen := map[string]int{}
+	var amount string
 
 	for _, tag := range event.Tags {
-		if len(tag) < 2 {
+		if len(tag) == 0 {
 			continue
 		}
+		if len(tag) < 2 {
+			if tag[0] == "p" || tag[0] == "P" {
+				return nil, fmt.Errorf("%w: %s tag has no value", ErrInvalidIdentityTag, tag[0])
+			}
+			continue
+		}
+		seen[tag[0]]++
+		var err error
 		switch tag[0] {
 		case "p":
-			zr.Recipient = identityFromReceiptTag(tag)
+			zr.Recipient, err = identityFromTag(tag, true)
 		case "P":
-			zr.Sender = identityFromReceiptTag(tag)
+			zr.Sender, err = identityFromTag(tag, true)
 		case "r":
 			zr.ResolvedPubkey = tag[1]
 		case "R":
 			zr.ResolvedSenderPubkey = tag[1]
+		case "ia":
+			zr.IA = tag[1]
+		case "amount":
+			amount = tag[1]
 		case "bolt11":
 			zr.Bolt11 = tag[1]
 		case "chain":
@@ -439,163 +671,196 @@ func parseAltZapReceipt(event *nip01.Event, policy altZapPolicy) (*AltZapReceipt
 		case "description":
 			zr.Description = tag[1]
 		case "zap":
-			if policy.relay {
-				continue
-			}
-			if len(tag) < 3 {
-				return nil, ErrInvalidZapTag
-			}
-			if err := utils.Validate32Key(tag[1]); err != nil {
-				return nil, fmt.Errorf("%w: pubkey %q: %w", ErrInvalidZapTag, tag[1], err)
-			}
-			u, err := url.ParseRequestURI(tag[2])
-			if err != nil {
-				return nil, fmt.Errorf("%w: relay url %q: %w", ErrInvalidZapTag, tag[2], err)
-			}
-			if u.Scheme != "wss" && u.Scheme != "ws" {
-				return nil, fmt.Errorf("%w: relay scheme %q", ErrInvalidZapTag, u.Scheme)
-			}
-			if len(tag) > 3 {
-				if _, err := strconv.Atoi(tag[3]); err != nil {
-					return nil, fmt.Errorf("%w: weight %q: %w", ErrInvalidZapTag, tag[3], err)
-				}
+			if !relay {
+				err = checkZapSplitTag(tag)
 			}
 		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	for _, name := range []string{"p", "P", "amount", "bolt11", "chain", "preimage", "description"} {
+		if seen[name] > 1 {
+			return nil, fmt.Errorf("%w: %s", ErrDuplicateTag, name)
+		}
+	}
+	if seen["ia"] > 1 || (seen["ia"] == 1 && !isLowerHex64(zr.IA)) {
+		return nil, ErrInvalidIATag
+	}
+	if seen["amount"] == 1 {
+		a, ok := parseAmount(amount)
+		if !ok {
+			return nil, fmt.Errorf("%w: receipt amount %q", nip57.ErrInvalidAmount, amount)
+		}
+		zr.Amount = a
 	}
 
+	// Rule 2.
+	if zr.Bolt11 == "" {
+		return nil, nip57.ErrMissingBolt11Tag
+	}
 	if zr.Chain == "" {
 		return nil, ErrMissingChainTag
 	}
 	if zr.Preimage == "" {
 		return nil, ErrMissingPreimageTag
 	}
-	if zr.Recipient.IsZero() && zr.Description != "" {
+	if zr.Recipient.IsZero() && seen["description"] > 0 {
 		// A receipt for a plain LNURL payment (no description) may omit p;
 		// one carrying a request must name its recipient.
 		return nil, nip57.ErrMissingRecipientTag
 	}
-	if zr.Bolt11 == "" {
-		return nil, nip57.ErrMissingBolt11Tag
-	}
 
-	// Parse embedded request if description is present
-	if zr.Description != "" {
+	// Rule 5, first half: the description embeds a validly signed request.
+	if seen["description"] > 0 {
 		var reqEvent nip01.Event
 		if err := json.Unmarshal([]byte(zr.Description), &reqEvent); err != nil {
 			return nil, fmt.Errorf("%w: %w", nip57.ErrInvalidDescriptionJSON, err)
 		}
-
-		// Verify signature of the embedded zap request (sender identity)
 		if err := reqEvent.Verify(); err != nil {
 			return nil, fmt.Errorf("%w: embedded request signature invalid: %w", nip57.ErrInvalidEmbeddedRequest, err)
 		}
-
-		req, err := parseAltZapRequest(&reqEvent, policy)
+		req, err := parseAltZapRequest(&reqEvent, relay)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %w", nip57.ErrInvalidEmbeddedRequest, err)
 		}
 		zr.Request = req
 	}
-
 	return zr, nil
 }
 
-// ValidateAltZapReceipt checks if the receipt is valid against the request
-// and invoice.
-func ValidateAltZapReceipt(receipt *nip01.Event) error {
-	return validateAltZapReceipt(receipt, policyStrict)
+// ReceiptPolicy is what receipt rule 10 needs: the nostrPubkey the
+// LNURL-pay endpoint at a decoded, normalised lnurl URL advertises (fetched
+// or cached by the caller).
+type ReceiptPolicy struct {
+	NostrPubkeyFor func(lnurlDecoded string) (string, error)
 }
 
-// ValidateAltZapReceiptForRelay is ValidateAltZapReceipt for a relay
-// ingesting a receipt: it still rejects a forged receipt (signature, hash
-// lock, chain, description binding, recipient and chain cross-checks) but
-// keeps one whose amounts disagree, since the payment did happen.
+// ValidateAltZapReceipt runs every rule of NIP-AZ's receipt table, as the
+// LNURL server must before publishing and a client must before displaying a
+// receipt as a payment. Rule 10 calls p.NostrPubkeyFor with the embedded
+// request's decoded lnurl; a nil NostrPubkeyFor fails a receipt that has a
+// description (ErrNostrPubkeyUnknown) rather than skip the rule.
+func ValidateAltZapReceipt(receipt *nip01.Event, p ReceiptPolicy) (*AltZapReceipt, error) {
+	return validateAltZapReceipt(receipt, false, &p, true)
+}
+
+// ValidateAltZapReceiptForRelay is the relay subset of the receipt table:
+// rules 1 to 6 (MUST) and 7 to 9 (SHOULD); rule 10 is skipped. The embedded
+// request is held to the relay subset of the request table, so a receipt
+// whose request carries a lightning address in lnurl is still stored.
 func ValidateAltZapReceiptForRelay(receipt *nip01.Event) error {
-	return validateAltZapReceipt(receipt, policyRelay)
+	_, err := validateAltZapReceipt(receipt, true, nil, true)
+	return err
 }
 
-func validateAltZapReceipt(receipt *nip01.Event, policy altZapPolicy) error {
-	// 1. Signature
-	if err := receipt.Verify(); err != nil {
-		return fmt.Errorf("%w: %w", nip57.ErrInvalidSignature, err)
+// validateAltZapReceipt runs rules 1 (when checkSig) to 9, and rule 10 when
+// policy is set.
+func validateAltZapReceipt(receipt *nip01.Event, relay bool, policy *ReceiptPolicy, checkSig bool) (*AltZapReceipt, error) {
+	if receipt == nil {
+		return nil, fmt.Errorf("%w: nil event", nip57.ErrWrongKind)
 	}
-
-	// 2. Parse
-	zr, err := parseAltZapReceipt(receipt, policy)
+	// 1. Signature, before any tag is read.
+	if checkSig {
+		if err := receipt.Verify(); err != nil {
+			return nil, fmt.Errorf("%w: %w", nip57.ErrInvalidSignature, err)
+		}
+	}
+	// 2. Required tags (and the embedded request's signature and tags).
+	zr, err := parseAltZapReceipt(receipt, relay)
 	if err != nil {
-		return err
+		return nil, err
 	}
-
-	// 3. Verify Invoice
 	invoice, err := nip57.DecodeBolt11(zr.Bolt11)
 	if err != nil {
-		return fmt.Errorf("%w: %w", nip57.ErrBolt11DecodeFailed, err)
+		return nil, fmt.Errorf("%w: %w", nip57.ErrBolt11DecodeFailed, err)
 	}
-
-	// Hash lock: the preimage must be the one that paid this invoice.
+	// 3. Hash lock: the preimage must be the one that paid this invoice.
 	preimage, err := hex.DecodeString(zr.Preimage)
 	if err != nil {
-		return fmt.Errorf("%w: preimage is not hex", ErrHashLockMismatch)
+		return nil, fmt.Errorf("%w: preimage is not hex", ErrHashLockMismatch)
 	}
 	if sum := sha256.Sum256(preimage); !strings.EqualFold(hex.EncodeToString(sum[:]), invoice.PaymentHash) {
-		return ErrHashLockMismatch
+		return nil, ErrHashLockMismatch
+	}
+	// 4. The invoice is on the receipt's chain; an unknown chain proves nothing.
+	prefixes, known := InvoiceCurrencies[zr.Chain]
+	if !known {
+		return nil, fmt.Errorf("%w: %q", ErrUnknownChain, zr.Chain)
+	}
+	if !slices.Contains(prefixes, invoice.Currency) {
+		return nil, fmt.Errorf("%w: chain %q, invoice currency %q", ErrChainMismatch, zr.Chain, invoice.Currency)
 	}
 
-	// The invoice must be on the receipt's chain, when the chain is known.
-	if prefixes, known := InvoiceCurrencies[zr.Chain]; known && !slices.Contains(prefixes, invoice.Currency) {
-		return fmt.Errorf("%w: chain %q, invoice currency %q", ErrChainMismatch, zr.Chain, invoice.Currency)
+	if req := zr.Request; req != nil {
+		// 5. The invoice binds the description exactly as stored.
+		if invoice.DescriptionHash == "" {
+			return nil, fmt.Errorf("%w: %w", nip57.ErrDescriptionHashMismatch, nip57.ErrMissingDescriptionHash)
+		}
+		if descHash := DescriptionHash(zr.Description); invoice.DescriptionHash != descHash {
+			return nil, fmt.Errorf("%w: have=%s want=%s", nip57.ErrDescriptionHashMismatch, descHash, invoice.DescriptionHash)
+		}
+		// 6. p, chain, ia and P are the request's.
+		if !sameIdentity(zr.Recipient, req.Recipient) {
+			return nil, fmt.Errorf("%w: receipt p differs from the request's", nip57.ErrRecipientMismatch)
+		}
+		if zr.Chain != req.Chain {
+			return nil, fmt.Errorf("%w: receipt %q, request %q", ErrChainMismatch, zr.Chain, req.Chain)
+		}
+		if zr.IA != req.IA {
+			return nil, ErrIAMismatch
+		}
+		switch req.Kind {
+		case KindAltZapOnBehalfRequest:
+			if !sameIdentity(zr.Sender, req.Sender) {
+				return nil, ErrSenderMismatch
+			}
+		default:
+			if !zr.Sender.IsZero() && !sameIdentity(zr.Sender, Pubkey(req.PubKey)) {
+				return nil, ErrSenderMismatch
+			}
+		}
+		// 7. The invoice settles the requested amount.
+		if invoice.AmountMloki != req.Amount {
+			return nil, fmt.Errorf("%w: invoice=%d request=%d", nip57.ErrAmountMismatch, invoice.AmountMloki, req.Amount)
+		}
+	} else if invoice.AmountMloki <= 0 {
+		// 8. A plain payment settled without a request is still positive.
+		return nil, ErrInvalidInvoiceAmount
 	}
-
-	// 4. Validate Logic (Strict for Zaps, relaxed for Direct Payments)
-	if zr.Description != "" {
-		if zr.Request == nil {
-			return nip57.ErrInvalidEmbeddedRequest
+	// 9. An amount tag states the invoice amount.
+	if zr.Amount != 0 && zr.Amount != invoice.AmountMloki {
+		return nil, fmt.Errorf("%w: amount tag %d, invoice %d", nip57.ErrAmountMismatch, zr.Amount, invoice.AmountMloki)
+	}
+	// 10. Signed by the nostrPubkey of the endpoint the request named.
+	if policy != nil && zr.Request != nil {
+		if policy.NostrPubkeyFor == nil {
+			return nil, ErrNostrPubkeyUnknown
 		}
-
-		// A. Verify description hash (CRITICAL)
-		// SHA256(description) == invoice.DescriptionHash
-		descHashHex := DescriptionHash(zr.Description)
-
-		if invoice.DescriptionHash != descHashHex {
-			return fmt.Errorf("%w: have=%s want=%s", nip57.ErrDescriptionHashMismatch, descHashHex, invoice.DescriptionHash)
+		want, err := policy.NostrPubkeyFor(zr.Request.Endpoint)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrNostrPubkeyUnknown, err)
 		}
-
-		// B. Verify amounts match
-		// Invoice amount mloki == Request amount mloki
-		if !policy.relay && invoice.AmountMloki != zr.Request.Amount {
-			return fmt.Errorf("%w: invoice=%d request=%d", nip57.ErrAmountMismatch, invoice.AmountMloki, zr.Request.Amount)
-		}
-
-		// C. Verify Recipients match
-		if zr.Recipient.Value() != zr.Request.Recipient.Value() {
-			return fmt.Errorf("%w: receipt=%s request_author=%s", nip57.ErrRecipientMismatch, zr.Recipient.Value(), zr.Request.Recipient.Value())
-		}
-
-		// D. The receipt settles on the chain the request asked for.
-		if zr.Chain != zr.Request.Chain {
-			return fmt.Errorf("%w: receipt %q, request %q", ErrChainMismatch, zr.Chain, zr.Request.Chain)
-		}
-	} else {
-		// Direct Payment (no Zap Request description)
-		if !policy.relay && invoice.AmountMloki <= 0 {
-			return ErrInvalidInvoiceAmount
+		if want != receipt.PubKey {
+			return nil, ErrReceiptSigner
 		}
 	}
-
-	return nil
+	return zr, nil
 }
 
 // AltZapRequestParams describes an AltZap request (kind 9520, or 9523 when
 // built via NewAltZapOnBehalfRequest). PrivateKey, Chain, Recipient, Lnurl,
-// AmountMloki, and Relays are required; the rest are optional. The event is
-// signed with PrivateKey internally — the caller never calls .Sign()
-// themselves.
+// AmountMloki, and Relays are required; IA is required when Recipient is a
+// ConnectionKey on a platform without a canonical form, and refused beside a
+// pubkey; the rest are optional. The event is signed with PrivateKey
+// internally — the caller never calls .Sign() themselves.
 type AltZapRequestParams struct {
-	PrivateKey  string   // sender's (or proxy agent's, for on-behalf) nsec hex
-	Chain       Chain    // e.g. "flokicoin" — prevents cross-chain replay
+	PrivateKey  string   // sender's (or proxy agent's, for on-behalf) private key hex
+	Chain       Chain    // e.g. "examplecoin" — prevents cross-chain replay
 	Recipient   Identity // recipient ("p" tag) — required
-	Lnurl       string   // recipient's LNURL-pay endpoint
-	AmountMloki int64    // amount in mloki (milli-loki)
+	IA          string   // "ia" tag: the IA whose attestation or nconnection the recipient's key came from
+	Lnurl       string   // recipient's LNURL-pay endpoint, bech32 "lnurl1..."
+	AmountMloki int64    // amount in the chain's milli-units
 	Relays      []string // relays the zap receipt should be published to
 	Sender      Identity // "P" tag — only for 9523; NewAltZapOnBehalfRequest sets it, NewAltZapRequest rejects it
 	Content     string   // optional note content
@@ -611,26 +876,27 @@ func NewAltZapRequest(p AltZapRequestParams) (*nip01.Event, error) {
 	return newAltZapRequest(KindAltZapRequest, p)
 }
 
-// newAltZapRequest builds and signs a request of the given kind, so the
-// signature always covers the final kind.
+// newAltZapRequest builds a request of the given kind, checks it against the
+// same tag rules a receiver applies (ParseAltZapRequest), and only then signs
+// it, so the signature always covers the final kind.
 func newAltZapRequest(kind int, p AltZapRequestParams) (*nip01.Event, error) {
 	tags := [][]string{
 		p.Recipient.toSlice("p", false),
-		{"amount", fmt.Sprintf("%d", p.AmountMloki)},
+		{"amount", strconv.FormatInt(p.AmountMloki, 10)},
 		{"lnurl", p.Lnurl},
 		{"chain", string(p.Chain)},
 	}
-
+	if p.IA != "" {
+		tags = append(tags, []string{"ia", p.IA})
+	}
 	if !p.Sender.IsZero() {
 		tags = append(tags, p.Sender.toSlice("P", false))
 	}
-
 	if len(p.Relays) > 0 {
 		relayTag := []string{"relays"}
 		relayTag = append(relayTag, p.Relays...)
 		tags = append(tags, relayTag)
 	}
-
 	if p.EventID != nil {
 		tags = append(tags, []string{"e", *p.EventID})
 	}
@@ -640,6 +906,9 @@ func newAltZapRequest(kind int, p AltZapRequestParams) (*nip01.Event, error) {
 		Kind:      kind,
 		Tags:      tags,
 		Content:   p.Content,
+	}
+	if _, err := parseAltZapRequest(event, false); err != nil {
+		return nil, fmt.Errorf("nipAZ: build request: %w", err)
 	}
 	if err := event.Sign(p.PrivateKey); err != nil {
 		return nil, fmt.Errorf("nipAZ: sign request: %w", err)
@@ -661,45 +930,52 @@ func NewAltZapOnBehalfRequest(sender Identity, p AltZapRequestParams) (*nip01.Ev
 }
 
 // AltZapReceiptParams describes an AltZap receipt (kind 9521), issued by the
-// LNURL server once the invoice is paid. PrivateKey and Bolt11 are required;
-// Recipient is the zero Identity for a plain LNURL payment settled without
-// a signed request.
+// LNURL server once the invoice is paid. PrivateKey, Chain, Bolt11 and
+// Preimage are required; Recipient is the zero Identity for a plain LNURL
+// payment settled without a signed request. IA is the request's ia tag,
+// copied unchanged ("" when it had none).
 //
-// ResolvedRecipientPubkey/ResolvedSenderPubkey/Coordinate/EventID are for
-// callers whose p/P tags carry a non-Nostr identity (e.g. a ConnectionKey)
-// and need to mirror the resolved native pubkey ("r"/"R" tags) and/or the
-// zapped event/addressable-event coordinate ("e"/"a" tags) onto the receipt.
+// ResolvedRecipientPubkey/ResolvedSenderPubkey ("r"/"R") publicly link a
+// ConnectionKey to a Nostr pubkey. Set them only from ResolveIdentity's result
+// and only with LinkAuthorized: the user authorized publishing that link. An
+// indexed 35521 for the key is not that authorization; without it the receipt
+// goes out without r/R. Coordinate/EventID mirror the request's "a"/"e".
 //
 // Recipient/Sender (including any handle attached via Identity.WithHandle)
-// are always authoritative — never re-derived or overridden from Description,
-// even when Description embeds different-looking p/P tags. Description is
-// stored verbatim for auditability only.
+// are always authoritative — never re-derived or overridden from Description;
+// NewAltZapReceipt refuses a receipt whose p, P, chain or ia differ from the
+// embedded request's. Description is stored verbatim.
 type AltZapReceiptParams struct {
-	PrivateKey              string // LNURL server's nsec hex — required, derives the event pubkey and signs
+	PrivateKey              string // LNURL server's private key hex — required, derives the event pubkey and signs
 	Chain                   Chain
 	Recipient               Identity
 	Sender                  Identity
+	IA                      string // "ia" tag, copied from the request
 	Bolt11                  string
-	Description             string // JSON of the embedded AltZap request, if any
+	Description             string // the embedded AltZap request exactly as received, if any
 	Preimage                *string
-	ResolvedRecipientPubkey string // optional "r" tag
-	ResolvedSenderPubkey    string // optional "R" tag
+	ResolvedRecipientPubkey string // optional "r" tag; needs LinkAuthorized
+	ResolvedSenderPubkey    string // optional "R" tag; needs LinkAuthorized
+	LinkAuthorized          bool   // the user authorized publishing the ConnectionKey-to-pubkey link
 	Coordinate              string // optional "a" tag
 	EventID                 string // optional "e" tag
 }
 
 // NewAltZapReceipt creates, signs, and returns a new AltZap receipt event
-// (kind 9521).
+// (kind 9521). It refuses r/R without LinkAuthorized (ErrLinkNotAuthorized)
+// and a receipt failing receipt rules 2 to 9; nothing is signed then. Rule 10
+// holds by construction when PrivateKey is the endpoint's nostrPubkey key.
 func NewAltZapReceipt(p AltZapReceiptParams) (*nip01.Event, error) {
+	if (p.ResolvedRecipientPubkey != "" || p.ResolvedSenderPubkey != "") && !p.LinkAuthorized {
+		return nil, ErrLinkNotAuthorized
+	}
 	tags := [][]string{
 		{"bolt11", p.Bolt11},
 		{"chain", string(p.Chain)},
 	}
-
 	if !p.Recipient.IsZero() {
 		tags = append(tags, p.Recipient.toSlice("p", true))
 	}
-
 	if p.Description != "" {
 		tags = append(tags, []string{"description", p.Description})
 	}
@@ -709,28 +985,27 @@ func NewAltZapReceipt(p AltZapReceiptParams) (*nip01.Event, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", nip57.ErrBolt11DecodeFailed, err)
 	}
-	tags = append(tags, []string{"amount", fmt.Sprintf("%d", inv.AmountMloki)})
-
+	if inv.AmountMloki > 0 {
+		tags = append(tags, []string{"amount", strconv.FormatInt(inv.AmountMloki, 10)})
+	}
 	if !p.Sender.IsZero() {
 		tags = append(tags, p.Sender.toSlice("P", true))
 	}
-
+	if p.IA != "" {
+		tags = append(tags, []string{"ia", p.IA})
+	}
 	if p.Preimage != nil {
 		tags = append(tags, []string{"preimage", *p.Preimage})
 	}
-
 	if p.ResolvedRecipientPubkey != "" {
 		tags = append(tags, []string{"r", p.ResolvedRecipientPubkey})
 	}
-
 	if p.ResolvedSenderPubkey != "" {
 		tags = append(tags, []string{"R", p.ResolvedSenderPubkey})
 	}
-
 	if p.EventID != "" {
 		tags = append(tags, []string{"e", p.EventID})
 	}
-
 	if p.Coordinate != "" {
 		tags = append(tags, []string{"a", p.Coordinate})
 	}
@@ -740,6 +1015,9 @@ func NewAltZapReceipt(p AltZapReceiptParams) (*nip01.Event, error) {
 		Kind:      KindAltZapReceipt,
 		Tags:      tags,
 		Content:   "",
+	}
+	if _, err := validateAltZapReceipt(event, false, nil, false); err != nil {
+		return nil, fmt.Errorf("nipAZ: build receipt: %w", err)
 	}
 	if err := event.Sign(p.PrivateKey); err != nil {
 		return nil, fmt.Errorf("nipAZ: sign receipt: %w", err)

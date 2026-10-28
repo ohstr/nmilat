@@ -424,7 +424,7 @@ func (c *NWCClient) unregister(subID string) {
 // bufSize-buffered response channel under a fresh subscription ID before
 // sending, so no response can race the registration. The returned cleanup
 // func must be called (typically via defer) exactly once.
-func (c *NWCClient) subscribeAndSend(ctx context.Context, method string, params any, bufSize int) (*nwcSub, func(), error) {
+func (c *NWCClient) subscribeAndSend(ctx context.Context, method string, params any, bufSize int, opts ...nip47.RequestOption) (*nwcSub, func(), error) {
 	select {
 	case <-ctx.Done():
 		return nil, func() {}, ctx.Err()
@@ -437,7 +437,7 @@ func (c *NWCClient) subscribeAndSend(ctx context.Context, method string, params 
 	}
 	cleanup := func() { c.unregister(subID) }
 
-	reqEvent, err := nip47.NewRequestEvent(c.appPrivKey, c.walletPubkey, method, params, c.encryption)
+	reqEvent, err := nip47.NewRequestEvent(c.appPrivKey, c.walletPubkey, method, params, c.encryption, opts...)
 	if err != nil {
 		cleanup()
 		return nil, func() {}, fmt.Errorf("build request: %w", err)
@@ -454,9 +454,15 @@ func (c *NWCClient) subscribeAndSend(ctx context.Context, method string, params 
 		cleanup()
 		return nil, func() {}, ErrConnectionClosed
 	}
+	if keep := PublishFilterFrom(ctx); keep != nil && !keep(reqEvent) {
+		return sub, cleanup, nil // dropped by a test hook: as if lost on the way
+	}
 	if !c.conn.Send(reqEvent) {
 		cleanup()
 		return nil, func() {}, ErrConnectionClosed
+	}
+	if f := AfterPublishFrom(ctx); f != nil {
+		f()
 	}
 	return sub, cleanup, nil
 }
@@ -765,7 +771,12 @@ func (c *NWCClient) MultiPayKeysend(ctx context.Context, params nip47.MultiPayKe
 // response event; it is not suitable for fan-out under a non-standard
 // method name.
 func (c *NWCClient) Call(ctx context.Context, method string, params any) (*nip47.ResponseEvent, error) {
-	sub, cleanup, err := c.subscribeAndSend(ctx, method, params, 1)
+	return c.CallWithOptions(ctx, method, params)
+}
+
+// CallWithOptions is Call with request options, such as nip47.WithExpiration.
+func (c *NWCClient) CallWithOptions(ctx context.Context, method string, params any, opts ...nip47.RequestOption) (*nip47.ResponseEvent, error) {
+	sub, cleanup, err := c.subscribeAndSend(ctx, method, params, 1, opts...)
 	if err != nil {
 		return nil, err
 	}

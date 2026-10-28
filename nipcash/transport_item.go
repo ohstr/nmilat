@@ -2,6 +2,7 @@ package nipcash
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/ohstr/nmilat/nipcash/transport"
@@ -130,23 +131,24 @@ func (p CashTransferParams) Item(id, target, connSecret string, b ItemBinding) (
 	return buildItem(id, target, connSecret, MethodCashTransfer, req, p.Credential, b)
 }
 
-// Item builds a cash_consolidate item for the private transport.
-//
-// target is the wallet the call is made AGAINST — the entry point — while the slices
-// being merged are CashConsolidateParams.Sources, each carrying its own credential.
-// The two are separate on purpose: NIP-CASH lets a caller consolidate sources it does
-// not otherwise hold, so the entry point is not necessarily one of them.
-//
-// cred authorizes the call itself. Note a consolidate item can therefore carry
-// several proofs: this item's own, plus one per source inside params, which is why
-// transport.Item.VerificationCost counts them.
-func (p CashConsolidateParams) Item(id, target, connSecret string, cred Credential, b ItemBinding) (transport.Item, error) {
+// Item builds a cash_consolidate item for the private transport. Its target is
+// Sources[0]'s wallet and its item proof is signed by Sources[0]'s credential,
+// the key that signed that source's claim proof (NIP-CASH §Consolidating
+// Tokens, step 1; §Claim Proofs). connSecret is Sources[0]'s bill connection
+// secret, for the bill proof.
+func (p CashConsolidateParams) Item(id, target, connSecret string, b ItemBinding) (transport.Item, error) {
 	req, err := p.Request()
 	if err != nil {
 		return transport.Item{}, err
 	}
-	return buildItem(id, target, connSecret, MethodCashConsolidate, req, cred, b)
+	if target != p.Sources[0].WalletPubkey {
+		return transport.Item{}, ErrConsolidateTarget
+	}
+	return buildItem(id, target, connSecret, MethodCashConsolidate, req, p.Sources[0].Credential, b)
 }
+
+// ErrConsolidateTarget is a consolidate item whose target is not Sources[0].
+var ErrConsolidateTarget = errors.New("nipcash: a cash_consolidate item targets its first source's wallet")
 
 // StatusItem builds a cash_status item for the private transport.
 //
@@ -162,18 +164,7 @@ func StatusItem(id, target, connSecret string, p CashStatusParams, cred Credenti
 	if !IsValidCashStatusScope(p.Scope) {
 		return transport.Item{}, fmt.Errorf("nipcash: cash_status scope %q must be %q, %q, or absent", p.Scope, ScopeAll, ScopeMine)
 	}
-	// Built through the credential, exactly as every other method's Request does, so
-	// a cash-mode bill's secret reaches the params. buildItem returns early for a
-	// cash-mode credential on the assumption that the secret is ALREADY in
-	// wireParams; passing CashStatusParams straight through broke that assumption
-	// silently, and produced an item with neither a proof nor a secret — malformed,
-	// refused by the codec, and therefore never sent.
-	_, _, _, _, cashSecret, err := cred.buildProof(proofBinding{WalletPubkey: target})
-	if err != nil {
-		return transport.Item{}, err
-	}
-	// The params value is passed even when empty: CanonicalParamsHash treats absent
-	// and empty as one representation, and a hub's decoder expects a params field it
-	// can unmarshal. Being explicit avoids depending on that equivalence.
-	return buildItem(id, target, connSecret, MethodCashStatus, CashStatusRequest{Scope: p.Scope, CashSecret: cashSecret, AttestationEvent: p.AttestationEvent}, cred, b)
+	// A cash-mode credential gives no item proof and puts nothing in params:
+	// cash_status never carries a cash_secret (NIP-CASH §Scoping the Roster).
+	return buildItem(id, target, connSecret, MethodCashStatus, CashStatusRequest(p), cred, b)
 }

@@ -11,36 +11,24 @@ import (
 // Ported from zapf's TestGenerateConnectionKey_Deterministic.
 
 func TestNewConnectionKey_Deterministic(t *testing.T) {
-	key1 := NewConnectionKey("discord", "123456")
-	key2 := NewConnectionKey("discord", "123456")
-	if key1 != key2 {
-		t.Error("NewConnectionKey should be deterministic")
-	}
-
-	key3 := NewConnectionKey("discord", "999999")
-	if key1 == key3 {
-		t.Error("different external IDs should produce different keys")
-	}
-
-	key4 := NewConnectionKey("x", "123456")
-	if key1 == key4 {
-		t.Error("different platforms should produce different keys")
-	}
-
-	if len(key1.String()) != 64 {
-		t.Errorf("ConnectionKey should be 64 hex chars, got %d", len(key1.String()))
+	key1, _ := NewConnectionKey("discord", "123456")
+	key2, _ := NewConnectionKey("discord", "123456")
+	key3, _ := NewConnectionKey("discord", "999999")
+	key4, _ := NewConnectionKey("x", "123456")
+	if key1 != key2 || key1 == key3 || key1 == key4 || len(key1.String()) != 64 {
+		t.Errorf("keys %s %s %s %s", key1, key2, key3, key4)
 	}
 }
 
-func TestNewConnectionKey_NoPredefinedPlatforms(t *testing.T) {
-	// The whole point of the open-string design: a platform this package has
-	// never heard of works exactly the same as a "known" one.
-	key := NewConnectionKey("mastodon", "@alice@example.social")
-	if key.String() == "" {
-		t.Error("expected a non-empty key for an arbitrary platform string")
+// A platform outside the canonical table has no key from typed input; its key
+// is the attested user id, byte for byte.
+func TestConnectionKey_OtherPlatformsComeFromTheIA(t *testing.T) {
+	if _, err := NewConnectionKey("mastodon", "@alice@example.social"); err == nil {
+		t.Error("typed input on a non-canonical platform produced a key")
 	}
-	if key != NewConnectionKey("mastodon", "@alice@example.social") {
-		t.Error("expected determinism for an arbitrary platform string too")
+	key, err := ConnectionKeyFromAttested("mastodon", "@alice@example.social")
+	if err != nil || key.String() == "" {
+		t.Errorf("attested key: %v", err)
 	}
 }
 

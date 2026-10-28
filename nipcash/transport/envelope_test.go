@@ -97,6 +97,7 @@ func TestEnvelope_RoundTrip(t *testing.T) {
 	}
 }
 
+// E-ENV-05.
 // TestEnvelope_EncodePadsToBuckets is the size-leak property end to end: whatever
 // is inside, the plaintext handed to NIP-44 lands on a bucket boundary.
 func TestEnvelope_EncodePadsToBuckets(t *testing.T) {
@@ -133,15 +134,14 @@ func TestEnvelope_RejectsMalformedShape(t *testing.T) {
 		tamper func(*Envelope)
 		want   error
 	}{
-		"wrong version":      {func(e *Envelope) { e.Version = 99 }, ErrEnvelopeVersion},
-		"no items":           {func(e *Envelope) { e.Items = nil }, ErrEnvelopeNoItems},
-		"short nonce":        {func(e *Envelope) { e.Nonce = "abcd" }, ErrEnvelopeMalformed},
-		"uppercase nonce":    {func(e *Envelope) { e.Nonce = strings.ToUpper(e.Nonce) }, ErrEnvelopeMalformed},
-		"short reply_to":     {func(e *Envelope) { e.ReplyTo = "00" }, ErrEnvelopeMalformed},
-		"item without id":    {func(e *Envelope) { e.Items[0].ID = "" }, ErrEnvelopeMalformed},
-		"item without proof": {func(e *Envelope) { e.Items[0].Proof = nil }, ErrEnvelopeMalformed},
-		"item bad target":    {func(e *Envelope) { e.Items[0].Target = "xyz" }, ErrEnvelopeMalformed},
-		"item no method":     {func(e *Envelope) { e.Items[0].Method = "" }, ErrEnvelopeMalformed},
+		"no items":            {func(e *Envelope) { e.Items = nil }, ErrEnvelopeNoItems},
+		"short nonce":         {func(e *Envelope) { e.Nonce = "abcd" }, ErrEnvelopeMalformed},
+		"uppercase nonce":     {func(e *Envelope) { e.Nonce = strings.ToUpper(e.Nonce) }, ErrEnvelopeMalformed},
+		"short reply_to":      {func(e *Envelope) { e.ReplyTo = "00" }, ErrEnvelopeMalformed},
+		"item without id":     {func(e *Envelope) { e.Items[0].ID = "" }, ErrEnvelopeMalformed},
+		"spend without proof": {func(e *Envelope) { e.Items[0].Proof, e.Items[0].Method = nil, "cash_redeem" }, ErrEnvelopeMalformed},
+		"item bad target":     {func(e *Envelope) { e.Items[0].Target = "xyz" }, ErrEnvelopeMalformed},
+		"item no method":      {func(e *Envelope) { e.Items[0].Method = "" }, ErrEnvelopeMalformed},
 	}
 
 	for name, tc := range tests {
@@ -227,6 +227,9 @@ func TestItem_VerificationCost(t *testing.T) {
 		"source with attestation": {`{"sources":[{"identity_event":"{}","attestation_event":"{}"}]}`, 4},
 		"sources without proofs":  {`{"sources":[{"wallet_pubkey":"aa"},{"wallet_pubkey":"bb"}]}`, 2},
 		"unparseable params":      {`{oops`, 2},
+		// A mistyped member hides nothing else from the count (E6).
+		"mistyped sources": {`{"sources":5,"identity_event":"{}","attestation_event":"{}","quote":"{}"}`, 5},
+		"mistyped amount":  {`{"amount_millis":"x","identity_event":"{}","quote":"{}"}`, 4},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -276,22 +279,21 @@ func TestEnvelope_DecodeRejectsOversizePlaintext(t *testing.T) {
 	}
 }
 
+// T09-15: CheckFreshness against H: now+H accepted, now+H+1 refused, passed refused.
 func TestEnvelope_CheckFreshness(t *testing.T) {
-	now := time.Now()
-	env := Envelope{NotAfter: now.Add(60 * time.Second).Unix()}
-
-	if err := env.CheckFreshness(now); err != nil {
-		t.Errorf("a 60s window must be accepted: %v", err)
+	now := time.Unix(1720000000, 0)
+	const H = 300
+	if err := CheckFreshness(Envelope{NotAfter: now.Unix() + H}, now, H); err != nil {
+		t.Errorf("now+H: %v", err)
 	}
-	if err := env.CheckFreshness(now.Add(2 * time.Minute)); !errors.Is(err, ErrEnvelopeExpired) {
-		t.Errorf("CheckFreshness past not_after = %v, want ErrEnvelopeExpired", err)
+	if err := CheckFreshness(Envelope{NotAfter: now.Unix() + H + 1}, now, H); !errors.Is(err, ErrEnvelopeTooFresh) {
+		t.Errorf("now+H+1: %v", err)
 	}
-
-	// A client must not be able to mint itself an arbitrarily long-lived envelope:
-	// not_after also bounds how long the hub has to remember the nonce.
-	greedy := Envelope{NotAfter: now.Add(time.Hour).Unix()}
-	if err := greedy.CheckFreshness(now); !errors.Is(err, ErrEnvelopeTooFresh) {
-		t.Errorf("CheckFreshness with an hour-long window = %v, want ErrEnvelopeTooFresh", err)
+	if err := CheckFreshness(Envelope{NotAfter: now.Unix() - 1}, now, H); !errors.Is(err, ErrEnvelopeExpired) {
+		t.Errorf("passed: %v", err)
+	}
+	if err := CheckFreshness(Envelope{NotAfter: now.Unix()}, now, H); err != nil {
+		t.Errorf("not_after = now: %v", err)
 	}
 }
 

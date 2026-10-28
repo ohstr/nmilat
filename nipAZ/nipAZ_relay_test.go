@@ -33,13 +33,6 @@ func TestValidateAltZapRequestForRelay_ToleratesShouldRules(t *testing.T) {
 		"https relay": func(kind int) [][]string {
 			return append(withoutTag(zapRequestTags(kind, validTestLnurl), "relays"), []string{"relays", "https://relay.example.com"})
 		},
-		"missing chain": func(kind int) [][]string { return withoutTag(zapRequestTags(kind, validTestLnurl), "chain") },
-		"non-numeric amount": func(kind int) [][]string {
-			return append(withoutTag(zapRequestTags(kind, validTestLnurl), "amount"), []string{"amount", "lots"})
-		},
-		"two e tags": func(kind int) [][]string {
-			return append(zapRequestTags(kind, validTestLnurl), []string{"e", testPaymentHash}, []string{"e", testPaymentHash})
-		},
 		"malformed zap split": func(kind int) [][]string {
 			return append(zapRequestTags(kind, validTestLnurl), []string{"zap", "not-a-key"})
 		},
@@ -50,7 +43,7 @@ func TestValidateAltZapRequestForRelay_ToleratesShouldRules(t *testing.T) {
 			if err := ValidateAltZapRequestForRelay(ev); err != nil {
 				t.Errorf("%s, kind %d: relay rejected a SHOULD-level miss: %v", name, kind, err)
 			}
-			if err := ValidateAltZapRequest(ev, 0); err == nil {
+			if err := legacyValidateRequest(ev, 0); err == nil {
 				t.Errorf("%s, kind %d: strict validator accepted it; the fixture is not testing a SHOULD rule", name, kind)
 			}
 		}
@@ -69,6 +62,10 @@ func TestValidateAltZapRequestForRelay_EnforcesMustRules(t *testing.T) {
 		{"P on 9520", KindAltZapRequest, append(zapRequestTags(KindAltZapRequest, validTestLnurl), sender), ErrSenderTagNotAllowed},
 		{"no P on 9523", KindAltZapOnBehalfRequest, withoutTag(zapRequestTags(KindAltZapOnBehalfRequest, validTestLnurl), "P"), ErrMissingSenderTag},
 		{"two P on 9523", KindAltZapOnBehalfRequest, append(zapRequestTags(KindAltZapOnBehalfRequest, validTestLnurl), sender), ErrSenderTagCount},
+		// SHOULD rules a relay enforces (rules 4, 5 and 8).
+		{"missing chain", KindAltZapRequest, withoutTag(zapRequestTags(KindAltZapRequest, validTestLnurl), "chain"), ErrMissingChainTag},
+		{"non-numeric amount", KindAltZapRequest, append(withoutTag(zapRequestTags(KindAltZapRequest, validTestLnurl), "amount"), []string{"amount", "lots"}), nip57.ErrInvalidAmount},
+		{"two e tags", KindAltZapRequest, append(zapRequestTags(KindAltZapRequest, validTestLnurl), []string{"e", testPaymentHash}, []string{"e", testPaymentHash}), nip57.ErrTooManyEventTags},
 	}
 	for _, tc := range cases {
 		ev := altZapRequestWithTags(t, tc.kind, tc.tags)
@@ -84,14 +81,15 @@ func TestValidateAltZapRequestForRelay_EnforcesMustRules(t *testing.T) {
 	}
 }
 
-func TestValidateAltZapReceiptForRelay_ToleratesAmountMismatch(t *testing.T) {
+// Receipt rule 7 is SHOULD for a relay, and the relay subset applies it.
+func TestValidateAltZapReceiptForRelay_RejectsAmountMismatch(t *testing.T) {
 	receipt, descHash := signedAltZapReceipt(t)
 	stubAltZapInvoice(t, &nip57.Invoice{Currency: "fc", PaymentHash: testPaymentHash, AmountMloki: 999, DescriptionHash: descHash})
 
-	if err := ValidateAltZapReceiptForRelay(receipt); err != nil {
-		t.Errorf("relay rejected a settled receipt over an amount mismatch: %v", err)
+	if err := ValidateAltZapReceiptForRelay(receipt); !errors.Is(err, nip57.ErrAmountMismatch) {
+		t.Errorf("relay: got %v, want ErrAmountMismatch", err)
 	}
-	if err := ValidateAltZapReceipt(receipt); !errors.Is(err, nip57.ErrAmountMismatch) {
+	if err := legacyValidateReceipt(receipt); !errors.Is(err, nip57.ErrAmountMismatch) {
 		t.Errorf("strict: got %v, want ErrAmountMismatch", err)
 	}
 }

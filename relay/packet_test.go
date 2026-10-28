@@ -3,6 +3,8 @@ package relay
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -299,6 +301,29 @@ func TestRunEventValidators(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("validator not invoked, got=%d", count)
+	}
+}
+
+// A validator's error is refused "invalid:" unless it carries a
+// RejectError, whose prefix wins, even wrapped.
+func TestRejectMessage(t *testing.T) {
+	base := errors.New("kind 9525 travels only inside a gift wrap")
+	cases := []struct {
+		err  error
+		want string
+	}{
+		{base, "invalid: kind 9525 travels only inside a gift wrap"},
+		{Reject("blocked", base), "blocked: kind 9525 travels only inside a gift wrap"},
+		{fmt.Errorf("outer: %w", Reject("restricted", base)), "restricted: outer: kind 9525 travels only inside a gift wrap"},
+		{Reject("", base), "invalid: kind 9525 travels only inside a gift wrap"},
+	}
+	for _, c := range cases {
+		if got := rejectMessage(c.err); got != c.want {
+			t.Errorf("rejectMessage(%v) = %q, want %q", c.err, got, c.want)
+		}
+	}
+	if !errors.Is(Reject("blocked", base), base) {
+		t.Fatal("Reject hides its error from errors.Is")
 	}
 }
 

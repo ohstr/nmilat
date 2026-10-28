@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/ohstr/nmilat/nip01"
+	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/nipcash/transport"
 	relayclient "github.com/ohstr/nmilat/relay/client"
 )
@@ -37,9 +38,18 @@ type BatchSession struct {
 	// whatever the caller supplied from the bill's own token hints.
 	fallbackRelays []string
 
+	cfg sessionConfig
+
 	mu           sync.Mutex
 	announcement *transport.Announcement
 	relays       []string
+	// unusable is set when the newest validly signed announcement was rejected:
+	// no call carrying a request_id goes to this Hub, and no older one is used.
+	unusable error
+	powMin   map[string]int
+	// accepted are the relays that accepted each withdrawal, by its notify,
+	// for WatchPayout.
+	accepted map[string][]string
 }
 
 // NewBatchSession fetches and verifies a hub's announcement.
@@ -53,15 +63,15 @@ type BatchSession struct {
 // relays are where to look. A bill's own token hints are the normal source; if the
 // announcement names its own relays those take over afterwards, since the token's
 // hints were fixed when the bill was minted and a hub may have moved since.
-func (c *Client) NewBatchSession(ctx context.Context, hubXOnly string, relays []string) (*BatchSession, error) {
-	return OpenBatchSession(ctx, hubXOnly, relays)
+func (c *Client) NewBatchSession(ctx context.Context, hubXOnly string, relays []string, opts ...SessionOption) (*BatchSession, error) {
+	return OpenBatchSession(ctx, hubXOnly, relays, append(append([]SessionOption(nil), c.sessionOpts...), opts...)...)
 }
 
 // OpenBatchSession is NewBatchSession for a caller with no cash connection, such
 // as a prospective circle member joining over the private transport: hubXOnly is
 // then the identity the Hub reported in get_info (NIP-CW §Finding the Private
 // Transport), and relays are the Hub connection's.
-func OpenBatchSession(ctx context.Context, hubXOnly string, relays []string) (*BatchSession, error) {
+func OpenBatchSession(ctx context.Context, hubXOnly string, relays []string, opts ...SessionOption) (*BatchSession, error) {
 	if len(relays) == 0 {
 		return nil, fmt.Errorf("nipcash/client: no relays to look for %s's announcement on", hubXOnly)
 	}
@@ -75,7 +85,7 @@ func OpenBatchSession(ctx context.Context, hubXOnly string, relays []string) (*B
 	if err != nil {
 		return nil, err
 	}
-	s := &BatchSession{hubXOnly: xonly, fallbackRelays: relays, relays: relays}
+	s := &BatchSession{hubXOnly: xonly, fallbackRelays: relays, relays: relays, cfg: newSessionConfig(opts)}
 	if err := s.Refresh(ctx); err != nil {
 		return nil, err
 	}
@@ -130,7 +140,7 @@ func (s *BatchSession) Refresh(ctx context.Context) error {
 	candidates = appendMissing(candidates, s.fallbackRelays)
 
 	var failures []error
-	var newest *transport.Announcement
+	var newest *nip01.Event
 	for _, raw := range candidates {
 		relayURL, err := url.Parse(raw)
 		if err != nil {
@@ -143,52 +153,65 @@ func (s *BatchSession) Refresh(ctx context.Context) error {
 			continue
 		}
 		for _, ev := range events {
-			// ParseAnnouncement verifies the signature against the expected identity
-			// and refuses one signed by anyone else. Doing it here rather than
-			// trusting the relay is the point: a relay can serve any bytes it likes.
-			announcement, err := transport.ParseAnnouncement(ev, s.hubXOnly)
-			if err != nil {
-				failures = append(failures, fmt.Errorf("relay %q: %w", raw, err))
-				continue
-			}
-			// Keep the NEWEST candidate rather than adopting the first that parses,
-			// and never move backwards from one already held.
+			// Only the author and signature decide which event is newest; the
+			// tags are judged afterwards, on that one event alone.
 			//
 			// Every announcement the hub has ever published stays individually valid
 			// forever — kind 11190 is replaceable at the relay, but an old event is
 			// still genuinely signed by the node identity. So a relay serving a stale
 			// one forges nothing; it CHOOSES which of the hub's own past policies the
-			// client obeys, and one cooperating relay in the candidate list is enough
-			// because the bill's token relay hints are re-appended on every Refresh.
-			//
-			// Measured consequence with no further precondition: replaying the hub's
-			// own pre-change announcement reinstates the 4 KiB padding bucket, which
-			// takes 1-8 items from three distinguishable wire sizes back to four —
-			// exactly the leak that change was made to close. And once inbox rotation
-			// ships, a retired inbox key is the remedy for a leaked one, so being able
-			// to pin a client to the old inbox would defeat rotation entirely.
-			if newest == nil || announcement.CreatedAt > newest.CreatedAt {
-				newest = announcement
+			// client obeys. Keeping the newest, and never moving backwards from one
+			// already held, is what stops that: replaying the hub's own pre-change
+			// announcement would reinstate a retired inbox or padding policy.
+			if ev == nil || ev.Kind != transport.KindHubAnnouncement || ev.PubKey != s.hubXOnly {
+				continue
+			}
+			if err := ev.Verify(nip01.WithoutPowCheck()); err != nil {
+				failures = append(failures, fmt.Errorf("relay %q: %w: %v", raw, transport.ErrAnnouncementSignature, err))
+				continue
+			}
+			if newest == nil || ev.CreatedAt > newest.CreatedAt {
+				newest = ev
 			}
 		}
 	}
 
-	if newest != nil {
-		s.mu.Lock()
-		if s.announcement == nil || newest.CreatedAt >= s.announcement.CreatedAt {
-			s.announcement = newest
-			if len(newest.Relays) > 0 {
-				s.relays = append([]string(nil), newest.Relays...)
-			}
+	if newest == nil {
+		if len(failures) > 0 {
+			return fmt.Errorf("%w: %v", ErrNoAnnouncement, errors.Join(failures...))
 		}
-		s.mu.Unlock()
+		return ErrNoAnnouncement
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.announcement != nil && int64(newest.CreatedAt) < s.announcement.CreatedAt { //nolint:gosec // seconds
 		return nil
 	}
-
-	if len(failures) > 0 {
-		return fmt.Errorf("%w: %v", ErrNoAnnouncement, errors.Join(failures...))
+	announcement, err := transport.ParseAnnouncement(newest, s.hubXOnly)
+	if err != nil {
+		// The newest validly signed announcement is the Hub's current policy; one
+		// the client cannot adopt makes the Hub unusable here, and an older one is
+		// never used in its place (NIP-CASH §Hub Announcement).
+		s.unusable = fmt.Errorf("%w: newest announcement rejected: %v", ErrHubUnusable, err)
+		return s.unusable
 	}
-	return ErrNoAnnouncement
+	s.unusable = nil
+	s.announcement = announcement
+	// Announced relays first, then the caller's own hints: if the announced
+	// relays go away, the hints are the way back.
+	s.relays = appendMissing(append([]string(nil), announcement.Relays...), s.fallbackRelays)
+	return nil
+}
+
+// MaxRequestAge is H as last announced, 0 when none was.
+func (s *BatchSession) MaxRequestAge() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.announcement == nil {
+		return 0
+	}
+	return s.announcement.Limits.MaxRequestAge
 }
 
 // Limits are the envelope limits this hub announced.
@@ -202,7 +225,7 @@ func (s *BatchSession) Limits() transport.Limits {
 	if s.announcement == nil {
 		return transport.Limits{}
 	}
-	return s.announcement.Limits.Limits()
+	return s.announcement.EffectiveLimits()
 }
 
 // Inbox is the key envelopes are encrypted and p-tagged to. NOT the hub identity.
@@ -241,3 +264,18 @@ func appendMissing(dst, extra []string) []string {
 	}
 	return dst
 }
+
+// BillCallsUsable reports whether this Hub takes calls carrying a request_id:
+// its newest announcement was usable and validates for bill calls (a usable
+// max_request_age); else ErrHubUnusable or the announcement's own refusal. A
+// caller checks it before writing anything ahead.
+func (s *BatchSession) BillCallsUsable() error {
+	return s.checkBillCalls([]itemBuilder{{RequestID: "check"}}, sendOptions{journal: noJournal{}})
+}
+
+// noJournal stands in for a journal in BillCallsUsable, which writes nothing.
+type noJournal struct{}
+
+func (noJournal) WriteAhead(context.Context, []nipcash.PendingCall) error { return nil }
+func (noJournal) RecordDerived(context.Context, string, int64) error      { return nil }
+func (noJournal) DerivedPlaced(context.Context, string) (bool, error)     { return false, nil }

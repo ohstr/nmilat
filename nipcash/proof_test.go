@@ -4,11 +4,47 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ohstr/nmilat/nipIC"
 )
+
+// testDiscordKey is the ConnectionKey of the discord account the test
+// attestations name (user id 12345).
+func testDiscordKey(t *testing.T) nipIC.ConnectionKey {
+	t.Helper()
+	k, err := nipIC.NewConnectionKey("discord", "12345")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k
+}
+
+func mustConnCred(t *testing.T, priv string, att *nipIC.Attestation) Credential {
+	t.Helper()
+	c, err := BySigningConnectionKey(priv, att)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// attestedKey builds a connection_key identity for an IA-attested user id, the
+// way a sender takes it from a 35522 (byte for byte).
+func attestedKey(t *testing.T, platform nipIC.WebIdentity, userID, ia string) namedIdentity {
+	t.Helper()
+	k, err := nipIC.ConnectionKeyFromAttested(platform, userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := ResolvedConnectionKey(k, platform, ia)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
 
 func buildTestAttestation(t *testing.T, iaPrivHex, userPubHex string, connectionKey nipIC.ConnectionKey, expirationDays int) *nipIC.Attestation {
 	t.Helper()
@@ -17,7 +53,9 @@ func buildTestAttestation(t *testing.T, iaPrivHex, userPubHex string, connection
 		ConnectionKey:  connectionKey,
 		UserPubkey:     userPubHex,
 		Platform:       "discord",
-		ExpirationDays: expirationDays,
+		ExpirationDays: max(expirationDays, 0),
+		NoExpiry:       expirationDays == 0,
+		AuthType:       "email_code",
 		Evidence:       nipIC.Evidence{Platform: "discord", UserID: "12345"},
 	})
 	if err != nil {
@@ -33,7 +71,7 @@ func buildTestAttestation(t *testing.T, iaPrivHex, userPubHex string, connection
 func TestBySigningConnectionKey_MandatoryExpiration(t *testing.T) {
 	iaPrivHex, _ := generateTestKeypair(t)
 	userPrivHex, userPubHex := generateTestKeypair(t)
-	connectionKey := nipIC.NewConnectionKey("discord", "some.user")
+	connectionKey := testDiscordKey(t)
 
 	t.Run("no expiration at all is rejected", func(t *testing.T) {
 		// ExpirationDays: 0 means "no expiry" in nipIC's own model —
@@ -43,9 +81,7 @@ func TestBySigningConnectionKey_MandatoryExpiration(t *testing.T) {
 		if att.ExpiresAt != nil {
 			t.Fatal("test setup: expected a nil ExpiresAt for ExpirationDays: 0")
 		}
-		cred := BySigningConnectionKey(userPrivHex, "discord", "some.user", att)
-		_, _, _, _, _, err := cred.buildProof(proofBinding{WalletPubkey: randomKeyHex(t), Bolt11Hash: "h"})
-		if err != ErrAttestationExpired {
+		if _, err := BySigningConnectionKey(userPrivHex, att); err != ErrAttestationExpired {
 			t.Fatalf("got %v, want ErrAttestationExpired", err)
 		}
 	})
@@ -56,26 +92,22 @@ func TestBySigningConnectionKey_MandatoryExpiration(t *testing.T) {
 		// mutate the parsed result directly for this test.
 		past := time.Now().Add(-time.Hour)
 		att.ExpiresAt = &past
-		cred := BySigningConnectionKey(userPrivHex, "discord", "some.user", att)
-		_, _, _, _, _, err := cred.buildProof(proofBinding{WalletPubkey: randomKeyHex(t), Bolt11Hash: "h"})
-		if err != ErrAttestationExpired {
+		if _, err := BySigningConnectionKey(userPrivHex, att); err != ErrAttestationExpired {
 			t.Fatalf("got %v, want ErrAttestationExpired", err)
 		}
 	})
 
 	t.Run("nil attestation is rejected", func(t *testing.T) {
-		cred := BySigningConnectionKey(userPrivHex, "discord", "some.user", nil)
-		_, _, _, _, _, err := cred.buildProof(proofBinding{WalletPubkey: randomKeyHex(t), Bolt11Hash: "h"})
-		if err != ErrAttestationExpired {
+		if _, err := BySigningConnectionKey(userPrivHex, nil); err != ErrAttestationExpired {
 			t.Fatalf("got %v, want ErrAttestationExpired", err)
 		}
 	})
 
 	t.Run("valid unexpired attestation succeeds", func(t *testing.T) {
 		att := buildTestAttestation(t, iaPrivHex, userPubHex, connectionKey, 90)
-		cred := BySigningConnectionKey(userPrivHex, "discord", "some.user", att)
-		identityType, identityValue, identityEvent, attestationEvent, _, err := cred.buildProof(proofBinding{
-			WalletPubkey: randomKeyHex(t), Bolt11Hash: "h",
+		cred := mustConnCred(t, userPrivHex, att)
+		identityType, identityValue, identityEvent, attestationEvent, _, err := cred.buildProof(ClaimBinding{Method: MethodCashRedeem,
+			Wallet: randomKeyHex(t), Bolt11Hash: strings.Repeat("4", 64),
 		})
 		if err != nil {
 			t.Fatalf("buildProof: %v", err)
@@ -133,9 +165,9 @@ func TestNewIdentityHash_Deterministic(t *testing.T) {
 // from the request's own new_identity fields, so any drift here (e.g. a
 // stale "bearer:" prefix) fails every cash-mode transfer's proof check.
 func TestNewIdentityHash_CashTargetPreimage(t *testing.T) {
-	ct := NewCashTarget()
+	ct := mustCashTarget(t)
 	sum := sha256.Sum256([]byte("cash:" + ct.identityValue() + ":"))
 	if got, want := newIdentityHash(ct), hex.EncodeToString(sum[:]); got != want {
-		t.Fatalf("newIdentityHash(NewCashTarget()) = %s, want sha256(\"cash:<commit>:\") = %s", got, want)
+		t.Fatalf("newIdentityHash(mustCashTarget(t)) = %s, want sha256(\"cash:<commit>:\") = %s", got, want)
 	}
 }

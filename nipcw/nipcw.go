@@ -30,16 +30,52 @@ const KindCircleIdentityProof = 23199
 // NIP-47 request.
 const MethodCreateCircleWallet = "create_circle_wallet"
 
-// NIP-47 error codes a Hub MUST use to refuse create_circle_wallet (NIP-CW
-// §Errors), exported so Hubs and clients share one spelling.
+// MethodDeleteCircleWallet is the member's own wallet deletion, sent over the
+// wallet's connection (NIP-CW §Deleting a Circle Wallet).
+const MethodDeleteCircleWallet = nip47.MethodDeleteCircleWallet
+
+// The NIP-47 error codes of NIP-CW §Errors, exported so Hubs and clients share
+// one spelling. A join is refused with BAD_REQUEST, UNAUTHORIZED,
+// REQUEST_REUSED, NOT_READY, RESTRICTED, WALLET_EXISTS, LIMIT_EXCEEDED,
+// RATE_LIMITED, INSUFFICIENT_CAPACITY or NOT_IMPLEMENTED (a join on the standard
+// transport); a wallet and a member request add NOT_FOUND,
+// INSUFFICIENT_BALANCE, QUOTA_EXCEEDED, PAYMENT_FAILED, ROTATION_PENDING and
+// FROZEN.
 const (
+	// ErrBadRequest: a param is missing or malformed, or the proof passed its
+	// freshness window before the join could commit. Nothing was made.
+	ErrBadRequest = nip47.ErrBadRequest
+	// ErrUnauthorized: the identity proof, item proof or member request did not
+	// verify.
+	ErrUnauthorized = nip47.ErrUnauthorized
+	// ErrRequestReused: the proof was already used; a copy of the join may have
+	// made the wallet, so the join is looked up, never read as failed.
+	ErrRequestReused = nip47.ErrRequestReused
 	// ErrNotReady: the Hub cannot decide membership yet. Retry later.
-	ErrNotReady = "NOT_READY"
-	// ErrRestricted: the requester is not a member of this circle.
+	ErrNotReady = nip47.ErrNotReady
+	// ErrRestricted: not accepting joins, not a member, or a connection key in use.
 	ErrRestricted = nip47.ErrRestricted
-	// ErrWalletExists: the requester already holds an active Circle Wallet
-	// under this Hub, until it is deleted.
-	ErrWalletExists = "WALLET_EXISTS"
+	// ErrWalletExists: the requester already holds an Active or Suspended Circle
+	// Wallet under this Hub.
+	ErrWalletExists = nip47.ErrWalletExists
+	// ErrLimitExceeded: a requested term is over the Hub's limits.
+	ErrLimitExceeded = nip47.ErrLimitExceeded
 	// ErrRateLimited: the requester has asked too often. Retry later.
 	ErrRateLimited = nip47.ErrRateLimited
+	// ErrInsufficientCapacity: the circle's holdings reached its ceiling.
+	ErrInsufficientCapacity = nip47.ErrInsufficientCapacity
+	// ErrNotImplemented: a join on the standard transport, or rotation not served.
+	ErrNotImplemented = nip47.ErrNotImplemented
+	// ErrNotFound: a member request names a wallet the Hub does not hold.
+	ErrNotFound = nip47.ErrNotFound
+	// ErrInsufficientBalance: a payment's full cost exceeds the balance.
+	ErrInsufficientBalance = nip47.ErrInsufficientBalance
+	// ErrQuotaExceeded: a payment or invoice past a cap or the outbound ceiling.
+	ErrQuotaExceeded = nip47.ErrQuotaExceeded
+	// ErrPaymentFailed: the payment could not be routed.
+	ErrPaymentFailed = nip47.ErrPaymentFailed
+	// ErrRotationPending: the wallet already has a pending rotation.
+	ErrRotationPending = nip47.ErrRotationPending
+	// ErrFrozen: the wallet is frozen, so its current key is refused.
+	ErrFrozen = nip47.ErrFrozen
 )

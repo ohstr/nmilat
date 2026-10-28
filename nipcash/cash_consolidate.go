@@ -19,6 +19,8 @@ type CashConsolidateParams struct {
 	// connection_key, or a *CashTarget) is accepted; ErrConsolidateTargetInvalid
 	// only if left nil.
 	To Target
+	// RequestID is REQUIRED.
+	RequestID string
 }
 
 // consolidateSourceParam is the wire shape of one entry in cash_consolidate's
@@ -36,12 +38,16 @@ type consolidateSourceParam struct {
 type CashConsolidateRequest struct {
 	Sources     []consolidateSourceParam     `json:"sources"`
 	NewIdentity cashTransferNewIdentityParam `json:"new_identity"`
+	RequestID   string                       `json:"request_id"`
 }
 
 // Request builds cash_consolidate's wire request from p. Exported for
 // nipcash/client's use; a caller using nipcash/client's CashConsolidate
 // method never calls this directly.
 func (p CashConsolidateParams) Request() (CashConsolidateRequest, error) {
+	if !ValidRequestID(p.RequestID) {
+		return CashConsolidateRequest{}, ErrRequestIDRequired
+	}
 	if len(p.Sources) < 2 {
 		return CashConsolidateRequest{}, ErrTooFewSources
 	}
@@ -57,12 +63,22 @@ func (p CashConsolidateParams) Request() (CashConsolidateRequest, error) {
 	// under different identities are distinct and stay legal.
 	seen := make(map[string]struct{}, len(p.Sources))
 	sources := make([]consolidateSourceParam, len(p.Sources))
+	wallets := make([]string, len(p.Sources))
+	for i, src := range p.Sources {
+		wallets[i] = src.WalletPubkey
+	}
+	sourcesHash, err := SourcesHash(wallets)
+	if err != nil {
+		return CashConsolidateRequest{}, err
+	}
 	for i, src := range p.Sources {
 		amount := src.Amount
-		binding := proofBinding{
-			WalletPubkey:    src.WalletPubkey,
+		binding := ClaimBinding{
+			Method:          MethodCashConsolidate,
+			Wallet:          src.WalletPubkey,
 			NewIdentityHash: newIdentityHash(p.To),
 			AmountMillis:    &amount,
+			SourcesHash:     sourcesHash,
 		}
 		identityType, identityValue, identityEvent, attestationEvent, cashSecret, err := src.Credential.buildProof(binding)
 		if err != nil {
@@ -90,7 +106,8 @@ func (p CashConsolidateParams) Request() (CashConsolidateRequest, error) {
 	}
 
 	return CashConsolidateRequest{
-		Sources: sources,
+		RequestID: p.RequestID,
+		Sources:   sources,
 		NewIdentity: cashTransferNewIdentityParam{
 			IdentityType:  targetFieldsVal.identityType(),
 			IdentityValue: targetFieldsVal.identityValue(),
@@ -103,51 +120,65 @@ func (p CashConsolidateParams) Request() (CashConsolidateRequest, error) {
 // NewWalletToken is still NIP-44 nested-encrypted at this point;
 // ParseResult decrypts it into CashConsolidateResult.
 type cashConsolidateResponseWire struct {
-	AmountMillis    uint64 `json:"amount_millis"`
-	NewWalletPubkey string `json:"new_wallet_pubkey"`
-	NewWalletToken  string `json:"new_wallet_token"`
-	ExpiresAt       *int64 `json:"expires_at,omitempty"`
+	AmountMillis    uint64           `json:"amount_millis"`
+	NewWalletPubkey string           `json:"new_wallet_pubkey"`
+	NewWalletToken  TokenOrTombstone `json:"new_wallet_token"`
+	ExpiresAt       Expiry           `json:"expires_at,omitzero"`
 }
 
-// CashConsolidateResult is cash_consolidate's response, with NewWalletToken
-// already decrypted into a plain cash token string.
+// CashConsolidateResult is cash_consolidate's response with the token decrypted.
+// ExpiresAt is the earliest source expiry, or never. NewWalletTombstone is set
+// only by ParseLookupResult, for a merged bill already destroyed.
 type CashConsolidateResult struct {
-	AmountMillis    uint64
-	NewWalletPubkey string
-	NewWalletToken  string
-	ExpiresAt       *int64
+	AmountMillis       uint64
+	NewWalletPubkey    string
+	NewWalletToken     string
+	ExpiresAt          Expiry
+	NewWalletTombstone *Tombstone
 }
 
-// ParseResult parses cash_consolidate's wire response, decrypting
-// NewWalletToken with the first source's own Credential when the target is
-// a pubkey — the Hub encrypts it to the caller, same as cash_transfer's own
-// delivery. A cash/connection_key target has no real pubkey yet, so the
-// Hub sends the token in the clear instead; ParseResult passes it through
-// unchanged rather than attempting decryption. A delivery that does not
-// decrypt is an error, as in cash_transfer's ParseResult: returning the
-// ciphertext would hand the caller something shaped like a token that opens
-// nothing.
-//
-// Exported for nipcash/client's use; a caller using nipcash/client's
-// CashConsolidate method never calls this directly.
+// ParseResult reads a direct cash_consolidate reply: a tombstone is *BillGone; a
+// secret key is refused; an empty token or pubkey is ErrEmptyToken; a pubkey target's token is decrypted with Sources[0]'s
+// credential (the caller's proof key), a connection_key or cash target's comes in
+// the clear.
 func (p CashConsolidateParams) ParseResult(data []byte) (*CashConsolidateResult, error) {
-	var wire cashConsolidateResponseWire
-	if err := json.Unmarshal(data, &wire); err != nil {
+	r, err := p.parse(data)
+	if err == nil && r.NewWalletTombstone != nil {
+		return r, ErrTombstoneInReply
+	}
+	return r, err
+}
+
+// ParseLookupResult reads a lookup's done result for a consolidate.
+func (p CashConsolidateParams) ParseLookupResult(data []byte) (*CashConsolidateResult, error) {
+	return p.parse(data)
+}
+
+func (p CashConsolidateParams) parse(data []byte) (*CashConsolidateResult, error) {
+	if err := goneIf(MethodCashConsolidate, data); err != nil {
 		return nil, err
 	}
-	result := &CashConsolidateResult{
-		AmountMillis:    wire.AmountMillis,
-		NewWalletPubkey: wire.NewWalletPubkey,
-		ExpiresAt:       wire.ExpiresAt,
+	if hasKey(data, "cash_secret") || hasKey(data, "secret") {
+		return nil, ErrHubReturnedSecret
 	}
-	result.NewWalletToken = wire.NewWalletToken
-	if wire.NewWalletToken == "" || len(p.Sources) == 0 || !IsPubkeyTarget(p.To) {
-		return result, nil
+	var w cashConsolidateResponseWire
+	if err := json.Unmarshal(data, &w); err != nil {
+		return nil, err
 	}
-	token, err := p.Sources[0].Credential.decryptDelivery(wire.NewWalletPubkey, wire.NewWalletToken)
+	r := &CashConsolidateResult{AmountMillis: w.AmountMillis, NewWalletPubkey: w.NewWalletPubkey,
+		NewWalletToken: w.NewWalletToken.Token, ExpiresAt: w.ExpiresAt, NewWalletTombstone: w.NewWalletToken.Tombstone}
+	if r.NewWalletTombstone == nil && (r.NewWalletToken == "" || r.NewWalletPubkey == "") {
+		// Every source is consumed: a reply without the merged bill's
+		// credential leaves the call pending, as mint_cash does.
+		return r, ErrEmptyToken
+	}
+	if r.NewWalletToken == "" || len(p.Sources) == 0 || !IsPubkeyTarget(p.To) {
+		return r, nil
+	}
+	token, err := p.Sources[0].Credential.decryptDelivery(w.NewWalletPubkey, r.NewWalletToken)
 	if err != nil {
-		return nil, fmt.Errorf("nipcash: decrypt the consolidated wallet's token for %s: %w", wire.NewWalletPubkey, err)
+		return nil, fmt.Errorf("nipcash: decrypt the consolidated wallet's token for %s: %w", w.NewWalletPubkey, err)
 	}
-	result.NewWalletToken = token
-	return result, nil
+	r.NewWalletToken = token
+	return r, nil
 }

@@ -6,7 +6,7 @@ package client
 // FINDING C-SDK-3 (HIGH, money destroyed) — CONFIRMED AND FIXED.
 //
 // Pre-fix, RekeyCashSlice generated the replacement cash secret ITSELF
-// (nipcash.NewCashTarget(), called at the top of rekeyCashSlice) and returned it only
+// (mustCashTarget(t), called at the top of rekeyCashSlice) and returned it only
 // on the success path. On the no-consolidate path the whole operation is ONE
 // CashTransfer to that fresh target: if that call returned an ambiguous error — a
 // timeout, a NotServedError, or ErrIncompleteReply from a hub lying about its chunk
@@ -102,7 +102,7 @@ func TestAuditC_RekeySlice_AmbiguousFailureMatrix_SecretStaysWithCaller(t *testi
 		t.Run(r.name, func(t *testing.T) {
 			// The caller mints and, in real use, PERSISTS this before calling. That is
 			// the order the fix exists to permit.
-			newTarget := nipcash.NewCashTarget()
+			newTarget := mustCashTarget(t)
 			recorded := newTarget.Secret()
 			if recorded == "" {
 				t.Fatal("setup: NewCashTarget produced no secret, nothing to protect")
@@ -170,7 +170,7 @@ func TestAuditC_RekeySlice_ConsolidatePathMatrix_SecretStaysWithCaller(t *testin
 	for _, c := range ambiguous {
 		t.Run(c.name, func(t *testing.T) {
 			injected := c.injected
-			newTarget := nipcash.NewCashTarget()
+			newTarget := mustCashTarget(t)
 			recorded := newTarget.Secret()
 
 			interim := &nipcash.CashTransferResult{AmountMillis: 500_000, IdentityType: "pubkey"}
@@ -234,7 +234,7 @@ func TestAuditC_RekeySlice_ConsolidatePathMatrix_SecretStaysWithCaller(t *testin
 // than removed it.
 func TestAuditC_RekeySlice_SuccessMatrix_ReturnsTheCallersOwnSecret(t *testing.T) {
 	t.Run("no_consolidate_in_place", func(t *testing.T) {
-		newTarget := nipcash.NewCashTarget()
+		newTarget := mustCashTarget(t)
 		recorded := newTarget.Secret()
 		fake := &fakeTransferConsolidater{
 			transferFunc: func(nipcash.CashTransferParams) (*nipcash.CashTransferResult, error) {
@@ -257,7 +257,7 @@ func TestAuditC_RekeySlice_SuccessMatrix_ReturnsTheCallersOwnSecret(t *testing.T
 	})
 
 	t.Run("consolidated_into_new_wallet", func(t *testing.T) {
-		newTarget := nipcash.NewCashTarget()
+		newTarget := mustCashTarget(t)
 		recorded := newTarget.Secret()
 		fake := &fakeTransferConsolidater{
 			transferFunc: func(nipcash.CashTransferParams) (*nipcash.CashTransferResult, error) {

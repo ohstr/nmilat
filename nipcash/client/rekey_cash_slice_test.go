@@ -16,7 +16,7 @@ func TestRekeyCashSlice_NoConsolidateWith_OneTransferOnly(t *testing.T) {
 	}
 	result, err := rekeyCashSlice(context.Background(), fake, RekeyCashSliceParams{
 		CashSlice: nipcash.Source{WalletPubkey: "wallet1", Amount: 5000, Credential: nipcash.BySecret("old-secret")},
-		NewTarget: nipcash.NewCashTarget(),
+		NewTarget: mustCashTarget(t),
 	})
 	if err != nil {
 		t.Fatalf("rekeyCashSlice: %v", err)
@@ -50,7 +50,7 @@ func TestRekeyCashSlice_ConsolidateWith_TransfersThenConsolidates(t *testing.T) 
 		InterimIdentity:   nipcash.Pubkey("myPubHex"),
 		InterimCredential: nipcash.BySigning(privKeyHex),
 		ConsolidateWith:   []nipcash.Source{{WalletPubkey: "wallet2", Amount: 3000, Credential: nipcash.BySigning(privKeyHex)}},
-		NewTarget:         nipcash.NewCashTarget(),
+		NewTarget:         mustCashTarget(t),
 	})
 	if err != nil {
 		t.Fatalf("rekeyCashSlice: %v", err)
@@ -86,9 +86,9 @@ func TestRekeyCashSlice_BadInterimIdentity_RejectedBeforeAnyWireCall(t *testing.
 	}
 	_, err := rekeyCashSlice(context.Background(), fake, RekeyCashSliceParams{
 		CashSlice:       nipcash.Source{WalletPubkey: "wallet1", Amount: 5000, Credential: nipcash.BySecret("old-secret")},
-		InterimIdentity: nipcash.NewCashTarget(), // invalid: not a pubkey target
+		InterimIdentity: mustCashTarget(t), // invalid: not a pubkey target
 		ConsolidateWith: []nipcash.Source{{WalletPubkey: "wallet2", Amount: 3000}},
-		NewTarget:       nipcash.NewCashTarget(),
+		NewTarget:       mustCashTarget(t),
 	})
 	if !errors.Is(err, ErrInterimIdentityNotPubkey) {
 		t.Fatalf("got %v, want ErrInterimIdentityNotPubkey", err)
@@ -103,7 +103,7 @@ func TestRekeyCashSlice_InterimTransferLandsButConsolidateFails_PartialProgress(
 	consolidateErr := errors.New("consolidate rejected")
 	fake := &fakeTransferConsolidater{
 		transferFunc: func(params nipcash.CashTransferParams) (*nipcash.CashTransferResult, error) {
-			return &nipcash.CashTransferResult{AmountMillis: 5000, NewWalletPubkey: "wallet1"}, nil
+			return &nipcash.CashTransferResult{AmountMillis: 5000}, nil
 		},
 		consolidateFunc: func(params nipcash.CashConsolidateParams) (*nipcash.CashConsolidateResult, error) {
 			return nil, consolidateErr
@@ -114,7 +114,7 @@ func TestRekeyCashSlice_InterimTransferLandsButConsolidateFails_PartialProgress(
 		InterimIdentity:   nipcash.Pubkey("myPubHex"),
 		InterimCredential: nipcash.BySigning(privKeyHex),
 		ConsolidateWith:   []nipcash.Source{{WalletPubkey: "wallet2", Amount: 3000}},
-		NewTarget:         nipcash.NewCashTarget(),
+		NewTarget:         mustCashTarget(t),
 	})
 	var partial *PartialProgressError
 	if !errors.As(err, &partial) {
@@ -128,5 +128,70 @@ func TestRekeyCashSlice_InterimTransferLandsButConsolidateFails_PartialProgress(
 	}
 	if !errors.Is(err, consolidateErr) {
 		t.Fatal("the underlying consolidate error must be unwrappable via errors.Is")
+	}
+}
+
+// H1: a full transfer to cash on a wallet that has had more than one recipient
+// is spun off (NIP-CASH §Which outcome a request produces). The new wallet's
+// token is then the only way to reach the bill, so it must come back.
+func TestRekeyCashSlice_SpinOffReply_ReturnsNewWalletToken(t *testing.T) {
+	fake := &fakeTransferConsolidater{
+		transferFunc: func(nipcash.CashTransferParams) (*nipcash.CashTransferResult, error) {
+			return &nipcash.CashTransferResult{AmountMillis: 5000, NewWalletPubkey: "spun", NewWalletToken: "lokicash1spun"}, nil
+		},
+	}
+	result, err := rekeyCashSlice(context.Background(), fake, RekeyCashSliceParams{
+		CashSlice: nipcash.Source{WalletPubkey: "wallet1", Amount: 5000, Credential: nipcash.BySecret("old-secret")},
+		NewTarget: mustCashTarget(t),
+	})
+	if err != nil {
+		t.Fatalf("rekeyCashSlice: %v", err)
+	}
+	if result.NewWalletPubkey != "spun" || result.NewToken != "lokicash1spun" {
+		t.Fatalf("got wallet %q token %q, want the spin-off's", result.NewWalletPubkey, result.NewToken)
+	}
+}
+
+func TestRekeyCashSlice_SpinOffWithoutToken_IsError(t *testing.T) {
+	fake := &fakeTransferConsolidater{
+		transferFunc: func(nipcash.CashTransferParams) (*nipcash.CashTransferResult, error) {
+			return &nipcash.CashTransferResult{AmountMillis: 5000, NewWalletPubkey: "spun"}, nil
+		},
+	}
+	if _, err := rekeyCashSlice(context.Background(), fake, RekeyCashSliceParams{
+		CashSlice: nipcash.Source{WalletPubkey: "wallet1", Amount: 5000, Credential: nipcash.BySecret("old-secret")},
+		NewTarget: mustCashTarget(t),
+	}); err == nil {
+		t.Fatal("a spin-off reply with no token was reported as success")
+	}
+}
+
+// H1: the interim transfer spins off when the interim identity already holds a
+// slice on the wallet; the consolidate must then name the new wallet.
+func TestRekeyCashSlice_InterimSpinOff_ConsolidatesTheNewWallet(t *testing.T) {
+	const privKeyHex = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+	fake := &fakeTransferConsolidater{
+		transferFunc: func(nipcash.CashTransferParams) (*nipcash.CashTransferResult, error) {
+			return &nipcash.CashTransferResult{AmountMillis: 5000, NewWalletPubkey: "interim-new", NewWalletToken: "lokicash1interim"}, nil
+		},
+		consolidateFunc: func(nipcash.CashConsolidateParams) (*nipcash.CashConsolidateResult, error) {
+			return &nipcash.CashConsolidateResult{AmountMillis: 8000, NewWalletPubkey: "merged", NewWalletToken: "lokicash1merged"}, nil
+		},
+	}
+	_, err := rekeyCashSlice(context.Background(), fake, RekeyCashSliceParams{
+		CashSlice:         nipcash.Source{WalletPubkey: "wallet1", Amount: 5000, Credential: nipcash.BySecret("old-secret")},
+		InterimIdentity:   nipcash.Pubkey("myPubHex"),
+		InterimCredential: nipcash.BySigning(privKeyHex),
+		ConsolidateWith:   []nipcash.Source{{WalletPubkey: "wallet2", Amount: 3000, Credential: nipcash.BySigning(privKeyHex)}},
+		NewTarget:         mustCashTarget(t),
+	})
+	if err != nil {
+		t.Fatalf("rekeyCashSlice: %v", err)
+	}
+	if got := fake.consolidateCalls[0].Sources[0].WalletPubkey; got != "interim-new" {
+		t.Fatalf("consolidate source wallet = %q, want the interim spin-off", got)
+	}
+	if len(fake.reconnectCalls) != 1 || fake.reconnectCalls[0] != "lokicash1interim" || fake.closed != 1 {
+		t.Fatalf("reconnects %v closed %d, want one to the interim spin-off's token, closed", fake.reconnectCalls, fake.closed)
 	}
 }

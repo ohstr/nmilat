@@ -12,6 +12,7 @@ import (
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip57"
 	"github.com/ohstr/nmilat/nipAZ"
+	"github.com/ohstr/nmilat/nipIC"
 	"github.com/ohstr/nmilat/utils"
 )
 
@@ -62,9 +63,12 @@ type Spec struct {
 	// Connection, for 9521, zaps a web identity (platform, external id)
 	// that Resolved (an "r" pubkey) may link to a Nostr profile.
 	Connection [2]string
-	Resolved   string
-	Amount     int64 // milli-units of the invoice's coin
-	CreatedAt  uint64
+	// IA is the request's ia tag for Connection: the IA that attested it. A
+	// platform without a canonical form needs one, and defaults to TestIA.
+	IA        string
+	Resolved  string // the "r" pubkey; the fixture treats the link as authorized
+	Amount    int64  // milli-units of the invoice's coin
+	CreatedAt uint64
 	// Preimage makes the payment unique; equal preimages are the same payment.
 	Preimage string
 	// Currency is a 9735 invoice's prefix (default "bc").
@@ -73,6 +77,18 @@ type Spec struct {
 	// chain's first currency prefix.
 	Chain nipAZ.Chain
 }
+
+// TestIA is the Identity Authority the fixtures' attested accounts name.
+var TestIA = NewKey(0x1a)
+
+// AltZapLnurl is the bech32 lnurl of the 9521 fixtures' LNURL-pay endpoint.
+var AltZapLnurl = func() string {
+	s, err := utils.EncodeLNURL("https://pay.example.com/lnurlp/zap")
+	if err != nil {
+		panic(err)
+	}
+	return s
+}()
 
 // Receipt builds a receipt that passes NIP-57/NIP-AZ validation.
 func Receipt(z Spec) (*nip01.Event, error) {
@@ -122,11 +138,20 @@ func Receipt(z Spec) (*nip01.Event, error) {
 		}
 		recipient := nipAZ.Pubkey(z.Recipient)
 		if z.Connection[0] != "" {
-			recipient = nipAZ.Connection(nipAZ.WebIdentity(z.Connection[0]), z.Connection[1])
+			// The fixtures name IA-attested accounts, so the key is the attested
+			// user id hashed byte for byte, as a sender takes it from a 35522.
+			key, err := nipIC.ConnectionKeyFromAttested(nipIC.WebIdentity(z.Connection[0]), z.Connection[1])
+			if err != nil {
+				return nil, err
+			}
+			recipient = nipAZ.ResolvedConnection(key, nipAZ.WebIdentity(z.Connection[0]))
+			if z.IA == "" && !nipIC.HasCanonicalForm(nipIC.WebIdentity(z.Connection[0])) {
+				z.IA = TestIA.Pub
+			}
 		}
 		req, err := nipAZ.NewAltZapRequest(nipAZ.AltZapRequestParams{
-			PrivateKey: z.Sender.Priv, Chain: z.Chain, Recipient: recipient,
-			Lnurl: "lnurl1dp68gurn8ghj7", AmountMloki: z.Amount, Relays: []string{"wss://relay.example.com"},
+			PrivateKey: z.Sender.Priv, Chain: z.Chain, Recipient: recipient, IA: z.IA,
+			Lnurl: AltZapLnurl, AmountMloki: z.Amount, Relays: []string{"wss://relay.example.com"},
 		})
 		if err != nil {
 			return nil, err
@@ -146,7 +171,7 @@ func Receipt(z Spec) (*nip01.Event, error) {
 		receipt, err := nipAZ.NewAltZapReceipt(nipAZ.AltZapReceiptParams{
 			PrivateKey: z.Provider.Priv, Chain: z.Chain, Recipient: recipient,
 			Sender: nipAZ.Pubkey(z.Sender.Pub), Description: string(desc), Preimage: &z.Preimage,
-			Bolt11: bolt11, ResolvedRecipientPubkey: z.Resolved,
+			IA: z.IA, Bolt11: bolt11, ResolvedRecipientPubkey: z.Resolved, LinkAuthorized: z.Resolved != "",
 		})
 		if err != nil {
 			return nil, err

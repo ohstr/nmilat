@@ -3,6 +3,8 @@ package nipcash
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/ohstr/nmilat/nipIC"
@@ -18,7 +20,7 @@ import (
 var (
 	_ Recipient = namedIdentity{}
 	_ Target    = namedIdentity{}
-	_ Recipient = cashRecipient{}
+	_ Recipient = (*CashTarget)(nil)
 	_ Target    = (*CashTarget)(nil)
 )
 
@@ -28,20 +30,23 @@ func TestPubkeyConnectionKeyAnyone_IdentityTypes(t *testing.T) {
 		t.Fatalf("Pubkey: got type=%s value=%s", pk.identityType(), pk.identityValue())
 	}
 
-	ck := ConnectionKey("discord", "some.user", "iapub")
-	if ck.identityType() != identityTypeConnectionKey || ck.iaPubkey() != "iapub" {
+	ck, err := ConnectionKey("discord", "80351110224678912", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ck.identityType() != identityTypeConnectionKey || ck.iaPubkey() != "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" {
 		t.Fatalf("ConnectionKey: got type=%s ia=%s", ck.identityType(), ck.iaPubkey())
 	}
 	// Same (platform, externalID) must always hash to the same connection
 	// key — ConnectionKey is deterministic (nipIC.NewConnectionKey).
-	ck2 := ConnectionKey("discord", "some.user", "iapub")
+	ck2, _ := ConnectionKey("discord", "80351110224678912", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
 	if ck.identityValue() != ck2.identityValue() {
 		t.Fatal("ConnectionKey must be deterministic for the same (platform, externalID)")
 	}
 
-	anyone := Anyone().(targetFields)
-	if anyone.identityType() != identityTypeCash {
-		t.Fatalf("Anyone: got type=%s", anyone.identityType())
+	cash := targetFields(mustCashTarget(t))
+	if cash.identityType() != identityTypeCash || !ValidCommitment(cash.identityValue()) {
+		t.Fatalf("CashTarget: got type=%s value=%s", cash.identityType(), cash.identityValue())
 	}
 }
 
@@ -51,9 +56,15 @@ func TestResolvedConnectionKey_MatchesConnectionKeyWithoutRehashing(t *testing.T
 	// string) has no externalID to feed it. ResolvedConnectionKey must
 	// produce an identical identity_type/identity_value/ia_pubkey given
 	// that same key directly, with no external ID involved at all.
-	viaExternalID := ConnectionKey("discord", "some.user", "iapub")
-	key := nipIC.NewConnectionKey("discord", "some.user")
-	viaKey := ResolvedConnectionKey(key, "discord", "iapub")
+	viaExternalID, err := ConnectionKey("discord", "80351110224678912", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _ := nipIC.NewConnectionKey("discord", "80351110224678912")
+	viaKey, err := ResolvedConnectionKey(key, "discord", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if viaKey.identityType() != viaExternalID.identityType() {
 		t.Fatalf("identityType mismatch: got %s, want %s", viaKey.identityType(), viaExternalID.identityType())
@@ -61,13 +72,13 @@ func TestResolvedConnectionKey_MatchesConnectionKeyWithoutRehashing(t *testing.T
 	if viaKey.identityValue() != viaExternalID.identityValue() {
 		t.Fatalf("identityValue mismatch: got %s, want %s", viaKey.identityValue(), viaExternalID.identityValue())
 	}
-	if viaKey.iaPubkey() != "iapub" {
+	if viaKey.iaPubkey() != "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" {
 		t.Fatalf("iaPubkey: got %s, want iapub", viaKey.iaPubkey())
 	}
 }
 
 func TestNewCashTarget_SecretAndCommitmentDiffer(t *testing.T) {
-	bt := NewCashTarget()
+	bt := mustCashTarget(t)
 	f := Target(bt).(targetFields)
 	if f.identityType() != identityTypeCash {
 		t.Fatalf("identityType: got %s", f.identityType())
@@ -80,7 +91,7 @@ func TestNewCashTarget_SecretAndCommitmentDiffer(t *testing.T) {
 	}
 
 	// Two calls must never collide.
-	other := NewCashTarget()
+	other := mustCashTarget(t)
 	if bt.Secret() == other.Secret() {
 		t.Fatal("NewCashTarget must generate a fresh secret every call")
 	}
@@ -91,7 +102,7 @@ func TestNewCashTarget_SecretAndCommitmentDiffer(t *testing.T) {
 // and "differs from the secret" alone would not notice.
 func TestNewCashTarget_CommitmentIsSHA256OfSecret(t *testing.T) {
 	for range 8 {
-		bt := NewCashTarget()
+		bt := mustCashTarget(t)
 		raw, err := hex.DecodeString(bt.Secret())
 		if err != nil {
 			t.Fatalf("Secret is not hex: %v", err)
@@ -111,5 +122,26 @@ func TestSend_PairsRecipientWithAmount(t *testing.T) {
 	f := a.Recipient.(targetFields)
 	if f.identityValue() != "aa" {
 		t.Fatalf("Recipient: got %s, want aa", f.identityValue())
+	}
+}
+
+// T05-17, T05-19: typed input must be canonical; a key from an nconnection needs
+// its IA; a resolved key must be 64 lowercase hex.
+func TestConnectionKeyConstructors_Refuse(t *testing.T) {
+	if _, err := ConnectionKey("discord", "080351110224678912", "ia"); !errors.Is(err, nipIC.ErrNotCanonical) {
+		t.Errorf("leading zero: %v", err)
+	}
+	if _, err := ConnectionKey("github", "Alice", "ia"); !errors.Is(err, nipIC.ErrTypedInputNotCanonical) {
+		t.Errorf("typed github: %v", err)
+	}
+	key, _ := nipIC.ConnectionKeyFromAttested("github", "Alice")
+	if _, err := ConnectionKeyFromNConnection(key, "github", ""); !errors.Is(err, ErrMissingIAPubkey) {
+		t.Errorf("nconnection without IA: %v", err)
+	}
+	if _, err := ResolvedConnectionKey(nipIC.ConnectionKey(strings.ToUpper(string(key))), "github", "ia"); err == nil {
+		t.Error("uppercase key resolved")
+	}
+	if id, err := ConnectionKeyFromNConnection(key, "github", "ia"); err != nil || id.identityValue() != string(key) {
+		t.Errorf("nconnection key: %v", err)
 	}
 }

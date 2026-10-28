@@ -3,6 +3,7 @@ package nipcash
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"strings"
 	"testing"
 
@@ -39,12 +40,12 @@ func generateTestKeypair(t *testing.T) (privKeyHex, pubKeyHex string) {
 }
 
 func TestEncodeDecode_RoundTrip(t *testing.T) {
-	want := Token{
+	want := withTestProvenance(Token{
 		HRP:          "lokicash",
 		WalletPubkey: randomKeyHex(t),
 		Secret:       randomKeyHex(t),
 		RelayURLs:    []string{"wss://relay.one", "wss://relay.two"},
-	}
+	})
 	token, err := Encode(want)
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
@@ -71,7 +72,7 @@ func TestEncodeDecode_RoundTrip(t *testing.T) {
 
 func TestEncodeDecode_AnyHRP(t *testing.T) {
 	for _, hrp := range []string{"lokicash", "satscash", "somethingelsecash"} {
-		token, err := Encode(Token{HRP: hrp, WalletPubkey: randomKeyHex(t), Secret: randomKeyHex(t), RelayURLs: []string{"wss://r.example"}})
+		token, err := Encode(withTestProvenance(Token{HRP: hrp, WalletPubkey: randomKeyHex(t), Secret: randomKeyHex(t), RelayURLs: []string{"wss://r.example"}}))
 		if err != nil {
 			t.Fatalf("Encode(%q): %v", hrp, err)
 		}
@@ -87,7 +88,7 @@ func TestEncodeDecode_AnyHRP(t *testing.T) {
 
 func TestEncodeDecode_IdentityRequired(t *testing.T) {
 	yes := true
-	token, err := Encode(Token{HRP: "lokicash", WalletPubkey: randomKeyHex(t), Secret: randomKeyHex(t), RelayURLs: []string{"wss://r.example"}, IdentityRequired: &yes})
+	token, err := Encode(withTestProvenance(Token{HRP: "lokicash", WalletPubkey: randomKeyHex(t), Secret: randomKeyHex(t), RelayURLs: []string{"wss://r.example"}, IdentityRequired: &yes}))
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
@@ -109,7 +110,7 @@ func TestEncodeDecode_MintProvenancePair(t *testing.T) {
 	token, err := Encode(Token{
 		HRP: "lokicash", WalletPubkey: randomKeyHex(t), Secret: randomKeyHex(t),
 		RelayURLs:     []string{"wss://r.example"},
-		MintSignature: sig, AttestedAmountMillis: &amount,
+		MintSignature: sig, AttestedAmountMillis: &amount, Scheme: SchemeZapV1,
 	})
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
@@ -121,6 +122,9 @@ func TestEncodeDecode_MintProvenancePair(t *testing.T) {
 	if !got.HasProvenance() {
 		t.Fatal("expected provenance to survive round-trip")
 	}
+	if got.Scheme != SchemeZapV1 {
+		t.Fatalf("scheme %d, want zap", got.Scheme)
+	}
 	if *got.AttestedAmountMillis != amount {
 		t.Fatalf("amount mismatch: got %d, want %d", *got.AttestedAmountMillis, amount)
 	}
@@ -130,9 +134,9 @@ func TestEncode_MintProvenanceHalfPairRejected(t *testing.T) {
 	amount := uint64(1000)
 	// A relay is present so the half-pair rule, not the relay rule, is what refuses.
 	_, err := Encode(Token{HRP: "lokicash", WalletPubkey: randomKeyHex(t), Secret: randomKeyHex(t),
-		RelayURLs: []string{"wss://r.example"}, AttestedAmountMillis: &amount})
-	if err == nil || !strings.Contains(err.Error(), "set together") {
-		t.Fatalf("err = %v, want the half-pair refusal for a lone attested amount", err)
+		RelayURLs: []string{"wss://r.example"}, AttestedAmountMillis: &amount, Scheme: SchemeMintV1})
+	if !errors.Is(err, ErrTokenUnsigned) {
+		t.Fatalf("err = %v, want ErrTokenUnsigned for a lone attested amount", err)
 	}
 }
 

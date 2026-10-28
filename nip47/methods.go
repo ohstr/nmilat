@@ -40,6 +40,14 @@ const (
 	ErrNotFound              = "NOT_FOUND"
 	ErrExpired               = "EXPIRED"
 	ErrBadRequest            = "BAD_REQUEST"
+	// The codes NIP-CASH and NIP-CW add.
+	ErrRequestReused        = "REQUEST_REUSED"
+	ErrLimitExceeded        = "LIMIT_EXCEEDED"
+	ErrInsufficientCapacity = "INSUFFICIENT_CAPACITY"
+	ErrRotationPending      = "ROTATION_PENDING"
+	ErrFrozen               = "FROZEN"
+	ErrNotReady             = "NOT_READY"
+	ErrWalletExists         = "WALLET_EXISTS"
 )
 
 // Notification type values, used as the "notification_type" field of a
@@ -48,7 +56,15 @@ const (
 	NotificationPaymentReceived     = "payment_received"
 	NotificationPaymentSent         = "payment_sent"
 	NotificationHoldInvoiceAccepted = "hold_invoice_accepted"
+	// NIP-CW connection-key rotation and freeze notifications.
+	NotificationRotationPending   = "rotation_pending"
+	NotificationRotationCancelled = "rotation_cancelled"
+	NotificationRotationCompleted = "rotation_completed"
+	NotificationWalletFrozen      = "wallet_frozen"
 )
+
+// MethodDeleteCircleWallet is NIP-CW's member wallet deletion.
+const MethodDeleteCircleWallet = "delete_circle_wallet"
 
 // Request is the JSON shape of a decrypted request event's content.
 type Request struct {
@@ -233,14 +249,36 @@ type GetBudgetResult struct {
 	TotalBudgetMloki int64  `json:"total_budget"`
 	RenewsAt         *int64 `json:"renews_at,omitempty"`
 	RenewalPeriod    string `json:"renewal_period"`
+	// TotalReceiveBudget and UsedReceiveBudget are a Circle Wallet's receive
+	// budget (NIP-CW); absent on other connections.
+	TotalReceiveBudget *int64 `json:"total_receive_budget,omitempty"`
+	UsedReceiveBudget  *int64 `json:"used_receive_budget,omitempty"`
+}
+
+// RemainingSend is total_budget − used_budget, never below zero.
+func (r GetBudgetResult) RemainingSend() int64 { return max(r.TotalBudgetMloki-r.UsedBudgetMloki, 0) }
+
+// RemainingReceive is total_receive_budget − used_receive_budget, never below
+// zero; false when the connection reports no receive budget.
+func (r GetBudgetResult) RemainingReceive() (int64, bool) {
+	if r.TotalReceiveBudget == nil {
+		return 0, false
+	}
+	used := int64(0)
+	if r.UsedReceiveBudget != nil {
+		used = *r.UsedReceiveBudget
+	}
+	return max(*r.TotalReceiveBudget-used, 0), true
 }
 
 // GetInfoResult is the get_info response payload.
 type GetInfoResult struct {
-	Alias         string   `json:"alias,omitempty"`
-	Color         string   `json:"color,omitempty"`
-	Pubkey        string   `json:"pubkey,omitempty"`
-	Network       string   `json:"network,omitempty"`
+	Alias   string `json:"alias,omitempty"`
+	Color   string `json:"color,omitempty"`
+	Pubkey  string `json:"pubkey,omitempty"`
+	Network string `json:"network,omitempty"`
+	// Chain is the chain's name, e.g. bitcoin (NIP-CASH §Network and Chain).
+	Chain         string   `json:"chain,omitempty"`
 	BlockHeight   int64    `json:"block_height,omitempty"`
 	BlockHash     string   `json:"block_hash,omitempty"`
 	Methods       []string `json:"methods"`
@@ -293,6 +331,92 @@ type CircleWalletInfo struct {
 	// MinBudgetRenewal is the tightest budget_renewal the Hub accepts
 	// ("daily"/"weekly"/"monthly"/"yearly"/"never"). Empty means not reported.
 	MinBudgetRenewal string `json:"min_budget_renewal,omitempty"`
+	// FeeReserve is the Hub's routing-fee reserve terms.
+	FeeReserve *FeeReserve `json:"fee_reserve"`
+	// DustThresholdMillis is the dust floor below which a wallet is deleted.
+	DustThresholdMillis *int64 `json:"dust_threshold_millis"`
+	// RotationDelaySecs is present only on a Hub that supports rotation.
+	RotationDelaySecs *int64 `json:"rotation_delay_secs,omitempty"`
+	// PerWalletMaxReceiveMillis is the Hub's OPTIONAL per-wallet receive ceiling.
+	PerWalletMaxReceiveMillis int64 `json:"per_wallet_max_receive_millis,omitempty"`
+	// Accepting says whether the circle takes joins now; nil when absent, which
+	// a join client treats as non-conforming.
+	Accepting *bool `json:"accepting,omitempty"`
+
+	present map[string]bool
+}
+
+// FeeReserve is a Circle Wallet Hub's routing-fee reserve.
+type FeeReserve struct {
+	Ppm       int64 `json:"ppm"`
+	MinMillis int64 `json:"min_millis"`
+}
+
+// alwaysCircleKeys are the circle_wallet keys every Hub reports.
+var alwaysCircleKeys = []string{"available_millis", "max_exp_secs", "fees_ppm", "fee_reserve",
+	"dust_threshold_millis", "circle_policy", "identity", "accepting"}
+
+// UnmarshalJSON remembers which keys were present, since fees_ppm 0 and an
+// absent fees_ppm decode alike.
+func (i *CircleWalletInfo) UnmarshalJSON(b []byte) error {
+	type plain CircleWalletInfo
+	var p plain
+	if err := json.Unmarshal(b, &p); err != nil {
+		return err
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(b, &keys); err != nil {
+		return err
+	}
+	*i = CircleWalletInfo(p)
+	i.present = make(map[string]bool, len(keys))
+	for k := range keys {
+		i.present[k] = true
+	}
+	return nil
+}
+
+// MissingAlways lists the "always" keys the decoded block did not carry. A block
+// built in code (not decoded) reports none.
+func (i CircleWalletInfo) MissingAlways() []string {
+	if i.present == nil {
+		return nil
+	}
+	var out []string
+	for _, k := range alwaysCircleKeys {
+		if !i.present[k] {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// The networks get_info's network names (NIP-CASH §Network and Chain).
+const (
+	NetworkMainnet = "mainnet"
+	NetworkTestnet = "testnet"
+	NetworkSignet  = "signet"
+	NetworkRegtest = "regtest"
+)
+
+// ValidNetwork reports one of the four network values.
+func ValidNetwork(s string) bool {
+	switch s {
+	case NetworkMainnet, NetworkTestnet, NetworkSignet, NetworkRegtest:
+		return true
+	}
+	return false
+}
+
+// RotationPending is the rotation_pending notification payload.
+type RotationPending struct {
+	ConnectionPubkey string `json:"connection_pubkey"`
+	CompletesAt      int64  `json:"completes_at"`
+}
+
+// RotationChanged is the rotation_cancelled and rotation_completed payload.
+type RotationChanged struct {
+	ConnectionPubkey string `json:"connection_pubkey"`
 }
 
 // circle_policy values (NIP-CW §Membership).

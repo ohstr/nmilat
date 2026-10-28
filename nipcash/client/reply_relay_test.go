@@ -115,6 +115,7 @@ func testReply(replyTo string) *nip01.Event {
 	}
 }
 
+// T11-35, E-ENV-06.
 // NIP-CASH §Addressing the Response: the hub replies on the relay the request
 // arrived on, so the client must listen on the relay it sent to. The first relay
 // takes the subscription but refuses the request; the request goes out on the
@@ -127,7 +128,7 @@ func TestSubscribeAndPublish_ListensOnTheRelayItSentTo(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	events, stop, err := s.subscribeAndPublish(ctx, replyTo, nip01.NewEvent(transport.KindPrivateRequest, "req"))
+	events, _, stop, err := s.subscribeAndPublish(ctx, replyTo, &outgoing{ev: nip01.NewEvent(transport.KindPrivateRequest, "req")})
 	if err != nil {
 		t.Fatalf("subscribeAndPublish: %v", err)
 	}
@@ -154,23 +155,19 @@ func TestCollectReply_SameEventFromTwoRelaysIsOneChunk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := packedEnvelope{
-		Envelope: transport.Envelope{Version: transport.EnvelopeVersion, Nonce: nonce,
-			NotAfter: time.Now().Add(5 * time.Second).Unix()},
-		ItemIDs: []string{"x1", "x2"},
-	}
+	p := statusPacked(nonce, time.Now().Add(5*time.Second).Unix(), "x1", "x2")
 	var replyKey [32]byte
 	copy(replyKey[:], strings.Repeat("t", 32))
 	s := hostileSession(limits, strings.Repeat("b", 64))
 
 	first := sealChunk(t, replyKey, limits, transport.ResponseEnvelope{
 		Version: transport.EnvelopeVersion, ReqNonce: nonce, Seq: 1, Total: 2,
-		Results: []transport.Result{{ID: "x1", Result: []byte(`{}`)}},
+		Results: []transport.Result{{ID: "x1", ResultType: "cash_status", Result: []byte(`{}`)}},
 	})
 	first.ID = strings.Repeat("1", 64)
 	second := sealChunk(t, replyKey, limits, transport.ResponseEnvelope{
 		Version: transport.EnvelopeVersion, ReqNonce: nonce, Seq: 2, Total: 2,
-		Results: []transport.Result{{ID: "x2", Result: []byte(`{}`)}},
+		Results: []transport.Result{{ID: "x2", ResultType: "cash_status", Result: []byte(`{}`)}},
 	})
 	second.ID = strings.Repeat("2", 64)
 
@@ -198,12 +195,13 @@ func TestSubscribeAndPublish_ARefusedRequestIsNotSent(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, _, err := s.subscribeAndPublish(ctx, replyTo, nip01.NewEvent(transport.KindPrivateRequest, "req"))
+	_, _, _, err := s.subscribeAndPublish(ctx, replyTo, &outgoing{ev: nip01.NewEvent(transport.KindPrivateRequest, "req")})
 	if err == nil || !strings.Contains(err.Error(), "refused") {
 		t.Fatalf("err = %v, want the relay's refusal", err)
 	}
 }
 
+// T11-34.
 // A relay registers a subscription and handles an event on two connections in
 // no fixed order. This one takes its time over the REQ and answers the request
 // at once, which is when a client that published without waiting for the
@@ -258,7 +256,7 @@ func TestSubscribeAndPublish_WaitsForTheSubscriptionBeforePublishing(t *testing.
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	events, stop, err := s.subscribeAndPublish(ctx, replyTo, nip01.NewEvent(transport.KindPrivateRequest, "req"))
+	events, _, stop, err := s.subscribeAndPublish(ctx, replyTo, &outgoing{ev: nip01.NewEvent(transport.KindPrivateRequest, "req")})
 	if err != nil {
 		t.Fatalf("subscribeAndPublish: %v", err)
 	}

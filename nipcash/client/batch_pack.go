@@ -14,6 +14,20 @@ import (
 // than the hub's announced max_bytes allows.
 var ErrItemTooLarge = errors.New("nipcash/client: a single item exceeds the hub's envelope limit")
 
+// ErrTooManySources is a consolidate whose sources exceed the Hub's announced
+// max_consolidate_sources, which the Hub refuses with QUOTA_EXCEEDED. It comes
+// wrapped with ErrItemTooLarge: the caller splits it into several consolidates,
+// each a new call.
+var ErrTooManySources = errors.New("nipcash/client: a consolidate has more sources than the hub's max_consolidate_sources")
+
+// fitsAlone checks that b's item, built on its own against a throwaway binding,
+// fits an envelope the Hub accepts: an item that does not can never be sent,
+// however a batch is split. A builder that cannot build is reported too.
+func fitsAlone(b itemBuilder, hubXOnly string, limits transport.Limits, notAfter int64) error {
+	_, _, _, err := packOne([]itemBuilder{b}, hubXOnly, limits, notAfter)
+	return err
+}
+
 // itemBuilder produces one item once its envelope's binding is known.
 //
 // The indirection exists because of an ordering constraint that is easy to miss and
@@ -30,6 +44,17 @@ type itemBuilder struct {
 	ID string
 	// Build returns the item for a given envelope binding.
 	Build func(id string, b nipcash.ItemBinding) (transport.Item, error)
+	// RequestID is the request_id the item carries, "" for a call without one.
+	RequestID string
+	// Pending returns the call to write ahead for the envelope deadline it was
+	// packed under; nil for an item that writes nothing ahead.
+	Pending func(deadline int64) nipcash.PendingCall
+	// Measure, when set, builds a stand-in of the same size as Build's item
+	// without using anything up. It is set for a single-use item (a circle
+	// join, whose prepared join builds once): packing decides the fit on the
+	// stand-in and calls Build only for the envelope that will carry it, so an
+	// item that spills into a later envelope is still built there.
+	Measure func(id string, b nipcash.ItemBinding) (transport.Item, error)
 }
 
 // packedEnvelope is one request envelope, built and ready to wrap.
@@ -98,7 +123,11 @@ func packOne(builders []itemBuilder, hubXOnly string, limits transport.Limits, n
 	var ids []string
 	consumed := 0
 	for _, b := range builders {
-		item, err := b.Build(b.ID, binding)
+		probe := b.Build
+		if b.Measure != nil {
+			probe = b.Measure
+		}
+		item, err := probe(b.ID, binding)
 		if err != nil {
 			// A builder that cannot produce an item at all — a captured-proof
 			// credential, a malformed invoice — is the caller's error and must
@@ -117,6 +146,18 @@ func packOne(builders []itemBuilder, hubXOnly string, limits transport.Limits, n
 			// against that envelope's own nonce — which is exactly why builders are
 			// deferred rather than items pre-built.
 			break
+		}
+		if b.Measure != nil {
+			// The fit was decided on the stand-in; the real item is built once,
+			// here, for the envelope that carries it.
+			built, err := b.Build(b.ID, binding)
+			if err != nil {
+				return transport.Envelope{}, nil, 0, fmt.Errorf("item %q: %w", b.ID, err)
+			}
+			candidate.Items[len(candidate.Items)-1] = built
+			if _, err := candidate.Encode(limits); err != nil {
+				return transport.Envelope{}, nil, 0, fmt.Errorf("item %q: built larger than measured: %w", b.ID, err)
+			}
 		}
 		env = candidate
 		ids = append(ids, b.ID)

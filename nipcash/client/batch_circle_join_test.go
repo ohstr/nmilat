@@ -43,7 +43,7 @@ func TestCreateCircleWalletMany_EndToEnd(t *testing.T) {
 		env := hub.envelopes()
 		want := transport.ProofBinding{
 			Target: hubWalletPub, HubXOnly: hub.hubXOnly, Method: nipcw.MethodCreateCircleWallet,
-			ParamsHash: hash, Nonce: env[len(env)-1].Nonce,
+			ParamsHash: hash, Nonce: env[len(env)-1].Nonce, NotAfter: env[len(env)-1].NotAfter,
 		}
 		if item.Target != hubWalletPub {
 			return nil
@@ -57,7 +57,8 @@ func TestCreateCircleWalletMany_EndToEnd(t *testing.T) {
 		if req.Pubkey != memberPub {
 			return &transport.Result{ID: item.ID, Error: &transport.ResultError{Code: nipcw.ErrRestricted}}
 		}
-		details := `{"wallet_pubkey":"` + strings.Repeat("ab", 32) + `","relays":["wss://w"],"expires_at":1,"fees_ppm":0,"budget_renewal":"never"}`
+		details := `{"wallet_pubkey":"` + strings.Repeat("ab", 32) + `","connection_pubkey":"` + req.ConnectionPubkey +
+			`","relays":["wss://w"],"max_amount":1000,"max_receive":0,"expires_at":1,"fees_ppm":0,"dust_threshold_millis":0,"budget_renewal":"never"}`
 		body, _ := json.Marshal(map[string]string{"encrypted_details": encryptFrom(t, hubWalletPriv, req.Pubkey, details)})
 		return &transport.Result{ID: item.ID, ResultType: item.Method, Result: body}
 	})
@@ -79,9 +80,13 @@ func TestCreateCircleWalletMany_EndToEnd(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return BatchCircleJoin{ID: id, Hub: hubConn, Params: nipcw.CreateCircleWalletParams{
+		j, err := nipcw.CreateCircleWalletParams{
 			Credential: nipcw.BySigning(priv), Connection: key, MaxAmountMillis: 1000,
-		}}
+		}.Prepare(hubWalletPub, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return BatchCircleJoin{ID: id, Hub: hubConn, Join: j}
 	}
 	outcomes, err := s.CreateCircleWalletMany(ctx, []BatchCircleJoin{join("member", memberPriv), join("stranger", strangerPriv)})
 	if err != nil {
@@ -90,7 +95,7 @@ func TestCreateCircleWalletMany_EndToEnd(t *testing.T) {
 	if len(outcomes) != 2 {
 		t.Fatalf("got %d outcomes, want 2", len(outcomes))
 	}
-	if o := outcomes[0]; !o.Succeeded() || o.Result == nil || o.Result.WalletPubkey != strings.Repeat("ab", 32) {
+	if o := outcomes[0]; !o.Succeeded() || o.Result == nil || o.Result.WalletPubkey != strings.Repeat("ab", 32) || o.Result.MissingTerms != nil {
 		t.Fatalf("member: state %v, result %+v, error %+v", o.State, o.Result, o.Error)
 	}
 	if o := outcomes[1]; o.State != OutcomeError || o.Error == nil || o.Error.Code != nipcw.ErrRestricted {

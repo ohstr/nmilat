@@ -58,3 +58,25 @@ func TestReceiptUnknownChain(t *testing.T) {
 		t.Fatal("want an error for a chain with no invoice currency")
 	}
 }
+
+// A 9521 to an IA-defined account carries the request's ia, and one with a
+// resolved pubkey carries r: both pass the relay subset.
+func TestAltZapReceiptAttestedConnection(t *testing.T) {
+	ev, err := Receipt(Spec{
+		Kind: nipAZ.KindAltZapReceipt, Sender: NewKey(1), Provider: NewKey(2),
+		Connection: [2]string{"telegram", "4242"}, Resolved: NewKey(3).Pub, Amount: 21000, CreatedAt: 1_700_000_000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := nipAZ.ValidateAltZapReceiptForRelay(ev); err != nil {
+		t.Fatal(err)
+	}
+	r, err := nipAZ.ParseAltZapReceipt(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.IA != TestIA.Pub || r.Request.IA != TestIA.Pub || r.ResolvedPubkey != NewKey(3).Pub {
+		t.Errorf("ia %q, request ia %q, r %q", r.IA, r.Request.IA, r.ResolvedPubkey)
+	}
+}

@@ -1,218 +1,91 @@
 package nipcw
 
 import (
-	"bytes"
-	"encoding/hex"
 	"fmt"
-	"strings"
 
-	"github.com/flokiorg/go-flokicoin/chainutil/bech32"
+	"github.com/ohstr/nmilat/internal/credcodec"
+	"github.com/ohstr/nmilat/nipcash"
 )
 
-// CircleHubConnectionHRP is the fixed bech32 prefix for a Circle Wallet
-// Hub's own connection string (NIP-CW §The Circle Wallet Hub Connection) —
-// the one members send create_circle_wallet to.
+// CircleHubConnectionHRP is the fixed bech32 prefix for a Circle Wallet Hub's
+// own connection string (NIP-CW §The Circle Wallet Hub Connection), the one
+// members join over.
 const CircleHubConnectionHRP = "circlehub"
 
-// TLV type numbers within a circlehub1... string. 0-2 follow the same
-// convention NIP-19/the cash-token-family format use for pairing data
-// (wallet pubkey, relay, secret); 3 is specific to this format (an optional
-// human-readable label) and is scoped to this decoder only — see NIP-CW's
-// own note that a Hub-connection format's type numbers don't need to line
-// up with any other format's.
-const (
-	circleHubTLVWalletPubkey uint8 = 0
-	circleHubTLVRelay        uint8 = 1
-	circleHubTLVSecret       uint8 = 2
-	circleHubTLVLabel        uint8 = 3
-)
-
-// circleHubKeyLen is the byte length of both a wallet pubkey and a pairing
-// secret — raw 32-byte values, same as every other Nostr key.
-const circleHubKeyLen = 32
-
-// maxCircleHubTLVValueLen is the largest value a single TLV entry's
-// one-byte length field can hold. A relay URL or label longer than this
-// would silently truncate the length prefix instead of erroring, corrupting
-// every entry that follows it in the stream — EncodeCircleHubConnection
-// rejects it outright instead.
-const maxCircleHubTLVValueLen = 255
-
-// CircleHubConnection is the decoded content of a Circle Wallet Hub's own
-// circlehub1... connection string: the pairing data a member needs to send
-// create_circle_wallet, plus an optional human-readable label.
+// CircleHubConnection is a decoded circlehub1... string.
+//
+// Pubkey (TLV 0) is the Hub's own pubkey, the one a join proof's d tag binds;
+// HubIdentity (TLV 4) is the node identity, circle_wallet.identity. Both are 64
+// lowercase hex. Relays (TLV 1) are kept exactly as encoded, since the
+// connection signature covers them as encoded. HasLabel tells an absent TLV 3
+// from an empty one. Signature (TLV 5) and Chain (TLV 6) complete the signature
+// of NIP-CASH §Connection Signatures, with the text label circle-hub:v1.
+//
+// Decoding never verifies: call Verify. An unverified string still decodes, and
+// a client tells its user the Hub is not confirmed.
 type CircleHubConnection struct {
-	WalletPubkey string   // hex, 32 bytes — the Hub's own pubkey
-	Secret       string   // hex, 32 bytes — the NWC connection secret
-	RelayURLs    []string // in encoded order
-	Label        string   // optional, "" if not set
+	Pubkey      string
+	Relays      []string
+	Secret      string
+	Label       string
+	HasLabel    bool
+	HubIdentity string
+	Signature   []byte
+	Chain       string
 }
 
-// EncodeCircleHubConnection packages c into a circlehub1... string.
-// WalletPubkey and Secret MUST each be a 32-byte hex string.
+func (c CircleHubConnection) conn() credcodec.Conn {
+	return credcodec.Conn{Pubkey: c.Pubkey, Relays: c.Relays, Secret: c.Secret, Label: c.Label,
+		HasLabel: c.HasLabel, HubIdentity: c.HubIdentity, Signature: c.Signature, Chain: c.Chain}
+}
+
+// Fields is what the connection signature covers.
+func (c CircleHubConnection) Fields() nipcash.ConnFields {
+	return nipcash.ConnFields{HRP: CircleHubConnectionHRP, Chain: c.Chain, Pubkey: c.Pubkey, HubIdentity: c.HubIdentity,
+		Relays: c.Relays, Secret: c.Secret, Label: c.Label, HasLabel: c.HasLabel}
+}
+
+// Verify reports nil when the connection signature recovers to TLV 4 over the
+// rebuilt text, else nipcash.ErrConnUnverified.
+func (c CircleHubConnection) Verify() error { return nipcash.VerifyConnection(c.Fields(), c.Signature) }
+
+// EncodeCircleHubConnection writes c as a circlehub1... string, entries in
+// ascending type order. It refuses an unsigned connection (TLV 4 and 5 are
+// required), a missing or malformed chain, an empty label with HasLabel, a
+// non-ASCII or over-long relay hint and a connection with no usable hint. Blank
+// hints are skipped; SignCircleHubConnection signs over exactly the hints
+// written.
 func EncodeCircleHubConnection(c CircleHubConnection) (string, error) {
-	pubkey, err := decodeCircleHubKeyHex(c.WalletPubkey, "wallet pubkey")
+	s, err := credcodec.EncodeConn(CircleHubConnectionHRP, c.conn())
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("nipcw: %w", err)
 	}
-	secret, err := decodeCircleHubKeyHex(c.Secret, "secret")
-	if err != nil {
-		return "", err
-	}
-	// A hub connection is the ONLY way to reach that specific hub — there is no
-	// discovery path behind it — so its relay hint MUST appear at least once
-	// (NIP-CASH §The Cash Hub Connection, NIP-CW §The Circle Wallet Hub
-	// Connection). Enforced at encode so an unusable string is never produced.
-	if countUsableCircleHubRelays(c.RelayURLs) == 0 {
-		return "", fmt.Errorf("nipcw: a circle hub connection needs at least one non-empty relay url, or nobody can reach the hub")
-	}
-	for _, url := range c.RelayURLs {
-		if len(url) > maxCircleHubTLVValueLen {
-			return "", fmt.Errorf("nipcw: relay url exceeds %d bytes: %q", maxCircleHubTLVValueLen, url)
-		}
-	}
-	if len(c.Label) > maxCircleHubTLVValueLen {
-		return "", fmt.Errorf("nipcw: label exceeds %d bytes", maxCircleHubTLVValueLen)
-	}
-
-	buf := &bytes.Buffer{}
-	writeCircleHubTLV(buf, circleHubTLVWalletPubkey, pubkey)
-	// Blank entries are skipped: every relay entry on the wire MUST be non-empty.
-	for _, url := range c.RelayURLs {
-		if strings.TrimSpace(url) != "" {
-			writeCircleHubTLV(buf, circleHubTLVRelay, []byte(url))
-		}
-	}
-	writeCircleHubTLV(buf, circleHubTLVSecret, secret)
-	if c.Label != "" {
-		writeCircleHubTLV(buf, circleHubTLVLabel, []byte(c.Label))
-	}
-
-	bits5, err := bech32.ConvertBits(buf.Bytes(), 8, 5, true)
-	if err != nil {
-		return "", fmt.Errorf("nipcw: failed to convert bits: %w", err)
-	}
-	return bech32.Encode(CircleHubConnectionHRP, bits5)
+	return s, nil
 }
 
-// DecodeCircleHubConnection parses a circlehub1... string back into its
-// pairing data. It rejects anything missing either required field (wallet
-// pubkey or secret), carrying a malformed length for either, or repeating
-// either one. An unrecognized TLV type is ignored rather than rejected, so
-// a future field can be added without breaking older decoders.
+// DecodeCircleHubConnection parses a circlehub1... string, all lowercase or all
+// uppercase. It refuses a missing TLV 0/2/4/5/6, a wrong-length 0/2/4/5, a
+// malformed 6, a repeated single field, a string with no usable relay hint and a
+// mixed-case string; it ignores a type above 6.
 func DecodeCircleHubConnection(s string) (CircleHubConnection, error) {
-	hrp, bits5, err := bech32.DecodeNoLimit(s)
+	c, err := credcodec.DecodeConn(s, CircleHubConnectionHRP)
 	if err != nil {
-		return CircleHubConnection{}, fmt.Errorf("nipcw: invalid bech32: %w", err)
+		return CircleHubConnection{}, fmt.Errorf("nipcw: %w", err)
 	}
-	if hrp != CircleHubConnectionHRP {
-		return CircleHubConnection{}, fmt.Errorf("nipcw: unexpected hrp %q, want %q", hrp, CircleHubConnectionHRP)
-	}
-	data, err := bech32.ConvertBits(bits5, 5, 8, false)
+	return CircleHubConnection{Pubkey: c.Pubkey, Relays: c.Relays, Secret: c.Secret, Label: c.Label,
+		HasLabel: c.HasLabel, HubIdentity: c.HubIdentity, Signature: c.Signature, Chain: c.Chain}, nil
+}
+
+// SignCircleHubConnection signs c with its node signer and returns it with
+// Signature set. Blank relay hints are dropped first, so the signature covers
+// exactly the hints EncodeCircleHubConnection will write. The signature must
+// recover to both c.HubIdentity and expectedXOnly, or nipcash.ErrSignerMismatch.
+func SignCircleHubConnection(c CircleHubConnection, sign nipcash.MintSigner, expectedXOnly string) (CircleHubConnection, error) {
+	c.Relays = credcodec.EmittedRelays(c.Relays)
+	sig, err := nipcash.SignConnection(c.Fields(), sign, expectedXOnly)
 	if err != nil {
-		return CircleHubConnection{}, fmt.Errorf("nipcw: failed to convert bits: %w", err)
+		return CircleHubConnection{}, err
 	}
-
-	var result CircleHubConnection
-	haveWalletPubkey := false
-	haveSecret := false
-	haveLabel := false
-	curr := 0
-	for curr < len(data) {
-		typ, value, ok := readCircleHubTLV(data[curr:])
-		if !ok {
-			return CircleHubConnection{}, fmt.Errorf("nipcw: truncated TLV entry at offset %d", curr)
-		}
-		switch typ {
-		case circleHubTLVWalletPubkey:
-			if len(value) != circleHubKeyLen {
-				return CircleHubConnection{}, fmt.Errorf("nipcw: wallet pubkey must be %d bytes, got %d", circleHubKeyLen, len(value))
-			}
-			if haveWalletPubkey {
-				return CircleHubConnection{}, fmt.Errorf("nipcw: duplicate wallet pubkey entry")
-			}
-			result.WalletPubkey = hex.EncodeToString(value)
-			haveWalletPubkey = true
-		case circleHubTLVRelay:
-			result.RelayURLs = append(result.RelayURLs, string(value))
-		case circleHubTLVSecret:
-			if len(value) != circleHubKeyLen {
-				return CircleHubConnection{}, fmt.Errorf("nipcw: secret must be %d bytes, got %d", circleHubKeyLen, len(value))
-			}
-			if haveSecret {
-				return CircleHubConnection{}, fmt.Errorf("nipcw: duplicate secret entry")
-			}
-			result.Secret = hex.EncodeToString(value)
-			haveSecret = true
-		case circleHubTLVLabel:
-			if haveLabel {
-				return CircleHubConnection{}, fmt.Errorf("nipcw: duplicate label entry")
-			}
-			result.Label = string(value)
-			haveLabel = true
-		default:
-			// Unknown TLV type: ignore, same forward-compatibility rule the
-			// cash-token-family format's own Decode establishes.
-		}
-		curr += 2 + len(value)
-	}
-
-	if !haveWalletPubkey {
-		return CircleHubConnection{}, fmt.Errorf("nipcw: missing wallet pubkey")
-	}
-	if !haveSecret {
-		return CircleHubConnection{}, fmt.Errorf("nipcw: missing secret")
-	}
-	if countUsableCircleHubRelays(result.RelayURLs) == 0 {
-		// The cardinality NIP-CW's own TLV table requires ("one or more"), finally
-		// enforced. Checked here rather than left to the dialer: a relay-less hub
-		// connection is structurally valid and its checksum verifies, so every
-		// layer above accepts it and the failure surfaces as an unexplained
-		// connection error against a string that looks perfect.
-		return CircleHubConnection{}, fmt.Errorf("nipcw: hub connection carries no usable relay url, so the hub is unreachable")
-	}
-	return result, nil
-}
-
-func decodeCircleHubKeyHex(s, field string) ([]byte, error) {
-	b, err := hex.DecodeString(s)
-	if err != nil {
-		return nil, fmt.Errorf("nipcw: invalid %s hex: %w", field, err)
-	}
-	if len(b) != circleHubKeyLen {
-		return nil, fmt.Errorf("nipcw: %s must be %d bytes, got %d", field, circleHubKeyLen, len(b))
-	}
-	return b, nil
-}
-
-func writeCircleHubTLV(buf *bytes.Buffer, typ uint8, value []byte) {
-	buf.WriteByte(typ)
-	buf.WriteByte(uint8(len(value))) //nolint:gosec // every EncodeCircleHubConnection call site pre-validates len(value) <= maxCircleHubTLVValueLen before calling writeCircleHubTLV
-	buf.Write(value)
-}
-
-func readCircleHubTLV(data []byte) (typ uint8, value []byte, ok bool) {
-	if len(data) < 2 {
-		return 0, nil, false
-	}
-	typ = data[0]
-	length := int(data[1])
-	if len(data) < 2+length {
-		return 0, nil, false
-	}
-	return typ, data[2 : 2+length], true
-}
-
-// countUsableCircleHubRelays returns how many of urls are non-empty once trimmed.
-// An empty entry is absence, not a relay: a producer with an unset relay
-// config easily emits one URL of "", which is exactly as unreachable as none
-// while passing any check that merely counts entries.
-func countUsableCircleHubRelays(urls []string) int {
-	n := 0
-	for _, u := range urls {
-		if strings.TrimSpace(u) != "" {
-			n++
-		}
-	}
-	return n
+	c.Signature = sig
+	return c, nil
 }

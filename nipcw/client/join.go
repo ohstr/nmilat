@@ -4,154 +4,209 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
-	"github.com/ohstr/nmilat/nip47"
 	cashclient "github.com/ohstr/nmilat/nipcash/client"
 	"github.com/ohstr/nmilat/nipcw"
 	relayclient "github.com/ohstr/nmilat/relay/client"
 )
 
-// ErrPrivateJoinUnavailable means JoinOptions.RequirePrivate was set and the
-// join could not travel over the private transport, so nothing was sent.
-var ErrPrivateJoinUnavailable = errors.New("nipcw/client: private join is unavailable")
+var (
+	// ErrJoinNotSent means Join stopped before any join was sent, so no wallet was
+	// made and the join is safe to retry (a journalled PendingJoin may be dropped).
+	ErrJoinNotSent = errors.New("nipcw/client: join not sent")
+	// ErrNoAnnouncement is a Hub whose kind-11190 announcement could not be found
+	// or verified against its identity. Nothing is sent, never over the standard
+	// transport either; the caller MAY try again later.
+	ErrNoAnnouncement = fmt.Errorf("%w: no verified private-transport announcement", ErrJoinNotSent)
+	// ErrNotAccepting is a Hub whose circle_wallet.accepting is false: the circle
+	// is closed to joins. Nothing is sent; lookups still work.
+	ErrNotAccepting = fmt.Errorf("%w: the Hub is not accepting joins", ErrJoinNotSent)
+	// ErrRotationWarningRequired is a join to a Hub without rotation_delay_secs
+	// and no JoinOptions.WarnNoRotation to warn the member first.
+	ErrRotationWarningRequired = fmt.Errorf("%w: the Hub cannot rotate a lost connection, and no warning was given", ErrJoinNotSent)
+	// ErrJoinDeclined is a member who declined WarnNoRotation's warning.
+	ErrJoinDeclined = fmt.Errorf("%w: the member declined after the rotation warning", ErrJoinNotSent)
+	// ErrOverHubLimit is a request over a limit get_info reports
+	// (per_wallet_max_millis, per_wallet_max_receive_millis, min_budget_renewal,
+	// max_exp_secs). The Hub would refuse it with LIMIT_EXCEEDED.
+	ErrOverHubLimit = fmt.Errorf("%w: the request is over the Hub's reported limits", ErrJoinNotSent)
+	// ErrNoJoinJournal is a Join without a JoinJournal: the secret and deadline
+	// must be written ahead, or a lost reply loses the wallet.
+	ErrNoJoinJournal = fmt.Errorf("%w: a join needs a journal", ErrJoinNotSent)
+)
 
-// ErrJoinNotSent means Join failed before any join request was sent, so no
-// wallet was created and the join is safe to retry.
-var ErrJoinNotSent = errors.New("nipcw/client: join not sent")
-
-// JoinOptions tunes Join.
+// JoinOptions tunes Join. Every join is private (NIP-CW §Private Join).
 type JoinOptions struct {
-	// RequirePrivate refuses with ErrPrivateJoinUnavailable rather than join
-	// over the shared Hub connection, where the requester's pubkey is visible
-	// to every co-member and the join to every relay observer.
-	RequirePrivate bool
+	// WarnNoRotation warns the member, before a join to a Hub that cannot rotate
+	// a lost connection, that losing the connection secret makes the balance
+	// unreachable, and SHOULD offer a backup. It returns whether to go on.
+	// Required for such a Hub: nil is ErrRotationWarningRequired.
+	WarnNoRotation func(ctx context.Context) bool
 }
 
-// JoinResult is a Join's wallet and how the request travelled.
+// PendingJoin is what a join writes ahead before it is sent: enough to look it
+// up and to hold the wallet when the reply is lost. ConnectionSecret never
+// leaves the member.
+type PendingJoin struct {
+	HubPubkey, Pubkey, ConnectionPubkey, ConnectionSecret string
+	Deadline                                              int64
+}
+
+// JoinJournal stores a PendingJoin durably before the join is sent.
+type JoinJournal interface {
+	WriteAhead(ctx context.Context, j PendingJoin) error
+}
+
+// JoinResult is a created wallet and the join that made it.
 type JoinResult struct {
 	*nipcw.CreateCircleWalletResponse
-	// Private reports whether the join went over the private transport.
-	Private bool
-	// FallbackReason is set when the Hub offers Private Join but the join went
-	// over the standard transport anyway. A client SHOULD tell the member the
-	// join was not private (NIP-CW §Finding the Private Transport).
-	FallbackReason error
+	Pending PendingJoin
 }
 
-// Join requests the caller's own Circle Wallet, over the private transport when
-// the Hub offers it (NIP-CW §Private Join) and the standard one otherwise.
-//
-// The node identity is read only from this connection's get_info, whose reply
-// the Hub connection key authenticates. If its announcement cannot be found or
-// verified, Join falls back to the standard transport and says so in
-// FallbackReason. Once a private request is sent it never falls back: a missing
-// reply may mean the join ran.
-//
-// Refusals carry the standard join's codes either way (nipcw.ErrNotReady,
-// ErrRestricted, ErrWalletExists, ErrRateLimited) as a *relayclient.WalletError.
-// A private join the Hub did not answer is a *cashclient.NotServedError. A
-// standard join that fails after a fallback also wraps the fallback reason, so
-// errors.Is(err, cashclient.ErrNoAnnouncement) reports it was not private.
-// Failures before any join is sent (get_info, generating the connection key)
-// wrap ErrJoinNotSent along with their cause; failures after it never do.
-// ErrPrivateJoinUnavailable also means nothing was sent.
-//
-// As with CreateCircleWallet, a zero params.Connection gets a fresh key whose
-// secret appears only in the result; a caller that must survive a lost reply
-// sets and saves its own.
-func (c *Client) Join(ctx context.Context, params nipcw.CreateCircleWalletParams, opts JoinOptions) (*JoinResult, error) {
-	params, err := withConnectionKey(params)
-	if err != nil {
-		return nil, fmt.Errorf("%w: connection key: %w", ErrJoinNotSent, err)
-	}
-	return join(ctx, c.nwc.GetInfo, opts,
-		func(ctx context.Context, identity string) (*nipcw.CreateCircleWalletResponse, error) {
-			return c.privateJoin(ctx, identity, params)
-		},
-		func(ctx context.Context) (*nipcw.CreateCircleWalletResponse, error) {
-			return c.CreateCircleWallet(ctx, params)
-		})
+// Wallet is the member's wallet connection: wallet_pubkey and relays from the
+// details, and the secret the member kept.
+func (r *JoinResult) Wallet() nipcw.WalletConnection {
+	return nipcw.WalletConnection{WalletPubkey: r.WalletPubkey, Relays: r.Relays, Secret: r.Pending.ConnectionSecret}
 }
 
-type joinFunc func(ctx context.Context) (*nipcw.CreateCircleWalletResponse, error)
+// JoinIndeterminateError is a join that may have made the wallet: REQUEST_REUSED,
+// an omission, no reply, or a reply that failed its checks. It is never a
+// failure; look it up with LookupJoin.
+type JoinIndeterminateError struct {
+	Pending PendingJoin
+	Code    string
+	Cause   error
+}
 
-type privateJoinFunc func(ctx context.Context, identity string) (*nipcw.CreateCircleWalletResponse, error)
+func (e *JoinIndeterminateError) Error() string {
+	msg := "nipcw/client: the join's outcome is unknown; look it up"
+	if e.Code != "" {
+		msg += ": " + e.Code
+	}
+	if e.Cause != nil {
+		msg += ": " + e.Cause.Error()
+	}
+	return msg
+}
 
-// unavailableError marks a private join that failed before anything was sent,
-// which is the only case Join may fall back from.
-type unavailableError struct{ err error }
+func (e *JoinIndeterminateError) Unwrap() error { return e.Cause }
 
-func (e *unavailableError) Error() string { return e.err.Error() }
-func (e *unavailableError) Unwrap() error { return e.err }
-
-// join is Join's transport choice, apart from the network so it can be tested.
-func join(ctx context.Context, getInfo func(context.Context) (*nip47.GetInfoResult, error), opts JoinOptions, private privateJoinFunc, standard joinFunc) (*JoinResult, error) {
-	result, err := getInfo(ctx)
+// Join requests the caller's own Circle Wallet over the private transport, the
+// only one a join travels on. Before anything is written, in order:
+//
+//   - get_info passes the online check (Connect's) and describes a conforming
+//     Hub, else ErrHubNonConforming;
+//   - accepting is true, else ErrNotAccepting;
+//   - the request is within the limits get_info reports, else ErrOverHubLimit;
+//   - the Hub's announcement verifies against its identity, else
+//     ErrNoAnnouncement;
+//   - a Hub without rotation_delay_secs gets the member's WarnNoRotation first.
+//
+// Then the join is prepared (a fresh connection key when p.Connection is zero),
+// written ahead to j with its secret and deadline, and sent. Every error above
+// wraps ErrJoinNotSent.
+//
+// After sending, a refusal is a *relayclient.WalletError, final for that proof
+// (BAD_REQUEST, UNAUTHORIZED, RESTRICTED, NOT_IMPLEMENTED, …): a retry is a new
+// Join with a new proof. REQUEST_REUSED, an omission, no reply or a reply that
+// fails its checks is a *JoinIndeterminateError.
+func (c *Client) Join(ctx context.Context, p nipcw.CreateCircleWalletParams, o JoinOptions, j JoinJournal) (*JoinResult, error) {
+	if j == nil {
+		return nil, ErrNoJoinJournal
+	}
+	gi, err := c.info(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("%w: get_info: %w", ErrJoinNotSent, err)
+		return nil, fmt.Errorf("%w: %w", ErrJoinNotSent, err)
 	}
-	info := result.CircleWallet
-	if info == nil || info.Identity == "" {
-		if opts.RequirePrivate {
-			return nil, fmt.Errorf("%w: the Hub does not offer it", ErrPrivateJoinUnavailable)
-		}
-		resp, err := standard(ctx)
-		if err != nil {
-			return nil, err
-		}
-		return &JoinResult{CreateCircleWalletResponse: resp}, nil
+	cw := gi.CircleWallet
+	if missing := cw.MissingAlways(); len(missing) > 0 {
+		return nil, fmt.Errorf("%w: %w: circle_wallet lacks %v", ErrJoinNotSent, ErrHubNonConforming, missing)
 	}
-
-	resp, err := private(ctx, info.Identity)
-	if err == nil {
-		return &JoinResult{CreateCircleWalletResponse: resp, Private: true}, nil
+	if cw.AvailableMillis < 0 || cw.FeeReserve == nil || cw.Accepting == nil {
+		return nil, fmt.Errorf("%w: %w: a negative available_millis or a null always field", ErrJoinNotSent, ErrHubNonConforming)
 	}
-	var unavailable *unavailableError
-	if !errors.As(err, &unavailable) {
+	if !*cw.Accepting {
+		return nil, ErrNotAccepting
+	}
+	if err := withinLimits(p, cw.PerWalletMaxMillis, cw.PerWalletMaxReceiveMillis, cw.MinBudgetRenewal, cw.MaxExpSecs); err != nil {
 		return nil, err
 	}
-	if opts.RequirePrivate {
-		return nil, fmt.Errorf("%w: %w", ErrPrivateJoinUnavailable, unavailable.err)
-	}
-	resp, err = standard(ctx)
+	session, err := c.batchSession(ctx)
 	if err != nil {
-		// Both wrapped, so errors.Is still finds why the join was not private.
-		return nil, fmt.Errorf("%w (after private join was unavailable: %w)", err, unavailable.err)
+		return nil, fmt.Errorf("%w: %w", ErrNoAnnouncement, err)
 	}
-	return &JoinResult{CreateCircleWalletResponse: resp, FallbackReason: unavailable.err}, nil
+	if cw.RotationDelaySecs == nil {
+		if o.WarnNoRotation == nil {
+			return nil, ErrRotationWarningRequired
+		}
+		if !o.WarnNoRotation(ctx) {
+			return nil, ErrJoinDeclined
+		}
+	}
+	if p.Connection.IsZero() {
+		key, err := nipcw.NewConnectionKey()
+		if err != nil {
+			return nil, fmt.Errorf("%w: connection key: %w", ErrJoinNotSent, err)
+		}
+		p.Connection = key
+	}
+	hub, err := c.hubBill()
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrJoinNotSent, err)
+	}
+	prepared, err := p.Prepare(c.conn.Pubkey, time.Now())
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrJoinNotSent, err)
+	}
+	pj := PendingJoin{HubPubkey: c.conn.Pubkey, Pubkey: prepared.Request.Pubkey, ConnectionPubkey: prepared.ConnectionPubkey,
+		ConnectionSecret: p.Connection.Secret(), Deadline: prepared.Deadline}
+	if err := j.WriteAhead(ctx, pj); err != nil {
+		return nil, fmt.Errorf("%w: write ahead: %w", ErrJoinNotSent, err)
+	}
+
+	outcomes, sendErr := session.CreateCircleWalletMany(ctx, []cashclient.BatchCircleJoin{{ID: "join", Hub: hub, Join: prepared}})
+	if len(outcomes) == 0 || outcomes[0].State == cashclient.OutcomeNotSent {
+		// No outcome, or OutcomeNotSent: the item's envelope was never
+		// published, so nothing was sent.
+		if sendErr == nil {
+			sendErr = errors.New("no outcome")
+		}
+		return nil, fmt.Errorf("%w: %w", ErrJoinNotSent, sendErr)
+	}
+	out := outcomes[0]
+	switch {
+	case out.Succeeded():
+		return &JoinResult{CreateCircleWalletResponse: out.Result, Pending: pj}, nil
+	case out.Undecodable:
+		// The Hub answered, but not with this join's details: look it up.
+		msg := ""
+		if out.Error != nil {
+			msg = out.Error.Message
+		}
+		return nil, &JoinIndeterminateError{Pending: pj, Cause: errors.New("the reply failed its checks: " + msg)}
+	case out.State == cashclient.OutcomeError && out.Error != nil:
+		if out.Error.Code == nipcw.ErrRequestReused {
+			return nil, &JoinIndeterminateError{Pending: pj, Code: out.Error.Code}
+		}
+		return nil, &relayclient.WalletError{Method: nipcw.MethodCreateCircleWallet, Code: out.Error.Code, Message: out.Error.Message}
+	default:
+		return nil, &JoinIndeterminateError{Pending: pj, Cause: sendErr}
+	}
 }
 
-// privateJoin sends one join over the private transport. Failures before the
-// request is sent are wrapped in unavailableError.
-func (c *Client) privateJoin(ctx context.Context, identity string, params nipcw.CreateCircleWalletParams) (*nipcw.CreateCircleWalletResponse, error) {
-	session, err := cashclient.OpenBatchSession(ctx, identity, c.pairing.RelayURLs)
-	if err != nil {
-		return nil, &unavailableError{err: err}
-	}
-	hub, err := cashclient.BillFromParts(c.hubPubkey, c.pairing.Secret)
-	if err != nil {
-		return nil, &unavailableError{err: err}
-	}
-	outcomes, sendErr := session.CreateCircleWalletMany(ctx, []cashclient.BatchCircleJoin{{ID: "join", Hub: hub, Params: params}})
-	if len(outcomes) == 0 && sendErr != nil {
-		// No outcomes means the item was never packed, so nothing was sent.
-		return nil, &unavailableError{err: sendErr}
-	}
-	if len(outcomes) != 1 {
-		return nil, &cashclient.NotServedError{Method: nipcw.MethodCreateCircleWallet}
-	}
-	o := outcomes[0]
+// withinLimits is the client pre-check against the limits get_info reports (0 or
+// "" when not reported). The Hub still decides: a refusal is handled anyway.
+func withinLimits(p nipcw.CreateCircleWalletParams, maxAmount, maxReceive int64, floor string, maxExp int) error {
 	switch {
-	case o.Succeeded():
-		return o.Result, nil
-	case o.Undecodable:
-		// The Hub ran the join, so this is not a refusal: the wallet may exist.
-		return nil, fmt.Errorf("nipcw/client: the Hub answered the join but its reply could not be read, so the wallet may exist: %s", o.Error.Message)
-	case o.State == cashclient.OutcomeError && o.Error != nil:
-		return nil, &relayclient.WalletError{Method: nipcw.MethodCreateCircleWallet, Code: o.Error.Code, Message: o.Error.Message}
-	case sendErr != nil:
-		return nil, sendErr
-	default:
-		return nil, &cashclient.NotServedError{Method: nipcw.MethodCreateCircleWallet}
+	case maxAmount > 0 && p.MaxAmountMillis > uint64(maxAmount):
+		return fmt.Errorf("%w: max_amount %d over per_wallet_max_millis %d", ErrOverHubLimit, p.MaxAmountMillis, maxAmount)
+	case maxReceive > 0 && p.MaxReceiveMillis > uint64(maxReceive):
+		return fmt.Errorf("%w: max_receive %d over per_wallet_max_receive_millis %d", ErrOverHubLimit, p.MaxReceiveMillis, maxReceive)
+	case !nipcw.RenewalAtLeast(p.BudgetRenewal, floor):
+		return fmt.Errorf("%w: budget_renewal %q tighter than min_budget_renewal %q", ErrOverHubLimit, p.BudgetRenewal, floor)
+	case maxExp > 0 && p.Expiry > time.Duration(maxExp)*time.Second:
+		return fmt.Errorf("%w: expiry over max_exp_secs %d", ErrOverHubLimit, maxExp)
 	}
+	return nil
 }

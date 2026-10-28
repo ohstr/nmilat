@@ -34,6 +34,10 @@ type Result struct {
 type ResultError struct {
 	Code    string `json:"code"`
 	Message string `json:"message,omitempty"`
+	// Detail is the error's optional machine-readable refinement (NIP-CASH
+	// §Errors). It is kept raw here: a value outside the ones the spec lists is
+	// read as no detail by whoever interprets it, never refused at decode.
+	Detail string `json:"detail,omitempty"`
 }
 
 // ResponseEnvelope is the plaintext of a kind-23191 response.
@@ -45,7 +49,8 @@ type ResultError struct {
 // A caller reads an omission as "not served", which carries the same information
 // an error would without confirming anything about what the hub holds.
 type ResponseEnvelope struct {
-	Version int `json:"v"`
+	// Version is never on the wire (see EnvelopeVersion).
+	Version int `json:"-"`
 	// ReqNonce ties this response to the request that produced it, so a client
 	// cannot be confused by a response to something else.
 	ReqNonce string `json:"req_nonce"`
@@ -74,6 +79,102 @@ type ResponseEnvelope struct {
 	Pad   string `json:"pad,omitempty"`
 }
 
+// MarshalJSON writes `"results": []` for a reply that answers no item and carries
+// no envelope-level error.
+//
+// The empty list is load-bearing (NIP-CASH §Responses (kind 23191)): it is how a
+// client tells a complete reply of omissions from a chunk that decided nothing,
+// which makes the reply incomplete. omitempty alone would erase that difference.
+func (r ResponseEnvelope) MarshalJSON() ([]byte, error) {
+	type plain ResponseEnvelope
+	w := struct {
+		plain
+		Results *[]Result `json:"results,omitempty"`
+	}{plain: plain(r)}
+	switch {
+	case len(r.Results) > 0:
+		w.Results = &r.Results
+	case r.Error == nil:
+		empty := []Result{}
+		w.Results = &empty
+	}
+	return json.Marshal(w)
+}
+
+// DecodedChunk is one decoded kind-23191 chunk, kept as the hub sent it, with what
+// was wrong in it reported instead of refused.
+//
+// A chunk is only ever refused whole for what makes it unusable (see
+// DecodeResponseChunk). Everything else is a fact about the reply the caller has to
+// weigh against the other chunks, which is why it is reported here: NIP-CASH
+// §Chunked Replies makes a malformed set incomplete, not void, and an item answered
+// twice indeterminate while its siblings keep their answers.
+type DecodedChunk struct {
+	*ResponseEnvelope
+	// DuplicateIDs lists the ids answered more than once inside this chunk. Every
+	// one of those answers is left in Results, so a caller counting answers per id
+	// sees each of them.
+	DuplicateIDs []string
+	// AlienIDs lists the ids of results dropped because the request never sent
+	// them (NIP-CASH §Responses: a client rejects results whose id it never sent).
+	AlienIDs []string
+}
+
+// DecidesNothing reports a chunk carrying neither `results` nor an envelope-level
+// error. Such a chunk decides no item and leaves the reply incomplete; it is never
+// read as `"results": []`, which a hub sends for a complete reply of omissions.
+func (c *DecodedChunk) DecidesNothing() bool {
+	return c.Results == nil && c.Error == nil
+}
+
+// DecodeResponseChunk parses one chunk of a reply to the request identified by
+// reqNonce.
+//
+// It refuses only what makes the whole chunk unusable: bad JSON, a req_nonce that
+// is not the request's, or a plaintext over max(maxBytes, 65535) bytes. A result for
+// an id the request never sent is dropped and listed in AlienIDs, and the rest of
+// the chunk kept. An id answered twice is reported in DuplicateIDs, not fatal.
+// seq and total are returned as sent, unchecked: a position outside 1 to total
+// makes the reply incomplete, which only the caller holding every chunk can act on.
+// A `v` field, gone from the wire, is ignored like any unknown field.
+func DecodeResponseChunk(plaintext []byte, reqNonce string, requestedIDs []string, maxBytes int) (*DecodedChunk, error) {
+	limit := max(maxBytes, MaxNIP44Plaintext)
+	if len(plaintext) > limit {
+		return nil, fmt.Errorf("%w: %d bytes, limit %d", ErrEnvelopeTooLarge, len(plaintext), limit)
+	}
+	var r ResponseEnvelope
+	if err := json.Unmarshal(plaintext, &r); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrResponseMalformed, err)
+	}
+	if r.ReqNonce != reqNonce {
+		return nil, fmt.Errorf("%w: req_nonce %q", ErrResponseMismatch, r.ReqNonce)
+	}
+
+	known := make(map[string]struct{}, len(requestedIDs))
+	for _, id := range requestedIDs {
+		known[id] = struct{}{}
+	}
+	out := &DecodedChunk{ResponseEnvelope: &r}
+	if r.Results == nil {
+		return out, nil
+	}
+	kept := make([]Result, 0, len(r.Results))
+	count := make(map[string]int, len(r.Results))
+	for _, result := range r.Results {
+		if _, ok := known[result.ID]; !ok {
+			out.AlienIDs = append(out.AlienIDs, result.ID)
+			continue
+		}
+		count[result.ID]++
+		if count[result.ID] == 2 {
+			out.DuplicateIDs = append(out.DuplicateIDs, result.ID)
+		}
+		kept = append(kept, result)
+	}
+	r.Results = kept
+	return out, nil
+}
+
 // DeriveReplyKey derives the key a response is encrypted under, from the
 // request's own NIP-44 conversation key plus its reply_to tag.
 //
@@ -100,10 +201,12 @@ func (r ResponseEnvelope) EncodeResponse(limits Limits) ([]byte, error) {
 	if err := limits.Validate(); err != nil {
 		return nil, err
 	}
-	if r.Version != EnvelopeVersion {
-		return nil, fmt.Errorf("%w: %d", ErrEnvelopeVersion, r.Version)
-	}
-	if len(r.ReqNonce) != keyHexLen || !isLowerHex(r.ReqNonce) {
+	// A reply echoes the request's nonce as sent. Only an envelope-level refusal
+	// can answer a malformed one: NIP-CASH §Serving an Envelope E4 refuses an
+	// envelope whose nonce is not 64 lowercase hex with BAD_REQUEST, and that
+	// reply must still name the nonce the client sent.
+	refusal := r.Error != nil && len(r.Results) == 0
+	if (len(r.ReqNonce) != keyHexLen || !isLowerHex(r.ReqNonce)) && (!refusal || r.ReqNonce == "") {
 		return nil, fmt.Errorf("%w: req_nonce must be %d lowercase hex characters",
 			ErrResponseMalformed, keyHexLen)
 	}
@@ -125,7 +228,9 @@ func (r ResponseEnvelope) EncodeResponse(limits Limits) ([]byte, error) {
 	}
 
 	const padFieldOverhead = len(`,"pad":""`)
-	target, err := limits.PaddedSize(len(body) + padFieldOverhead)
+	// A reply pads to the Hub's bucket under NIP-44's ceiling, never to the
+	// request's max_bytes, which bounds requests only.
+	target, err := PaddedReplySize(len(body)+padFieldOverhead, limits.PadBucketBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -139,9 +244,9 @@ func (r ResponseEnvelope) EncodeResponse(limits Limits) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("transport: marshal padded response: %w", err)
 	}
-	if len(padded) > limits.MaxEnvelopeBytes {
-		return nil, fmt.Errorf("%w: %d bytes after padding, limit %d",
-			ErrEnvelopeTooLarge, len(padded), limits.MaxEnvelopeBytes)
+	if len(padded) > MaxNIP44Plaintext {
+		return nil, fmt.Errorf("%w: %d bytes after padding, ceiling %d",
+			ErrEnvelopeTooLarge, len(padded), MaxNIP44Plaintext)
 	}
 	return padded, nil
 }
@@ -149,28 +254,32 @@ func (r ResponseEnvelope) EncodeResponse(limits Limits) ([]byte, error) {
 // DecodeResponse parses a response and checks it answers the request identified by
 // reqNonce, with results referring only to ids that request actually contained.
 //
+// It is the strict reading of one reply event, kept for callers that hold a
+// single-event reply: anything DecodeResponseChunk would merely report (an alien
+// id, a duplicate id, an item with both a result and an error, a seq outside its
+// total) is refused here. A client collecting a chunked reply uses
+// DecodeResponseChunk instead, so one bad chunk never discards another's answers.
+//
 // requestedIDs is what closes a confusion vector: without it a hostile or buggy
 // hub could return results for ids the client never sent, and a client demuxing
 // by id would happily attribute them to something.
+//
+// limits.MaxEnvelopeBytes does not cap the reply: it bounds requests only. A
+// plaintext is refused as too large only past 65535 bytes, the same ceiling
+// EncodeResponse pads under.
 func DecodeResponse(plaintext []byte, reqNonce string, requestedIDs []string, limits Limits) (*ResponseEnvelope, error) {
 	if err := limits.Validate(); err != nil {
 		return nil, err
 	}
-	if len(plaintext) > limits.MaxEnvelopeBytes {
-		return nil, fmt.Errorf("%w: %d bytes, limit %d",
-			ErrEnvelopeTooLarge, len(plaintext), limits.MaxEnvelopeBytes)
+	// The reply's ceiling is NIP-44's 65535 bytes, not the request's max_bytes:
+	// a Hub pads each chunk against its own pad_bucket_bytes and 65535 (NIP-CASH
+	// §Envelopes, `pad`), exactly as EncodeResponse does, so a full reply may be
+	// larger than any request the Hub accepts. DecodeResponseChunk enforces it.
+	chunk, err := DecodeResponseChunk(plaintext, reqNonce, requestedIDs, limits.MaxEnvelopeBytes)
+	if err != nil {
+		return nil, err
 	}
-
-	var r ResponseEnvelope
-	if err := json.Unmarshal(plaintext, &r); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrResponseMalformed, err)
-	}
-	if r.Version != EnvelopeVersion {
-		return nil, fmt.Errorf("%w: %d", ErrEnvelopeVersion, r.Version)
-	}
-	if r.ReqNonce != reqNonce {
-		return nil, fmt.Errorf("%w: req_nonce %q", ErrResponseMismatch, r.ReqNonce)
-	}
+	r := chunk.ResponseEnvelope
 	// Tolerated on decode for the same reason it is filled in on encode: a hub that
 	// answers in one event and omits the pair is not malformed, just terse.
 	if r.Seq == 0 && r.Total == 0 {
@@ -180,26 +289,25 @@ func DecodeResponse(plaintext []byte, reqNonce string, requestedIDs []string, li
 		return nil, fmt.Errorf("%w: seq %d of %d is not a position in a reply",
 			ErrResponseMalformed, r.Seq, r.Total)
 	}
-
-	known := make(map[string]struct{}, len(requestedIDs))
-	for _, id := range requestedIDs {
-		known[id] = struct{}{}
+	if len(chunk.AlienIDs) > 0 {
+		return nil, fmt.Errorf("%w: %q", ErrUnknownItemID, chunk.AlienIDs[0])
 	}
-	seen := make(map[string]struct{}, len(r.Results))
+	if len(chunk.DuplicateIDs) > 0 {
+		return nil, fmt.Errorf("%w: duplicate result for %q", ErrResponseMalformed, chunk.DuplicateIDs[0])
+	}
 	for _, result := range r.Results {
-		if _, ok := known[result.ID]; !ok {
-			return nil, fmt.Errorf("%w: %q", ErrUnknownItemID, result.ID)
-		}
-		if _, dup := seen[result.ID]; dup {
-			return nil, fmt.Errorf("%w: duplicate result for %q", ErrResponseMalformed, result.ID)
-		}
-		seen[result.ID] = struct{}{}
-		if result.Result != nil && result.Error != nil {
+		if result.HasBoth() {
 			return nil, fmt.Errorf("%w: item %q carries both a result and an error",
 				ErrResponseMalformed, result.ID)
 		}
 	}
-	return &r, nil
+	return r, nil
+}
+
+// HasBoth reports a result that carries both a result body and an error, which no
+// reading can resolve. A JSON null body counts as none.
+func (r Result) HasBoth() bool {
+	return r.Error != nil && len(r.Result) > 0 && string(r.Result) != "null"
 }
 
 // Omitted reports the ids that were requested but not answered. A caller should

@@ -29,6 +29,10 @@ type TransferFromSourcesParams struct {
 	// anything moves.
 	InterimIdentity   nipcash.Target
 	InterimCredential nipcash.Credential // proves control of InterimIdentity afterward
+	// Journal and Device are where and as whom each call is written ahead
+	// (every step carries a request_id).
+	Journal Journal
+	Device  string
 }
 
 // TransferFromSourcesResult is TransferFromSources' outcome.
@@ -37,6 +41,9 @@ type TransferFromSourcesParams struct {
 type TransferFromSourcesResult struct {
 	ConsolidatedFirst *nipcash.CashConsolidateResult
 	Transfer          *nipcash.CashTransferResult
+	// Ordered is the local ordered mark of the bills built: set when every
+	// source was ordered (nipcash.Source.Ordered).
+	Ordered bool
 }
 
 // transferConsolidaterCloser is a transferConsolidater that can also be
@@ -57,9 +64,8 @@ type transferConsolidaterCloser interface {
 // the newly-consolidated wallet through the *original* client would
 // therefore bind the final transfer's proof to the wrong wallet pubkey
 // entirely, and the Hub would reject it (confirmed live: NOT_FOUND).
-// RekeyCashSlice never needs this — its own interim step is a
-// CashTransfer, which (per NIP-CASH's own rules) is always in-place for
-// a cash-mode source, so its Client binding never goes stale.
+// RekeyCashSlice never needs this: it sends nothing after its last
+// CashTransfer, and its consolidate names the interim wallet in its sources.
 type transferFromSourcesClient interface {
 	transferConsolidater
 	reconnect(ctx context.Context, walletToken string) (transferConsolidaterCloser, error)
@@ -67,7 +73,9 @@ type transferFromSourcesClient interface {
 
 // reconnect dials a fresh client bound to walletToken.
 func (c *Client) reconnect(ctx context.Context, walletToken string) (transferConsolidaterCloser, error) {
-	return Connect(ctx, walletToken)
+	// The same session options as c, so a WithPowBudget or other setting the
+	// caller chose carries over to the new wallet's client.
+	return Connect(ctx, walletToken, c.sessionOpts...)
 }
 
 // TransferFromSources transfers Amount to To, drawing from Sources. A
@@ -97,6 +105,12 @@ func (c *Client) TransferFromSources(ctx context.Context, p TransferFromSourcesP
 // no-network-testability reasoning, extended here with a reconnect step
 // a fake can assert on independently).
 func transferFromSources(ctx context.Context, c transferFromSourcesClient, p TransferFromSourcesParams) (*TransferFromSourcesResult, error) {
+	// Refused before the first call: a mixed consolidate would be refused
+	// RESTRICTED, and nothing must move first.
+	ordered, err := sourcesOrdered(p.Sources)
+	if err != nil {
+		return nil, err
+	}
 	if len(p.Sources) == 1 {
 		src := p.Sources[0]
 		result, err := c.CashTransfer(ctx, nipcash.CashTransferParams{
@@ -104,20 +118,20 @@ func transferFromSources(ctx context.Context, c transferFromSourcesClient, p Tra
 			To:            p.To,
 			CurrentAmount: src.Amount,
 			SplitAmount:   &p.Amount,
-		})
+		}, p.Journal, p.Device)
 		if err != nil {
 			return nil, err
 		}
-		return &TransferFromSourcesResult{Transfer: result}, nil
+		return &TransferFromSourcesResult{Transfer: result, Ordered: ordered}, nil
 	}
 
 	// The call is authorized by the first source's own credential: the caller proves
 	// control of every source individually inside Params, and any one of them is
 	// equally a proof that this caller may make the call.
-	consolidateResult, err := c.CashConsolidate(ctx, p.Sources[0].Credential, nipcash.CashConsolidateParams{
+	consolidateResult, err := c.CashConsolidate(ctx, nipcash.CashConsolidateParams{
 		Sources: p.Sources,
 		To:      p.InterimIdentity,
-	})
+	}, p.Journal, p.Device)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +147,7 @@ func transferFromSources(ctx context.Context, c transferFromSourcesClient, p Tra
 		To:            p.To,
 		CurrentAmount: consolidateResult.AmountMillis,
 		SplitAmount:   &p.Amount,
-	})
+	}, p.Journal, p.Device)
 	if err != nil {
 		return nil, &PartialProgressError{Consolidated: consolidateResult, Cause: err}
 	}
@@ -151,5 +165,5 @@ func transferFromSources(ctx context.Context, c transferFromSourcesClient, p Tra
 		transferResult.NewWalletPubkey = consolidateResult.NewWalletPubkey
 	}
 
-	return &TransferFromSourcesResult{ConsolidatedFirst: consolidateResult, Transfer: transferResult}, nil
+	return &TransferFromSourcesResult{ConsolidatedFirst: consolidateResult, Transfer: transferResult, Ordered: ordered}, nil
 }

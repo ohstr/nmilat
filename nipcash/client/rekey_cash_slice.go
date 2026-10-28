@@ -16,6 +16,9 @@ import (
 // CashConsolidate then rejected it.
 var ErrInterimIdentityNotPubkey = errors.New("nipcash/client: RekeyCashSlice requires InterimIdentity to be a pubkey target")
 
+// errSpinOffNoPubkey is a spin-off reply carrying a token but no wallet pubkey.
+var errSpinOffNoPubkey = errors.New("nipcash/client: the spin-off reply names no new wallet pubkey")
+
 // ErrNewTargetNotCash refuses a re-key with no caller-supplied cash target.
 //
 // Deliberately an error rather than minting one: the target carries the only copy
@@ -73,6 +76,10 @@ type RekeyCashSliceParams struct {
 	// the secret lives in. A nil is refused rather than silently minted, so the
 	// requirement cannot be missed by omission.
 	NewTarget *nipcash.CashTarget
+	// Journal and Device are where and as whom each call is written ahead
+	// (every step carries a request_id).
+	Journal Journal
+	Device  string
 }
 
 // RekeyCashSliceResult is RekeyCashSlice's outcome. NewToken == ""
@@ -84,17 +91,24 @@ type RekeyCashSliceResult struct {
 	NewWalletPubkey string
 	NewToken        string
 	AmountMillis    uint64
+	// Ordered is the local ordered mark of the re-keyed bill: CashSlice's own
+	// mark, or, after a consolidate, set when every source was ordered.
+	Ordered bool
 }
 
 // RekeyCashSlice moves CashSlice out of shared cash-mode custody: its
 // current secret is presented once, consumed, and replaced with a fresh
 // secret only the caller knows (returned as NewSecret — the only copy,
-// persist it immediately). With ConsolidateWith empty, this is a single
-// in-place CashTransfer (cash-mode source ⇒ single-recipient-by-construction,
-// so it's always in-place — NewToken stays ""). With ConsolidateWith
-// non-empty, CashSlice first reassigns onto InterimIdentity (also
-// always in-place), then consolidates alongside ConsolidateWith into a
-// freshly-minted cash-mode wallet (NewToken is then non-empty).
+// persist it immediately). With ConsolidateWith empty, this is a single full
+// CashTransfer. The Hub keeps it in place only when the wallet has only ever had
+// one recipient (NIP-CASH §Which outcome a request produces); any other wallet
+// spins the slice off into one new wallet, whose pubkey and token come back as
+// NewWalletPubkey and NewToken. NewToken stays "" only for an in-place reply.
+// With ConsolidateWith non-empty, CashSlice first reassigns onto
+// InterimIdentity (in place, or spun off when that identity already holds a
+// slice on the wallet; the consolidate then names whichever wallet holds it),
+// then consolidates alongside ConsolidateWith into a freshly-minted cash-mode
+// wallet (NewToken is then non-empty).
 //
 // If the interim reassignment succeeds but the following consolidate
 // then fails, returns *PartialProgressError{Transferred: <the interim
@@ -112,7 +126,7 @@ func (c *Client) RekeyCashSlice(ctx context.Context, p RekeyCashSliceParams) (*R
 // what a test calls with a hand-built fake to exercise the branching
 // (single vs. consolidated path, partial-failure error) without a
 // network.
-func rekeyCashSlice(ctx context.Context, c transferConsolidater, p RekeyCashSliceParams) (*RekeyCashSliceResult, error) {
+func rekeyCashSlice(ctx context.Context, c transferFromSourcesClient, p RekeyCashSliceParams) (*RekeyCashSliceResult, error) {
 	// Refused, not defaulted. Minting one here is what destroyed the secret on an
 	// ambiguous failure, so a caller that forgot to supply one must be told rather
 	// than quietly given the old behaviour back.
@@ -120,21 +134,42 @@ func rekeyCashSlice(ctx context.Context, c transferConsolidater, p RekeyCashSlic
 		return nil, ErrNewTargetNotCash
 	}
 	bt := p.NewTarget
+	// Refused before the interim transfer: a mixed consolidate would be
+	// refused RESTRICTED after CashSlice's secret was already consumed.
+	ordered, err := sourcesOrdered(append([]nipcash.Source{p.CashSlice}, p.ConsolidateWith...))
+	if err != nil {
+		return nil, err
+	}
 
 	if len(p.ConsolidateWith) == 0 {
 		result, err := c.CashTransfer(ctx, nipcash.CashTransferParams{
 			Credential:    p.CashSlice.Credential,
 			To:            bt,
 			CurrentAmount: p.CashSlice.Amount,
-		})
+		}, p.Journal, p.Device)
 		if err != nil {
 			return nil, err
 		}
-		return &RekeyCashSliceResult{
+		out := &RekeyCashSliceResult{
 			NewSecret:       bt.Secret(),
 			NewWalletPubkey: p.CashSlice.WalletPubkey,
 			AmountMillis:    result.AmountMillis,
-		}, nil
+			Ordered:         ordered,
+		}
+		// A spin-off: the re-keyed bill is a new wallet, and its token is the
+		// only way to reach it. Dropping it would strand the funds.
+		if result.NewWalletPubkey != "" || result.NewWalletToken != "" || result.NewWalletTombstone != nil {
+			tok, err := result.RecipientToken("")
+			if err != nil {
+				return nil, err
+			}
+			if result.NewWalletPubkey == "" {
+				return nil, errSpinOffNoPubkey
+			}
+			out.NewWalletPubkey = result.NewWalletPubkey
+			out.NewToken = tok
+		}
+		return out, nil
 	}
 
 	if !nipcash.IsPubkeyTarget(p.InterimIdentity) {
@@ -145,23 +180,46 @@ func rekeyCashSlice(ctx context.Context, c transferConsolidater, p RekeyCashSlic
 		Credential:    p.CashSlice.Credential,
 		To:            p.InterimIdentity,
 		CurrentAmount: p.CashSlice.Amount,
-	})
+	}, p.Journal, p.Device)
 	if err != nil {
 		return nil, err
 	}
 
+	// The interim transfer lands in place unless InterimIdentity already holds a
+	// slice on this wallet, in which case it spins off: the consolidate must
+	// then name the new wallet, and is sent over that wallet's connection.
+	interimWallet := p.CashSlice.WalletPubkey
+	var via transferConsolidater = c
+	if interimResult.NewWalletPubkey != "" || interimResult.NewWalletToken != "" || interimResult.NewWalletTombstone != nil {
+		tok, err := interimResult.RecipientToken("")
+		if err != nil {
+			return nil, &PartialProgressError{Transferred: interimResult, Cause: err}
+		}
+		if interimResult.NewWalletPubkey == "" {
+			return nil, &PartialProgressError{Transferred: interimResult, Cause: errSpinOffNoPubkey}
+		}
+		interimWallet = interimResult.NewWalletPubkey
+		nc, err := c.reconnect(ctx, tok)
+		if err != nil {
+			return nil, &PartialProgressError{Transferred: interimResult, Cause: err}
+		}
+		defer nc.Close()
+		via = nc
+	}
+
 	thisSource := nipcash.Source{
-		WalletPubkey: p.CashSlice.WalletPubkey,
+		WalletPubkey: interimWallet,
 		Amount:       p.CashSlice.Amount,
 		Credential:   p.InterimCredential,
+		Ordered:      p.CashSlice.Ordered,
 	}
 	sources := append([]nipcash.Source{thisSource}, p.ConsolidateWith...)
 	// Authorized by this slice's own interim credential — the same one proving
 	// control of the first source below.
-	result, err := c.CashConsolidate(ctx, p.InterimCredential, nipcash.CashConsolidateParams{
+	result, err := via.CashConsolidate(ctx, nipcash.CashConsolidateParams{
 		Sources: sources,
 		To:      bt,
-	})
+	}, p.Journal, p.Device)
 	if err != nil {
 		return nil, &PartialProgressError{Transferred: interimResult, Cause: err}
 	}
@@ -171,5 +229,6 @@ func rekeyCashSlice(ctx context.Context, c transferConsolidater, p RekeyCashSlic
 		NewWalletPubkey: result.NewWalletPubkey,
 		NewToken:        result.NewWalletToken,
 		AmountMillis:    result.AmountMillis,
+		Ordered:         ordered,
 	}, nil
 }

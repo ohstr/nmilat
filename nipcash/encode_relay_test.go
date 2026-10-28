@@ -1,29 +1,32 @@
 package nipcash
 
 import (
+	"errors"
 	"slices"
 	"testing"
 )
 
-// NIP-CASH §The Cash Token and §The Cash Hub Connection: each relay entry MUST be
-// non-empty. A blank entry beside a real one is dropped at encode, not written.
-func TestEncoders_SkipBlankRelayEntries(t *testing.T) {
+// NIP-CASH §Relay Hints Are Mandatory: an encoder MUST NOT emit an empty or
+// non-ASCII hint. A cash token refuses one, since relay_hash covers its hints as
+// written; a connection string skips a blank one and signs what it writes.
+func TestEncoders_BlankRelayEntries(t *testing.T) {
 	relays := []string{"", "wss://r.example", "  "}
-	want := []string{"wss://r.example"}
-
-	tok, err := Encode(Token{HRP: "lokicash", WalletPubkey: randomKeyHex(t), Secret: randomKeyHex(t), RelayURLs: relays})
-	if err != nil {
-		t.Fatalf("Encode: %v", err)
+	tok := withTestProvenance(Token{HRP: "lokicash", WalletPubkey: randomKeyHex(t), Secret: randomKeyHex(t), RelayURLs: relays})
+	if _, err := Encode(tok); !errors.Is(err, ErrBlankRelayHint) {
+		t.Fatalf("Encode with blank hints: %v, want ErrBlankRelayHint", err)
 	}
-	decoded, err := Decode(tok)
-	if err != nil {
-		t.Fatalf("Decode: %v", err)
-	}
-	if !slices.Equal(decoded.RelayURLs, want) {
-		t.Errorf("cash token relays = %q, want %q", decoded.RelayURLs, want)
+	tok.RelayURLs = []string{"wss://r.example", "wss://rélay"}
+	if _, err := Encode(tok); !errors.Is(err, ErrNonASCIIRelayHint) {
+		t.Fatalf("Encode with a non-ASCII hint: %v", err)
 	}
 
-	conn, err := EncodeCashHubConnection(CashHubConnection{WalletPubkey: randomKeyHex(t), Secret: randomKeyHex(t), RelayURLs: relays})
+	sign, _ := LocalChainSigner(key1, "bitcoin")
+	c, err := SignCashHubConnection(CashHubConnection{Pubkey: randomKeyHex(t), Secret: randomKeyHex(t), Relays: relays,
+		HubIdentity: kchIdentity, Chain: "bitcoin"}, sign, kchIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := EncodeCashHubConnection(c)
 	if err != nil {
 		t.Fatalf("EncodeCashHubConnection: %v", err)
 	}
@@ -31,7 +34,40 @@ func TestEncoders_SkipBlankRelayEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecodeCashHubConnection: %v", err)
 	}
-	if !slices.Equal(hub.RelayURLs, want) {
-		t.Errorf("cashhub relays = %q, want %q", hub.RelayURLs, want)
+	if want := []string{"wss://r.example"}; !slices.Equal(hub.Relays, want) {
+		t.Errorf("cashhub relays = %q, want %q", hub.Relays, want)
+	}
+	if err := hub.Verify(); err != nil {
+		t.Errorf("the signature does not cover the hints written: %v", err)
 	}
 }
+
+// withTestProvenance gives a token the provenance fields Encode requires: a
+// well-formed but meaningless signature, for tests about the codec only.
+func withTestProvenance(t Token) Token {
+	if t.MintSignature == nil {
+		t.MintSignature = make([]byte, mintSigLen)
+		t.MintSignature[0] = 31
+	}
+	if t.AttestedAmountMillis == nil {
+		amt := uint64(1000)
+		t.AttestedAmountMillis = &amt
+	}
+	if t.Scheme == SchemeNone {
+		t.Scheme = SchemeMintV1
+	}
+	return t
+}
+
+// mustCashTarget is a fresh cash target, failing the test on a CSPRNG error.
+func mustCashTarget(t *testing.T) *CashTarget {
+	t.Helper()
+	c, err := NewCashTarget()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// testRID is a well-formed request_id for building requests in tests.
+const testRID = "00112233445566778899aabbccddeeff"

@@ -9,6 +9,7 @@ import (
 	"github.com/ohstr/nmilat/nipcash/transport"
 )
 
+// T11-31.
 // NIP-CASH §Batching Across Bills: a Hub answers a bill it does not hold with
 // silence, so a client SHOULD refuse locally to send a bill minted by another node.
 func TestStatusMany_RefusesABillFromAnotherNode(t *testing.T) {

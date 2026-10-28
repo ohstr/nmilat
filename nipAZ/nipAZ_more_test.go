@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/ohstr/nmilat/nipIC"
 	"strings"
 	"testing"
 
@@ -40,17 +41,17 @@ func signedZapRequestEvent(t *testing.T, kind int, extraTags [][]string) *nip01.
 
 func TestValidateAltZapRequest_Success(t *testing.T) {
 	ev := signedZapRequestEvent(t, KindAltZapRequest, nil)
-	if err := ValidateAltZapRequest(ev, 0); err != nil {
+	if err := legacyValidateRequest(ev, 0); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if err := ValidateAltZapRequest(ev, 1000); err != nil {
+	if err := legacyValidateRequest(ev, 1000); err != nil {
 		t.Fatalf("unexpected error with matching expected amount: %v", err)
 	}
 }
 
 func TestValidateAltZapRequest_AmountMismatch(t *testing.T) {
 	ev := signedZapRequestEvent(t, KindAltZapRequest, nil)
-	if err := ValidateAltZapRequest(ev, 9999); err == nil {
+	if err := legacyValidateRequest(ev, 9999); err == nil {
 		t.Fatal("expected error for amount mismatch")
 	}
 }
@@ -59,7 +60,7 @@ func TestValidateAltZapRequest_InvalidSignature(t *testing.T) {
 	ev := signedZapRequestEvent(t, KindAltZapRequest, nil)
 	ev.Content = "tampered after signing"
 
-	if err := ValidateAltZapRequest(ev, 0); err == nil {
+	if err := legacyValidateRequest(ev, 0); err == nil {
 		t.Fatal("expected error for invalid signature")
 	}
 }
@@ -72,7 +73,7 @@ func TestNewAltZapRequest(t *testing.T) {
 	params := AltZapRequestParams{
 		PrivateKey:  zapsTestPrivKey,
 		Chain:       "flokicoin",
-		Recipient:   Pubkey("recipient1"),
+		Recipient:   Pubkey(testHex("recipient1")),
 		Lnurl:       validLnurl,
 		AmountMloki: 5000,
 		Relays:      relays,
@@ -81,7 +82,7 @@ func TestNewAltZapRequest(t *testing.T) {
 
 	// The signer is a 9520's sender, so a separate sender is refused.
 	withSender := params
-	withSender.Sender = Connection("discord", "sender-external-id")
+	withSender.Sender = attested("discord", "1001")
 	if _, err := NewAltZapRequest(withSender); !errors.Is(err, ErrSenderTagNotAllowed) {
 		t.Fatalf("Sender on a 9520: got %v, want ErrSenderTagNotAllowed", err)
 	}
@@ -117,7 +118,7 @@ func TestNewAltZapRequest_ContentRoundTrips(t *testing.T) {
 	ev, err := NewAltZapRequest(AltZapRequestParams{
 		PrivateKey:  zapsTestPrivKey,
 		Chain:       "flokicoin",
-		Recipient:   Pubkey("recipient1"),
+		Recipient:   Pubkey(testHex("recipient1")),
 		Lnurl:       validTestLnurl,
 		AmountMloki: 5000,
 		Relays:      []string{"wss://relay.example.com"},
@@ -135,7 +136,7 @@ func TestNewAltZapRequest_InvalidPrivateKeyErrors(t *testing.T) {
 	_, err := NewAltZapRequest(AltZapRequestParams{
 		PrivateKey:  "not-a-valid-key",
 		Chain:       "flokicoin",
-		Recipient:   Pubkey("recipient1"),
+		Recipient:   Pubkey(testHex("recipient1")),
 		Lnurl:       validTestLnurl,
 		AmountMloki: 5000,
 		Relays:      []string{"wss://relay.example.com"},
@@ -148,11 +149,11 @@ func TestNewAltZapRequest_InvalidPrivateKeyErrors(t *testing.T) {
 func TestNewAltZapOnBehalfRequest(t *testing.T) {
 	relays := []string{"wss://relay.example.com"}
 	ev, err := NewAltZapOnBehalfRequest(
-		Connection("discord", "sender-external-id"),
+		attested("discord", "1001"),
 		AltZapRequestParams{
 			PrivateKey:  zapsTestPrivKey,
 			Chain:       "flokicoin",
-			Recipient:   Connection("discord", "recipient-external-id"),
+			Recipient:   attested("discord", "1002"),
 			Lnurl:       validTestLnurl,
 			AmountMloki: 5000,
 			Relays:      relays,
@@ -165,7 +166,7 @@ func TestNewAltZapOnBehalfRequest(t *testing.T) {
 	if ev.Kind != KindAltZapOnBehalfRequest {
 		t.Errorf("expected kind %d, got %d", KindAltZapOnBehalfRequest, ev.Kind)
 	}
-	if err := ValidateAltZapRequest(ev, 5000); err != nil {
+	if err := legacyValidateRequest(ev, 5000); err != nil {
 		t.Fatalf("on-behalf request does not validate (signature must cover kind 9523): %v", err)
 	}
 
@@ -187,15 +188,15 @@ func TestNewAltZapOnBehalfRequest(t *testing.T) {
 // really does parse with a non-zero sender regardless of what's in Params.
 func TestNewAltZapOnBehalfRequest_SenderParamIsIgnoredInFavorOfPositionalArg(t *testing.T) {
 	ev, err := NewAltZapOnBehalfRequest(
-		Pubkey("real-sender"),
+		Pubkey(testHex("real-sender")),
 		AltZapRequestParams{
 			PrivateKey:  zapsTestPrivKey,
 			Chain:       "flokicoin",
-			Recipient:   Pubkey("recipient1"),
+			Recipient:   Pubkey(testHex("recipient1")),
 			Lnurl:       validTestLnurl,
 			AmountMloki: 5000,
 			Relays:      []string{"wss://relay.example.com"},
-			Sender:      Pubkey("this-should-be-overridden"),
+			Sender:      Pubkey(testHex("this-should-be-overridden")),
 		},
 	)
 	if err != nil {
@@ -205,7 +206,7 @@ func TestNewAltZapOnBehalfRequest_SenderParamIsIgnoredInFavorOfPositionalArg(t *
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if req.Sender.Value() != "real-sender" {
+	if req.Sender.Value() != testHex("real-sender") {
 		t.Errorf("expected the positional sender argument to win, got %q", req.Sender.Value())
 	}
 }
@@ -229,7 +230,7 @@ func TestNewAltZapReceipt_RecipientNeverOverriddenByDescription(t *testing.T) {
 	reqEvent := &nip01.Event{
 		Kind: KindAltZapRequest,
 		Tags: [][]string{
-			{"p", "some-other-unverified-recipient", "discord", "unverified-handle"},
+			{"p", testHex("some-other-unverified-recipient"), "discord"},
 			{"amount", "1000"},
 			{"lnurl", validTestLnurl},
 			{"chain", "flokicoin"},
@@ -244,8 +245,13 @@ func TestNewAltZapReceipt_RecipientNeverOverriddenByDescription(t *testing.T) {
 		t.Fatalf("failed to marshal embedded request: %v", err)
 	}
 
-	preimage := "abc123"
-	verifiedRecipient := Connection("discord", "server-verified-id").WithHandle("server-verified-handle")
+	nip57.DecodeBolt11 = func(string) (*nip57.Invoice, error) {
+		return &nip57.Invoice{Currency: "fc", PaymentHash: testPaymentHash, AmountMloki: 1000, DescriptionHash: DescriptionHash(string(descBytes))}, nil
+	}
+	preimage := testPreimage
+	verifiedRecipient := attested("discord", "1003").WithHandle("server-verified-handle")
+	// Receipt rule 6: a p that differs from the embedded request's is
+	// refused, never silently replaced by either side.
 	receipt, err := NewAltZapReceipt(AltZapReceiptParams{
 		PrivateKey:  zapsTestPrivKey,
 		Chain:       "flokicoin",
@@ -254,19 +260,8 @@ func TestNewAltZapReceipt_RecipientNeverOverriddenByDescription(t *testing.T) {
 		Description: string(descBytes),
 		Preimage:    &preimage,
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	parsed, err := ParseAltZapReceipt(receipt)
-	if err != nil {
-		t.Fatalf("unexpected error parsing constructed receipt: %v", err)
-	}
-	if parsed.Recipient.Value() != verifiedRecipient.Value() {
-		t.Errorf("expected server-verified recipient to win, got value %q", parsed.Recipient.Value())
-	}
-	if parsed.Recipient.Handle() != "server-verified-handle" {
-		t.Errorf("expected server-verified handle to win, got %q", parsed.Recipient.Handle())
+	if !errors.Is(err, nip57.ErrRecipientMismatch) || receipt != nil {
+		t.Fatalf("got %v, want ErrRecipientMismatch and nothing signed", err)
 	}
 }
 
@@ -279,11 +274,11 @@ func TestNewAltZapReceipt_HandleRoundTrips(t *testing.T) {
 		return &nip57.Invoice{Currency: "fc", PaymentHash: testPaymentHash, AmountMloki: 1000}, nil
 	}
 
-	preimage := "abc123"
+	preimage := testPreimage
 	receipt, err := NewAltZapReceipt(AltZapReceiptParams{
 		PrivateKey: zapsTestPrivKey,
 		Chain:      "flokicoin",
-		Recipient:  Connection("discord", "id1").WithHandle("cool_username"),
+		Recipient:  attested("discord", "1004").WithHandle("cool_username"),
 		Bolt11:     "lnfc-invoice",
 		Preimage:   &preimage,
 	})
@@ -311,13 +306,14 @@ func TestNewAltZapReceipt_ProxySenderWithResolvedSender(t *testing.T) {
 		return &nip57.Invoice{Currency: "fc", PaymentHash: testPaymentHash, AmountMloki: 1000}, nil
 	}
 
-	preimage := "preimage_hex"
+	preimage := testPreimage
 	receipt, err := NewAltZapReceipt(AltZapReceiptParams{
 		PrivateKey:           zapsTestPrivKey,
 		Chain:                "flokicoin",
-		Recipient:            Pubkey("recipientpubkey"),
-		Sender:               Connection("discord", "someconnectionkey-external-id").WithHandle(""),
+		Recipient:            Pubkey(testHex("recipientpubkey")),
+		Sender:               attested("discord", "1005").WithHandle(""),
 		ResolvedSenderPubkey: "actualsenderpubkey",
+		LinkAuthorized:       true,
 		Bolt11:               "lnbc1...",
 		Preimage:             &preimage,
 	})
@@ -347,7 +343,7 @@ func TestNewAltZapRequest_NeverEmitsHandleOnRequests(t *testing.T) {
 	ev, err := NewAltZapRequest(AltZapRequestParams{
 		PrivateKey:  zapsTestPrivKey,
 		Chain:       "flokicoin",
-		Recipient:   Connection("discord", "id1").WithHandle("should-not-appear"),
+		Recipient:   attested("discord", "1004").WithHandle("should-not-appear"),
 		Lnurl:       validTestLnurl,
 		AmountMloki: 5000,
 		Relays:      []string{"wss://relay.example.com"},
@@ -381,14 +377,14 @@ func TestValidateAltZapReceipt_WithoutRequest(t *testing.T) {
 		return &nip57.Invoice{Currency: "fc", PaymentHash: testPaymentHash, AmountMloki: 1000}, nil
 	}
 
-	if err := ValidateAltZapReceipt(ev); err != nil {
+	if err := legacyValidateReceipt(ev); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	nip57.DecodeBolt11 = func(bolt11 string) (*nip57.Invoice, error) {
 		return &nip57.Invoice{Currency: "fc", PaymentHash: testPaymentHash, AmountMloki: 0}, nil
 	}
-	if err := ValidateAltZapReceipt(ev); err == nil {
+	if err := legacyValidateReceipt(ev); err == nil {
 		t.Fatal("expected error for zero/invalid invoice amount on a receipt without a request")
 	}
 }
@@ -424,7 +420,7 @@ func TestValidateAltZapReceipt_WithEmbeddedRequest(t *testing.T) {
 		return &nip57.Invoice{Currency: "fc", PaymentHash: testPaymentHash, AmountMloki: 1000, DescriptionHash: descHashHex}, nil
 	}
 
-	if err := ValidateAltZapReceipt(receipt); err != nil {
+	if err := legacyValidateReceipt(receipt); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -432,7 +428,7 @@ func TestValidateAltZapReceipt_WithEmbeddedRequest(t *testing.T) {
 	nip57.DecodeBolt11 = func(bolt11 string) (*nip57.Invoice, error) {
 		return &nip57.Invoice{Currency: "fc", PaymentHash: testPaymentHash, AmountMloki: 42, DescriptionHash: descHashHex}, nil
 	}
-	if err := ValidateAltZapReceipt(receipt); err == nil {
+	if err := legacyValidateReceipt(receipt); err == nil {
 		t.Fatal("expected amount mismatch error")
 	}
 
@@ -440,7 +436,7 @@ func TestValidateAltZapReceipt_WithEmbeddedRequest(t *testing.T) {
 	nip57.DecodeBolt11 = func(bolt11 string) (*nip57.Invoice, error) {
 		return &nip57.Invoice{Currency: "fc", PaymentHash: testPaymentHash, AmountMloki: 1000, DescriptionHash: "wrong"}, nil
 	}
-	if err := ValidateAltZapReceipt(receipt); err == nil {
+	if err := legacyValidateReceipt(receipt); err == nil {
 		t.Fatal("expected description hash mismatch error")
 	}
 }
@@ -461,14 +457,14 @@ func TestIdentity_PubkeyIsNotZero(t *testing.T) {
 }
 
 func TestIdentity_ConnectionComputesConnectionKeyInternally(t *testing.T) {
-	id := Connection("discord", "123456")
+	id := attested("discord", "123456")
 	if len(id.Value()) != 64 {
 		t.Errorf("expected a 64-hex-char ConnectionKey, got %d chars: %q", len(id.Value()), id.Value())
 	}
-	if id.Value() != Connection("discord", "123456").Value() {
+	if id.Value() != attested("discord", "123456").Value() {
 		t.Error("expected Connection() to be deterministic for the same (platform, externalID) pair")
 	}
-	if id.Value() == Connection("discord", "654321").Value() {
+	if id.Value() == attested("discord", "654321").Value() {
 		t.Error("expected different externalIDs to produce different ConnectionKeys")
 	}
 	if id.WebIdentity() != "discord" {
@@ -482,7 +478,7 @@ func TestIdentity_ConnectionComputesConnectionKeyInternally(t *testing.T) {
 // several layers up) must not have to pay for — or risk diverging from — a
 // second hash computation.
 func TestIdentity_ResolvedConnectionDoesNotRehash(t *testing.T) {
-	key := ConnectionKey(Connection("discord", "123456").Value())
+	key := ConnectionKey(attested("discord", "123456").Value())
 	id := ResolvedConnection(key, "discord")
 	if id.Value() != key.String() {
 		t.Errorf("expected ResolvedConnection to use the given key verbatim, got %q want %q", id.Value(), key.String())
@@ -492,13 +488,13 @@ func TestIdentity_ResolvedConnectionDoesNotRehash(t *testing.T) {
 	}
 	// Cross-check against the hashing constructor: both paths must agree for
 	// the same logical (platform, externalID) identity.
-	if id.Value() != Connection("discord", "123456").Value() {
+	if id.Value() != attested("discord", "123456").Value() {
 		t.Error("expected ResolvedConnection(NewConnectionKey(...)) to equal Connection(...) for the same inputs")
 	}
 }
 
 func TestIdentity_ResolvedConnectionSupportsHandle(t *testing.T) {
-	key := ConnectionKey(Connection("discord", "123456").Value())
+	key := ConnectionKey(attested("discord", "123456").Value())
 	id := ResolvedConnection(key, "discord").WithHandle("cool_username")
 	if id.Handle() != "cool_username" {
 		t.Errorf("expected handle to round-trip, got %q", id.Handle())
@@ -549,4 +545,20 @@ func TestIdentity_WithHandleIsImmutable(t *testing.T) {
 	if withHandle.Handle() != "alice" {
 		t.Errorf("expected handle 'alice', got %q", withHandle.Handle())
 	}
+}
+
+// attested is the Identity of an IA-attested user id, its key taken byte for
+// byte as a sender takes it from a 35522.
+// testHex is a stable 64-lowercase-hex stand-in for a named pubkey.
+func testHex(name string) string {
+	sum := sha256.Sum256([]byte(name))
+	return hex.EncodeToString(sum[:])
+}
+
+func attested(platform WebIdentity, userID string) Identity {
+	k, err := nipIC.ConnectionKeyFromAttested(platform, userID)
+	if err != nil {
+		panic(err)
+	}
+	return ResolvedConnection(k, platform)
 }

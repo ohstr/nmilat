@@ -285,9 +285,6 @@ func FuzzDecodeResponse(f *testing.F) {
 		if len(data) > limits.MaxEnvelopeBytes {
 			t.Fatalf("accepted %d bytes over the %d limit", len(data), limits.MaxEnvelopeBytes)
 		}
-		if decoded.Version != EnvelopeVersion {
-			t.Fatalf("accepted version %d", decoded.Version)
-		}
 		// The reply is bound to THIS request. Accepting another's is how a hostile
 		// relay replays one envelope's answer as another's.
 		if decoded.ReqNonce != reqNonce {
@@ -337,4 +334,41 @@ func FuzzDecodeResponse(f *testing.F) {
 			t.Fatalf("%d omitted + %d answered != %d requested", len(omitted), len(seen), len(requestedIDs))
 		}
 	})
+}
+
+// A Hub pads a reply against its own pad_bucket_bytes and 65535, never the
+// request's max_bytes (NIP-CASH §Envelopes, `pad`), so a reply EncodeResponse
+// accepts may be larger than max_bytes. DecodeResponse must read it with the same
+// limits; only a plaintext past 65535 bytes is too large.
+func TestResponse_LargerThanMaxBytesStillDecodes(t *testing.T) {
+	limits := DefaultLimits()
+	limits.MaxEnvelopeBytes = 2 * limits.PadBucketBytes
+	limits.MaxConsolidateSources = 2
+	if err := limits.Validate(); err != nil {
+		t.Fatalf("limits: %v", err)
+	}
+	nonce := strings.Repeat("cd", 32)
+	big := `{"note":"` + strings.Repeat("x", 3*limits.MaxEnvelopeBytes) + `"}`
+	resp := testResponse(t, nonce, Result{ID: "1", ResultType: "cash_status", Result: json.RawMessage(big)})
+
+	plaintext, err := resp.EncodeResponse(limits)
+	if err != nil {
+		t.Fatalf("EncodeResponse: %v", err)
+	}
+	if len(plaintext) <= limits.MaxEnvelopeBytes {
+		t.Fatalf("reply is %d bytes; the test needs one past max_bytes %d", len(plaintext), limits.MaxEnvelopeBytes)
+	}
+	decoded, err := DecodeResponse(plaintext, nonce, []string{"1"}, limits)
+	if err != nil {
+		t.Fatalf("DecodeResponse refused a %d-byte reply EncodeResponse produced under the same limits: %v",
+			len(plaintext), err)
+	}
+	if len(decoded.Results) != 1 || string(decoded.Results[0].Result) != big {
+		t.Errorf("the result did not survive the round trip")
+	}
+
+	over := `{"req_nonce":"` + nonce + `","results":[],"pad":"` + strings.Repeat("0", MaxNIP44Plaintext) + `"}`
+	if _, err := DecodeResponse([]byte(over), nonce, nil, limits); !errors.Is(err, ErrEnvelopeTooLarge) {
+		t.Errorf("a reply past 65535 bytes: %v, want ErrEnvelopeTooLarge", err)
+	}
 }

@@ -2,14 +2,15 @@ package nipcash
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 )
 
 func TestCashConsolidateParams_Request_TooFewSources(t *testing.T) {
 	privKeyHex, _ := generateTestKeypair(t)
-	p := CashConsolidateParams{
+	p := CashConsolidateParams{RequestID: testRID,
 		Sources: []Source{From(randomKeyHex(t), 1000, BySigning(privKeyHex))},
-		To:      Pubkey("merged"),
+		To:      Pubkey("dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"),
 	}
 	if _, err := p.Request(); err != ErrTooFewSources {
 		t.Fatalf("got %v, want ErrTooFewSources", err)
@@ -17,12 +18,12 @@ func TestCashConsolidateParams_Request_TooFewSources(t *testing.T) {
 }
 
 func TestCashConsolidateParams_Request_CashSourceRejected(t *testing.T) {
-	p := CashConsolidateParams{
+	p := CashConsolidateParams{RequestID: testRID,
 		Sources: []Source{
 			From(randomKeyHex(t), 1000, BySecret("s1")),
 			From(randomKeyHex(t), 1000, BySecret("s2")),
 		},
-		To: Pubkey("merged"),
+		To: Pubkey("dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"),
 	}
 	if _, err := p.Request(); err != ErrCashSource {
 		t.Fatalf("got %v, want ErrCashSource", err)
@@ -31,7 +32,7 @@ func TestCashConsolidateParams_Request_CashSourceRejected(t *testing.T) {
 
 func TestCashConsolidateParams_Request_NilTargetRejected(t *testing.T) {
 	privKeyHex, _ := generateTestKeypair(t)
-	p := CashConsolidateParams{
+	p := CashConsolidateParams{RequestID: testRID,
 		Sources: []Source{
 			From(randomKeyHex(t), 1000, BySigning(privKeyHex)),
 			From(randomKeyHex(t), 1000, BySigning(privKeyHex)),
@@ -45,8 +46,8 @@ func TestCashConsolidateParams_Request_NilTargetRejected(t *testing.T) {
 
 func TestCashConsolidateParams_Request_CashTargetAccepted(t *testing.T) {
 	privKeyHex, _ := generateTestKeypair(t)
-	bt := NewCashTarget()
-	p := CashConsolidateParams{
+	bt := mustCashTarget(t)
+	p := CashConsolidateParams{RequestID: testRID,
 		Sources: []Source{
 			From(randomKeyHex(t), 1000, BySigning(privKeyHex)),
 			From(randomKeyHex(t), 1000, BySigning(privKeyHex)),
@@ -64,12 +65,12 @@ func TestCashConsolidateParams_Request_CashTargetAccepted(t *testing.T) {
 
 func TestCashConsolidateParams_Request_ConnectionKeyTargetAccepted(t *testing.T) {
 	privKeyHex, _ := generateTestKeypair(t)
-	p := CashConsolidateParams{
+	p := CashConsolidateParams{RequestID: testRID,
 		Sources: []Source{
 			From(randomKeyHex(t), 1000, BySigning(privKeyHex)),
 			From(randomKeyHex(t), 1000, BySigning(privKeyHex)),
 		},
-		To: ConnectionKey("discord", "someone", "iapub"),
+		To: attestedKey(t, "discord", "2001", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"),
 	}
 	req, err := p.Request()
 	if err != nil {
@@ -78,7 +79,7 @@ func TestCashConsolidateParams_Request_ConnectionKeyTargetAccepted(t *testing.T)
 	if req.NewIdentity.IdentityType != identityTypeConnectionKey {
 		t.Fatalf("NewIdentity.IdentityType: got %s, want connection_key", req.NewIdentity.IdentityType)
 	}
-	if req.NewIdentity.IAPubkey != "iapub" {
+	if req.NewIdentity.IAPubkey != "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" {
 		t.Fatalf("NewIdentity.IAPubkey: got %q, want \"iapub\" — previously dropped entirely, must now pass through", req.NewIdentity.IAPubkey)
 	}
 }
@@ -86,7 +87,7 @@ func TestCashConsolidateParams_Request_ConnectionKeyTargetAccepted(t *testing.T)
 func TestCashConsolidateParams_Request_HappyPath(t *testing.T) {
 	privKeyHex, pubKeyHex := generateTestKeypair(t)
 	walletA, walletB := randomKeyHex(t), randomKeyHex(t)
-	p := CashConsolidateParams{
+	p := CashConsolidateParams{RequestID: testRID,
 		Sources: []Source{
 			From(walletA, 10_000, BySigning(privKeyHex)),
 			From(walletB, 15_000, BySigning(privKeyHex)),
@@ -128,14 +129,14 @@ func TestCashConsolidateParams_ParseResult_SelfTarget_Decrypts(t *testing.T) {
 	// with.
 	ciphertext := encryptForTest(t, newWalletPrivHex, callerPubHex, "lokicash1thetoken")
 
-	p := CashConsolidateParams{
+	p := CashConsolidateParams{RequestID: testRID,
 		Sources: []Source{From(randomKeyHex(t), 1000, BySigning(callerPrivHex))},
 		To:      Pubkey(callerPubHex),
 	}
 	raw, err := json.Marshal(cashConsolidateResponseWire{
 		AmountMillis:    1000,
 		NewWalletPubkey: newWalletPubHex,
-		NewWalletToken:  ciphertext,
+		NewWalletToken:  TokenOrTombstone{Token: ciphertext},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -159,14 +160,14 @@ func TestCashConsolidateParams_ParseResult_ThirdPartyPubkeyTarget_Decrypts(t *te
 	// hands Carol a plain token out of band.
 	ciphertext := encryptForTest(t, newWalletPrivHex, callerPubHex, "lokicash1forcarol")
 
-	p := CashConsolidateParams{
+	p := CashConsolidateParams{RequestID: testRID,
 		Sources: []Source{From(randomKeyHex(t), 1000, BySigning(callerPrivHex))},
 		To:      Pubkey(carolPubHex),
 	}
 	raw, err := json.Marshal(cashConsolidateResponseWire{
 		AmountMillis:    1000,
 		NewWalletPubkey: newWalletPubHex,
-		NewWalletToken:  ciphertext,
+		NewWalletToken:  TokenOrTombstone{Token: ciphertext},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -190,14 +191,14 @@ func TestCashConsolidateParams_ParseResult_UndecryptableDeliveryIsAnError(t *tes
 	// error to say so.
 	ciphertext := encryptForTest(t, newWalletPrivHex, carolPubHex, "lokicash1forcarol")
 
-	p := CashConsolidateParams{
+	p := CashConsolidateParams{RequestID: testRID,
 		Sources: []Source{From(randomKeyHex(t), 1000, BySigning(callerPrivHex))},
 		To:      Pubkey(carolPubHex),
 	}
 	raw, err := json.Marshal(cashConsolidateResponseWire{
 		AmountMillis:    1000,
 		NewWalletPubkey: newWalletPubHex,
-		NewWalletToken:  ciphertext,
+		NewWalletToken:  TokenOrTombstone{Token: ciphertext},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -210,16 +211,16 @@ func TestCashConsolidateParams_ParseResult_UndecryptableDeliveryIsAnError(t *tes
 
 func TestCashConsolidateParams_ParseResult_CashTarget_PassesThroughPlaintext(t *testing.T) {
 	callerPrivHex, _ := generateTestKeypair(t)
-	bt := NewCashTarget()
+	bt := mustCashTarget(t)
 
-	p := CashConsolidateParams{
+	p := CashConsolidateParams{RequestID: testRID,
 		Sources: []Source{From(randomKeyHex(t), 1000, BySigning(callerPrivHex))},
 		To:      bt,
 	}
 	raw, err := json.Marshal(cashConsolidateResponseWire{
 		AmountMillis:    1000,
 		NewWalletPubkey: randomKeyHex(t),
-		NewWalletToken:  "lokicash1plaintext",
+		NewWalletToken:  TokenOrTombstone{Token: "lokicash1plaintext"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -236,14 +237,14 @@ func TestCashConsolidateParams_ParseResult_CashTarget_PassesThroughPlaintext(t *
 func TestCashConsolidateParams_ParseResult_ConnectionKeyTarget_PassesThroughPlaintext(t *testing.T) {
 	callerPrivHex, _ := generateTestKeypair(t)
 
-	p := CashConsolidateParams{
+	p := CashConsolidateParams{RequestID: testRID,
 		Sources: []Source{From(randomKeyHex(t), 1000, BySigning(callerPrivHex))},
-		To:      ConnectionKey("discord", "someone", "iapub"),
+		To:      attestedKey(t, "discord", "2001", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"),
 	}
 	raw, err := json.Marshal(cashConsolidateResponseWire{
 		AmountMillis:    1000,
 		NewWalletPubkey: randomKeyHex(t),
-		NewWalletToken:  "lokicash1plaintext",
+		NewWalletToken:  TokenOrTombstone{Token: "lokicash1plaintext"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -254,5 +255,56 @@ func TestCashConsolidateParams_ParseResult_ConnectionKeyTarget_PassesThroughPlai
 	}
 	if result.NewWalletToken != "lokicash1plaintext" {
 		t.Fatalf("NewWalletToken: got %q, want the plaintext value passed through unchanged", result.NewWalletToken)
+	}
+}
+
+// Pending's amount is the sources' sum; a sum past uint64 is ErrAmountOverflow,
+// never a wrapped amount written ahead.
+func TestCashConsolidatePending_Overflow(t *testing.T) {
+	privKeyHex, _ := generateTestKeypair(t)
+	half := uint64(1)<<63 + 1
+	p := CashConsolidateParams{RequestID: testRID,
+		Sources: []Source{
+			From(randomKeyHex(t), half, BySigning(privKeyHex)),
+			From(randomKeyHex(t), half, BySigning(privKeyHex)),
+		},
+		To: Pubkey("dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"),
+	}
+	if _, err := p.Pending(); err != ErrAmountOverflow {
+		t.Fatalf("got %v, want ErrAmountOverflow", err)
+	}
+	p.Sources[1].Amount = 5
+	if pc, err := p.Pending(); err != nil || pc.Amount != half+5 {
+		t.Fatalf("got %v %v, want %d", pc.Amount, err, half+5)
+	}
+}
+
+// A direct reply with no credential for the merged bill keeps the call
+// pending (ErrEmptyToken), as mint_cash does; a cash target's token in the
+// clear is accepted.
+func TestCashConsolidateParams_ParseResult_EmptyTokenRefused(t *testing.T) {
+	privKeyHex, _ := generateTestKeypair(t)
+	p := CashConsolidateParams{RequestID: testRID,
+		Sources: []Source{
+			From(randomKeyHex(t), 1000, BySigning(privKeyHex)),
+			From(randomKeyHex(t), 1000, BySigning(privKeyHex)),
+		},
+		To: mustCashTarget(t),
+	}
+	for name, body := range map[string]string{
+		"empty token":  `{"amount_millis":2000,"new_wallet_pubkey":"` + ktokWallet + `","new_wallet_token":""}`,
+		"no token":     `{"amount_millis":2000,"new_wallet_pubkey":"` + ktokWallet + `"}`,
+		"empty pubkey": `{"amount_millis":2000,"new_wallet_pubkey":"","new_wallet_token":"` + ktok1 + `"}`,
+	} {
+		if _, err := p.ParseResult([]byte(body)); !errors.Is(err, ErrEmptyToken) {
+			t.Errorf("%s: %v, want ErrEmptyToken", name, err)
+		}
+		if _, err := p.ParseLookupResult([]byte(body)); !errors.Is(err, ErrEmptyToken) {
+			t.Errorf("%s (lookup): %v, want ErrEmptyToken", name, err)
+		}
+	}
+	good := `{"amount_millis":2000,"new_wallet_pubkey":"` + ktokWallet + `","new_wallet_token":"` + ktok1 + `"}`
+	if r, err := p.ParseResult([]byte(good)); err != nil || r.NewWalletToken != ktok1 {
+		t.Fatalf("good: %+v %v", r, err)
 	}
 }

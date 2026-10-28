@@ -10,7 +10,7 @@ import (
 //
 // It answers one of two ways: the roster of recipients — scoped per §Scoping the
 // Roster — or, for a bill the Hub has already destroyed and is still inside its
-// retention window, a tombstone (CashStatusResult.IsSpent).
+// retention window, a tombstone (CashStatusResult.Tombstone).
 //
 // A timeout is NOT a third answer meaning "spent". Silence is indeterminate by
 // construction — an unreachable Hub looks identical — so a caller MUST retry rather

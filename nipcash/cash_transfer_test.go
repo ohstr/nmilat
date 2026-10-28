@@ -3,6 +3,8 @@ package nipcash
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 
 	btcec "github.com/flokiorg/go-flokicoin/crypto"
@@ -13,9 +15,9 @@ import (
 
 func TestCashTransferParams_Request_FullTransfer(t *testing.T) {
 	privKeyHex, _ := generateTestKeypair(t)
-	p := CashTransferParams{
+	p := CashTransferParams{RequestID: testRID,
 		Credential:    BySigning(privKeyHex),
-		To:            Pubkey("recipienthex"),
+		To:            Pubkey("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
 		CurrentAmount: 15000,
 	}
 	req, err := p.Request(randomKeyHex(t))
@@ -25,7 +27,7 @@ func TestCashTransferParams_Request_FullTransfer(t *testing.T) {
 	if req.AmountMillis != nil {
 		t.Fatalf("a full transfer must omit amount_millis, got %v", *req.AmountMillis)
 	}
-	if req.NewIdentity.IdentityValue != "recipienthex" {
+	if req.NewIdentity.IdentityValue != "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" {
 		t.Fatalf("NewIdentity: got %+v", req.NewIdentity)
 	}
 	// The proof itself must still bind to a concrete amount (the slice's
@@ -51,9 +53,9 @@ func TestCashTransferParams_Request_FullTransfer(t *testing.T) {
 func TestCashTransferParams_Request_Split(t *testing.T) {
 	privKeyHex, _ := generateTestKeypair(t)
 	split := uint64(5000)
-	p := CashTransferParams{
+	p := CashTransferParams{RequestID: testRID,
 		Credential:    BySigning(privKeyHex),
-		To:            Pubkey("recipienthex"),
+		To:            Pubkey("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
 		CurrentAmount: 15000,
 		SplitAmount:   &split,
 	}
@@ -68,7 +70,7 @@ func TestCashTransferParams_Request_Split(t *testing.T) {
 
 func TestCashTransferParams_ParseResult_InPlace(t *testing.T) {
 	privKeyHex, _ := generateTestKeypair(t)
-	p := CashTransferParams{Credential: BySigning(privKeyHex), To: Pubkey("aa"), CurrentAmount: 1000}
+	p := CashTransferParams{RequestID: testRID, Credential: BySigning(privKeyHex), To: Pubkey("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), CurrentAmount: 1000}
 	raw := []byte(`{"amount_millis":1000,"identity_type":"pubkey","identity_value":"aa"}`)
 	result, err := p.ParseResult(raw)
 	if err != nil {
@@ -88,11 +90,11 @@ func TestCashTransferParams_ParseResult_SpinOff_DecryptsToken(t *testing.T) {
 	// decryptFromPubkey (the caller side) must invert.
 	ciphertext := encryptForTest(t, newWalletPrivHex, callerPubHex, "lokicash1thetoken")
 
-	p := CashTransferParams{Credential: BySigning(callerPrivHex), To: Pubkey("bb"), CurrentAmount: 1000}
+	p := CashTransferParams{RequestID: testRID, Credential: BySigning(callerPrivHex), To: Pubkey("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"), CurrentAmount: 1000}
 	raw, err := json.Marshal(cashTransferResponseWire{
 		AmountMillis:    1000,
 		NewWalletPubkey: newWalletPubHex,
-		NewWalletToken:  ciphertext,
+		NewWalletToken:  TokenOrTombstone{Token: ciphertext},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -108,7 +110,7 @@ func TestCashTransferParams_ParseResult_SpinOff_DecryptsToken(t *testing.T) {
 
 func TestCashTransferResult_RecipientToken_InPlaceFallsBackToOriginal(t *testing.T) {
 	result := &CashTransferResult{NewWalletToken: ""}
-	got := result.RecipientToken("lokicash1original")
+	got, _ := result.RecipientToken("lokicash1original")
 	if got != "lokicash1original" {
 		t.Fatalf("RecipientToken() = %q, want the original token (in-place reassignment)", got)
 	}
@@ -116,7 +118,7 @@ func TestCashTransferResult_RecipientToken_InPlaceFallsBackToOriginal(t *testing
 
 func TestCashTransferResult_RecipientToken_SpinOffUsesNewWalletToken(t *testing.T) {
 	result := &CashTransferResult{NewWalletToken: "lokicash1spunoff"}
-	got := result.RecipientToken("lokicash1original")
+	got, _ := result.RecipientToken("lokicash1original")
 	if got != "lokicash1spunoff" {
 		t.Fatalf("RecipientToken() = %q, want the spun-off NewWalletToken", got)
 	}
@@ -128,7 +130,7 @@ func TestCashTransferResult_RecipientToken_PartialSplitUsesNewWalletToken(t *tes
 	// RecipientToken's — this only ever answers "what does the recipient
 	// need."
 	result := &CashTransferResult{NewWalletToken: "lokicash1carvedoff", RemainderWalletToken: "lokicash1remainder"}
-	got := result.RecipientToken("lokicash1original")
+	got, _ := result.RecipientToken("lokicash1original")
 	if got != "lokicash1carvedoff" {
 		t.Fatalf("RecipientToken() = %q, want the carved-off NewWalletToken, not the caller's own remainder", got)
 	}
@@ -163,4 +165,68 @@ func encryptForTest(t *testing.T, fromPrivHex, toPubHex, plaintext string) strin
 		t.Fatal(err)
 	}
 	return ciphertext
+}
+
+// A spin-off always carries its token: without one RecipientToken errors, as a
+// *BillGone when a lookup answered the new bill's tombstone.
+func TestCashTransferResult_RecipientToken_SpinOffWithoutToken(t *testing.T) {
+	r := &CashTransferResult{NewWalletPubkey: strings.Repeat("ab", 32)}
+	if tok, err := r.RecipientToken("orig"); err == nil || tok != "" {
+		t.Fatalf("RecipientToken = %q, %v; want an error", tok, err)
+	}
+	r.NewWalletTombstone = &Tombstone{Status: StatusSpent, Reason: ReasonRedeemed}
+	var gone *BillGone
+	if _, err := r.RecipientToken("orig"); !errors.As(err, &gone) || gone.Tombstone.Reason != ReasonRedeemed {
+		t.Fatalf("err = %v, want *BillGone", err)
+	}
+}
+
+func TestChainForHRP(t *testing.T) {
+	for hrp, want := range map[string]string{"satscash": "bitcoin", "SATSCASH": "bitcoin", "lokicash": "flokicoin"} {
+		if got, ok := ChainForHRP(hrp); !ok || got != want {
+			t.Errorf("ChainForHRP(%q) = %q, %v", hrp, got, ok)
+		}
+	}
+	if _, ok := ChainForHRP("cashhub"); ok {
+		t.Error("cashhub has no chain")
+	}
+}
+
+// CASH-XFER-05: WithRemainder fills a missing remainder target for a partial
+// split of a cash source only, keeps a supplied one, and the result builds.
+func TestCashTransferParams_WithRemainder(t *testing.T) {
+	source, err := NewCashTarget()
+	if err != nil {
+		t.Fatal(err)
+	}
+	to, _ := NewCashTarget()
+	half, full := uint64(500), uint64(1000)
+	p := CashTransferParams{Credential: BySecret(source.Secret()), To: to, CurrentAmount: 1000, SplitAmount: &half,
+		RequestID: strings.Repeat("ab", 32)}
+	if !p.NeedsRemainder() {
+		t.Fatal("a partial cash split needs a remainder")
+	}
+	got, err := p.WithRemainder()
+	if err != nil || got.RemainderTarget == nil || CommitmentsEqual(got.RemainderTarget.Commitment(), source.Commitment()) {
+		t.Fatalf("WithRemainder = %+v, %v", got.RemainderTarget, err)
+	}
+	req, err := got.Request(strings.Repeat("cd", 32))
+	if err != nil || req.RemainderCommitment != got.RemainderTarget.Commitment() {
+		t.Fatalf("Request = %+v, %v", req, err)
+	}
+	pc, err := got.Pending(strings.Repeat("cd", 32))
+	if err != nil || len(pc.Secrets) != 2 || pc.Secrets[1].Role != SecretRoleRemainder || pc.Secrets[1].Secret != got.RemainderTarget.Secret() {
+		t.Fatalf("Pending secrets = %+v, %v", pc.Secrets, err)
+	}
+	kept, _ := got.WithRemainder()
+	if kept.RemainderTarget != got.RemainderTarget {
+		t.Fatal("a supplied remainder target was replaced")
+	}
+	p.SplitAmount = &full
+	if p.NeedsRemainder() {
+		t.Fatal("a full transfer needs no remainder")
+	}
+	if same, _ := p.WithRemainder(); same.RemainderTarget != nil {
+		t.Fatal("a full transfer got a remainder target")
+	}
 }

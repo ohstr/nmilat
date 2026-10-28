@@ -20,12 +20,24 @@ type Invoice struct {
 	Description     string // the "d" field (payment memo), if present
 	DescriptionHash string
 	PaymentHash     string
+	// Timestamp is the invoice's creation time, in unix seconds.
+	Timestamp int64
+	// Expiry is the "x" field in seconds, or 3600 when absent (BOLT11's
+	// default).
+	Expiry int64
 }
 
+// DefaultBolt11Expiry is the expiry BOLT11 gives an invoice with no "x" field.
+const DefaultBolt11Expiry = 3600
+
+// ExpiresAt is the unix time the invoice expires: Timestamp + Expiry.
+func (i *Invoice) ExpiresAt() int64 { return i.Timestamp + i.Expiry }
+
 // DecodeBolt11 decodes a bolt11 invoice string into its currency prefix,
-// amount, memo, payment hash, and description hash — what NIP-57 needs to
-// cross-check a zap receipt against the invoice it claims to have paid,
-// plus what a caller needs to display it. The default implementation
+// amount, memo, payment hash, description hash, creation timestamp and expiry
+// — what NIP-57 needs to cross-check a zap receipt against the invoice it
+// claims to have paid, plus what a caller needs to display it or to check when
+// it expires (Invoice.ExpiresAt). The default implementation
 // is a minimal, dependency-free BOLT11 parser (see bolt11.go) — swap this
 // var for your own decoder (e.g. one backed by a full Lightning node
 // library) if you need routing hints, the payee node ID, or node-signature
@@ -42,6 +54,7 @@ const (
 	bolt11FieldPaymentHash     = 1
 	bolt11FieldDescription     = 13
 	bolt11FieldDescriptionHash = 23
+	bolt11FieldExpiry          = 6
 )
 
 const (
@@ -50,8 +63,8 @@ const (
 	bolt11HashFieldWords = 52  // 260 bits -> 32 bytes once converted, 4 bits padding
 )
 
-// decodeBolt11 extracts the currency prefix, amount, memo, payment hash, and
-// description hash from a BOLT11 invoice string — what nip57 needs to
+// decodeBolt11 extracts the currency prefix, amount, memo, payment hash,
+// description hash, timestamp and expiry ("x") from a BOLT11 invoice string — what nip57 needs to
 // cross-check a zap receipt against the invoice it claims to have paid
 // (NIP-57 Appendix F), plus what a caller needs to display it. It deliberately does not decode routing hints, the payee node ID, or
 // any other tagged field, and does not verify the invoice's own node
@@ -74,7 +87,10 @@ func decodeBolt11(bolt11 string) (*Invoice, error) {
 	}
 	fields := words[bolt11TimestampWords : len(words)-bolt11SignatureWords]
 
-	inv := &Invoice{Currency: currency, AmountMloki: amountMloki}
+	inv := &Invoice{Currency: currency, AmountMloki: amountMloki, Expiry: DefaultBolt11Expiry}
+	for _, w := range words[:bolt11TimestampWords] {
+		inv.Timestamp = inv.Timestamp<<5 | int64(w)
+	}
 
 	for i := 0; i+3 <= len(fields); {
 		fieldType := int(fields[i])
@@ -98,6 +114,14 @@ func decodeBolt11(bolt11 string) (*Invoice, error) {
 		case bolt11FieldDescriptionHash:
 			if h, err := bolt11HashHex(data); err == nil {
 				inv.DescriptionHash = h
+			}
+		case bolt11FieldExpiry:
+			if len(data) > 0 && len(data) <= 12 {
+				var x int64
+				for _, w := range data {
+					x = x<<5 | int64(w)
+				}
+				inv.Expiry = x
 			}
 		}
 	}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/ohstr/nmilat/nip01"
@@ -35,8 +36,11 @@ var (
 	ErrProofWrongMethod = errors.New("transport: item proof is bound to a different method")
 	ErrProofWrongParams = errors.New("transport: item proof is bound to different params")
 	ErrProofWrongNonce  = errors.New("transport: item proof is bound to a different envelope")
-	ErrProofStale       = errors.New("transport: item proof is outside its freshness window")
-	ErrProofSignature   = errors.New("transport: item proof signature is invalid")
+	// ErrProofWrongExpiration is an expiration tag that is not the envelope's
+	// not_after. It also matches ErrProofWrongNonce, which it was before.
+	ErrProofWrongExpiration = errors.New("transport: item proof expiration is not the envelope's not_after")
+	ErrProofStale           = errors.New("transport: item proof is outside its freshness window")
+	ErrProofSignature       = errors.New("transport: item proof signature is invalid")
 )
 
 // ProofBinding is everything an item proof commits to. Every field is a separate
@@ -148,6 +152,9 @@ func verifyProof(wantKind int, proof json.RawMessage, want ProofBinding, now tim
 		return "", fmt.Errorf("%w: signer pubkey must be %d lowercase hex characters",
 			ErrProofMalformed, keyHexLen)
 	}
+	if ev.Content != "" {
+		return "", fmt.Errorf("%w: content must be empty", ErrProofMalformed)
+	}
 
 	got, err := proofTags(ev.Tags)
 	if err != nil {
@@ -171,11 +178,14 @@ func verifyProof(wantKind int, proof json.RawMessage, want ProofBinding, now tim
 	if got[tagEnvelope] != want.Nonce {
 		return "", ErrProofWrongNonce
 	}
+	if got[tagExpiration] != strconv.FormatInt(want.NotAfter, 10) {
+		return "", fmt.Errorf("%w (%w): expiration %q, envelope not_after %d", ErrProofWrongExpiration, ErrProofWrongNonce, got[tagExpiration], want.NotAfter)
+	}
 
-	created := time.Unix(int64(ev.CreatedAt), 0) //nolint:gosec // event timestamps are seconds since epoch
-	if created.Before(now.Add(-ProofFreshnessPast)) || created.After(now.Add(ProofFreshnessFuture)) {
-		return "", fmt.Errorf("%w: created_at %s, now %s",
-			ErrProofStale, created.UTC().Format(time.RFC3339), now.UTC().Format(time.RFC3339))
+	// NIP-CASH §Freshness, in whole seconds: now − 300 ≤ created_at ≤ now + 60.
+	created, n := int64(ev.CreatedAt), now.Unix() //nolint:gosec // event timestamps are seconds since epoch
+	if created < n-int64(ProofFreshnessPast/time.Second) || created > n+int64(ProofFreshnessFuture/time.Second) {
+		return "", fmt.Errorf("%w: created_at %d, now %d", ErrProofStale, created, n)
 	}
 
 	// Last, and only now: the ID must be the event's own hash and the signature
@@ -194,19 +204,23 @@ func verifyProof(wantKind int, proof json.RawMessage, want ProofBinding, now tim
 func proofTags(tags [][]string) (map[string]string, error) {
 	out := make(map[string]string, len(proofRequiredTags))
 	for _, tag := range tags {
-		if len(tag) < 2 {
+		if len(tag) == 0 || !proofRequiredTags[tag[0]] {
 			continue
 		}
 		name := tag[0]
-		if !proofRequiredTags[name] {
-			continue
+		// Each binding tag's value is one string (NIP-CASH §Item Proofs).
+		if len(tag) != 2 {
+			return nil, fmt.Errorf("%w: %q tag is not one string", ErrProofMalformed, name)
 		}
 		if _, dup := out[name]; dup {
 			return nil, fmt.Errorf("%w: duplicate %q tag", ErrProofMalformed, name)
 		}
+		if proofHexTags[name] && (len(tag[1]) != keyHexLen || !isLowerHex(tag[1])) {
+			return nil, fmt.Errorf("%w: %q must be %d lowercase hex characters", ErrProofMalformed, name, keyHexLen)
+		}
 		out[name] = tag[1]
 	}
-	for name := range proofRequiredTags {
+	for _, name := range proofTagOrder {
 		if out[name] == "" {
 			return nil, fmt.Errorf("%w: missing %q tag", ErrProofMalformed, name)
 		}
@@ -220,4 +234,33 @@ var proofRequiredTags = map[string]bool{
 	tagMethod:     true,
 	tagParamsHash: true,
 	tagEnvelope:   true,
+	tagExpiration: true,
+}
+
+// proofTagOrder is the order a missing tag is reported in, so the same proof
+// always gets the same error.
+var proofTagOrder = []string{tagTarget, tagHub, tagMethod, tagParamsHash, tagEnvelope, tagExpiration}
+
+// proofHexTags are the binding tags written as 64 lowercase hex.
+var proofHexTags = map[string]bool{tagTarget: true, tagHub: true, tagParamsHash: true}
+
+// ErrBillProofSigner is a bill proof signed by none of the live connections that
+// share the item's target.
+var ErrBillProofSigner = errors.New("transport: bill proof is not signed by a live connection of the target")
+
+// VerifyBillProofAny verifies a bill proof (VerifyBillProof) and then requires
+// its signer to be one of live, the client keys (x-only) of the Hub's live
+// connections sharing the item's target pubkey; it returns that key's index. A
+// Hub never passes a revoked connection's key, so its proofs verify nothing.
+func VerifyBillProofAny(proof json.RawMessage, want ProofBinding, now time.Time, live []string) (int, error) {
+	signer, err := VerifyBillProof(proof, want, now)
+	if err != nil {
+		return -1, err
+	}
+	for i, k := range live {
+		if k == signer {
+			return i, nil
+		}
+	}
+	return -1, ErrBillProofSigner
 }

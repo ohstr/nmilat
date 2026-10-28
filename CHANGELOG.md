@@ -8,6 +8,369 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `resultToState` to `testdata/vectors/pocket.json` (K-POCKET-7): NIP-CP
+  §Balance's result to state table, so every client tests the same mapping.
+  ([#218](https://github.com/ohstr/nmilat/pull/218))
+- Adds `nipcash.QuoteForSlice`, binding a withdraw quote to the bill, the
+  slice's identity and its current amount (the fake Hub uses it; conformance
+  adds CT-WD-27, same identity at another amount), `ErrClaimAmountUnbound`,
+  `transport.ErrProofWrongExpiration` (also matching `ErrProofWrongNonce`),
+  `transport.ServeVerdict.Served`, `client.ReplaceOptions.ChainTip`,
+  `TransferOutcome.CallError`/`ConsolidateOutcome.CallError`,
+  `nipcw.Credential.Pubkey` and `nipcw/client.ErrJoinSigner`,
+  `nipCP.Synced.Answered` and `ErrTooFewRelays`, and
+  `listing.VersionBook.CurrentByD` with `TapCache.Passed`.
+  ([#218](https://github.com/ohstr/nmilat/pull/218))
+- Adds `client.ReplaceOptions.NoChainView`: a caller with no view of the
+  chain re-places a withdrawal while its quote has not been refused
+  `quote_expired` (NIP-CP §Lookups), instead of showing it
+  `quote_unchecked`; `listing.TapResult.Passed`; and `textsan.MaxClusterBytes`
+  with `textsan.Options.MaxBytes`.
+  ([#218](https://github.com/ohstr/nmilat/pull/218))
+- Adds `client.NeedsStatusError`/`ErrNeedsStatus` for a redeem whose outcome
+  is unknown (never resent) and `Client.RedeemFollowUp`, `BillNoSlice`,
+  `LocalReason`/`LocalRetryable` with `ReasonStatusWidened`,
+  `TransferOutcome.Remainder`, and
+  `nipcash.CashTransferParams.NeedsRemainder`/`WithRemainder` with
+  `SecretRoleRemainder`. ([#215](https://github.com/ohstr/nmilat/pull/215))
+- Adds mint lookups, faults on `mint_cash` and held redeem payments to the
+  fake Hub, and the E-MINT-02..05/07/09/11/13 tests.
+  ([#215](https://github.com/ohstr/nmilat/pull/215))
+- Adds tests covering the client scenarios of WP-11 end to end against the
+  fake ledger (mint, transfer, status, redeem, lookup and envelope cases)
+  and `RedeemProgressOf`, and tags existing tests with the T11 and E-* ids
+  they cover. ([#214](https://github.com/ohstr/nmilat/pull/214))
+- Adds `nipcash.Source.Ordered` and enforces `ErrMixedOrdered` in
+  `ConsolidateMany`, `CashConsolidate` and the composites, which carry an
+  `Ordered` mark onto the bills they build.
+  ([#213](https://github.com/ohstr/nmilat/pull/213))
+- Adds `Client.Unreconciled`, `Client.CashRedeemWith` with
+  `RedeemOptions{AutoAmount, Payee}` and `ErrInvoiceAmount`,
+  `ErrTooManySources`, `OutcomeNotSent`, and
+  `nipcw/client.WalletGuard.Check`, `ObserveRefusal` and `Do` with
+  `ErrWalletFrozen` and `ErrStaleKey`.
+  ([#213](https://github.com/ohstr/nmilat/pull/213))
+- Adds zap transfers, `cash_consolidate`, live-wallet and spin-off caps and
+  archive drops to the fake ledger, and a ledger circle (joins, join
+  lookups, member requests, extra and revoked connections, issued wallets);
+  the fake's conformance adapter implements every `Admin` hook.
+  ([#212](https://github.com/ohstr/nmilat/pull/212))
+- Adds conformance cases CT-JOIN-01..18, CT-JLK-01..06, CT-POW-04..06,
+  CT-XFER-04/-12/-20, CT-CONS-01..03/-05/-08/-09 and CT-LK-15, the optional
+  `CircleFunder` interface, and the E-JOIN end-to-end tests.
+  ([#212](https://github.com/ohstr/nmilat/pull/212))
+- Adds fake-Hub orders on a fake chain (mempool, confirmation tiers, reorgs,
+  evictions), minting once per payment with splitting at `max_millis`,
+  notices on every change, reservations released by the clock, retirable and
+  extra connections, a broken-signer fault and a restart that keeps order
+  records; conformance cases CT-ORD-04..16, CT-ORDC-01..10, CT-LK-14 and
+  CT-OSL-01..05, with the optional `OrderConnectionAdder` and `Restarter`
+  interfaces. ([#211](https://github.com/ohstr/nmilat/pull/211))
+- Adds the end-to-end order tests E-ORD-01..09 and E-ORDC-01..02, and the
+  fuzz targets F-CO-1 and F-ORD-1.
+  ([#211](https://github.com/ohstr/nmilat/pull/211))
+- Adds `nip57.Invoice.Timestamp`, `Expiry` (3600 when the invoice has no `x`
+  field, `DefaultBolt11Expiry`) and `ExpiresAt`.
+  ([#210](https://github.com/ohstr/nmilat/pull/210))
+- Adds `nipCO.CheckOrderInvoice`, `nip57test.SignedBolt11` (a signed BOLT11
+  invoice builder), `nipcash.ErrRedeemAmountOnAmountInvoice`,
+  `ErrPubkeyNotLowerHex` and `ErrAttestationKey`.
+  ([#208](https://github.com/ohstr/nmilat/pull/208))
+- Adds `nipcash.ErrBech32m` and `nipIC.ErrNConnectionBech32m`.
+  ([#206](https://github.com/ohstr/nmilat/pull/206))
+- Adds to the fake Hub a `cash_redeem` fake payee and `cash_transfer` splits
+  on its bill ledger, `FaultStallCommit`, and the optional conformance
+  interfaces `Payee` and `SliceRemover`; CT-WD-09 now runs every leg,
+  CT-WD-22 and E-WD-14 are added.
+  ([#206](https://github.com/ohstr/nmilat/pull/206))
+- Adds `vectors` (`Files`, `Build`, `WriteAll`, `Version`), which builds
+  every cross-implementation vector file (37) from nmilat with deterministic
+  inputs, and `cmd/export-vectors`; the files are committed under
+  `testdata/vectors` with a drift test and a known-answer read-back test.
+  ([#205](https://github.com/ohstr/nmilat/pull/205))
+- Adds tests freezing the remaining known-answer negatives (relay hash,
+  reply key, params hash, the connection key never produced) and member
+  connection keys. ([#205](https://github.com/ohstr/nmilat/pull/205))
+- Adds `relay.Reject(prefix, err)`, so an event validator chooses its NIP-01
+  prefix (other errors stay `invalid:`); `nipCP/relayreg` now refuses a bare
+  kind 9525 as `blocked:`.
+  ([#204](https://github.com/ohstr/nmilat/pull/204))
+- Adds `relay.WithRecipientOnlyKinds` (`SessionConfig.RecipientOnlyKinds`):
+  an opt-in rule serving a kind only to a connection AUTHed as one of its
+  `p`, on REQ, COUNT, NEG-OPEN and the live tail, and
+  `SessionHandler.QueryHandler` for POST /query.
+  ([#204](https://github.com/ohstr/nmilat/pull/204))
+- Adds `nipcw/relayreg`, which refuses a follow set dated more than 15
+  minutes ahead, and `nipcw.FollowSetMaxFuture`.
+  ([#204](https://github.com/ohstr/nmilat/pull/204))
+- Adds `nip46/signeruri.Dial`, which opens a signer from a `bunker://`,
+  `bunker+unix://` or `unix://` URI or a bare absolute socket path and
+  refuses any other scheme, `nipLS.DenyAll`, and `nipLS.ErrMessageTooLarge`
+  (the client no longer sends a request line over 1 MiB).
+  ([#203](https://github.com/ohstr/nmilat/pull/203))
+- Adds conformance cases CT-WD-01..21 and 23..26, CT-STAT-13 and CT-ENV-16,
+  with the optional `WithdrawChain` and `WithdrawToggle` interfaces; the
+  suite mints its bills with `mint_cash` over the Cash Hub connection.
+  ([#202](https://github.com/ohstr/nmilat/pull/202))
+- Adds a bill ledger to the fake Hub (`ServeWithdrawals`: `mint_cash`,
+  `cash_status` with the withdraw object, quotes, withdrawals, cancels,
+  lookups, re-mints, notices), a fake chain (blocks, mempool, reorgs,
+  evictions, withheld transactions) and the payout faults, with end-to-end
+  client tests E-WD-02..06 and 08..11.
+  ([#202](https://github.com/ohstr/nmilat/pull/202))
+- Adds `MintCashResult.MarshalJSON`/`UnmarshalJSON`, so a Hub encodes its
+  `mint_cash` reply from the result type, and `Expiry.IsZero`.
+  ([#201](https://github.com/ohstr/nmilat/pull/201))
+- Adds `nipcw/client.(*Client).Info`, the `get_info` read at the online
+  check. ([#201](https://github.com/ohstr/nmilat/pull/201))
+- Adds `nipCP` withdraw entries: `Entry.Address`, `Quote` and `Receipt`, the
+  `remint` secret role, pending `cash_withdraw` entries, `ApplyWithdraw`
+  (receipt checked first, source spent, re-minted bill on `cancelled`,
+  `done` on `final` or `cancelled`) and `WithdrawDoneRewrite`; and
+  `DialRelaysWith(DialConfig{AuthWait})`.
+  ([#201](https://github.com/ohstr/nmilat/pull/201))
+- Adds `relay/client.WithPublishFilter`, `WithAfterPublish`,
+  `PublishFilterFrom` and `AfterPublishFrom`; the `nipcash/client` hooks of
+  the same names delegate to them.
+  ([#201](https://github.com/ohstr/nmilat/pull/201))
+- Adds `niplsp`, the NIP-LSP Lightning Service Provider Announcement (kind
+  10735): `FromLSPSInfo` builds the fields from an LSP's LSPS0/1/2/5 answers
+  in either unit dialect, `NewAnnouncement`, `SigningPayload` and `Sign` (an
+  injected node signer that only signs kind 10735), `ParseAnnouncement` in
+  the NIP's client order (`*AnnouncementError{Step}`), `Seen`/`Newest`
+  (newest version per node, no fallback), `CheckLive` against the node's
+  live LSPS answers, and `NodeIDs`.
+  ([#199](https://github.com/ohstr/nmilat/pull/199))
+- Adds `nipcash/listing` (NIP-CASH §Listing Offers): kind-31190 listings
+  built from signed `cashorder1`/`circlehub1` records (`NewListing`,
+  `ClosedListing`, `NewListingDeletion`); the wallet's checks before showing
+  (`ParseListing`, `ListingError`), `VersionBook` and the at-tap outcomes
+  (`CheckTap`, `TapCache`); operator offers (kind 11191), recommendations
+  (kind 31191), reports and curator sets; signals and ranking from trusted
+  authors only; `SanitizeText`; and the trusted and global fetch filters.
+  ([#198](https://github.com/ohstr/nmilat/pull/198))
+- Adds listings to the fake Hub (`cashtest.Lister`) and conformance cases
+  CT-LIST-01..06. ([#198](https://github.com/ohstr/nmilat/pull/198))
+- Adds the dependency `github.com/rivo/uniseg`, used to count user-perceived
+  characters. ([#198](https://github.com/ohstr/nmilat/pull/198))
+- Adds on-chain withdrawals to `nipcash` (`cash_withdraw_quote`,
+  `cash_withdraw`): witness address checks (`DecodeWitnessAddress`,
+  `NormalizeAddress`, `ClassifyAddress`, `WithdrawHRPs`), `WithdrawFee`, the
+  kind-23187 quote, call requests, the kind-23188 receipt, payouts, cancels,
+  `Detail`/`ParseDetail`, and the Hub's decisions (`CheckQuoteRequest`,
+  `CheckWithdrawPayout`, `PayoutStateOf`, `CancelDue`, `RemintExpiry`,
+  `WithdrawRecordRetained`, `WithdrawBlocksHubDelete`).
+  ([#197](https://github.com/ohstr/nmilat/pull/197))
+- Adds the withdrawal flows to `nipcash/client`: `WithdrawTerms`,
+  `QuoteWithdraw`, `Withdraw` (written ahead, receipt verified),
+  `LookupWithdraw`, `CancelWithdraw`, `WatchPayout`, `PayoutFinished`, the
+  batch forms, `WithWithdrawHRP`, `ReplaceOptions.Quote`, and the
+  `cash_withdraw` rules of `Recover` and `Replace`. `PendingCall` gains
+  `Quote`, `Address`, `HoldsUntil`, `Receipt` and `LastDetail`.
+  ([#197](https://github.com/ohstr/nmilat/pull/197))
+- Adds conformance cases CT-WD-01 (wire part) and CT-SCOPE-05, and
+  `cashtest.WithWithdrawals`.
+  ([#197](https://github.com/ohstr/nmilat/pull/197))
+- Adds `nip59.WrapWithKey`, `UnwrapWithKey` and `WithWrapExpiration`: the NIP-59
+  receive path, and wraps under a key the caller keeps.
+  ([#196](https://github.com/ohstr/nmilat/pull/196))
+- Adds `nipCP` (Cash Pocket): kind-9525 entries with a strict rumor codec,
+  sealed and opened under a recorded wrap key; resolution per `w`, balance
+  per chain and `MapStatus`; pending entries written ahead for `mint_cash`,
+  `cash_transfer`, `cash_consolidate` and `cash_order`; `ApplyResult`,
+  `ApplyLookup` and `ApplyOrder`; `PocketJournal`, a `client.Journal` that
+  reads entries back from two or more relays; sync, republish, NIP-40 wrap
+  expiration and prune helpers; and `nipCP/relayreg`, which refuses bare
+  kind-9525 events. ([#196](https://github.com/ohstr/nmilat/pull/196))
+- Adds `nipcash.ChainForHRP` (the chain a bill's token prefix names) and
+  `client.DerivedParentRecorder`, an optional Journal extension that
+  `Replace` tells the replaced call's request_id.
+  ([#196](https://github.com/ohstr/nmilat/pull/196))
+- Adds `nipCO` (Cash Orders): the `cashorder1` codec
+  (`EncodeOrderConnection`, `DecodeOrderConnection`, `SignOrderConnection`,
+  `OrderConnection.Verify`), selling terms (`ParseOrderInfo`,
+  `Terms.Validate`, `SellsNothing`), `OrderFee`, `ConfirmationsFor`,
+  `MintSplit`, the `cash_order` request and order shapes, the buyer key
+  (`BuyerKeyFromSecret`, `NewCashOrderTarget`, `NewBuyerKey`, `NewNotify`),
+  the kind-23189 order notice, and the Hub's decisions (`CheckPlacement`,
+  `OrderStateAt`, `OrderRetained`, `OrderBlocksHubDelete`,
+  `OrderHubDeleteAt`, `UnpaidOnchainDeleteAt`, `UsedMarkDroppable`).
+  ([#195](https://github.com/ohstr/nmilat/pull/195))
+- Adds `nipCO/client`: `Connect` (verifies the string, runs the online
+  check, verifies the announcement), `OrderClient.Terms`, `Place` (written
+  ahead, private transport only, `TermsChanged`, on-chain address check),
+  `Lookup`, `Watch`, `Finished` and `EndedUnpaid`.
+  ([#195](https://github.com/ohstr/nmilat/pull/195))
+- Adds `nipcash.MethodCashOrder`, `client.BatchSession.CashOrderMany`,
+  `LookupOrderMany` and `BillCallsUsable`, and `client.ItemOutcome.Accepted`
+  and `Pending`; `Recover` and `Replace` use the new constant and a fresh
+  notify on re-placement. ([#195](https://github.com/ohstr/nmilat/pull/195))
+- Adds an Order connection and order book to the fake Hub, and conformance
+  cases CT-ORD-01, -02, -03 and -14 for Hubs implementing `OrderPayer`.
+  ([#195](https://github.com/ohstr/nmilat/pull/195))
+- Adds `nipCZ` (Cash Zaps): `ParseCashZap` and `ParseCashZapInfo` for kinds
+  9522 and 10522, `VerifyClient` (rules 1-8) and `VerifyWallet` (rules 1-6,
+  8 and 9, with a caller-supplied rule 9 check and the
+  `CheckStatus`/`CheckInPlaceTransfer` helpers), and a `Verdict` with
+  `Countable`, `ExpiresAtTrusted`, `CreditSender`, `MinterUnlisted`,
+  `MayContactMinter` and `Received`.
+  ([#194](https://github.com/ohstr/nmilat/pull/194))
+- Adds `nipCZ.ZapTransfer`, which builds a zap's `cash_transfer` and refuses
+  a ConnectionKey-bound bill on a target (`ErrZapNeedsPubkeyBill`),
+  `NewCashZap`, which copies `issued_at`/`expires_at` exactly and never
+  writes `expiration`, `PlanSend`/`PlanSendCandidates`, `Count`,
+  `SelectCopy`/`SelectTrustedCopy`, `ZapTargetFor`, `ZapContextFromEvent`,
+  `Chains`/`ChainForHRP`, `SameMinter`, `IncomingFilter`, `SentFilters`,
+  `PublishRelays` and `IncomingRelays`.
+  ([#194](https://github.com/ohstr/nmilat/pull/194))
+- Adds `nipCZ/relayreg`, an opt-in relay validator for kind 9522 that
+  applies rules 1-6. ([#194](https://github.com/ohstr/nmilat/pull/194))
+- Adds `nipAZ.ServerPolicy` and `ReceiptPolicy`, so a server applies every
+  NIP-AZ request rule (advertised chain, callback amount, own endpoint,
+  trusted `ia`) and every receipt rule including rule 10, `SupportsAltZap`,
+  `AltZapRequest.EconomicSender`, `Endpoint`, `AltZapReceipt.Amount` and
+  `NormalizeEndpoint`. ([#193](https://github.com/ohstr/nmilat/pull/193))
+- Adds `ia` to alt-zap requests and receipts, `nipAZ.ResolveIdentity` and
+  `SweepAllowed` (with `HeldValue`), which resolve a ConnectionKey or
+  release held value only through the request's IA's current attestation,
+  and `AltZapReceiptParams.LinkAuthorized`, without which `r`/`R` are
+  refused (`ErrLinkNotAuthorized`).
+  ([#193](https://github.com/ohstr/nmilat/pull/193))
+- Adds `nip57test.Spec.IA`, `TestIA` and `AltZapLnurl`.
+  ([#193](https://github.com/ohstr/nmilat/pull/193))
+- Adds the NIP-CW join building blocks: `nipcw.Terms`, `TermsTag`,
+  `ParseTerms`, `RenewalAtLeast`, `ValidRenewal`,
+  `CreateCircleWalletParams.Prepare` with a single-use `*PreparedJoin`
+  (`Item`, `ParseResult`, `ErrPreparedJoinUsed`), `CircleWalletDetails` and
+  `EncryptDetails`, `JoinLookupParams` and
+  `nipcash/client.(*BatchSession).LookupCircleJoin`.
+  ([#192](https://github.com/ohstr/nmilat/pull/192))
+- Adds NIP-CW Hub helpers: `VerifyJoinProof`,
+  `ParseCreateCircleWalletRequest`, `JoinProofError`,
+  `JoinProofRetainUntil`, `NewMemberRequest`, `VerifyMemberRequest`,
+  `MemberRequestRetainUntil`, `BudgetPeriodStart`, `BudgetPeriod`,
+  `FeeSkim`, `RoutingFeeReserve`, `MaxCost`, `ResolveFollowSet`,
+  `EncryptHiddenMember`, `DecryptHiddenMember`, `SealHiddenMembers`, and
+  every NIP-CW join and wallet error code.
+  ([#192](https://github.com/ohstr/nmilat/pull/192))
+- Adds `nipcw.SignCircleHubConnection`, `CircleHubConnection.Verify` and
+  `Fields`, `nipcw.WalletConnection`, and in `nipcw/client` `LookupJoin`,
+  `DeleteWallet`, `ParseRotationNotification`, `WalletGuard`,
+  `JoinIndeterminateError`, `PendingJoin`, `JoinJournal`,
+  `JoinResult.Wallet`, `Client.Verified`, `ErrNoAnnouncement`,
+  `ErrNotAccepting`, `ErrRotationWarningRequired`, `ErrHubNonConforming` and
+  `ErrOverHubLimit`. ([#192](https://github.com/ohstr/nmilat/pull/192))
+- Adds an optional Circle Wallet Hub connection to the fake Hub
+  (`cashtest.WithCircleHub`).
+  ([#192](https://github.com/ohstr/nmilat/pull/192))
+- Adds the client's write-ahead journal for calls carrying a `request_id`:
+  `nipcash.PendingCall`, `client.Journal` (and the optional
+  `AcceptedRecorder`), envelopes packed one at a time with `not_after` =
+  now + `DeadlineWindow(H)` and each call written ahead with that exact
+  deadline before publishing, `FinalError` for `BAD_REQUEST`,
+  `IndeterminateError` for any other answer short of a result,
+  `ItemOutcome.RequestID` and `NeedsLookup`, `Recover` and `Replace` (derived
+  ids, at most 3 re-placements, a mint or order only with confirmation), and
+  `ErrNoJournal`, `ErrNotSent`, `ErrDeadlineTooClose`, `ErrDuplicateRequestID`
+  and `ErrReplaceNeedsConfirmation`.
+  ([#191](https://github.com/ohstr/nmilat/pull/191))
+- Adds minting over a `cashhub1` string (`ConnectCashHub`, `HubInfo`,
+  `HubClient.Info` with the online check, `HubClient.MintCash` with a
+  journal, `LookupMint`), lookups of transfers and consolidates
+  (`Client.LookupTransfer`, `LookupConsolidate`; a bearer call is looked up
+  without its secret first), `ConnectCashSlice`, `CashSecretCredential`,
+  `ConnectZap`, `SelectVerifiedCopy` and `Bill.Ordered`.
+  ([#191](https://github.com/ohstr/nmilat/pull/191))
+- Adds proof of work to the client: a session reads each relay's NIP-11
+  minimum, mines a request to the highest one with its `expiration` at
+  `not_after`, re-mines the same request on a `pow:` refusal, and reports a
+  minimum over `WithPowBudget` or mining not done in time as `ErrPowTooHard`
+  (an `ErrNotSent`). Sessions take `SessionOption`s.
+  ([#191](https://github.com/ohstr/nmilat/pull/191))
+- Adds a proof-of-work relay double to `internal/cashtest`
+  (`Relay.SetMinPow`, NIP-11, the `expiration` window, id dedup) and the
+  CT-POW-01..03 conformance cases.
+  ([#191](https://github.com/ohstr/nmilat/pull/191))
+- Adds `request_id` to `mint_cash`, `cash_transfer` and `cash_consolidate`
+  (`RequestID`, filled with a fresh id by the SDK until the journal lands),
+  `zap_target` and `remainder_commitment` to `cash_transfer`, a zap bill's
+  `issued_at` and `expires_at`, `cash_lookup` (`CashLookupParams`,
+  `ParseCashLookupResult`), tombstones (`Tombstone`, `ParseTombstone`,
+  `*BillGone`, `TombstoneReason`), `RedeemFee`, `RequiredInvoiceAmount`,
+  cash secrets and commitments, `OrderedResult`, the `withdraw` terms of
+  `cash_status`, and `OwnRow` and `Claimable`.
+  ([#190](https://github.com/ohstr/nmilat/pull/190))
+- Adds the Hub-side serving helpers of the private transport:
+  `transport.ClassifyEnvelope` (E1 to E6 in order), `ItemShapeOK`,
+  `BearerShapeOK`, `VerifyBillProofAny`, `WrapResponseChunk`,
+  `PaddedReplySize`, and `nipcash.ServingMethod`, `ReuseCheckApplies`,
+  `RequiresRequestID` and `AnswersWithTombstone`.
+  ([#189](https://github.com/ohstr/nmilat/pull/189))
+- Adds proof of work for private requests: `transport.WrapRequestPow` mines
+  a request with an `expiration` equal to its `not_after`, `Remine` re-mines
+  the same envelope, `ParsePowRejection` reads a `pow:` refusal and
+  `RelayPowMinimum` reads a relay's NIP-11 minimum.
+  ([#189](https://github.com/ohstr/nmilat/pull/189))
+- Adds `network` and `chain` to `get_info` results (`GetInfoResult.Chain`,
+  `ValidNetwork`), `accepting`, `fee_reserve`, `dust_threshold_millis`,
+  `rotation_delay_secs` and `per_wallet_max_receive_millis` to a Circle
+  Wallet Hub's terms (`CircleWalletInfo.MissingAlways` names absent keys),
+  receive budgets, the NIP-CASH and NIP-CW error codes and rotation
+  notifications, `delete_circle_wallet`, and `nip47.WithExpiration`,
+  `RequestExpiration` and `NWCClient.CallWithOptions`.
+  ([#188](https://github.com/ohstr/nmilat/pull/188))
+- Adds `request_id` and lookup helpers for NIP-CASH: `ValidRequestID`,
+  `NewRequestID`, `DerivedRequestID`, `CheckDeadline`, `CommitAllowed`,
+  `DeadlineWindow`, `DecideLookup`, `RecordRetained`, `TombstoneAnswerable`,
+  `SliceLive`, the `ErrCode*` constants, `CodeRetryable` and `FinalCode`.
+  ([#187](https://github.com/ohstr/nmilat/pull/187))
+- Adds `max_request_age` to the Hub announcement (`Limits.MaxRequestAgeSeconds`,
+  `AnnouncedLimits.MaxRequestAge`) and `Announcement.ValidateForBillCalls`,
+  which reports a Hub without one of at least 60 seconds as unusable.
+  ([#187](https://github.com/ohstr/nmilat/pull/187))
+- Adds shared claim-proof helpers for NIP-CASH Hubs: `VerifyClaimProof`
+  (the exact tag schema per method and slice, bound values, freshness,
+  consumed ids, the connection_key attestation checks, `RESTRICTED` for an
+  untrusted IA), `VerifySliceAttestation`, `ItemSignerMatchesClaim`,
+  `FreshAt`, `ClaimRetainUntil`, `SourcesHash` and `NewIdentityHashOf`.
+  ([#186](https://github.com/ohstr/nmilat/pull/186))
+- Adds canonical NIP-IC ConnectionKeys for x, discord, email and dns (IDNA
+  A-labels, refusing any input the mapping would change), keys taken byte for
+  byte from an attestation for other platforms (`ConnectionKeyFromAttested`,
+  `nipcash.ConnectionKeyFromAttestation`, `ConnectionKeyFromNConnection`),
+  and the NIP-IC verification model (`nipIC.Evaluate`).
+  ([#185](https://github.com/ohstr/nmilat/pull/185))
+- Adds `nipIC.NewIdentityConnection`, which links a user's `35521` to one or
+  more attestations by reference, `auth_type` support for attestations
+  verified by other means, and `Attestation.Reverify` for cross-IA
+  re-verification of `public_post` evidence.
+  ([#185](https://github.com/ohstr/nmilat/pull/185))
+- Adds the `cash-mint:v1` and `cash-zap:v1` mint signatures with
+  `relay_hash` (`MintPayloadV1`, `ZapPayloadV1`, `ProvenancePayload`,
+  `VerifyZapProvenance`, `MinterXOnly`), `nipcash.SignToken`, which refuses
+  to issue a token whose signature does not recover to the node key,
+  `LocalMintSigner`, `IsReservedSignText`, and the online check
+  (`OnlineCheck`, `HubIdentityEqual`).
+  ([#184](https://github.com/ohstr/nmilat/pull/184))
+- Adds signed connection strings: `cashhub1` carries the Hub identity, a
+  node signature and the chain (TLV 4, 5, 6), with `SignCashHubConnection`,
+  `CashHubConnection.Verify`, `ConnSignedText`, `SignConnection`,
+  `VerifyConnection`, `LocalChainSigner`, `RelayHash` and `QRForm`.
+  ([#183](https://github.com/ohstr/nmilat/pull/183))
+- Adds TLV 8, the token's signature scheme (`Token.Scheme`), and
+  `Token.UsableRelays`.
+  ([#183](https://github.com/ohstr/nmilat/pull/183))
+- Adds the `nipcash/conformance` suite, which runs the spec's Hub scenarios
+  against any Hub through `HubUnderTest` and optional `Clocked`, `Faulty`,
+  `Admin`, `HubDeleter`, `OrderPayer`, `PowRelay` and `Lister` adapters; this
+  first set covers envelope serving and connection scope (CT-ENV-01, 02, 03,
+  10, 11, 14, 15 and CT-SCOPE-03).
+  ([#182](https://github.com/ohstr/nmilat/pull/182))
+- Adds `transport.DecodeResponseChunk`, which refuses a reply chunk only when
+  it is unusable and reports ids never sent or answered twice, and the error
+  `detail` field (`ResultError.Detail`). A reply that omits every item now
+  carries `"results": []`.
+  ([#181](https://github.com/ohstr/nmilat/pull/181))
 - Adds `nip44.MessageKeys` and `nip44.OpenWithKeys`: one payload's message
   keys, MAC checked, which open that payload and no other. The package now
   tests against the official NIP-44 v2 vectors.
@@ -263,6 +626,199 @@ privacy and performance fixes.
 
 ### Changed
 
+- Changes `Replace` to re-place a withdrawal automatically only while its
+  quote holds at `ReplaceOptions.ChainTip`, showing it (`quote_unchecked`,
+  `quote_expired`) otherwise, so callers must now pass the tip; to refuse,
+  before anything is written, a send that packs no call under the derived id
+  or changes its target, amount, secrets or quote; and to record the derived
+  id only once the call is written ahead.
+  ([#218](https://github.com/ohstr/nmilat/pull/218))
+- Changes a batch refused whole with QUOTA_EXCEEDED or BAD_REQUEST to keep
+  that refusal for every call carrying a `request_id`, repacking only items
+  without one, and drops the unreachable stale-policy resend; a batch stopped
+  partway by ErrNotSent gives each unsent item `OutcomeNotSent`.
+  Since every spend carries a `request_id`, only reads are repacked in
+  practice: a spend in such an envelope is closed refused by `Recover`, and
+  its caller issues it again under a fresh `request_id`.
+  ([#218](https://github.com/ohstr/nmilat/pull/218))
+- Changes `Replace` to check whether a withdrawal's derived id was already
+  placed before checking its quote, so a live re-placement closes as
+  `derived_already_placed` rather than showing `quote_expired` or
+  `quote_unchecked`.
+  ([#218](https://github.com/ohstr/nmilat/pull/218))
+- Changes `TapCache` to count a signer as passed at tap once steps 2 and 3
+  succeed, an unavailable Hub included, so `CurrentByD` keeps showing that
+  listing, as unavailable, beside a copy under another pubkey.
+  ([#218](https://github.com/ohstr/nmilat/pull/218))
+- Changes `textsan`, and so `listing.SanitizeText` and NIP-LSP text, to strip
+  every format character (Unicode Cf: U+206A-U+206F, U+FFF9-U+FFFB and the
+  tag characters included), keeping a zero-width joiner only between two
+  emoji, and to cap the result at 32 bytes per allowed character.
+  ([#218](https://github.com/ohstr/nmilat/pull/218))
+- Changes `ItemOutcome.SafeToResend` to answer true only for BAD_REQUEST or
+  a definitive code on a call without a `request_id`, never for INTERNAL or
+  REQUEST_REUSED; `RedeemOptions.AutoAmount` with no `Payee` to read the payee
+  from the invoice's signature; and `CashRedeem` to return
+  `*nipcash.BillGone` for a destroyed bill.
+  ([#218](https://github.com/ohstr/nmilat/pull/218))
+- Changes `VersionBook` to show, when several pubkeys list one `d`, only the
+  listing whose signer passed at tap, or none; `listing.SanitizeText` to strip
+  control characters; and `textsan` to strip U+200E, U+200F, U+061C, U+00AD,
+  U+180E and U+2061-U+2064.
+  ([#218](https://github.com/ohstr/nmilat/pull/218))
+- Changes `PocketJournal.DerivedEntryExists` to return `ErrTooFewRelays`
+  rather than report an absence when fewer than `MinStored` relays answered.
+  ([#218](https://github.com/ohstr/nmilat/pull/218))
+- Changes a batch refused whole with QUOTA_EXCEEDED or BAD_REQUEST to
+  re-read the announcement and, when the policy changed, repack and resend
+  once; `TransferMany` to generate the remainder target of a partial cash
+  split; `State` to read NOT_FOUND as `BillNoSlice` and a widened scope-mine
+  answer as indeterminate; and `cashtest.Relay.Duplicate` to reach Hub
+  listeners too. ([#215](https://github.com/ohstr/nmilat/pull/215))
+- Changes `ConsolidateMany` to refuse an item over `max_consolidate_sources`
+  or one that fits no envelope before anything is written, and
+  `CreateCircleWalletMany` to give every join an outcome, building spilled
+  joins in a later envelope.
+  ([#213](https://github.com/ohstr/nmilat/pull/213))
+- Changes `nipCO.CheckOrderInvoice` to refuse an order invoice that does not
+  expire at `pay_by`. ([#210](https://github.com/ohstr/nmilat/pull/210))
+- Changes `nipCO/client.Place` to refuse a Lightning reply whose invoice is
+  not a BOLT11 invoice for exactly `pay_millis`; the fake Hub answers orders
+  with a signed invoice for exactly `pay_millis`, expiring at `pay_by`.
+  ([#208](https://github.com/ohstr/nmilat/pull/208))
+- Changes `CashRedeemParams.Request` to refuse an `amount` with an invoice
+  that carries one, and a pubkey recipient, target or `ia_pubkey` that is
+  not 64 lowercase hex. ([#208](https://github.com/ohstr/nmilat/pull/208))
+- Changes `nipIC.ConnectionKeyFromAttested` to refuse a non-canonical user
+  id on a platform with a canonical form, and
+  `nipcash.ConnectionKeyFromAttestation` to refuse an attestation whose `d`
+  is not the ConnectionKey of its platform and user id.
+  ([#208](https://github.com/ohstr/nmilat/pull/208))
+- Changes `nip44.json` to follow NIP-44 v2's extended length prefix: the
+  pinned upstream file's `invalid.encrypt_msg_lengths` rows of 65536 bytes and
+  more are listed as `superseded`, the NIP's extended length prefix vectors
+  (65535, 65536, 65537) are added as `extendedLengthPrefix`, and
+  `nmilatDivergences` is gone. ([#208](https://github.com/ohstr/nmilat/pull/208))
+- Changes `NormalizeAddress` to report a base58check address as
+  `ErrAddressNoWitness` rather than a mixed-case error, and
+  `WithdrawTerms.Validate` to refuse an empty `script_types`.
+  ([#206](https://github.com/ohstr/nmilat/pull/206))
+- Changes the fake Hub to answer a commit stalled past its deadline
+  `BAD_REQUEST`, as NIP-CASH requires, instead of dropping the reply.
+  ([#206](https://github.com/ohstr/nmilat/pull/206))
+- Changes `relay.ClassifyKind` to count kinds 9522 and 9523 as zaps.
+  ([#204](https://github.com/ohstr/nmilat/pull/204))
+- Changes the Hub-side encoding of `expires_at` in `mint_cash`,
+  `cash_consolidate` and `cash_status` results: omitted for a bill that
+  never expires (clients still read absent, null and 0 as never).
+  ([#201](https://github.com/ohstr/nmilat/pull/201))
+- Changes `HubClient.MintCash` to apply
+  `WithPublishFilter`/`WithAfterPublish` to the mint's NIP-47 request.
+  ([#201](https://github.com/ohstr/nmilat/pull/201))
+- Changes `niplsp` and `nipcash/listing` to share one text sanitizer;
+  `niplsp` now also drops an emoji variation selector left after a stripped
+  check-mark look-alike. ([#201](https://github.com/ohstr/nmilat/pull/201))
+- Changes `nipCO/client` to check order addresses with nipcash's witness
+  address helpers, and `FinalError.Detail`/`IndeterminateError.Detail` to
+  carry `ParseDetail` of the answer.
+  ([#197](https://github.com/ohstr/nmilat/pull/197))
+- Changes `client.Connect` and `ConnectCashSlice` to accept only a cash
+  token: no NIP-47 URI form is parsed anywhere in the cash NIPs, which an
+  import-graph test pins. ([#196](https://github.com/ohstr/nmilat/pull/196))
+- Changes `client.Replace` to leave the write-ahead of the re-placed call to
+  the send path, which writes it once with its exact deadline, `DerivedFrom`
+  and `Attempt`. ([#196](https://github.com/ohstr/nmilat/pull/196))
+- Changes the `nip59` seal to carry empty tags (`[]`) instead of `null`.
+  ([#196](https://github.com/ohstr/nmilat/pull/196))
+- Changes `nipAZ.ValidateAltZapRequest` to take a `ServerPolicy` and
+  `ValidateAltZapReceipt` a `ReceiptPolicy`. `p`/`P` tags must be 64
+  lowercase hex with a NIP-IC platform name and are never lowercased;
+  `amount` must be a plain positive integer; an `lnurl` is accepted in
+  either case, not mixed. The relay validators apply the SHOULD rules too,
+  and the builders refuse to sign an event that would fail validation.
+  ([#193](https://github.com/ohstr/nmilat/pull/193))
+- Changes `nipcw.CircleHubConnection` to require TLV 4, 5 and 6 (`Pubkey`,
+  `Relays`, `HubIdentity`, `Signature`, `Chain`); encoding refuses an
+  unsigned connection. `nipcw/client.Connect` takes a `circlehub1` string
+  and `Options` and runs the online check; `Join` joins only over the
+  private transport, with a `JoinJournal`, and warns before joining a Hub
+  without rotation. ([#192](https://github.com/ohstr/nmilat/pull/192))
+- Changes `nipcw.CreateCircleWalletRequest` to carry `max_receive`, an
+  unsigned `expiry` and an always-sent `budget_renewal`,
+  `CreateCircleWalletResponse` to report `ConnectionPubkey`,
+  `MaxReceiveMillis`, `DustThresholdMillis`, `RotationDelaySecs`,
+  `MissingTerms`, `LeakedFields` and `CapsRaised`, `ConnectionKeyFromSecret`
+  to refuse a secret that is not 64 lowercase hex, and
+  `nipcash/client.BatchCircleJoin` to carry a `*nipcw.PreparedJoin` (`Join`)
+  instead of `Params`. ([#192](https://github.com/ohstr/nmilat/pull/192))
+- Changes `TransferMany`, `ConsolidateMany`, `CashTransfer` and
+  `CashConsolidate` to take a `Journal` and a device id (the composites take
+  them in their params); a call without a journal is refused. A session uses
+  the newest validly signed announcement and treats the Hub as unusable when
+  that one is rejected, never falling back to an older one; it publishes to
+  the announced relays, then the bill's own. `Connect` refuses a `cashhub1`
+  string and dials a token on its usable relays.
+  ([#191](https://github.com/ohstr/nmilat/pull/191))
+- Changes `cash_status` to the final wire: no `cash_secret` for a cash-mode
+  bill, scope `mine` by default, a destroyed bill answered with a
+  `{"status":"spent","reason":…}` tombstone for every bill method, and
+  `RecipientStatus.ExpiresAt` an `Expiry` (absent, null or 0 is never).
+  ([#190](https://github.com/ohstr/nmilat/pull/190))
+- Changes `client.CheckClaim` to read the caller's own row from its
+  credential, matching a `connection_key` row by its value and its IA, and to
+  report a spent or withdrawn slice as not claimable rather than as not found.
+  ([#190](https://github.com/ohstr/nmilat/pull/190))
+- Changes `NewCashTarget` and `RecipientToken` to return an error, the
+  `cash_consolidate` item to target `Sources[0]` and be signed by its
+  credential, and a cash-mode mint recipient to a caller-generated
+  `*CashTarget` commitment.
+  ([#190](https://github.com/ohstr/nmilat/pull/190))
+- Changes the private transport to the final serving rules: no `v` on
+  envelopes or replies; `cash_lookup`, `cash_order` and the withdrawal methods
+  servable; `Decode` keeps proofless, secretless and repeated items for the
+  Hub's own steps and reports an over-cap consolidate as `QUOTA_EXCEEDED`;
+  `CheckFreshness(e, now, H)` replaces `MaxNotAfterWindow`; padding stops at
+  `max_bytes`, and replies pad to the bucket under 65535; the verification
+  budget counts every signed event an item carries; an announced `max_bytes`
+  over 65535 is clamped (`Announcement.EffectiveLimits`).
+  ([#189](https://github.com/ohstr/nmilat/pull/189))
+- Changes the kind-11190 announcement to the tag form: `inbox`, one `limit`
+  per name, `r` and optional `addr` tags (`Announcement.Addrs`), an empty
+  `content` and no version. `ParseAnnouncement` reads only tags and accepts an
+  inbox equal to the author; `NewAnnouncement` takes optional addrs and
+  parses its own event before returning it.
+  ([#187](https://github.com/ohstr/nmilat/pull/187))
+- Changes claim proofs to carry the `m` tag, and `s` on `cash_consolidate`,
+  through `ClaimBinding`; item and bill proofs now must carry `expiration`
+  equal to the envelope's `not_after`, an empty `content` and lowercase hex
+  `d`, `h` and `ph`, with freshness counted in whole seconds.
+  ([#186](https://github.com/ohstr/nmilat/pull/186))
+- Changes `nipIC.NewConnectionKey`, `nipAZ.Connection` and
+  `nipcash.ConnectionKey` to return an error and refuse non-canonical input
+  and platforms without a canonical form, and `BySigningConnectionKey` to
+  take the attestation only.
+  ([#185](https://github.com/ohstr/nmilat/pull/185))
+- Changes `nipIC.NewAttestation` to write a 90-day `expiration` unless the IA
+  asks for none, and to refuse an invalid platform name or a non-canonical
+  user id; `ParseAttestation`, `ParseIdentityConnection` and the
+  `nconnection` codec refuse duplicate, malformed or missing fields.
+  ([#185](https://github.com/ohstr/nmilat/pull/185))
+- Changes `nipcash.Encode` to refuse unsigned tokens and empty, blank or
+  non-ASCII relay hints, and the bech32 credential decoders to refuse a
+  string that mixes upper and lower case (`ErrMixedCase`); an all-uppercase
+  string decodes. A token whose TLV 5/6 come without a valid TLV 8 now has no
+  provenance.
+  ([#183](https://github.com/ohstr/nmilat/pull/183))
+- Changes `CashHubConnection` to `{Pubkey, Relays, Secret, Label, HasLabel,
+  HubIdentity, Signature, Chain}`; `EncodeCashHubConnection` refuses an
+  unsigned connection and `DecodeCashHubConnection` one missing TLV 4, 5 or 6.
+  ([#183](https://github.com/ohstr/nmilat/pull/183))
+- Changes `ItemOutcome` so a reply split into chunks reports unanswered and
+  contradicted items separately (`OutcomeUnanswered`, `OutcomeConflict`), a
+  result whose `result_type` is not the item's method is never read as a
+  result, and an envelope that got no reply is unanswered rather than not
+  served. A `switch` over `OutcomeState` needs a default branch.
+  ([#181](https://github.com/ohstr/nmilat/pull/181))
 - Changes a derived index that missed writes while off to catch up from
   where it stopped instead of rebuilding. Too many deletes meanwhile, a
   layout change or writes by another program still mean a rebuild.
@@ -376,8 +932,129 @@ privacy and performance fixes.
 - Takes the `*GroupsService` in `NewQueryHandler`, so `POST /query` applies
   REQ's NIP-29 visibility. ([#74](https://github.com/ohstr/nmilat/pull/74))
 
+### Removed
+
+- Removes `nipcw.CreateCircleWalletParams.Request`, `ParseResult` and `Item`
+  (use `Prepare`), `CreateCircleWalletResponse.PairingURI`,
+  `CircleHubConnection.WalletPubkey`/`RelayURLs`, the standard-transport
+  `nipcw/client.(*Client).CreateCircleWallet`, `JoinOptions.RequirePrivate`,
+  `JoinResult.Private`/`FallbackReason` and `ErrPrivateJoinUnavailable`.
+  ([#192](https://github.com/ohstr/nmilat/pull/192))
+- Removes `Client.MintCash` (use `HubClient.MintCash`).
+  ([#191](https://github.com/ohstr/nmilat/pull/191))
+- Removes `MintCashParams.IdempotencyKey`, `nipcash.Anyone()` and
+  `ErrWrongCredentialForTarget`,
+  `RecipientResult.CashSecret`, `CashStatusResult.Error`/`IsSpent`,
+  `CashStatusParams.AttestationEvent`, and `nipcash.MatchClaim`,
+  `MatchClaimAuto`, `NoLocalIdentity` and `ErrSpent` (use `OwnRow`,
+  `Claimable` and `*BillGone`).
+  ([#190](https://github.com/ohstr/nmilat/pull/190))
+- Removes `nipcash.MintPayload` and the `lokicash-mint:v1` payload: a token
+  signed over it carries no valid provenance.
+  ([#184](https://github.com/ohstr/nmilat/pull/184))
+
 ### Fixed
 
+- Fixes GO-2026-5970 and GO-2026-5026 by updating `golang.org/x/text` to
+  v0.39.0 and `golang.org/x/net` to v0.55.0.
+  ([#218](https://github.com/ohstr/nmilat/pull/218))
+- Fixes the proof vector case "no expiration tag is fine", which expects a
+  refusal: it is now "missing expiration tag is refused".
+  ([#218](https://github.com/ohstr/nmilat/pull/218))
+- Fixes the conformance suite skipping every withdrawal case against a Hub
+  that lists `cash_withdraw_quote` and `cash_withdraw` only on its bills'
+  connections: they are `cash_redeem`-scope methods of a Cash Wallet
+  connection (NIP-CASH §Methods, §Scope Surface), so when the Cash Hub
+  connection does not list them the suite reads the offer from a probe bill's
+  own `get_info`; CT-WD-01 and CT-SCOPE-05 check the bill's lists too. The
+  probe bill is redeemed right after (with a Payee), so it does not outlast
+  CT-WD-24's 400 days.
+  ([#218](https://github.com/ohstr/nmilat/pull/218))
+- Fixes CT-WD-02 refusing an expired bill's tombstone: a Hub that has already
+  swept the bill answers a quote for it with its tombstone (spent, expired).
+  ([#218](https://github.com/ohstr/nmilat/pull/218))
+- Fixes `RekeyCashSlice` reporting success with no token when the Hub spins
+  the slice off, stranding the funds: it returns the new wallet's pubkey and
+  token, and consolidates an interim spin-off over its own connection.
+  ([#218](https://github.com/ohstr/nmilat/pull/218))
+- Fixes `nipCP.Sync` trusting the id a relay claims: each wrap's id and
+  signature are checked before it is keyed, credited to a relay or marked
+  seen, and it is marked seen only once it opens, so one relay can no longer
+  hide a pocket entry.
+  ([#218](https://github.com/ohstr/nmilat/pull/218))
+- Fixes `HubClient.MintCash` closing a mint whose token's provenance is not
+  the connection's Hub identity or whose wallet differs (now
+  `*IndeterminateError`); a `cash_consolidate` reply with an empty
+  `new_wallet_token` or `new_wallet_pubkey` being accepted (now
+  `ErrEmptyToken`, the call stays pending); a cancelled withdrawal's re-minted
+  bill going unchecked; and an order read back with `cash_lookup` skipping the
+  invoice and address checks.
+  ([#218](https://github.com/ohstr/nmilat/pull/218))
+- Fixes `VerifyClaimProof` accepting any amount when a transfer or
+  consolidate expectation carries none; `Item.VerificationCost` undercounting
+  signed events when another params member is mistyped (an E6 budget bypass);
+  item and bill proofs accepting a binding tag that is not exactly one string;
+  a slice attestation repeating d, p, platform, evidence or expiration; an
+  envelope refused at E5 or E6 not counting as served; `Envelope.Validate`
+  skipping bill proofs and refusing a proofless cash_status or quote; and
+  `CashConsolidateParams.Pending` wrapping on overflow.
+  ([#218](https://github.com/ohstr/nmilat/pull/218))
+- Fixes connections signed or encoded with `Label` but not `HasLabel`
+  (unverifiable), and labels that are not valid UTF-8.
+  ([#218](https://github.com/ohstr/nmilat/pull/218))
+- Fixes nipCZ refusing a 9522 carrying `e` and `a` whose coordinate author is
+  not `p`, counting a zap on a target event that does not verify, and taking
+  minters from a 10522 another author signed.
+  ([#218](https://github.com/ohstr/nmilat/pull/218))
+- Fixes listings accepting a mixed-case `connection`, hiding a listing whose
+  `get_info` lacks the `cash_order` key (now unavailable), refusing repeated
+  hints of an unknown payment kind, and reading a curator set by any `d`.
+  ([#218](https://github.com/ohstr/nmilat/pull/218))
+- Fixes niplsp never using a remembered node's announcement again after a
+  restart, reading an LSPS1 answer with no known option as not asked, calling
+  a live check usable without list_protocols, and accepting a non-ASCII
+  website or image URL.
+  ([#218](https://github.com/ohstr/nmilat/pull/218))
+- Fixes `TransferFromSources` dropping the session options on reconnect,
+  `LookupJoin` accepting a credential that is not the join's signer,
+  `ParseCreateCircleWalletRequest` reading an empty `budget_renewal` as never,
+  `nipCP` `Balance` wrapping on overflow, a Spoofed nipIC verdict naming the
+  pubkey of a claim whose signature fails, and `signeruri` passing the
+  untrimmed URI on.
+  ([#218](https://github.com/ohstr/nmilat/pull/218))
+- Fixes `transport.DecodeResponse` refusing a reply larger than the request's
+  `max_bytes`: a Hub pads each reply chunk against its own `pad_bucket_bytes`
+  and 65535, as `EncodeResponse` does, so a reply is now refused for size
+  only past 65535 bytes.
+  ([#218](https://github.com/ohstr/nmilat/pull/218))
+- Fixes the credential decoders and `nipIC.DecodeNConnection` accepting a
+  bech32m checksum: these strings are NIP-19 bech32 (on-chain addresses keep
+  BIP-350). ([#206](https://github.com/ohstr/nmilat/pull/206))
+- Fixes `ParseWithdrawCancel` giving a different reason from run to run when
+  several fields are bad. ([#206](https://github.com/ohstr/nmilat/pull/206))
+- Fixes `nip01.SubscriptionFilter` losing its tag filters when marshalled by
+  value. ([#206](https://github.com/ohstr/nmilat/pull/206))
+- Fixes a proof missing several tags reporting a different missing tag from
+  run to run. ([#205](https://github.com/ohstr/nmilat/pull/205))
+- Fixes `nipLS` line limits: a line of exactly 1 MiB plus its newline is
+  accepted on both sides; a longer one is answered `invalid: line too long`,
+  discarded without buffering, and the connection kept; a result whose
+  response would exceed 1 MiB is answered `result too large`.
+  ([#203](https://github.com/ohstr/nmilat/pull/203))
+- Fixes `nipCP` relay queries losing an event that arrived just before EOSE.
+  ([#201](https://github.com/ohstr/nmilat/pull/201))
+- Fixes `IndeterminateError`'s text including the call's request_id.
+  ([#197](https://github.com/ohstr/nmilat/pull/197))
+- Fixes `CashTransferResult.RecipientToken` to report a spin-off answered
+  with its tombstone as `*BillGone`.
+  ([#196](https://github.com/ohstr/nmilat/pull/196))
+- Fixes `client.AcceptedRecorder` being told item ids instead of
+  request_ids. ([#195](https://github.com/ohstr/nmilat/pull/195))
+- Fixes chunked private replies so a chunk that contradicts another no longer
+  discards outcomes already decided, including a new bill's only token. An item
+  answered twice, or answered beside an envelope-level error, is reported on its
+  own as `OutcomeConflict`, and the reply as `ErrReplyConflict`.
+  ([#181](https://github.com/ohstr/nmilat/pull/181))
 - Fixes the relay hanging for good when a query with several tag names (or a
   `before_id`) ran inside a read while a write grew the store, as a NIP-29
   group create does. The query is now planned in the caller's transaction.

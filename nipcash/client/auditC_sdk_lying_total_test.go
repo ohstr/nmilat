@@ -267,7 +267,7 @@ func TestAuditC_LyingTotal_SingleItemDiscardsARealResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	batchOut, batchErr := c.session.TransferMany(ctx, []BatchTransfer{{ID: "1", Bill: bill,
-		Params: nipcash.CashTransferParams{To: nipcash.Pubkey(target), Credential: nipcash.BySecret(connSecretFor(target)), CurrentAmount: 7000}}})
+		Params: nipcash.CashTransferParams{To: nipcash.Pubkey(target), Credential: nipcash.BySecret(connSecretFor(target)), CurrentAmount: 7000}}}, newTestJournal(), "d")
 	if batchErr != nil {
 		t.Fatalf("control: TransferMany err = %v, want a complete reply (total bounded by 1 item)", batchErr)
 	}
@@ -285,7 +285,7 @@ func TestAuditC_LyingTotal_SingleItemDiscardsARealResult(t *testing.T) {
 	defer cancel2()
 	res, err := c.CashTransfer(ctx2, nipcash.CashTransferParams{
 		To: nipcash.Pubkey(target), Credential: nipcash.BySecret(connSecretFor(target)), CurrentAmount: 7000,
-	})
+	}, newTestJournal(), "d")
 	t.Logf("CashTransfer -> result=%v err=%v", res, err)
 
 	if res == nil {
@@ -325,7 +325,7 @@ func TestAuditC_LyingTotal_SingleItemDiscardsARealResult(t *testing.T) {
 // because that is what a caller is told to use to RECOVER from an omission.
 func TestAuditC_LyingTotal_StatusAlsoDiscarded(t *testing.T) {
 	body, err := json.Marshal(nipcash.CashStatusResult{
-		Recipients: []nipcash.RecipientStatus{{AmountMillis: 4242}},
+		Recipients: []nipcash.RecipientStatus{{IdentityType: "pubkey", IdentityValue: strings.Repeat("ab", 32), AmountMillis: 4242}},
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -1,16 +1,15 @@
 package nipcash
 
 import (
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
+	"errors"
+	"fmt"
 
 	"github.com/ohstr/nmilat/nipAZ"
 	"github.com/ohstr/nmilat/nipIC"
 )
 
 // Recipient is who mint_cash funds a slice for — build one with Pubkey,
-// ConnectionKey, or Anyone. No identity_type string ever appears in caller
+// ConnectionKey, or a *CashTarget. No identity_type string ever appears in caller
 // code: each constructor encodes its own wire shape internally.
 type Recipient interface {
 	// recipient is an unexported marker: only types this package constructs
@@ -59,77 +58,79 @@ func Pubkey(hex string) namedIdentity {
 	return namedIdentity{identity: nipAZ.Pubkey(hex)}
 }
 
-// ConnectionKey builds a Recipient/Target for a Web Identity account that
-// has no Nostr keypair yet, vouched for by the Identity Authority at
-// iaPubkey — platform+externalID are hashed into a nipIC.ConnectionKey
-// internally (via nipAZ.Connection, itself built on nipIC.NewConnectionKey),
-// so no caller ever computes that hash by hand.
-func ConnectionKey(platform nipIC.WebIdentity, externalID, iaPubkey string) namedIdentity {
-	return namedIdentity{identity: nipAZ.Connection(platform, externalID), ia: iaPubkey}
+// ConnectionKey builds a Recipient/Target for an account on a platform with a
+// canonical user-id form (x, discord, email, dns), from typed input, vouched for
+// by the IA at iaPubkey. Input that is not canonical has no key and is an error
+// (nipIC.ErrNotCanonical); a platform without a canonical form is
+// nipIC.ErrTypedInputNotCanonical, since its key comes from the recipient's
+// attestation (ConnectionKeyFromAttestation) or nconnection
+// (ConnectionKeyFromNConnection), never from what a sender typed.
+func ConnectionKey(platform nipIC.WebIdentity, typed, iaPubkey string) (namedIdentity, error) {
+	id, err := nipAZ.Connection(platform, typed)
+	if err != nil {
+		return namedIdentity{}, err
+	}
+	return namedIdentity{identity: id, ia: iaPubkey}, nil
 }
 
-// ResolvedConnectionKey builds a Recipient/Target from a nipIC.ConnectionKey
-// the caller already has — e.g. one decoded from an nconnection1... string
-// via nipIC.DecodeNConnection, which carries the key itself, not the raw
-// external ID it was hashed from. Unlike ConnectionKey, this never hashes
-// anything (via nipAZ.ResolvedConnection): a caller with only the key, not
-// the external ID, has no way to reproduce ConnectionKey's own hash step
-// and shouldn't need to.
-func ResolvedConnectionKey(key nipIC.ConnectionKey, platform nipIC.WebIdentity, iaPubkey string) namedIdentity {
-	return namedIdentity{identity: nipAZ.ResolvedConnection(key, platform), ia: iaPubkey}
+// ConnectionKeyFromAttestation builds a Recipient/Target from a recipient's
+// Kind 35522: the key is its d tag, byte for byte, and the IA is its author.
+func ConnectionKeyFromAttestation(att *nipIC.Attestation) (namedIdentity, error) {
+	if att == nil || att.Event == nil {
+		return namedIdentity{}, fmt.Errorf("nipcash: no attestation")
+	}
+	// d must be the ConnectionKey of the evidence's user id, and on a platform
+	// with a canonical form that user id must be canonical (NIP-IC
+	// §Terminology): an attestation keyed otherwise addresses no account.
+	key, err := nipIC.ConnectionKeyFromAttested(att.Platform, att.Evidence.UserID)
+	if err != nil {
+		return namedIdentity{}, err
+	}
+	if key != att.ConnectionKey {
+		return namedIdentity{}, ErrAttestationKey
+	}
+	return ResolvedConnectionKey(att.ConnectionKey, att.Platform, att.PubKey)
 }
 
-// cashRecipient is Anyone()'s concrete Recipient — plain cash, no
-// registered identity, redeemable by whoever holds the wallet's secret.
-// Deliberately satisfies only Recipient, not Target: see CashTarget.
-type cashRecipient struct{}
+// ErrAttestationKey is an attestation whose d is not the ConnectionKey of its
+// platform and evidence user id.
+var ErrAttestationKey = errors.New("nipcash: the attestation's d is not the ConnectionKey of its platform and user id")
 
-func (cashRecipient) recipient()            {}
-func (cashRecipient) identityType() string  { return identityTypeCash }
-func (cashRecipient) identityValue() string { return "" }
-func (cashRecipient) iaPubkey() string      { return "" }
+// ConnectionKeyFromNConnection builds a Recipient/Target from the key and
+// platform an nconnection carries, with the IA the sender trusts for it. The IA
+// is required: the key travels with the pubkey of the IA that attested it.
+func ConnectionKeyFromNConnection(key nipIC.ConnectionKey, platform nipIC.WebIdentity, iaPubkey string) (namedIdentity, error) {
+	if iaPubkey == "" {
+		return namedIdentity{}, ErrMissingIAPubkey
+	}
+	return ResolvedConnectionKey(key, platform, iaPubkey)
+}
 
-// Anyone builds a Recipient for plain, unbound cash — the Hub mints its
-// cash secret and returns it once, in MintCash's own response
-// (MintCashResult.Recipients[i].CashSecret). Not usable as a
-// CashTransfer/CashConsolidate Target — use NewCashTarget for that case
-// instead, which has different, caller-side secret-generation requirements.
-func Anyone() Recipient { return cashRecipient{} }
+// ResolvedConnectionKey builds a Recipient/Target from a ConnectionKey the caller
+// already holds. It never hashes anything; it refuses a key that is not 64
+// lowercase hex and a platform outside nipIC.ValidPlatformName.
+func ResolvedConnectionKey(key nipIC.ConnectionKey, platform nipIC.WebIdentity, iaPubkey string) (namedIdentity, error) {
+	if _, err := nipIC.ParseConnectionKey(string(key)); err != nil {
+		return namedIdentity{}, err
+	}
+	if !nipIC.ValidPlatformName(platform) {
+		return namedIdentity{}, nipIC.ErrPlatformName
+	}
+	return namedIdentity{identity: nipAZ.ResolvedConnection(key, platform), ia: iaPubkey}, nil
+}
 
-// CashTarget is a not-yet-realized cash-mode identity, used only as a
-// CashTransfer/CashConsolidate Target. It is NOT the same as Anyone():
-// mint_cash's cash-mode recipient gets its secret minted by the Hub, over the
-// Hub's own single-owner connection — safe to return in that response.
-// cash_transfer's cash-mode target is the opposite: NIP-CASH requires the
-// *caller* to generate the secret and submit only its commitment, because
-// the response travels back over the shared *source* connection,
-// decryptable by every co-recipient it's ever had (NIP-CASH §Security
-// Considerations — an implementation that minted a fresh secret here and
-// handed it back would leak it to exactly the audience this mechanism
-// exists to keep it from). NewCashTarget generates that secret locally —
-// it never appears in any request or response — and exposes it via Secret
-// so the caller can hand it to whoever they're transferring to, alongside
-// the returned wallet token.
+// CashTarget is a cash-mode identity: a secret the caller generated and its
+// commitment, which is all that travels. It is a mint_cash recipient and a
+// cash_transfer/cash_consolidate target alike: a Hub never generates a cash
+// secret (NIP-CASH §Cash-Mode Slices). The caller persists Secret() before the
+// call goes out and hands it on with the returned token.
 type CashTarget struct {
 	secret string
 	commit string // hex sha256(secret) — the value actually sent on the wire
 }
 
-func (*CashTarget) target() {}
-
-// NewCashTarget generates a fresh, high-entropy cash secret locally and
-// its commitment, ready to use as a CashTransfer/CashConsolidate Target.
-func NewCashTarget() *CashTarget {
-	var raw [32]byte
-	// crypto/rand.Read never returns a partial read without an error on any
-	// platform Go supports; a non-nil error here means the platform's CSPRNG
-	// is unavailable, which nothing downstream could recover from either.
-	if _, err := rand.Read(raw[:]); err != nil {
-		panic("nipcash: crypto/rand unavailable: " + err.Error())
-	}
-	sum := sha256.Sum256(raw[:])
-	return &CashTarget{secret: hex.EncodeToString(raw[:]), commit: hex.EncodeToString(sum[:])}
-}
+func (*CashTarget) target()    {}
+func (*CashTarget) recipient() {}
 
 // Secret returns the cash secret to hand to whoever this target's
 // CashTransfer/CashConsolidate call is for — alongside the call's own
@@ -178,6 +179,12 @@ type Source struct {
 	// CashStatus.
 	Amount     uint64
 	Credential Credential
+	// Ordered is a local mark, never sent: the source is an ordered slice
+	// (§Data Model: minted for an order, or made from ordered slices only). A
+	// consolidate whose sources' marks differ is refused locally
+	// (nipcash/client.ErrMixedOrdered) rather than sent for a RESTRICTED
+	// refusal. A slice received from someone else carries no mark.
+	Ordered bool
 }
 
 // From pairs walletPubkey and its current amount with a Credential.
@@ -200,7 +207,7 @@ type Credential interface {
 	// connection_key mode); cashSecret is the plaintext secret (only for
 	// a cash credential). Exactly one of {identityEvent, cashSecret} is
 	// ever set.
-	buildProof(binding proofBinding) (identityType, identityValue string, identityEvent, attestationEvent []byte, cashSecret string, err error)
+	buildProof(binding ClaimBinding) (identityType, identityValue string, identityEvent, attestationEvent []byte, cashSecret string, err error)
 
 	// itemAuthorization reports how this credential can authorize an item on the
 	// PRIVATE TRANSPORT, which needs something buildProof cannot give it: a

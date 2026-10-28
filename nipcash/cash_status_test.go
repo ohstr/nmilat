@@ -1,69 +1,48 @@
 package nipcash
 
 import (
-	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 )
 
-// A roster response and a tombstone share one type, so the discriminator has to
-// be reliable in both directions.
-func TestCashStatusResult_IsSpent(t *testing.T) {
-	var roster CashStatusResult
-	if err := json.Unmarshal([]byte(`{"recipients":[{"identity_type":"pubkey","amount_millis":1000}]}`), &roster); err != nil {
-		t.Fatal(err)
+// A roster and a tombstone are told apart by ParseCashStatusResult; an empty or
+// unknown answer is never read as spent.
+func TestParseCashStatusResult_RosterOrTombstone(t *testing.T) {
+	roster, err := ParseCashStatusResult([]byte(`{"recipients":[{"identity_type":"pubkey","identity_value":"` + strings.Repeat("a", 64) + `","amount_millis":1000}]}`))
+	if err != nil || roster.Tombstone != nil || len(roster.Recipients) != 1 {
+		t.Fatalf("roster: %+v %v", roster, err)
 	}
-	if roster.IsSpent() {
-		t.Fatal("a roster response must not read as spent")
+	tomb, err := ParseCashStatusResult([]byte(`{"status":"spent","reason":"redeemed","retained_until":1758800000}`))
+	if err != nil || tomb.Tombstone == nil || *tomb.Tombstone.RetainedUntil != 1758800000 {
+		t.Fatalf("tombstone: %+v %v", tomb, err)
 	}
-	if len(roster.Recipients) != 1 {
-		t.Fatalf("recipients = %d, want 1", len(roster.Recipients))
-	}
-
-	var tomb CashStatusResult
-	if err := json.Unmarshal([]byte(`{"error":"spent","retained_until":1758800000}`), &tomb); err != nil {
-		t.Fatal(err)
-	}
-	if !tomb.IsSpent() {
-		t.Fatal("a tombstone must read as spent")
-	}
-	if tomb.RetainedUntil == nil || *tomb.RetainedUntil != 1758800000 {
-		t.Fatalf("retained_until = %v, want 1758800000", tomb.RetainedUntil)
+	for _, raw := range []string{`{}`, `{"error":"spent"}`, `{"status":"something_new"}`} {
+		r, err := ParseCashStatusResult([]byte(raw))
+		if err == nil && r.Tombstone != nil {
+			t.Errorf("%s read as spent", raw)
+		}
 	}
 }
 
-// An empty response is neither a roster nor a tombstone. It must not read as
-// spent — reporting a bill gone on an empty answer is the failure this whole
-// mechanism exists to prevent.
-func TestCashStatusResult_EmptyIsNotSpent(t *testing.T) {
-	var empty CashStatusResult
-	if err := json.Unmarshal([]byte(`{}`), &empty); err != nil {
-		t.Fatal(err)
+// T10-20: rows of an unknown type, or with uppercase values, are malformed;
+// expires_at absent, null or 0 is never.
+func TestParseCashStatusResult_Rows(t *testing.T) {
+	hex := strings.Repeat("a", 64)
+	for _, raw := range []string{
+		`{"recipients":[{"identity_type":"bearer","identity_value":"` + hex + `","amount_millis":1}]}`,
+		`{"recipients":[{"identity_type":"pubkey","identity_value":"` + strings.ToUpper(hex) + `","amount_millis":1}]}`,
+		`{"recipients":[{"identity_type":"connection_key","identity_value":"` + hex + `","amount_millis":1}]}`,
+	} {
+		if _, err := ParseCashStatusResult([]byte(raw)); !errors.Is(err, ErrStatusMalformed) {
+			t.Errorf("%s: %v", raw, err)
+		}
 	}
-	if empty.IsSpent() {
-		t.Fatal("an empty result must not read as spent")
-	}
-}
-
-// An unrecognised error value must not read as spent either: a future Hub may
-// answer with something this client does not know, and guessing "gone" is the
-// dangerous direction to guess in.
-func TestCashStatusResult_UnknownErrorIsNotSpent(t *testing.T) {
-	var other CashStatusResult
-	if err := json.Unmarshal([]byte(`{"error":"something_new"}`), &other); err != nil {
-		t.Fatal(err)
-	}
-	if other.IsSpent() {
-		t.Fatal("only the documented \"spent\" value may read as spent")
-	}
-}
-
-// The zero value must be indeterminate, so a caller that ignores an error and
-// reads the state still never concludes the bill is gone.
-func TestBillStateZeroValueIsIndeterminate(t *testing.T) {
-	// BillState lives in the client package; this asserts the contract it
-	// depends on from here: a zero CashStatusResult is not spent.
-	var zero CashStatusResult
-	if zero.IsSpent() {
-		t.Fatal("the zero value must not read as spent")
+	for _, exp := range []string{``, `,"expires_at":null`, `,"expires_at":0`} {
+		r, err := ParseCashStatusResult([]byte(`{"recipients":[{"identity_type":"pubkey","identity_value":"` + hex +
+			`","amount_millis":1,"claimed":true,"claimed_at":5,"redeem_fee_millis":1,"net_redeemable_millis":0,"min_transfer_millis":1000` + exp + `}]}`))
+		if err != nil || !r.Recipients[0].ExpiresAt.Never() || *r.Recipients[0].ClaimedAt != 5 || r.Recipients[0].MinTransferMillis != 1000 {
+			t.Errorf("expires_at %q: %+v %v", exp, r, err)
+		}
 	}
 }

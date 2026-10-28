@@ -1,7 +1,10 @@
 package nipcash
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/ohstr/nmilat/nip57"
 )
@@ -19,10 +22,16 @@ type CashRedeemParams struct {
 	// a cash-mode slice; BySigning/BySigningConnectionKey for an
 	// identity-bound one.
 	Credential Credential
-	// Amount OPTIONALLY overrides an amountless invoice's amount, mirroring
-	// pay_invoice. nil uses the invoice's own encoded amount.
+	// Amount OPTIONALLY sets an amountless invoice's amount, mirroring
+	// pay_invoice. nil uses the invoice's own encoded amount. It is refused
+	// with an invoice that carries an amount (ErrRedeemAmountOnAmountInvoice):
+	// NIP-CASH §Redeeming a Slice, amount MUST NOT alter such an invoice.
 	Amount *uint64
 }
+
+// ErrRedeemAmountOnAmountInvoice is an amount given with an invoice that
+// already carries one; nothing is sent.
+var ErrRedeemAmountOnAmountInvoice = errors.New("nipcash: amount must not be sent with an invoice that carries an amount")
 
 // CashRedeemRequest is cash_redeem's wire request shape.
 type CashRedeemRequest struct {
@@ -44,7 +53,10 @@ func (p CashRedeemParams) Request(walletPubkey string) (CashRedeemRequest, error
 	if err != nil {
 		return CashRedeemRequest{}, fmt.Errorf("nipcash: decode invoice: %w", err)
 	}
-	binding := proofBinding{WalletPubkey: walletPubkey, Bolt11Hash: invoice.PaymentHash}
+	if p.Amount != nil && invoice.AmountMloki != 0 {
+		return CashRedeemRequest{}, ErrRedeemAmountOnAmountInvoice
+	}
+	binding := ClaimBinding{Method: MethodCashRedeem, Wallet: walletPubkey, Bolt11Hash: invoice.PaymentHash}
 	identityType, identityValue, identityEvent, attestationEvent, cashSecret, err := p.Credential.buildProof(binding)
 	if err != nil {
 		return CashRedeemRequest{}, err
@@ -72,4 +84,27 @@ type CashRedeemResult struct {
 	// same-node redemption) — never the real Lightning routing cost, which
 	// is never charged to the recipient (NIP-CASH §The Redeem Fee).
 	FeesPaid uint64 `json:"fees_paid"`
+}
+
+// ParseCashRedeemResult reads a cash_redeem answer: a tombstone is *BillGone;
+// otherwise a 64 lowercase hex preimage and an unsigned integer fees_paid.
+func ParseCashRedeemResult(raw json.RawMessage) (*CashRedeemResult, error) {
+	if err := goneIf(MethodCashRedeem, raw); err != nil {
+		return nil, err
+	}
+	var w struct {
+		Preimage string          `json:"preimage"`
+		FeesPaid json.RawMessage `json:"fees_paid"`
+	}
+	if err := json.Unmarshal(raw, &w); err != nil {
+		return nil, fmt.Errorf("nipcash: cash_redeem result: %w", err)
+	}
+	if !isLowerHex64(w.Preimage) {
+		return nil, errors.New("nipcash: cash_redeem preimage is not 64 lowercase hex")
+	}
+	fees, err := strconv.ParseUint(string(w.FeesPaid), 10, 64)
+	if err != nil {
+		return nil, errors.New("nipcash: cash_redeem fees_paid is not an unsigned integer")
+	}
+	return &CashRedeemResult{Preimage: w.Preimage, FeesPaid: fees}, nil
 }

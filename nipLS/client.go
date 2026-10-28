@@ -26,6 +26,10 @@ var (
 // ErrConnClosed means the signer hung up without answering.
 var ErrConnClosed = errors.New("nipLS: signer closed the connection")
 
+// ErrMessageTooLarge means a request line would exceed MaxMessageSize.
+// Nothing was sent and the connection stays usable.
+var ErrMessageTooLarge = errors.New("nipLS: request exceeds the 1 MiB message cap")
+
 // Client talks to a signer over its unix socket. It is safe for
 // concurrent use; calls are serialized on the one connection. After a
 // transport error (including a cancelled ctx mid-call) the connection is
@@ -64,7 +68,8 @@ func Dial(ctx context.Context, uri string) (*Client, error) {
 // The Client owns conn from here on.
 func NewClient(ctx context.Context, conn net.Conn) (*Client, error) {
 	sc := bufio.NewScanner(conn)
-	sc.Buffer(make([]byte, 0, 64*1024), MaxMessageSize)
+	// +1: a line of exactly MaxMessageSize bytes and its "\n" must fit.
+	sc.Buffer(make([]byte, 0, 64*1024), MaxMessageSize+1)
 	c := &Client{conn: conn, sc: sc}
 	pub, err := c.Call(ctx, nip46.MethodGetPublicKey)
 	if err != nil {
@@ -83,7 +88,9 @@ func (c *Client) Close() error { return c.conn.Close() }
 func (c *Client) PubKey() string { return c.pub }
 
 // Call sends one request and waits for its response. An error response
-// comes back as an *Error.
+// comes back as an *Error; a "denied: " one matches ErrDenied and is
+// never retried. A request whose line would exceed MaxMessageSize is not
+// sent: Call returns ErrMessageTooLarge.
 func (c *Client) Call(ctx context.Context, method string, params ...string) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -92,7 +99,7 @@ func (c *Client) Call(ctx context.Context, method string, params ...string) (str
 	}
 	result, err := c.call(ctx, method, params)
 	var e *Error
-	if err != nil && !errors.As(err, &e) {
+	if err != nil && !errors.As(err, &e) && !errors.Is(err, ErrMessageTooLarge) {
 		// The conn deadline can fire a hair before ctx reports it.
 		var ne net.Error
 		if ctx.Err() != nil {
@@ -109,6 +116,18 @@ func (c *Client) call(ctx context.Context, method string, params []string) (stri
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	if params == nil {
+		params = []string{}
+	}
+	line, err := json.Marshal(nip46.Request{RequestID: strconv.Itoa(c.seq + 1), Method: method, Params: params})
+	if err != nil {
+		return "", err
+	}
+	if len(line) > MaxMessageSize {
+		return "", ErrMessageTooLarge
+	}
+	c.seq++
+	id := strconv.Itoa(c.seq)
 	if dl, ok := ctx.Deadline(); ok {
 		_ = c.conn.SetDeadline(dl)
 	} else {
@@ -117,15 +136,6 @@ func (c *Client) call(ctx context.Context, method string, params []string) (stri
 	stop := context.AfterFunc(ctx, func() { _ = c.conn.SetDeadline(time.Unix(1, 0)) })
 	defer stop()
 
-	c.seq++
-	id := strconv.Itoa(c.seq)
-	if params == nil {
-		params = []string{}
-	}
-	line, err := json.Marshal(nip46.Request{RequestID: id, Method: method, Params: params})
-	if err != nil {
-		return "", err
-	}
 	if _, err := c.conn.Write(append(line, '\n')); err != nil {
 		return "", err
 	}

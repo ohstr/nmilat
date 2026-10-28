@@ -202,6 +202,9 @@ func openSubscription(ctx context.Context, s *Session, rp *wire.RequestPacket, r
 	// deniedPrivateGroupPotentialEvent skips the parse for events with no
 	// "d"/"h" tag, so this stays cheap.
 	checkGroupPrivacy := s.groups != nil
+	// Recipient-only kinds (WithRecipientOnlyKinds), checked per event for
+	// the same reason: an identity AUTHed after the REQ is honored.
+	checkRecipient := s.config.mayMatchRecipientOnlyKind(allFilters(rp.Filters)...)
 
 	go func() {
 		// async subscription loop (same as original)
@@ -219,7 +222,8 @@ func openSubscription(ctx context.Context, s *Session, rp *wire.RequestPacket, r
 		for {
 			select {
 			case event := <-toSend:
-				if checkGroupPrivacy && s.groups.deniedPrivateGroupPotentialEvent(s, event) {
+				if (checkGroupPrivacy && s.groups.deniedPrivateGroupPotentialEvent(s, event)) ||
+					(checkRecipient && s.config.deniedRecipientOnlyPotentialEvent(s, event)) {
 					wg.Done()
 					continue
 				}

@@ -2,9 +2,10 @@ package client
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/nipcash/transport"
@@ -85,7 +86,7 @@ func (s *BatchSession) StatusMany(ctx context.Context, items []BatchStatus) ([]S
 	// sendBatch can return outcomes AND an error, when a reply arrived in fewer chunks
 	// than the hub sent. Those outcomes are real answers and must not be discarded —
 	// the error says part of the picture is missing, not that none of it is.
-	outcomes, sendErr := s.sendBatch(ctx, builders)
+	outcomes, sendErr := s.sendBatch(ctx, builders, sendOptions{})
 	if sendErr != nil && len(outcomes) == 0 {
 		return nil, sendErr
 	}
@@ -93,16 +94,15 @@ func (s *BatchSession) StatusMany(ctx context.Context, items []BatchStatus) ([]S
 	for _, o := range outcomes {
 		so := StatusOutcome{ItemOutcome: o}
 		if o.Succeeded() {
-			var result nipcash.CashStatusResult
-			if err := json.Unmarshal(o.Result, &result); err != nil {
+			result, err := nipcash.ParseCashStatusResult(o.Result)
+			if err != nil {
 				// A served item whose body will not decode is a hub-side problem, not
-				// an omission. Downgrading it to an error keeps the distinction honest:
-				// the hub DID answer, and the answer was unusable.
+				// an omission: the hub DID answer, and the answer was unusable.
 				so.State = OutcomeError
 				so.Error = decodeError(o.ID, err)
 				so.Undecodable = true
 			} else {
-				so.Result = &result
+				so.Result = result
 			}
 		}
 		out = append(out, so)
@@ -156,7 +156,7 @@ func (s *BatchSession) RedeemMany(ctx context.Context, items []BatchRedeem) ([]R
 	// sendBatch can return outcomes AND an error, when a reply arrived in fewer chunks
 	// than the hub sent. Those outcomes are real answers and must not be discarded —
 	// the error says part of the picture is missing, not that none of it is.
-	outcomes, sendErr := s.sendBatch(ctx, builders)
+	outcomes, sendErr := s.sendBatch(ctx, builders, sendOptions{})
 	if sendErr != nil && len(outcomes) == 0 {
 		return nil, sendErr
 	}
@@ -164,13 +164,11 @@ func (s *BatchSession) RedeemMany(ctx context.Context, items []BatchRedeem) ([]R
 	for _, o := range outcomes {
 		ro := RedeemOutcome{ItemOutcome: o}
 		if o.Succeeded() {
-			var result nipcash.CashRedeemResult
-			if err := json.Unmarshal(o.Result, &result); err != nil {
-				ro.State = OutcomeError
-				ro.Error = decodeError(o.ID, err)
-				ro.Undecodable = true
+			result, err := nipcash.ParseCashRedeemResult(o.Result)
+			if err != nil {
+				ro.ItemOutcome = parseFailure(ro.ItemOutcome, err)
 			} else {
-				ro.Result = &result
+				ro.Result = result
 			}
 		}
 		out = append(out, ro)
@@ -192,17 +190,63 @@ type BatchTransfer struct {
 type TransferOutcome struct {
 	ItemOutcome
 	Result *nipcash.CashTransferResult
+	// Remainder is the cash target the remainder of a partial split of a cash
+	// source was sent to: the caller's own, or the one the SDK generated and
+	// wrote ahead (role nipcash.SecretRoleRemainder). nil for any other call.
+	// Its secret opens the remainder wallet.
+	Remainder *nipcash.CashTarget
+	// Ordered is the item's Bill.Ordered, a local mark the bills the transfer
+	// makes keep (NIP-CASH §Data Model: a new wallet made from an ordered slice
+	// is ordered, and an in-place reassignment keeps the mark).
+	Ordered bool
 }
 
-// TransferMany transfers or splits several bills in one request.
-func (s *BatchSession) TransferMany(ctx context.Context, items []BatchTransfer) ([]TransferOutcome, error) {
+// CallError is the caller's error for one transfer outcome: nil for a result;
+// *nipcash.BillGone for a tombstone; *FinalError for BAD_REQUEST; else
+// *IndeterminateError (look it up), whose Call carries the refusal code
+// (LastCode, SawReused) that Recover reads.
+func (o TransferOutcome) CallError(sendErr error) error {
+	return oneCall(o.ItemOutcome, sendErr, nipcash.MethodCashTransfer)
+}
+
+// TransferMany transfers or splits several bills in one request. Every item
+// carries a request_id (one is generated when Params has none) and is written
+// ahead to j, as device's, with its envelope's exact deadline before anything is
+// published. Outcomes carry the request_id; NeedsLookup says which to look up.
+//
+// A partial split of a cash source without a RemainderTarget gets a fresh one
+// (nipcash.CashTransferParams.WithRemainder), its secret written ahead with
+// role nipcash.SecretRoleRemainder; a re-placement (Replace) keeps the
+// replaced call's. The target sent is TransferOutcome.Remainder.
+func (s *BatchSession) TransferMany(ctx context.Context, items []BatchTransfer, j Journal, device string) ([]TransferOutcome, error) {
 	builders := make([]itemBuilder, 0, len(items))
 	// Kept so each result can be parsed through the SAME params that authorized it —
 	// the delivered token is encrypted to that credential.
 	paramsByID := make(map[string]nipcash.CashTransferParams, len(items))
+	orderedByID := make(map[string]bool, len(items))
 	for i, it := range items {
 		it := it
+		if it.Params.RequestID == "" {
+			rid, err := nipcash.NewRequestID()
+			if err != nil {
+				return nil, err
+			}
+			it.Params.RequestID = rid
+		}
+		if err := it.Bill.check(itemID(it.ID, i), s.HubIdentity()); err != nil {
+			return nil, err
+		}
+		params, err := remainderFor(ctx, it.Params)
+		if err != nil {
+			return nil, err
+		}
+		it.Params = params
+		pc, err := it.Params.Pending(it.Bill.target)
+		if err != nil {
+			return nil, err
+		}
 		paramsByID[itemID(it.ID, i)] = it.Params
+		orderedByID[itemID(it.ID, i)] = it.Bill.Ordered
 		builders = append(builders, itemBuilder{
 			ID: itemID(it.ID, i),
 			Build: func(id string, b nipcash.ItemBinding) (transport.Item, error) {
@@ -211,19 +255,21 @@ func (s *BatchSession) TransferMany(ctx context.Context, items []BatchTransfer) 
 				}
 				return it.Params.Item(id, it.Bill.target, it.Bill.connSecret, b)
 			},
+			RequestID: it.Params.RequestID,
+			Pending:   s.pendingAt(pc),
 		})
 	}
 
 	// sendBatch can return outcomes AND an error, when a reply arrived in fewer chunks
 	// than the hub sent. Those outcomes are real answers and must not be discarded —
 	// the error says part of the picture is missing, not that none of it is.
-	outcomes, sendErr := s.sendBatch(ctx, builders)
+	outcomes, sendErr := s.sendBatch(ctx, builders, sendOptions{journal: j, device: device})
 	if sendErr != nil && len(outcomes) == 0 {
 		return nil, sendErr
 	}
 	out := make([]TransferOutcome, 0, len(outcomes))
 	for _, o := range outcomes {
-		to := TransferOutcome{ItemOutcome: o}
+		to := TransferOutcome{ItemOutcome: o, Ordered: orderedByID[o.ID], Remainder: paramsByID[o.ID].RemainderTarget}
 		if o.Succeeded() {
 			// ParseResult, never a plain unmarshal: a spun-off wallet's token
 			// arrives ENCRYPTED to its new owner, and only the credential that
@@ -231,9 +277,7 @@ func (s *BatchSession) TransferMany(ctx context.Context, items []BatchTransfer) 
 			// ciphertext in a field named for a token — usable-looking and useless.
 			result, err := paramsByID[o.ID].ParseResult(o.Result)
 			if err != nil {
-				to.State = OutcomeError
-				to.Error = decodeError(o.ID, err)
-				to.Undecodable = true
+				to.ItemOutcome = parseFailure(to.ItemOutcome, err)
 			} else {
 				to.Result = result
 			}
@@ -253,16 +297,25 @@ type BatchConsolidate struct {
 	// it. Build it with BillFor(token) — the two halves come from one token and are
 	// deliberately not separately settable (see Bill).
 	Bill Bill
-	// Credential authorizes the call itself, separately from each source's own
-	// credential inside Params.
-	Credential nipcash.Credential
-	Params     nipcash.CashConsolidateParams
+	// Params' Sources[0] is the item's target and signs its item proof.
+	Params nipcash.CashConsolidateParams
 }
 
 // ConsolidateOutcome is one consolidation's answer.
 type ConsolidateOutcome struct {
 	ItemOutcome
 	Result *nipcash.CashConsolidateResult
+	// Ordered is set when every source was ordered: the merged bill is ordered
+	// too (NIP-CASH §Consolidating Tokens). A local mark, never on the wire.
+	Ordered bool
+}
+
+// CallError is the caller's error for one consolidate outcome: nil for a
+// result; *nipcash.BillGone for a tombstone; *FinalError for BAD_REQUEST;
+// else *IndeterminateError (look it up), whose Call carries the refusal code
+// (LastCode, SawReused) that Recover reads.
+func (o ConsolidateOutcome) CallError(sendErr error) error {
+	return oneCall(o.ItemOutcome, sendErr, nipcash.MethodCashConsolidate)
 }
 
 // ConsolidateMany performs several consolidations in one request.
@@ -272,42 +325,79 @@ type ConsolidateOutcome struct {
 // batch of redemptions — and the SDK splits across envelopes rather than refusing. A
 // single consolidation whose sources alone exceed the hub's announced max_bytes cannot
 // be split at all and returns ErrItemTooLarge: the caller must consolidate in stages.
-func (s *BatchSession) ConsolidateMany(ctx context.Context, items []BatchConsolidate) ([]ConsolidateOutcome, error) {
+//
+// Every item carries a request_id and is written ahead to j, as TransferMany's.
+//
+// Each item is checked on its own before anything is written or sent: sources
+// over the Hub's announced max_consolidate_sources are refused with
+// ErrTooManySources, and an item that fits no envelope with ErrItemTooLarge
+// (NIP-CASH §Envelopes; both wrap ErrItemTooLarge). The caller splits such an
+// item into several consolidates, each a new call.
+//
+// An item whose sources' ordered marks differ (nipcash.Source.Ordered, or the
+// item's Bill.Ordered for the source that is its bill) is refused with
+// ErrMixedOrdered before anything is written or sent: a Hub refuses that mix
+// with RESTRICTED (NIP-CASH §Consolidating Tokens, step 3).
+func (s *BatchSession) ConsolidateMany(ctx context.Context, items []BatchConsolidate, j Journal, device string) ([]ConsolidateOutcome, error) {
 	builders := make([]itemBuilder, 0, len(items))
 	// Same reason as TransferMany: the merged wallet's token is delivered encrypted.
 	paramsByID := make(map[string]nipcash.CashConsolidateParams, len(items))
+	orderedByID := make(map[string]bool, len(items))
 	for i, it := range items {
 		it := it
+		if it.Params.RequestID == "" {
+			rid, err := nipcash.NewRequestID()
+			if err != nil {
+				return nil, err
+			}
+			it.Params.RequestID = rid
+		}
+		if err := it.Bill.check(itemID(it.ID, i), s.HubIdentity()); err != nil {
+			return nil, err
+		}
+		ordered, err := consolidateOrdered(it.Bill, it.Params.Sources)
+		if err != nil {
+			return nil, mixedItem(itemID(it.ID, i))
+		}
+		pc, err := it.Params.Pending()
+		if err != nil {
+			return nil, err
+		}
 		paramsByID[itemID(it.ID, i)] = it.Params
+		orderedByID[itemID(it.ID, i)] = ordered
 		builders = append(builders, itemBuilder{
 			ID: itemID(it.ID, i),
 			Build: func(id string, b nipcash.ItemBinding) (transport.Item, error) {
 				if err := it.Bill.check(id, s.HubIdentity()); err != nil {
 					return transport.Item{}, err
 				}
-				return it.Params.Item(id, it.Bill.target, it.Bill.connSecret, it.Credential, b)
+				return it.Params.Item(id, it.Bill.target, it.Bill.connSecret, b)
 			},
+			RequestID: it.Params.RequestID,
+			Pending:   s.pendingAt(pc),
 		})
+	}
+
+	if err := s.checkConsolidateItems(items, builders); err != nil {
+		return nil, err
 	}
 
 	// sendBatch can return outcomes AND an error, when a reply arrived in fewer chunks
 	// than the hub sent. Those outcomes are real answers and must not be discarded —
 	// the error says part of the picture is missing, not that none of it is.
-	outcomes, sendErr := s.sendBatch(ctx, builders)
+	outcomes, sendErr := s.sendBatch(ctx, builders, sendOptions{journal: j, device: device})
 	if sendErr != nil && len(outcomes) == 0 {
 		return nil, sendErr
 	}
 	out := make([]ConsolidateOutcome, 0, len(outcomes))
 	for _, o := range outcomes {
-		co := ConsolidateOutcome{ItemOutcome: o}
+		co := ConsolidateOutcome{ItemOutcome: o, Ordered: orderedByID[o.ID]}
 		if o.Succeeded() {
 			// ParseResult for the reason TransferMany uses it: the merged wallet's
 			// token is delivered encrypted to its new owner.
 			result, err := paramsByID[o.ID].ParseResult(o.Result)
 			if err != nil {
-				co.State = OutcomeError
-				co.Error = decodeError(o.ID, err)
-				co.Undecodable = true
+				co.ItemOutcome = parseFailure(co.ItemOutcome, err)
 			} else {
 				co.Result = result
 			}
@@ -315,6 +405,28 @@ func (s *BatchSession) ConsolidateMany(ctx context.Context, items []BatchConsoli
 		out = append(out, co)
 	}
 	return out, sendErr
+}
+
+// checkConsolidateItems refuses, before anything is written, an item over the
+// announced source cap or one that fits no envelope on its own. An unusable
+// announcement is left to sendBatch, which reports it.
+func (s *BatchSession) checkConsolidateItems(items []BatchConsolidate, builders []itemBuilder) error {
+	limits := s.Limits()
+	if limits.Validate() != nil {
+		return nil
+	}
+	notAfter := time.Now().Add(s.deadlineWindow()).Unix()
+	for i, it := range items {
+		id := itemID(it.ID, i)
+		if n := len(it.Params.Sources); n > limits.MaxConsolidateSources {
+			return fmt.Errorf("%w: %w: item %q has %d sources, the hub's max_consolidate_sources is %d",
+				ErrItemTooLarge, ErrTooManySources, id, n, limits.MaxConsolidateSources)
+		}
+		if err := fitsAlone(builders[i], s.HubIdentity(), limits, notAfter); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // itemID falls back to the index when a caller supplied no id of their own.
@@ -334,4 +446,54 @@ func decodeError(id string, err error) *transport.ResultError {
 		Code:    "INTERNAL",
 		Message: fmt.Sprintf("hub answered item %q with a body this client could not decode: %v", id, err),
 	}
+}
+
+// parseFailure turns a result that did not parse into its outcome: a tombstone
+// (the bill is gone; nothing moved) is OutcomeError carrying Gone, never a
+// success; anything else is an undecodable answer.
+func parseFailure(o ItemOutcome, err error) ItemOutcome {
+	var gone *nipcash.BillGone
+	if errors.As(err, &gone) {
+		o.State = OutcomeError
+		o.Error = &transport.ResultError{Message: gone.Error()}
+		t := gone.Tombstone
+		o.Gone = &t
+		return o
+	}
+	o.State = OutcomeError
+	o.Error = decodeError(o.ID, err)
+	o.Undecodable = true
+	return o
+}
+
+// pendingAt completes a call for the send path: the Hub identity and H read
+// before sending, and the deadline of the envelope it was packed into.
+func (s *BatchSession) pendingAt(pc nipcash.PendingCall) func(int64) nipcash.PendingCall {
+	return func(deadline int64) nipcash.PendingCall {
+		pc.Deadline, pc.HubIdentity, pc.MaxRequestAge = deadline, s.HubIdentity(), s.MaxRequestAge()
+		return pc
+	}
+}
+
+// remainderFor completes a transfer's RemainderTarget: kept when the caller
+// gave one, the replaced call's when ctx carries a re-placement of this
+// request_id, else a fresh one when the call needs it (NIP-CASH §Transferring
+// and Splitting a Slice, remainder_commitment).
+func remainderFor(ctx context.Context, p nipcash.CashTransferParams) (nipcash.CashTransferParams, error) {
+	if !p.NeedsRemainder() || p.RemainderTarget != nil {
+		return p, nil
+	}
+	if next, ok := ctx.Value(replacementKey{}).(nipcash.PendingCall); ok && next.RequestID == p.RequestID {
+		for _, sec := range next.Secrets {
+			if sec.Role == nipcash.SecretRoleRemainder {
+				t, err := nipcash.CashTargetFromSecret(sec.Secret)
+				if err != nil {
+					return p, err
+				}
+				p.RemainderTarget = t
+				return p, nil
+			}
+		}
+	}
+	return p.WithRemainder()
 }

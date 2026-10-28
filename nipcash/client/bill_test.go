@@ -84,8 +84,7 @@ func TestBatchMethods_RejectAZeroBillByName(t *testing.T) {
 	s := &BatchSession{
 		relays: []string{"ws://127.0.0.1:1"},
 		announcement: &transport.Announcement{
-			Version: 1,
-			Inbox:   strings.Repeat("ab", 32),
+			Inbox: strings.Repeat("ab", 32),
 			Limits: transport.AnnouncedLimits{
 				MaxBytes:              d.MaxEnvelopeBytes,
 				MaxItems:              d.MaxItems,
@@ -111,11 +110,11 @@ func TestBatchMethods_RejectAZeroBillByName(t *testing.T) {
 			return err
 		}},
 		{"TransferMany", func() error {
-			_, err := s.TransferMany(ctx, []BatchTransfer{{ID: "x"}})
+			_, err := s.TransferMany(ctx, []BatchTransfer{{ID: "x"}}, newTestJournal(), "d")
 			return err
 		}},
 		{"ConsolidateMany", func() error {
-			_, err := s.ConsolidateMany(ctx, []BatchConsolidate{{ID: "x", Credential: cred}})
+			_, err := s.ConsolidateMany(ctx, []BatchConsolidate{{ID: "x"}}, newTestJournal(), "d")
 			return err
 		}},
 	} {

@@ -10,6 +10,7 @@ import (
 	"github.com/ohstr/nmilat/nipcash/transport"
 )
 
+// T11-19, E-ENV-02 (partial).
 // NIP-CASH §Multiple Relay Hints: when every relay fails, report what was tried,
 // not only the last failure. Both relays here refuse connections.
 func TestPrivateTransport_ReportsEveryRelayFailure(t *testing.T) {
@@ -19,7 +20,7 @@ func TestPrivateTransport_ReportsEveryRelayFailure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	_, _, err := s.subscribeAndPublish(ctx, strings.Repeat("c", 64), nip01.NewEvent(1, "x"))
+	_, _, _, err := s.subscribeAndPublish(ctx, strings.Repeat("c", 64), &outgoing{ev: nip01.NewEvent(1, "x")})
 	if err == nil {
 		t.Fatal("no error with every relay unreachable")
 	}

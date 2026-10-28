@@ -2084,6 +2084,12 @@ func (ss *storeScan) tailCandidate(evsid uint64, raw []byte) (*PotentialEvent, e
 }
 
 func (s *EventStore) QueryNip77Items(ctx context.Context, filter *nip01.SubscriptionFilter) ([]nip77.Item, error) {
+	return s.queryNip77Items(ctx, filter, nil)
+}
+
+// queryNip77Items is QueryNip77Items leaving out every event skip reports
+// (nil skips none).
+func (s *EventStore) queryNip77Items(ctx context.Context, filter *nip01.SubscriptionFilter, skip func(*PotentialEvent) bool) ([]nip77.Item, error) {
 	fg := nip01.NewSubscriptionFilterGroup()
 	fg.Add(filter)
 
@@ -2110,6 +2116,9 @@ func (s *EventStore) QueryNip77Items(ctx context.Context, filter *nip01.Subscrip
 	for pe := range outgoing {
 		func() {
 			defer wg.Done()
+			if skip != nil && skip(pe) {
+				return
+			}
 			idBytes, err := hex.DecodeString(pe.EventID)
 			if err != nil || len(idBytes) != 32 {
 				return

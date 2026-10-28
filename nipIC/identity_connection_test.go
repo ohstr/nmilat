@@ -15,6 +15,7 @@ func signedIdentityConnectionEvent(t *testing.T, dValue string, extraTags ...[]s
 	tags := [][]string{
 		{TagDTag, dValue},
 		{TagPlatform, "discord"},
+		{TagEventRef, "event-id-0", "wss://ia.example.com"},
 	}
 	tags = append(tags, extraTags...)
 	evt := &nip01.Event{Kind: KindIdentityConnection, Tags: tags}
@@ -113,9 +114,10 @@ func TestParseIdentityConnection_AttestationRefs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(conn.Attestations) != 2 {
-		t.Fatalf("expected 2 attestation refs (multi-IA stacking), got %d", len(conn.Attestations))
+	if len(conn.Attestations) != 3 { // the fixture's own reference comes first
+		t.Fatalf("expected 3 attestation refs (multi-IA stacking), got %d", len(conn.Attestations))
 	}
+	conn.Attestations = conn.Attestations[1:]
 	if conn.Attestations[0].EventID != "event-id-1" || conn.Attestations[0].RelayURL != "wss://relay-one.example.com" {
 		t.Errorf("unexpected first ref: %+v", conn.Attestations[0])
 	}
@@ -124,13 +126,20 @@ func TestParseIdentityConnection_AttestationRefs(t *testing.T) {
 	}
 }
 
-func TestParseIdentityConnection_NoAttestationRefsIsEmptyNotNilPanic(t *testing.T) {
-	evt := signedIdentityConnectionEvent(t, testConnKeyHex)
-	conn, err := ParseIdentityConnection(evt)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(conn.Attestations) != 0 {
-		t.Errorf("expected no attestation refs, got %d", len(conn.Attestations))
+// T05-09: a 35521 without an e reference, or without a platform, is invalid.
+func TestParseIdentityConnection_NeedsReferenceAndPlatform(t *testing.T) {
+	for name, tags := range map[string][][]string{
+		"no e":         {{TagDTag, testConnKeyHex}, {TagPlatform, "discord"}},
+		"no platform":  {{TagDTag, testConnKeyHex}, {TagEventRef, "x", "wss://r"}},
+		"bad platform": {{TagDTag, testConnKeyHex}, {TagPlatform, "Discord"}, {TagEventRef, "x", "wss://r"}},
+		"uppercase d":  {{TagDTag, "A" + testConnKeyHex[1:]}, {TagPlatform, "discord"}, {TagEventRef, "x", "wss://r"}},
+	} {
+		evt := &nip01.Event{Kind: KindIdentityConnection, Tags: tags}
+		if err := evt.Sign(testIAPrivKey); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ParseIdentityConnection(evt); err == nil {
+			t.Errorf("%s: parsed", name)
+		}
 	}
 }

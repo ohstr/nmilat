@@ -77,7 +77,7 @@ func TestAuditC_SecA_StaleAnnouncementWinsOnRelayOrder(t *testing.T) {
 // the race: a session that ALREADY holds the current announcement is walked
 // backwards onto a retired one.
 //
-// Refresh is triggered by isStalePolicy — an over-limit or over-budget rejection,
+// Refresh is triggered by a policy refusal — an over-limit or over-budget rejection,
 // which is itself something a hub can provoke by announcing tighter limits. So the
 // attacker does not need to win a startup race; it needs the client to refresh once.
 func TestAuditC_SecA_RefreshRollsBackToARetiredAnnouncement(t *testing.T) {

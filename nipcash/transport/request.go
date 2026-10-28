@@ -52,43 +52,57 @@ import (
 // So the conversation key is returned and the private key is not. That is the minimal
 // thing the caller needs: enough to read one reply, and useless for signing anything.
 func WrapRequest(plaintext []byte, inboxXOnly string) (*nip01.Event, [32]byte, error) {
+	ev, privHex, key, err := buildRequest(plaintext, inboxXOnly)
+	if err != nil {
+		return nil, key, err
+	}
+	// Never assign PubKey by hand — Sign derives it from the private key.
+	if err := ev.Sign(privHex); err != nil {
+		return nil, key, fmt.Errorf("transport: sign request: %w", err)
+	}
+	return ev, key, nil
+}
+
+// buildRequest is WrapRequest without the signature: the unsigned 23190 with its
+// author set, the ephemeral private key and the conversation key.
+func buildRequest(plaintext []byte, inboxXOnly string) (*nip01.Event, string, [32]byte, error) {
 	var key [32]byte
 
 	if len(plaintext) == 0 {
-		return nil, key, fmt.Errorf("%w: refusing to wrap an empty payload", ErrEnvelopeMalformed)
+		return nil, "", key, fmt.Errorf("%w: refusing to wrap an empty payload", ErrEnvelopeMalformed)
 	}
 	if len(inboxXOnly) != keyHexLen || !isLowerHex(inboxXOnly) {
-		return nil, key, fmt.Errorf("%w: inbox pubkey must be %d lowercase hex characters",
+		return nil, "", key, fmt.Errorf("%w: inbox pubkey must be %d lowercase hex characters",
 			ErrAnnouncementMalformed, keyHexLen)
 	}
 	inboxBytes, err := hex.DecodeString(inboxXOnly)
 	if err != nil {
-		return nil, key, fmt.Errorf("%w: inbox pubkey: %v", ErrAnnouncementMalformed, err)
+		return nil, "", key, fmt.Errorf("%w: inbox pubkey: %v", ErrAnnouncementMalformed, err)
 	}
 	inboxPub, err := schnorr.ParsePubKey(inboxBytes)
 	if err != nil {
-		return nil, key, fmt.Errorf("%w: inbox pubkey is not a valid point: %v", ErrAnnouncementMalformed, err)
+		return nil, "", key, fmt.Errorf("%w: inbox pubkey is not a valid point: %v", ErrAnnouncementMalformed, err)
 	}
 
 	ephemeralPriv, err := btcec.NewPrivateKey()
 	if err != nil {
-		return nil, key, fmt.Errorf("transport: ephemeral key: %w", err)
+		return nil, "", key, fmt.Errorf("transport: ephemeral key: %w", err)
 	}
 	ephemeralPrivHex := hex.EncodeToString(ephemeralPriv.Serialize())
 
 	conversationKey, err := nip44.GenerateConversationKey(ephemeralPriv, inboxPub)
 	if err != nil {
-		return nil, key, fmt.Errorf("transport: conversation key: %w", err)
+		return nil, "", key, fmt.Errorf("transport: conversation key: %w", err)
 	}
 	if len(conversationKey) != len(key) {
-		return nil, key, fmt.Errorf("transport: conversation key is %d bytes, expected %d",
+		return nil, "", key, fmt.Errorf("transport: conversation key is %d bytes, expected %d",
 			len(conversationKey), len(key))
 	}
 	copy(key[:], conversationKey)
 
 	content, err := nip44.Encrypt(string(plaintext), conversationKey)
 	if err != nil {
-		return nil, key, fmt.Errorf("transport: encrypt request: %w", err)
+		return nil, "", key, fmt.Errorf("transport: encrypt request: %w", err)
 	}
 
 	ev := nip01.NewEvent(KindPrivateRequest, content)
@@ -100,12 +114,12 @@ func WrapRequest(plaintext []byte, inboxXOnly string) (*nip01.Event, [32]byte, e
 	// confirms the event was addressed to its inbox rather than merely encrypted
 	// to something. A hub checks it before spending an ECDH.
 	ev.Tags = [][]string{{"p", inboxXOnly}}
-	// Never assign PubKey by hand — Sign derives it from the private key. See
-	// nip59.Wrap's own note about the landmine that used to sit here.
-	if err := ev.Sign(ephemeralPrivHex); err != nil {
-		return nil, key, fmt.Errorf("transport: sign request: %w", err)
+	pub, err := utils.GetPublicKey(ephemeralPrivHex)
+	if err != nil {
+		return nil, "", key, fmt.Errorf("transport: ephemeral pubkey: %w", err)
 	}
-	return ev, key, nil
+	ev.PubKey = pub
+	return ev, ephemeralPrivHex, key, nil
 }
 
 // ConversationKeyFor returns the NIP-44 conversation key between a request event's

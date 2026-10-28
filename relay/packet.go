@@ -112,6 +112,10 @@ func (s *Session) processRequest(ctx context.Context, rp *wire.RequestPacket) er
 		return nil
 	}
 
+	if s.refuseRecipientOnlyRead(rp.SubscriptionID, allFilters(rp.Filters)...) {
+		return nil
+	}
+
 	// The embedder's handlers go first, then the built-in chain.
 	if s.runRequestHandlers(ctx, rp, s.config.RequestHandlers) {
 		return nil
@@ -306,6 +310,10 @@ func (s *Session) processCount(parent context.Context, cp *wire.CountPacket) err
 		return nil
 	}
 
+	if s.refuseRecipientOnlyRead(cp.SubscriptionID, allFilters(cp.Filters)...) {
+		return nil
+	}
+
 	// We calculate count immediately and return.
 	//
 	// NIP-29: deniedPrivateGroupFilter above only catches a filter that
@@ -326,9 +334,12 @@ func (s *Session) processCount(parent context.Context, cp *wire.CountPacket) err
 	var count int64
 	var approx bool
 	var err error
-	if s.groups.needsPrivacyCheck(cp.Filters) {
+	checkGroups := s.groups.needsPrivacyCheck(cp.Filters)
+	checkRecipient := s.config.mayMatchRecipientOnlyKind(allFilters(cp.Filters)...)
+	if checkGroups || checkRecipient {
 		count, approx, err = s.store.CountEventsApprox(parent, cp.Filters, func(pe *PotentialEvent) bool {
-			return s.groups.deniedPrivateGroupPotentialEvent(s, pe)
+			return (checkGroups && s.groups.deniedPrivateGroupPotentialEvent(s, pe)) ||
+				(checkRecipient && s.config.deniedRecipientOnlyPotentialEvent(s, pe))
 		})
 	} else if n, ok := s.store.CountFromCounters(cp.Filters); ok {
 		count = n
@@ -354,7 +365,44 @@ func (s *Session) processCount(parent context.Context, cp *wire.CountPacket) err
 // EVENT
 /////////////////////////////////////////////////////////////////////
 
+// EventValidator checks an event of the kind it is registered for. A
+// non-nil error refuses the event, the OK message being "invalid: " and the
+// error's text, unless the error is (or wraps) a *RejectError, which names
+// its own NIP-01 prefix.
 type EventValidator func(context.Context, *nip01.Event) error
+
+// RejectError is a validator's refusal under a NIP-01 machine-readable
+// prefix other than "invalid" (e.g. "blocked", "restricted"). Build one
+// with Reject.
+type RejectError struct {
+	// Prefix is the NIP-01 prefix, without the colon.
+	Prefix string
+	// Err is the reason, sent after the prefix.
+	Err error
+}
+
+func (e *RejectError) Error() string { return e.Err.Error() }
+
+// Unwrap returns Err, so errors.Is sees through the prefix.
+func (e *RejectError) Unwrap() error { return e.Err }
+
+// Reject returns err as a refusal under prefix (e.g. "blocked"): a
+// validator returning it is answered "<prefix>: <err>" instead of
+// "invalid: <err>". An empty prefix means "invalid".
+func Reject(prefix string, err error) error {
+	return &RejectError{Prefix: prefix, Err: err}
+}
+
+// rejectMessage is the OK message for a validator's error: its
+// RejectError prefix, else "invalid".
+func rejectMessage(err error) string {
+	prefix := "invalid"
+	var re *RejectError
+	if errors.As(err, &re) && re.Prefix != "" {
+		prefix = re.Prefix
+	}
+	return prefix + ": " + err.Error()
+}
 
 // EventPolicy decides whether a relay takes an event, after validation: ""
 // accepts it; anything else refuses it, with that text as the OK message.
@@ -493,7 +541,7 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 	if err := runEventValidators(ctx, ep.Event); err != nil {
 		s.config.Logger.Debug().Err(err).Str("id", ep.Event.ID).Int("kind", ep.Event.Kind).Msg("event rejected: kind validation failed")
 
-		s.finishEvent(ep.Event, start, false, fmt.Sprintf("invalid: %s", err.Error()))
+		s.finishEvent(ep.Event, start, false, rejectMessage(err))
 
 		return nil
 	}
@@ -698,7 +746,18 @@ func (r *replyer) reply(sr wire.SubscriptionResponse) {
 
 func (s *Session) processNegOpen(ctx context.Context, p *wire.NegOpenPacket) error {
 
-	items, err := s.store.QueryNip77Items(ctx, p.Filter)
+	// Recipient-only kinds: the same rule as REQ, since an id list is a
+	// read too. NIP-77 has no CLOSED, so the refusal is a NEG-ERR.
+	if s.AuthedPubkey() == "" && s.config.namesRecipientOnlyKind(p.Filter) {
+		s.reply(&wire.NegErrPacket{SubscriptionID: p.SubscriptionID, Code: recipientOnlyRefusal(s.config.RecipientOnlyKinds)})
+		return nil
+	}
+	var skip func(*PotentialEvent) bool
+	if s.config.mayMatchRecipientOnlyKind(p.Filter) {
+		skip = func(pe *PotentialEvent) bool { return s.config.deniedRecipientOnlyPotentialEvent(s, pe) }
+	}
+
+	items, err := s.store.queryNip77Items(ctx, p.Filter, skip)
 	if err != nil {
 		return fmt.Errorf("failed to query items: %w", err)
 	}
