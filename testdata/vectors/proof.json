@@ -553,7 +553,7 @@
       "error": "transport: item proof is malformed: missing \"en\" tag"
     },
     {
-      "name": "no expiration tag is fine",
+      "name": "missing expiration tag is refused",
       "kind": "item",
       "proof": "{\"id\":\"04066916c6affd9e36cd4ccc9c82d0b8c3e6e3a544bbb9db8e321406488725dd\",\"pubkey\":\"4d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766\",\"created_at\":1760000000,\"kind\":23192,\"tags\":[[\"d\",\"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\"],[\"h\",\"989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f\"],[\"m\",\"cash_redeem\"],[\"ph\",\"c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\"],[\"en\",\"1111111111111111111111111111111111111111111111111111111111111111\"]],\"content\":\"\",\"sig\":\"8e9eab78a0f310862b5843d03bb06d057a2662d22b985e1ee89caf179f149192251cf0ea349bc9e13ea72c5d13efc73dea295f22c618218fa5a80f49db0c1457\"}",
       "binding": {

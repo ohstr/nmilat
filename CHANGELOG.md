@@ -923,6 +923,8 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes the proof vector case "no expiration tag is fine", which expects a
+  refusal: it is now "missing expiration tag is refused".
 - Fixes the conformance suite skipping every withdrawal case against a Hub
   that lists `cash_withdraw_quote` and `cash_withdraw` only on its bills'
   connections: they are `cash_redeem`-scope methods of a Cash Wallet
