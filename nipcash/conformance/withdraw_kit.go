@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"sync"
 	"testing"
@@ -12,10 +13,12 @@ import (
 	"github.com/flokiorg/go-flokicoin/chainutil/bech32"
 
 	"github.com/ohstr/nmilat/nip01"
+	"github.com/ohstr/nmilat/nip47"
 	"github.com/ohstr/nmilat/nipIC"
 	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/nipcash/client"
 	"github.com/ohstr/nmilat/nipcash/transport"
+	relayclient "github.com/ohstr/nmilat/relay/client"
 )
 
 // The withdrawal cases' kit: bills minted over the Hub's Cash Hub connection,
@@ -58,16 +61,96 @@ type wdState struct {
 	err     error
 	hub     *client.HubClient
 	session *client.BatchSession
+
+	offerOnce sync.Once
+	offerErr  error
+	offered   bool
+	why       string                // why the suite reads no offer
+	billInfo  *nip47.GetInfoResult // get_info on the probe bill's own connection
 }
 
 // withdrawals skips a case unless the Hub offers withdrawals, and returns its
 // batch session.
 func (s *suite) withdrawals(t *testing.T) *client.BatchSession {
 	t.Helper()
-	if !slices.Contains(s.info.PrivateMethods, nipcash.MethodCashWithdrawQuote) {
-		t.Skip("the Hub does not offer on-chain withdrawals")
+	if !s.offersWithdrawals(t) {
+		t.Skip("the Hub does not offer on-chain withdrawals: " + s.wd.why)
 	}
 	return s.wdSession(t)
+}
+
+// offersWithdrawals reports whether the Hub offers on-chain withdrawals, read
+// once. cash_withdraw_quote and cash_withdraw are methods of a Cash Wallet
+// connection under its cash_redeem scope (NIP-CASH §Methods), and a Hub SHOULD
+// derive private_methods from what each connection was granted (§Scope
+// Surface): a Hub offering them lists them on its bills' connections, not
+// necessarily on the Cash Hub connection, whose only scope is cash_hub. So a
+// Cash Hub connection listing them is read as the offer, and otherwise the
+// suite mints a probe bill and reads its own get_info.
+func (s *suite) offersWithdrawals(t *testing.T) bool {
+	t.Helper()
+	s.wd.offerOnce.Do(func() {
+		if slices.Contains(s.info.PrivateMethods, nipcash.MethodCashWithdrawQuote) {
+			s.wd.offered = true
+			return
+		}
+		if !slices.Contains(s.info.Methods, nipcash.MethodMintCash) {
+			s.wd.why = "the Cash Hub connection lists no withdrawal method and does not serve mint_cash, so the suite cannot read a bill's get_info"
+			return
+		}
+		s.wd.billInfo, s.wd.offerErr = s.probeBillInfo(t)
+		if s.wd.offerErr != nil {
+			return
+		}
+		s.wd.offered = slices.Contains(s.wd.billInfo.PrivateMethods, nipcash.MethodCashWithdrawQuote)
+		if !s.wd.offered {
+			s.wd.why = "neither the Cash Hub connection's nor a bill's get_info lists cash_withdraw_quote"
+		}
+	})
+	if s.wd.offerErr != nil {
+		t.Fatalf("withdrawal offer: %v", s.wd.offerErr)
+	}
+	return s.wd.offered
+}
+
+// probeBillInfo mints a one-slice cash bill and returns get_info on its own
+// connection.
+func (s *suite) probeBillInfo(t *testing.T) (*nip47.GetInfoResult, error) {
+	t.Helper()
+	s.wdSession(t)
+	ctx, cancel := ctx15()
+	defer cancel()
+	target, err := nipcash.NewCashTarget()
+	if err != nil {
+		return nil, err
+	}
+	res, err := s.wd.hub.MintCash(ctx, nipcash.MintCashParams{Recipients: []nipcash.Allocation{nipcash.Send(target, wdAmount)}},
+		newMemJournal(), "conformance")
+	if err != nil {
+		return nil, fmt.Errorf("mint_cash for a probe bill: %w", err)
+	}
+	tok, err := nipcash.Decode(res.CashToken)
+	if err != nil {
+		return nil, fmt.Errorf("probe bill token: %w", err)
+	}
+	return s.billGetInfo(tok)
+}
+
+// billGetInfo is get_info on a bill's own Cash Wallet connection.
+func (s *suite) billGetInfo(tok nipcash.Token) (*nip47.GetInfoResult, error) {
+	ctx, cancel := ctx15()
+	defer cancel()
+	nwc, err := relayclient.NewNWCClient(ctx, &nip47.PairingInfo{WalletPubkey: tok.WalletPubkey, RelayURLs: tok.RelayURLs, Secret: tok.Secret},
+		nip47.EncryptionNIP44V2)
+	if err != nil {
+		return nil, fmt.Errorf("open the bill's connection: %w", err)
+	}
+	defer nwc.Close()
+	gi, err := nwc.GetInfo(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get_info on the bill's connection: %w", err)
+	}
+	return gi, nil
 }
 
 func (s *suite) wdSession(t *testing.T) *client.BatchSession {

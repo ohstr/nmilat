@@ -923,6 +923,12 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes the conformance suite skipping every withdrawal case against a Hub
+  that lists `cash_withdraw_quote` and `cash_withdraw` only on its bills'
+  connections: they are `cash_redeem`-scope methods of a Cash Wallet
+  connection (NIP-CASH §Methods, §Scope Surface), so when the Cash Hub
+  connection does not list them the suite reads the offer from a probe bill's
+  own `get_info`; CT-WD-01 and CT-SCOPE-05 check the bill's lists too.
 - Fixes `RekeyCashSlice` reporting success with no token when the Hub spins
   the slice off, stranding the funds: it returns the new wallet's pubkey and
   token, and consolidates an interim spin-off over its own connection.

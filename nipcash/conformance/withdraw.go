@@ -90,7 +90,7 @@ func ctWd01(t *testing.T, s *suite) {
 			t.Errorf("%s on 23194 was not refused NOT_IMPLEMENTED: %+v", method, resp.Response)
 		}
 	}
-	if !slices.Contains(s.info.PrivateMethods, nipcash.MethodCashWithdrawQuote) || !slices.Contains(s.info.Methods, nipcash.MethodMintCash) {
+	if !slices.Contains(s.info.Methods, nipcash.MethodMintCash) || !s.offersWithdrawals(t) {
 		t.Logf("the bill part needs a Hub offering withdrawals and serving mint_cash")
 		return
 	}
@@ -98,6 +98,16 @@ func ctWd01(t *testing.T, s *suite) {
 	a, b := s.pubkeyPair(t, wdAmount)
 	if st := s.status(t, b, nipcash.ScopeMine); st.Withdraw == nil {
 		t.Errorf("cash_status of a Hub listing the withdrawal methods carries no withdraw object")
+	}
+	// A Hub that lists them on its bills' connections only (the probe found
+	// them there) lists both on this bill's too.
+	byBill := s.wd.billInfo != nil
+	if byBill {
+		if gi, err := s.billGetInfo(b.tok); err != nil {
+			t.Error(err)
+		} else if !slices.Contains(gi.PrivateMethods, nipcash.MethodCashWithdrawQuote) || !slices.Contains(gi.PrivateMethods, nipcash.MethodCashWithdraw) {
+			t.Errorf("a bill's private_methods %v lacks a withdrawal method", gi.PrivateMethods)
+		}
 	}
 	toggle, ok := s.h.(WithdrawToggle)
 	if !ok {
@@ -119,6 +129,13 @@ func ctWd01(t *testing.T, s *suite) {
 	}
 	if slices.Contains(info.PrivateMethods, nipcash.MethodCashWithdrawQuote) || slices.Contains(info.PrivateMethods, nipcash.MethodCashWithdraw) {
 		t.Errorf("withdrawals off: private_methods %v still lists them", info.PrivateMethods)
+	}
+	if byBill {
+		if gi, err := s.billGetInfo(b.tok); err != nil {
+			t.Error(err)
+		} else if slices.Contains(gi.PrivateMethods, nipcash.MethodCashWithdrawQuote) || slices.Contains(gi.PrivateMethods, nipcash.MethodCashWithdraw) {
+			t.Errorf("withdrawals off: a bill's private_methods %v still lists them", gi.PrivateMethods)
+		}
 	}
 	if st := s.status(t, b, nipcash.ScopeMine); st.Withdraw != nil {
 		t.Errorf("withdrawals off: cash_status still carries the withdraw object")
@@ -1608,11 +1625,18 @@ func ctEnv16(t *testing.T, s *suite) {
 
 // CT-SCOPE-05 (CASH-WD-01): a Hub offering withdrawals lists both
 // cash_withdraw and cash_withdraw_quote in private_methods; one that does not
-// lists neither.
+// lists neither. Checked on the Cash Hub connection, and on a bill's own
+// connection when the suite read the offer there (see offersWithdrawals).
 func ctScope05(t *testing.T, s *suite) {
-	quote := slices.Contains(s.info.PrivateMethods, nipcash.MethodCashWithdrawQuote)
-	call := slices.Contains(s.info.PrivateMethods, nipcash.MethodCashWithdraw)
-	if quote != call {
-		t.Errorf("private_methods %v lists one withdrawal method without the other", s.info.PrivateMethods)
+	both := func(where string, pm []string) {
+		quote := slices.Contains(pm, nipcash.MethodCashWithdrawQuote)
+		call := slices.Contains(pm, nipcash.MethodCashWithdraw)
+		if quote != call {
+			t.Errorf("%s private_methods %v lists one withdrawal method without the other", where, pm)
+		}
+	}
+	both("the Cash Hub connection's", s.info.PrivateMethods)
+	if slices.Contains(s.info.Methods, nipcash.MethodMintCash) && s.offersWithdrawals(t) && s.wd.billInfo != nil {
+		both("a bill's", s.wd.billInfo.PrivateMethods)
 	}
 }
