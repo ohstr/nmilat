@@ -8,6 +8,8 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `resultToState` to `testdata/vectors/pocket.json` (K-POCKET-7): NIP-CP
+  §Balance's result to state table, so every client tests the same mapping.
 - Adds `nipcash.QuoteForSlice`, binding a withdraw quote to the bill, the
   slice's identity and its current amount (the fake Hub uses it; conformance
   adds CT-WD-27, same identity at another amount), `ErrClaimAmountUnbound`,

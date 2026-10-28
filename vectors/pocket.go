@@ -2,6 +2,7 @@ package vectors
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/ohstr/nmilat/nip01"
@@ -24,6 +25,52 @@ type pocketFile struct {
 	Order    []orderApplyCase  `json:"order"`
 	Withdraw []pocketRumorCase `json:"withdraw"`
 	WdApply  []wdApplyCase     `json:"applyWithdraw"`
+	Results  []resultStateCase `json:"resultToState"`
+}
+
+// resultStateCase: K-POCKET-7, NIP-CP §Balance's result to state table, the
+// same for every method that answers about a held bill. Result is own_spend,
+// tombstone (with Tombstone, the object as the Hub sends it), not_found (with
+// Proof: identity_key, cash_secret, connection_key or other_key, what made the
+// item proof) or no_answer; State is the entry's state and Definitive whether
+// it may set a final state.
+type resultStateCase struct {
+	ID         string          `json:"id,omitempty"`
+	Name       string          `json:"name"`
+	Result     string          `json:"result"`
+	Tombstone  json.RawMessage `json:"tombstone,omitempty"`
+	Proof      string          `json:"proof,omitempty"`
+	State      string          `json:"state"`
+	Definitive bool            `json:"definitive"`
+}
+
+// statusInput reads a resultStateCase as MapStatus's input.
+func (c resultStateCase) statusInput() (nipCP.StatusInput, error) {
+	var in nipCP.StatusInput
+	switch c.Result {
+	case "own_spend":
+		in.OwnSpend = true
+	case "tombstone":
+		t, ok := nipcash.ParseTombstone(c.Tombstone)
+		if !ok {
+			return in, fmt.Errorf("%s: not a tombstone: %s", c.Name, c.Tombstone)
+		}
+		in.Tombstone = t
+	case "not_found":
+		in.NotFound = true
+		switch c.Proof {
+		case "identity_key", "cash_secret":
+			in.ProofByEntryKey = true
+		case "connection_key", "other_key":
+		default:
+			return in, fmt.Errorf("%s: unknown proof %q", c.Name, c.Proof)
+		}
+	case "no_answer":
+		in.NoAnswer = true
+	default:
+		return in, fmt.Errorf("%s: unknown result %q", c.Name, c.Result)
+	}
+	return in, nil
 }
 
 // pocketRumorCase: an entry as its kind 9525 rumor (unsigned, by User at
@@ -132,8 +179,8 @@ func pbill(w string, rev uint64, st nipCP.State) nipCP.Entry {
 
 func buildPocket() (any, error) {
 	f := pocketFile{header: newHeader(
-		"NIP-CP pocket entries (kind 9525 rumors): bill and pending entries as tags (K-POCKET-1..2), rumor parsing refusals, version resolution (K-POCKET-3), the per-chain balance (K-POCKET-4), the cash_order pending entry and its close rule (K-POCKET-5), and the cash_withdraw pending entry with its receipt, source spent, done and rewrite (K-POCKET-6).",
-		"nipCP/{entry,pending,order,withdraw,resolve}.go; nipCP/entry_test.go, seal_test.go, pending_test.go, order_test.go, withdraw_test.go (K-POCKET-1..6)",
+		"NIP-CP pocket entries (kind 9525 rumors): bill and pending entries as tags (K-POCKET-1..2), rumor parsing refusals, version resolution (K-POCKET-3), the per-chain balance (K-POCKET-4), the cash_order pending entry and its close rule (K-POCKET-5), and the cash_withdraw pending entry with its receipt, source spent, done and rewrite (K-POCKET-6), and the result to state table (K-POCKET-7, resultToState: result own_spend|tombstone|not_found|no_answer, tombstone as sent, proof identity_key|cash_secret|connection_key|other_key for not_found, the state and whether it is definitive).",
+		"nipCP/{entry,pending,order,withdraw,resolve}.go; nipCP/entry_test.go, seal_test.go, pending_test.go, order_test.go, withdraw_test.go (K-POCKET-1..6); nipCP/balance.go MapStatus (K-POCKET-7)",
 	), User: pocketUser, WrapKey: hx('c', 64), At: pocketAt}
 
 	// K-POCKET-1: a bill entry.
@@ -359,6 +406,41 @@ func buildPocket() (any, error) {
 		if done != nil {
 			rw, err := nipCP.WithdrawDoneRewrite(*done)
 			f.Withdraw = append(f.Withdraw, rumorCase("K-POCKET-6", "the done entry rewritten", rw, err))
+		}
+	}
+
+	// K-POCKET-7: a result about a held bill, mapped to the entry's state.
+	result := func(id, name, res, tomb, proof string) error {
+		c := resultStateCase{ID: id, Name: name, Result: res, Proof: proof}
+		if tomb != "" {
+			c.Tombstone = json.RawMessage(tomb)
+		}
+		in, err := c.statusInput()
+		if err != nil {
+			return err
+		}
+		st, def := nipCP.MapStatus(in)
+		c.State, c.Definitive = string(st), def
+		f.Results = append(f.Results, c)
+		return nil
+	}
+	for _, r := range [][5]string{
+		{"K-POCKET-7", "the wallet's own spend succeeded", "own_spend", "", ""},
+		{"", "tombstone, reason expired", "tombstone", `{"status":"spent","reason":"expired"}`, ""},
+		{"", "tombstone, reason reclaimed", "tombstone", `{"status":"spent","reason":"reclaimed"}`, ""},
+		{"", "tombstone, reason redeemed", "tombstone", `{"status":"spent","reason":"redeemed"}`, ""},
+		{"", "tombstone, reason transferred", "tombstone", `{"status":"spent","reason":"transferred"}`, ""},
+		{"", "tombstone, reason consolidated", "tombstone", `{"status":"spent","reason":"consolidated"}`, ""},
+		{"", "tombstone, an unrecognised reason", "tombstone", `{"status":"spent","reason":"written_off"}`, ""},
+		{"", "tombstone, no reason", "tombstone", `{"status":"spent"}`, ""},
+		{"", "NOT_FOUND, proof signed by the entry's identity key", "not_found", "", "identity_key"},
+		{"", "NOT_FOUND, cash entry, item made with its secret", "not_found", "", "cash_secret"},
+		{"", "NOT_FOUND, proof signed by the connection key", "not_found", "", "connection_key"},
+		{"", "NOT_FOUND, proof signed by another key", "not_found", "", "other_key"},
+		{"", "no answer (timeout)", "no_answer", "", ""},
+	} {
+		if err := result(r[0], r[1], r[2], r[3], r[4]); err != nil {
+			return nil, err
 		}
 	}
 	return f, nil
