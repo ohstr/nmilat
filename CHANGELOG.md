@@ -928,7 +928,11 @@ privacy and performance fixes.
   connections: they are `cash_redeem`-scope methods of a Cash Wallet
   connection (NIP-CASH §Methods, §Scope Surface), so when the Cash Hub
   connection does not list them the suite reads the offer from a probe bill's
-  own `get_info`; CT-WD-01 and CT-SCOPE-05 check the bill's lists too.
+  own `get_info`; CT-WD-01 and CT-SCOPE-05 check the bill's lists too. The
+  probe bill is redeemed right after (with a Payee), so it does not outlast
+  CT-WD-24's 400 days.
+- Fixes CT-WD-02 refusing an expired bill's tombstone: a Hub that has already
+  swept the bill answers a quote for it with its tombstone (spent, expired).
 - Fixes `RekeyCashSlice` reporting success with no token when the Hub spins
   the slice off, stranding the funds: it returns the new wallet's pubkey and
   token, and consolidates an interim spin-off over its own connection.
