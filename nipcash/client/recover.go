@@ -260,18 +260,6 @@ func Replace(ctx context.Context, pc nipcash.PendingCall, j Journal, o ReplaceOp
 	if pc.Attempt >= max {
 		return Action{Kind: ActionShow, Reason: "replace_cap"}, nil
 	}
-	if isWithdraw {
-		holdsUntil := pc.HoldsUntil
-		if o.Quote != nil {
-			holdsUntil = o.Quote.HoldsUntil
-		}
-		switch {
-		case o.ChainTip > 0 && !nipcash.QuoteValidAt(holdsUntil, o.ChainTip):
-			return Action{Kind: ActionShow, Reason: "quote_expired"}, nil
-		case o.ChainTip <= 0 && !o.Confirmed:
-			return Action{Kind: ActionShow, Reason: "quote_unchecked"}, nil
-		}
-	}
 	id, err := nipcash.DerivedRequestID(pc.RequestID)
 	if err != nil {
 		return Action{}, err
@@ -287,6 +275,20 @@ func Replace(ctx context.Context, pc nipcash.PendingCall, j Journal, o ReplaceOp
 	}
 	if placed {
 		return Action{Kind: ActionClose, Reason: "derived_already_placed"}, nil
+	}
+	// The quote is checked only once the derived id is known not to have gone
+	// out: a re-placement already placed closes the call, whatever its quote.
+	if isWithdraw {
+		holdsUntil := pc.HoldsUntil
+		if o.Quote != nil {
+			holdsUntil = o.Quote.HoldsUntil
+		}
+		switch {
+		case o.ChainTip > 0 && !nipcash.QuoteValidAt(holdsUntil, o.ChainTip):
+			return Action{Kind: ActionShow, Reason: "quote_expired"}, nil
+		case o.ChainTip <= 0 && !o.Confirmed:
+			return Action{Kind: ActionShow, Reason: "quote_unchecked"}, nil
+		}
 	}
 	next := pc
 	next.RequestID, next.DerivedFrom, next.Attempt, next.LastCode, next.SawReused = id, pc.RequestID, pc.Attempt+1, "", false

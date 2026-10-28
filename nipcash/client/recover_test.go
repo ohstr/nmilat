@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -258,5 +259,31 @@ func TestReplace_FailureBeforeWriteAheadRecordsNothing(t *testing.T) {
 	act, err := Replace(ctx, pc, j, ReplaceOptions{}, func(context.Context, nipcash.PendingCall) error { sent = true; return nil })
 	if err != nil || act.Kind != ActionWait || !sent {
 		t.Fatalf("second Replace = %+v, %v, sent %v", act, err, sent)
+	}
+}
+
+// R2-N1: a withdrawal whose re-placement already went out closes as
+// derived_already_placed, whatever the quote says at the known tip; it is not
+// shown as quote_expired or quote_unchecked.
+func TestReplace_WithdrawDerivedPlacedBeforeQuote(t *testing.T) {
+	ctx := context.Background()
+	pc := nipcash.PendingCall{RequestID: testRequestID, Method: nipcash.MethodCashWithdraw, Device: "a", MaxRequestAge: 300,
+		Quote: "{}", HoldsUntil: 100, Notify: strings.Repeat("ab", 32), Target: strings.Repeat("cd", 32)}
+	derived, _ := nipcash.DerivedRequestID(testRequestID)
+	send := func(context.Context, nipcash.PendingCall) error { t.Fatal("re-sent"); return nil }
+	for _, tip := range []int64{0, 101} {
+		j := newTestJournal()
+		if err := j.RecordDerived(ctx, derived, time.Now().Unix()+600); err != nil {
+			t.Fatal(err)
+		}
+		act, err := Replace(ctx, pc, j, ReplaceOptions{ChainTip: tip}, send)
+		if err != nil || act.Kind != ActionClose || act.Reason != "derived_already_placed" {
+			t.Errorf("tip %d (journal): %+v %v", tip, act, err)
+		}
+		exists := func(context.Context, string) (bool, error) { return true, nil }
+		act, err = Replace(ctx, pc, newTestJournal(), ReplaceOptions{ChainTip: tip, DerivedEntryExists: exists}, send)
+		if err != nil || act.Kind != ActionClose || act.Reason != "derived_already_placed" {
+			t.Errorf("tip %d (entry): %+v %v", tip, act, err)
+		}
 	}
 }
