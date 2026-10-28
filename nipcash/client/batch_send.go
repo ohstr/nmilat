@@ -49,6 +49,11 @@ func (s *BatchSession) deadlineWindow() time.Duration {
 // without a request_id are packed again under them and sent in fresh envelopes;
 // otherwise, and always for a call carrying a request_id (never resent under
 // the same id, NIP-CASH §Errors), the refusal is the item's outcome.
+//
+// Every spend carries a request_id, so in practice only reads (cash_status,
+// quotes, lookups) are packed again. A spend in an envelope refused whole gets
+// the refusal as its outcome, and Recover closes it refused: the caller must
+// issue it again under a fresh request_id, packed under the current limits.
 func (s *BatchSession) sendBatch(ctx context.Context, builders []itemBuilder, opts sendOptions) ([]ItemOutcome, error) {
 	if len(builders) == 0 {
 		return nil, nil
