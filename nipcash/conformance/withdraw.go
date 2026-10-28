@@ -1085,8 +1085,15 @@ func ctWd16(t *testing.T, s *suite) {
 	pc, v1 := s.heldPayout(t, h, s.address(t, p2wpkh))
 	s.chain().Withhold(t, v1, true)
 	t.Cleanup(func() { s.chain().Withhold(t, v1, false) })
+	// The first version's transaction as the Hub answered it: a chain node
+	// drops a replaced transaction from its mempool, so it may not know v1
+	// once the bump replaces it.
+	first := s.payoutNow(t, h, pc)
 	p := s.waitPayout(t, h, pc, true, func(p *nipcash.Payout) bool { return p.Txid != v1 })
 	raw1, _ := s.chain().Tx(t, v1)
+	if raw1 == "" && first.Txid == v1 {
+		raw1 = first.Tx
+	}
 	t1, t2 := decodeTx(t, raw1), decodeTx(t, p.Tx)
 	if !sharesInput(t1, t2) {
 		t.Errorf("the bump %s spends no input of %s", p.Txid, v1)
