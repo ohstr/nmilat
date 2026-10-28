@@ -1040,6 +1040,59 @@ func TestCurrentByDSeveralSigners(t *testing.T) {
 	}
 }
 
+// R2-N2: a signer that passed steps 2 and 3 counts as passed even when its
+// Hub is unavailable for now (no cash_order key), so it still shows, as
+// unavailable, beside a copy under another pubkey; no answer at all passes
+// nothing.
+func TestCurrentByDPassedButUnavailable(t *testing.T) {
+	real := kList1(t)
+	copier, err := utils.GetPublicKey(key3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sign, err := nipcash.LocalChainSigner(key3, "bitcoin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := nipCO.SignOrderConnection(nipCO.OrderConnection{Pubkey: kcoConn, Relays: []string{relayURL},
+		Secret: connSecret(), Label: "Copied counter", HasLabel: true, HubIdentity: copier, Chain: "bitcoin"}, sign, copier)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := kList1Fields(t)
+	f.Order = &c
+	ev, err := NewListing(f, createdList1, createdList1, signWith(key3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	copy, err := ParseListing(ev, mainnet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	book := NewVersionBook()
+	book.Offer(real, createdList1)
+	book.Offer(copy, createdList1)
+	none := CheckTap(real, nil, nil, errors.New("timeout"))
+	if none.Passed {
+		t.Fatal("no answer passed the check")
+	}
+	book.Taps().Record(real, none)
+	if _, ok := book.CurrentByD(kcoConn, createdList1); ok {
+		t.Fatal("shown after a tap with no answer")
+	}
+	unavailable := CheckTap(real, info(node, "mainnet", "bitcoin"), json.RawMessage(`{"methods":["get_info"]}`), nil)
+	if unavailable.Outcome != TapUnavailable || !unavailable.Passed {
+		t.Fatalf("unavailable tap: %+v", unavailable)
+	}
+	book.Taps().Record(real, unavailable)
+	if l, ok := book.CurrentByD(kcoConn, createdList1); !ok || l != real {
+		t.Fatalf("passed but unavailable not shown: %v %v", l, ok)
+	}
+	if book.Taps().Hidden(real) {
+		t.Fatal("an unavailable listing was hidden")
+	}
+}
+
 // A curator set is read by its first d only; #p values are chunked.
 func TestCuratorFirstDAndPChunks(t *testing.T) {
 	ev := nip01.NewEvent(CuratorSetKind, "", []string{"d", "other"}, []string{"d", CuratorSetD}, []string{"p", node})

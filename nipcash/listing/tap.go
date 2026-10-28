@@ -44,9 +44,13 @@ func (o TapOutcome) String() string {
 
 // TapResult is CheckTap's verdict. Terms (cash_order) or Circle (circle_wallet)
 // are set with TapShow: show them, never the hint, and say so when HintDiffers.
+// Passed is set once steps 2 and 3 (the online check, the identity and the
+// network) succeeded, whatever the outcome after them: a listing whose Hub is
+// unavailable for now has still passed the check at tap.
 type TapResult struct {
 	Outcome     TapOutcome
 	Reason      string
+	Passed      bool
 	Terms       *nipCO.Terms
 	Circle      *nip47.CircleWalletInfo
 	HintDiffers bool
@@ -86,6 +90,14 @@ func CheckTap(l *Listing, info *nip47.GetInfoResult, raw json.RawMessage, infoEr
 	if info.Network != l.Network {
 		return TapResult{Outcome: TapHideForGood, Reason: "get_info names another network than the listing"}
 	}
+	r := readTerms(l, info, raw)
+	r.Passed = true
+	return r
+}
+
+// readTerms runs §Wallet Rules "At tap" steps 4 and 5, once steps 2 and 3
+// passed.
+func readTerms(l *Listing, info *nip47.GetInfoResult, raw json.RawMessage) TapResult {
 	if l.Order != nil {
 		// Only a cash_order object is the Hub's closed signal: a reply without
 		// the key (an old or degraded Hub) is no answer about the terms.
@@ -131,7 +143,7 @@ func CheckTap(l *Listing, info *nip47.GetInfoResult, raw json.RawMessage, infoEr
 // concurrent use.
 //
 // It also remembers which addresses (pubkey and d) passed the check at tap
-// (TapShow), which decides what shows when several pubkeys list one d
+// (TapResult.Passed, steps 2 and 3), which decides what shows when several pubkeys list one d
 // (VersionBook.CurrentByD).
 type TapCache struct {
 	mu     sync.Mutex
@@ -149,8 +161,8 @@ func tapKey(l *Listing) string {
 }
 
 // Record stores a hiding outcome for l's version and marks l's address as
-// passed on TapShow; TapUnavailable records nothing, and a version hidden for
-// good stays so.
+// passed when the result passed steps 2 and 3 (TapResult.Passed, or TapShow),
+// TapUnavailable included; a version hidden for good stays so.
 func (c *TapCache) Record(l *Listing, r TapResult) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -160,9 +172,10 @@ func (c *TapCache) Record(l *Listing, r TapResult) {
 	if c.passed == nil {
 		c.passed = map[string]bool{}
 	}
-	switch r.Outcome {
-	case TapShow:
+	if r.Passed || r.Outcome == TapShow {
 		c.passed[l.Address()] = true
+	}
+	switch r.Outcome {
 	case TapHideForGood, TapHideUntilNewer:
 		if prev, ok := c.hide[tapKey(l)]; !ok || prev != TapHideForGood {
 			c.hide[tapKey(l)] = r.Outcome
