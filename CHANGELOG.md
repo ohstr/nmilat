@@ -17,6 +17,11 @@ privacy and performance fixes.
   `nipcw.Credential.Pubkey` and `nipcw/client.ErrJoinSigner`,
   `nipCP.Synced.Answered` and `ErrTooFewRelays`, and
   `listing.VersionBook.CurrentByD` with `TapCache.Passed`.
+- Adds `client.ReplaceOptions.NoChainView`: a caller with no view of the
+  chain re-places a withdrawal while its quote has not been refused
+  `quote_expired` (NIP-CP §Lookups), instead of showing it
+  `quote_unchecked`; `listing.TapResult.Passed`; and `textsan.MaxClusterBytes`
+  with `textsan.Options.MaxBytes`.
 - Adds `client.NeedsStatusError`/`ErrNeedsStatus` for a redeem whose outcome
   is unknown (never resent) and `Client.RedeemFollowUp`, `BillNoSlice`,
   `LocalReason`/`LocalRetryable` with `ReasonStatusWidened`,
@@ -607,6 +612,20 @@ privacy and performance fixes.
   that refusal for every call carrying a `request_id`, repacking only items
   without one, and drops the unreachable stale-policy resend; a batch stopped
   partway by ErrNotSent gives each unsent item `OutcomeNotSent`.
+  Since every spend carries a `request_id`, only reads are repacked in
+  practice: a spend in such an envelope is closed refused by `Recover`, and
+  its caller issues it again under a fresh `request_id`.
+- Changes `Replace` to check whether a withdrawal's derived id was already
+  placed before checking its quote, so a live re-placement closes as
+  `derived_already_placed` rather than showing `quote_expired` or
+  `quote_unchecked`.
+- Changes `TapCache` to count a signer as passed at tap once steps 2 and 3
+  succeed, an unavailable Hub included, so `CurrentByD` keeps showing that
+  listing, as unavailable, beside a copy under another pubkey.
+- Changes `textsan`, and so `listing.SanitizeText` and NIP-LSP text, to strip
+  every format character (Unicode Cf: U+206A-U+206F, U+FFF9-U+FFFB and the
+  tag characters included), keeping a zero-width joiner only between two
+  emoji, and to cap the result at 32 bytes per allowed character.
 - Changes `ItemOutcome.SafeToResend` to answer true only for BAD_REQUEST or
   a definitive code on a call without a `request_id`, never for INTERNAL or
   REQUEST_REUSED; `RedeemOptions.AutoAmount` with no `Payee` to read the payee
