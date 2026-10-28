@@ -1183,7 +1183,9 @@ func (s *EventStore) findEvents(ctx context.Context, tx *bolt.Tx, filter *nip01.
 
 	filters := nip01.NewSubscriptionFilterGroup()
 	filters.Add(filter)
-	scan, err := NewStoreQuery(s, filters)
+	// Planned inside tx: a second read transaction on this goroutine could
+	// deadlock against a writer waiting to grow the file.
+	scan, err := newStoreQuery(s, tx, filters)
 	if err != nil {
 		return nil, err
 	}
@@ -1215,6 +1217,17 @@ func (s *EventStore) findEvents(ctx context.Context, tx *bolt.Tx, filter *nip01.
 	return potEvents, nil
 }
 
+// viewIn runs fn in tx when the caller already holds one, else in a read
+// transaction of its own. A second View on a goroutine inside one deadlocks
+// once a writer waits to grow the file: the inner read lock queues behind
+// the writer, which waits for the outer one.
+func (s *EventStore) viewIn(tx *bolt.Tx, fn func(*bolt.Tx) error) error {
+	if tx != nil {
+		return fn(tx)
+	}
+	return s.db.View(fn)
+}
+
 // resolveEvsidByID looks up idHex's evsid via the indexID bucket (keyed
 // eventID+createdAt+evsid), for NIP-CW's BeforeID cursor: see
 // scanContext.beforeIDEvsid's doc comment for why evsid, not the hex id
@@ -1222,12 +1235,12 @@ func (s *EventStore) findEvents(ctx context.Context, tx *bolt.Tx, filter *nip01.
 // error, when idHex simply isn't (or is no longer) in the store -- that is
 // not a query failure, just a cursor pointing at a boundary event that
 // doesn't resolve to anything right now.
-func (s *EventStore) resolveEvsidByID(idHex string) (evsid uint64, found bool, err error) {
+func (s *EventStore) resolveEvsidByID(tx *bolt.Tx, idHex string) (evsid uint64, found bool, err error) {
 	prefix, decodeErr := hex.DecodeString(idHex)
 	if decodeErr != nil || len(prefix) != 32 {
 		return 0, false, nil
 	}
-	err = s.db.View(func(tx *bolt.Tx) error {
+	err = s.viewIn(tx, func(tx *bolt.Tx) error {
 		c := tx.Bucket(indexID).Cursor()
 		k, _ := c.Seek(prefix)
 		if k == nil || !bytes.HasPrefix(k, prefix) || len(k) != 32+8+8 {
@@ -1706,6 +1719,12 @@ type storeScan struct {
 }
 
 func newStoreScan(store *EventStore, filter *nip01.SubscriptionFilter, sentEvents map[uint64]bool) (*storeScan, error) {
+	return newStoreScanIn(store, nil, filter, sentEvents)
+}
+
+// newStoreScanIn plans a scan inside tx, or in its own read transaction
+// when tx is nil.
+func newStoreScanIn(store *EventStore, tx *bolt.Tx, filter *nip01.SubscriptionFilter, sentEvents map[uint64]bool) (*storeScan, error) {
 	ss := &storeScan{
 		store: store,
 		scanContext: &scanContext{
@@ -1717,7 +1736,7 @@ func newStoreScan(store *EventStore, filter *nip01.SubscriptionFilter, sentEvent
 	}
 
 	if filter.BeforeID != "" {
-		evsid, found, err := store.resolveEvsidByID(filter.BeforeID)
+		evsid, found, err := store.resolveEvsidByID(tx, filter.BeforeID)
 		if err != nil {
 			return nil, err
 		}
@@ -1732,7 +1751,7 @@ func newStoreScan(store *EventStore, filter *nip01.SubscriptionFilter, sentEvent
 		ss.index = indexID
 		ss.cursors, err = createCursorsByID(filter.IDs)
 	case len(filter.Tags) > 0:
-		ss.index, ss.cursors, err = store.chooseTagScan(filter)
+		ss.index, ss.cursors, err = store.chooseTagScan(tx, filter)
 	case len(filter.Authors) > 0 && len(filter.Kinds) > 0:
 		ss.index = indexKindPubkey
 		ss.cursors, err = createCursorsByKindsAndAuthors(filter.Kinds, filter.Authors)
@@ -2210,6 +2229,12 @@ type StoreQuery struct {
 }
 
 func NewStoreQuery(store *EventStore, filters *nip01.SubscriptionFilterGroup) (*StoreQuery, error) {
+	return newStoreQuery(store, nil, filters)
+}
+
+// newStoreQuery is NewStoreQuery planned inside tx, for a caller already in
+// a read transaction; nil plans in a transaction of its own.
+func newStoreQuery(store *EventStore, tx *bolt.Tx, filters *nip01.SubscriptionFilterGroup) (*StoreQuery, error) {
 
 	sq := &StoreQuery{
 		filters:    filters,
@@ -2219,7 +2244,7 @@ func NewStoreQuery(store *EventStore, filters *nip01.SubscriptionFilterGroup) (*
 
 	for _, filter := range filters.GetAll() {
 		filter.Limit = clamp(filter.Limit, filterMinLimit, store.limitation.MaxLimit)
-		if ss, err := newStoreScan(store, filter, sq.sentEvents); err != nil {
+		if ss, err := newStoreScanIn(store, tx, filter, sq.sentEvents); err != nil {
 			return nil, err
 		} else {
 			sq.scanners = append(sq.scanners, ss)
@@ -2461,7 +2486,7 @@ func createCursorsByTags(tags map[string][]string) ([]*storeCursor, error) {
 // If even the smallest tag range reaches the probe cap and the filter has
 // kinds and authors, the kind+pubkey index is probed too and used when it
 // is smaller.
-func (s *EventStore) chooseTagScan(filter *nip01.SubscriptionFilter) ([]byte, []*storeCursor, error) {
+func (s *EventStore) chooseTagScan(tx *bolt.Tx, filter *nip01.SubscriptionFilter) ([]byte, []*storeCursor, error) {
 	names := make([]string, 0, len(filter.Tags))
 	for name, values := range filter.Tags {
 		// A name with a value that can't be indexed can't drive the scan:
@@ -2505,7 +2530,7 @@ func (s *EventStore) chooseTagScan(filter *nip01.SubscriptionFilter) ([]byte, []
 	}
 
 	index, best := indexTag, plans[0]
-	err := s.db.View(func(tx *bolt.Tx) error {
+	err := s.viewIn(tx, func(tx *bolt.Tx) error {
 		bestCount := countRanges(tx.Bucket(indexTag), plans[0], rangeProbeCap)
 		for _, plan := range plans[1:] {
 			// Count only up to the best so far: anything that reaches it

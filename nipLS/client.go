@@ -14,10 +14,14 @@ import (
 	"time"
 
 	"github.com/ohstr/nmilat/nip01"
+	"github.com/ohstr/nmilat/nip44"
 	"github.com/ohstr/nmilat/nip46"
 )
 
-var _ Key = (*Client)(nil)
+var (
+	_ Key                = (*Client)(nil)
+	_ nip46.MessageKeyer = (*Client)(nil)
+)
 
 // ErrConnClosed means the signer hung up without answering.
 var ErrConnClosed = errors.New("nipLS: signer closed the connection")
@@ -213,6 +217,20 @@ func (c *Client) Encrypt(ctx context.Context, scheme, peerPubKey, plaintext stri
 		return "", err
 	}
 	return c.Call(ctx, method, peerPubKey, plaintext)
+}
+
+// MessageKeys asks the signer for the keys that open one NIP-44 payload
+// exchanged with peerPubKey.
+func (c *Client) MessageKeys(ctx context.Context, peerPubKey, payload string) (nip44.Keys, error) {
+	res, err := c.Call(ctx, nip46.MethodNIP44MessageKeys, peerPubKey, payload)
+	if err != nil {
+		return nip44.Keys{}, err
+	}
+	var keys nip44.Keys
+	if err := json.Unmarshal([]byte(res), &keys); err != nil {
+		return nip44.Keys{}, fmt.Errorf("nipLS: malformed nip44_message_keys result: %w", err)
+	}
+	return keys, nil
 }
 
 // Decrypt asks the signer to decrypt ciphertext from peerPubKey.

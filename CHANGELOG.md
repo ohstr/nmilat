@@ -168,7 +168,7 @@ privacy and performance fixes.
 - Adds conformance cases CT-WD-01 (wire part) and CT-SCOPE-05, and
   `cashtest.WithWithdrawals`.
   ([#197](https://github.com/ohstr/nmilat/pull/197))
-- Adds `nip59.WrapWithKey`, `Unwrap` and `WithWrapExpiration`: the NIP-59
+- Adds `nip59.WrapWithKey`, `UnwrapWithKey` and `WithWrapExpiration`: the NIP-59
   receive path, and wraps under a key the caller keeps.
   ([#196](https://github.com/ohstr/nmilat/pull/196))
 - Adds `nipCP` (Cash Pocket): kind-9525 entries with a strict rumor codec,
@@ -368,6 +368,25 @@ privacy and performance fixes.
   `detail` field (`ResultError.Detail`). A reply that omits every item now
   carries `"results": []`.
   ([#181](https://github.com/ohstr/nmilat/pull/181))
+- Adds `nip44.MessageKeys` and `nip44.OpenWithKeys`: one payload's message
+  keys, MAC checked, which open that payload and no other. The package now
+  tests against the official NIP-44 v2 vectors.
+  ([#207](https://github.com/ohstr/nmilat/pull/207))
+- Adds the `nip44_message_keys` method to `nipLS` and `nip46/bunker` (server
+  and client), and `nipLS.ResultPolicy`, which sees an encrypt or decrypt
+  result before it is returned.
+  ([#207](https://github.com/ohstr/nmilat/pull/207))
+- Adds `nip59.Seal`, `WrapSeal` and `Unwrap`, which take the key as a signer
+  and never open a seal from a sender not asked for. `Prove` and
+  `VerifyProof` show one seal's content to a third party without any key.
+  ([#207](https://github.com/ohstr/nmilat/pull/207))
+- Adds NIP-17 recipient, subject and reply tags, `ParseChatMessage`, and
+  kind 10050 DM relay lists.
+  ([#207](https://github.com/ohstr/nmilat/pull/207))
+- Adds builders for NIP-25 reactions, NIP-10 replies, NIP-18 reposts and
+  NIP-09 deletion requests, and NIP-02/NIP-51 list edits that keep every
+  other item.
+  ([#207](https://github.com/ohstr/nmilat/pull/207))
 - Adds `WithSearchBatch` and `WithSearchInFlight`: `SearchIndexer` keeps
   several batches enqueued with a `search.Enqueuer` engine and acknowledges
   them in order, only past what was applied. A large relay's search can then
@@ -1009,6 +1028,10 @@ privacy and performance fixes.
   answered twice, or answered beside an envelope-level error, is reported on its
   own as `OutcomeConflict`, and the reply as `ErrReplyConflict`.
   ([#181](https://github.com/ohstr/nmilat/pull/181))
+- Fixes the relay hanging for good when a query with several tag names (or a
+  `before_id`) ran inside a read while a write grew the store, as a NIP-29
+  group create does. The query is now planned in the caller's transaction.
+  ([#217](https://github.com/ohstr/nmilat/pull/217))
 - Fixes a filter with several tag names walking every tag's index range, so
   `#d` lookups plus a common tag such as `#l` took seconds. The scan now
   follows the smallest range and checks the other tags per event.

@@ -124,6 +124,16 @@ type Policy interface {
 	Authorize(ctx context.Context, req *Request) error
 }
 
+// ResultPolicy is a Policy that also sees an encrypt, decrypt or
+// nip44_message_keys result before it is returned, e.g. to release a
+// decrypted gift wrap only when it holds a seal from a listed sender. It
+// runs only for a request Authorize allowed; an error refuses it and the
+// result is discarded.
+type ResultPolicy interface {
+	Policy
+	AuthorizeResult(ctx context.Context, req *Request, result string) error
+}
+
 // PolicyFunc adapts a function to Policy.
 type PolicyFunc func(ctx context.Context, req *Request) error
 
@@ -161,7 +171,8 @@ type Request struct {
 	Counterpart string
 	// Plaintext is set for nip04_encrypt and nip44_encrypt.
 	Plaintext string
-	// Ciphertext is set for nip04_decrypt and nip44_decrypt.
+	// Ciphertext is set for nip04_decrypt, nip44_decrypt and
+	// nip44_message_keys.
 	Ciphertext string
 
 	// Rule optionally names what decided, for the decision hook. A Policy

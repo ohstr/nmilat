@@ -10,6 +10,8 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -40,6 +42,8 @@ var (
 	// ErrInvalidPlaintextLength is a plaintext shorter than MinPlaintextSize
 	// or longer than MaxPlaintextSize: no peer could open it.
 	ErrInvalidPlaintextLength = errors.New("invalid plaintext length")
+	// ErrInvalidKeys is message keys of the wrong length.
+	ErrInvalidKeys = errors.New("invalid message keys")
 )
 
 // GenerateConversationKey computes the conversation key using HKDF-SHA256-Extract
@@ -112,46 +116,124 @@ func encryptWithNonce(plaintext string, conversationKey, nonce []byte) (string, 
 
 // Decrypt decrypts NIP-44 v2 payload.
 func Decrypt(payload string, conversationKey []byte) (string, error) {
-	data, err := base64.StdEncoding.DecodeString(payload)
-	if err != nil {
-		return "", fmt.Errorf("base64 decode error: %w", err)
-	}
-
-	// Min length: Version(1) + Nonce(32) + PaddedData(min 32 + length prefix 2) + MAC(32)
-	// But let's be more general: min is 1 + 32 + 2 + 32 = 67?
-	// Spec says calcPaddedLen(1) = 32. So 1 + 32 + 32 + 32 = 97.
-	// nostr-tools checks if len < 99 (includes some overhead or larger min padding?)
-	if len(data) < 97 {
-		return "", ErrMessageTooShort
-	}
-
-	if data[0] != Version {
-		return "", ErrInvalidVersion
-	}
-
-	nonce := data[1:33]
-	ciphertext := data[33 : len(data)-32]
-	mac := data[len(data)-32:]
-
-	chachaKey, chachaNonce, hmacKey, err := getMessageKeys(conversationKey, nonce)
+	p, err := parsePayload(payload)
 	if err != nil {
 		return "", err
 	}
+	keys, err := p.keys(conversationKey)
+	if err != nil {
+		return "", err
+	}
+	return p.open(keys)
+}
 
-	// Verify MAC
-	calculatedMac := hmacAad(hmacKey, ciphertext, nonce)
-	if !hmac.Equal(calculatedMac, mac) {
+// Keys are one payload's message keys: they open that payload and no other,
+// and reveal nothing about the conversation key they came from.
+type Keys struct {
+	ChaChaKey   []byte // 32 bytes
+	ChaChaNonce []byte // 12 bytes
+	HMACKey     []byte // 32 bytes
+}
+
+type keysJSON struct {
+	ChaChaKey   string `json:"chacha_key"`
+	ChaChaNonce string `json:"chacha_nonce"`
+	HMACKey     string `json:"hmac_key"`
+}
+
+// MarshalJSON writes {"chacha_key", "chacha_nonce", "hmac_key"} as hex.
+func (k Keys) MarshalJSON() ([]byte, error) {
+	return json.Marshal(keysJSON{hex.EncodeToString(k.ChaChaKey), hex.EncodeToString(k.ChaChaNonce), hex.EncodeToString(k.HMACKey)})
+}
+
+// UnmarshalJSON reads MarshalJSON's form, checking each key's length.
+func (k *Keys) UnmarshalJSON(b []byte) error {
+	var j keysJSON
+	if err := json.Unmarshal(b, &j); err != nil {
+		return err
+	}
+	var out Keys
+	for _, f := range []struct {
+		s   string
+		n   int
+		dst *[]byte
+	}{{j.ChaChaKey, chacha20.KeySize, &out.ChaChaKey}, {j.ChaChaNonce, chacha20.NonceSize, &out.ChaChaNonce}, {j.HMACKey, sha256.Size, &out.HMACKey}} {
+		v, err := hex.DecodeString(f.s)
+		if err != nil || len(v) != f.n {
+			return ErrInvalidKeys
+		}
+		*f.dst = v
+	}
+	*k = out
+	return nil
+}
+
+// MessageKeys returns the keys that open payload, after checking its version,
+// length and MAC under conversationKey.
+func MessageKeys(conversationKey []byte, payload string) (Keys, error) {
+	p, err := parsePayload(payload)
+	if err != nil {
+		return Keys{}, err
+	}
+	return p.keys(conversationKey)
+}
+
+// OpenWithKeys checks payload's MAC with keys.HMACKey and decrypts it, without
+// the conversation key.
+func OpenWithKeys(keys Keys, payload string) (string, error) {
+	if len(keys.ChaChaKey) != chacha20.KeySize || len(keys.ChaChaNonce) != chacha20.NonceSize || len(keys.HMACKey) != sha256.Size {
+		return "", ErrInvalidKeys
+	}
+	p, err := parsePayload(payload)
+	if err != nil {
+		return "", err
+	}
+	if !hmac.Equal(hmacAad(keys.HMACKey, p.ciphertext, p.nonce), p.mac) {
 		return "", ErrInvalidMAC
 	}
+	return p.open(keys)
+}
 
-	// Decrypt
-	padded := make([]byte, len(ciphertext))
-	cipher, err := chacha20.NewUnauthenticatedCipher(chachaKey, chachaNonce)
+// payload is a decoded NIP-44 v2 payload: version | nonce | ciphertext | mac.
+type payload struct {
+	nonce, ciphertext, mac []byte
+}
+
+func parsePayload(s string) (payload, error) {
+	data, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		return payload{}, fmt.Errorf("base64 decode error: %w", err)
+	}
+	// Version(1) + Nonce(32) + smallest padded plaintext(32) + MAC(32).
+	if len(data) < 97 {
+		return payload{}, ErrMessageTooShort
+	}
+	if data[0] != Version {
+		return payload{}, ErrInvalidVersion
+	}
+	return payload{nonce: data[1:33], ciphertext: data[33 : len(data)-32], mac: data[len(data)-32:]}, nil
+}
+
+// keys derives the payload's message keys and checks its MAC.
+func (p payload) keys(conversationKey []byte) (Keys, error) {
+	chachaKey, chachaNonce, hmacKey, err := getMessageKeys(conversationKey, p.nonce)
+	if err != nil {
+		return Keys{}, err
+	}
+	if !hmac.Equal(hmacAad(hmacKey, p.ciphertext, p.nonce), p.mac) {
+		return Keys{}, ErrInvalidMAC
+	}
+	return Keys{ChaChaKey: chachaKey, ChaChaNonce: chachaNonce, HMACKey: hmacKey}, nil
+}
+
+// open decrypts and unpads; the MAC must already be checked.
+func (p payload) open(keys Keys) (string, error) {
+	padded := make([]byte, len(p.ciphertext))
+	cipher, err := chacha20.NewUnauthenticatedCipher(keys.ChaChaKey, keys.ChaChaNonce)
 	if err != nil {
 		return "", err
 	}
-	cipher.XORKeyStream(padded, ciphertext)
-
+	cipher.XORKeyStream(padded, p.ciphertext)
 	return unpad(padded)
 }
 

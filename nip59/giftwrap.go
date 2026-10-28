@@ -3,10 +3,13 @@
 // (kind 1059, signed by a throwaway key) so the relay learns nothing about
 // who sent it.
 //
-// Wrap seals any event with a throwaway wrap key. WrapWithKey wraps a rumor (an
-// unsigned event) under a wrap key the caller generated first, for a caller
-// that records that key to delete the wrap later (NIP-CP). Unwrap opens a wrap
-// addressed to the caller and returns the rumor with the seal's signer.
+// Wrap seals any event with a private key held here and a throwaway wrap key.
+// WrapWithKey wraps a rumor (an unsigned event) under a wrap key the caller
+// generated first, for a caller that records that key to delete the wrap later
+// (NIP-CP); UnwrapWithKey opens a wrap with a private key held here and returns
+// the rumor with the seal's signer. Seal, WrapSeal and Unwrap take a Sealer or
+// Opener instead, so the key can stay in a signer; Prove and VerifyProof show
+// one seal's content to a third party.
 package nip59
 
 import (
@@ -74,7 +77,7 @@ func WithWrapExpiration(unix int64) WrapOption {
 	return func(c *wrapConfig) { c.expiration = unix }
 }
 
-// Errors of WrapWithKey and Unwrap.
+// Errors of WrapWithKey and UnwrapWithKey.
 var (
 	// ErrSignedRumor is a rumor given to WrapWithKey with a signature: a rumor
 	// travels unsigned, so a leaked copy proves nothing.
@@ -215,14 +218,14 @@ func wrap(payload *nip01.Event, senderPrivKeyHex, recipientPubKeyHex, ephemeralP
 	return wrap, nil
 }
 
-// Unwrap opens a gift wrap addressed to recipientPriv: it verifies the wrap's
+// UnwrapWithKey opens a gift wrap addressed to recipientPriv: it verifies the wrap's
 // signature, decrypts the seal, verifies the seal's signature, decrypts the
 // rumor, and returns it with the seal's signer. The rumor's id is checked
 // against its content when present and set when absent. Whether that signer,
 // the rumor's pubkey and kind are acceptable is the caller's to decide; a
 // rumor whose pubkey differs from the seal signer is ErrRumorAuthor, and a
 // signed rumor is returned as it is (Sig set) for the caller to discard.
-func Unwrap(w *nip01.Event, recipientPriv string) (rumor *nip01.Event, sealSigner string, err error) {
+func UnwrapWithKey(w *nip01.Event, recipientPriv string) (rumor *nip01.Event, sealSigner string, err error) {
 	if w == nil || w.Kind != KindGiftWrap {
 		return nil, "", ErrNotWrap
 	}

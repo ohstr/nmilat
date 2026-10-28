@@ -58,7 +58,7 @@ func Open(wrap *nip01.Event, userPriv string) (Entry, error) {
 	if err != nil {
 		return Entry{}, fmt.Errorf("nipCP: user key: %w", err)
 	}
-	rumor, signer, err := nip59.Unwrap(wrap, userPriv)
+	rumor, signer, err := nip59.UnwrapWithKey(wrap, userPriv)
 	if err != nil {
 		return Entry{}, fmt.Errorf("%w: %v", ErrNotEntry, err)
 	}

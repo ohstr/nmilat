@@ -56,7 +56,7 @@ func TestWrapWithKeyRefusesSignedRumorAndUsesTheKey(t *testing.T) {
 		t.Fatal("WrapWithKey changed the caller's rumor")
 	}
 
-	got, signer, err := Unwrap(w, userPriv)
+	got, signer, err := UnwrapWithKey(w, userPriv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,26 +99,26 @@ func TestUnwrapRefusesOthersAndTampering(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := Unwrap(w, otherPriv); !errors.Is(err, ErrNotWrap) {
+	if _, _, err := UnwrapWithKey(w, otherPriv); !errors.Is(err, ErrNotWrap) {
 		t.Fatalf("another key opened it: %v", err)
 	}
 	bad := *w
 	bad.Content = bad.Content[:len(bad.Content)-4] + "AAAA"
-	if _, _, err := Unwrap(&bad, userPriv); !errors.Is(err, ErrNotWrap) {
+	if _, _, err := UnwrapWithKey(&bad, userPriv); !errors.Is(err, ErrNotWrap) {
 		t.Fatalf("tampered wrap: %v", err)
 	}
 	seal := *w
 	seal.Kind = KindSeal
-	if _, _, err := Unwrap(&seal, userPriv); !errors.Is(err, ErrNotWrap) {
+	if _, _, err := UnwrapWithKey(&seal, userPriv); !errors.Is(err, ErrNotWrap) {
 		t.Fatalf("a seal given as a wrap: %v", err)
 	}
-	// Wrap (throwaway key) round-trips through Unwrap too.
+	// Wrap (throwaway key) round-trips through UnwrapWithKey too.
 	payload := nip01.NewUnsignedEvent(14, otherPub, "dm")
 	w2, err := Wrap(payload, otherPriv, userPub)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, signer, err := Unwrap(w2, userPriv)
+	got, signer, err := UnwrapWithKey(w2, userPriv)
 	if err != nil {
 		t.Fatal(err)
 	}
