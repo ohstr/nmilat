@@ -265,7 +265,15 @@ func ctWd02(t *testing.T, s *suite) {
 	if _, ok := s.h.(Clocked); ok {
 		e := s.pubkeyBill(t, wdAmount, time.Hour)
 		s.advance(t, 2*time.Hour)
-		wantOutcome(t, "expired slice", s.quote(t, e, addr, &soon).ItemOutcome, nipcash.ErrCodeRestricted, "")
+		// A Hub may already have swept the expired bill: its tombstone, spent
+		// for expiry, answers instead (NIP-CASH §Answer or Omit).
+		if o := s.quote(t, e, addr, &soon).ItemOutcome; o.Gone != nil {
+			if o.Gone.Reason != nipcash.ReasonExpired {
+				t.Errorf("expired slice: a tombstone with reason %q, want %q", o.Gone.Reason, nipcash.ReasonExpired)
+			}
+		} else {
+			wantOutcome(t, "expired slice", o, nipcash.ErrCodeRestricted, "")
+		}
 	}
 	// Row 6: above the maximum, too slow.
 	if terms.MaxMillis != nil {
