@@ -1450,9 +1450,6 @@ Full Blossom support.
 
 ### Removed
 
-- Removes `nipcash.MintPayload` and the `lokicash-mint:v1` payload: a token
-  signed over it carries no valid provenance.
-  ([#218](https://github.com/ohstr/nmilat/pull/218))
 - Removes the unused `nip11.DelegationConfig`. ([781d85b](https://github.com/ohstr/nmilat/commit/781d85b))
 
 ## [0.2.3]
