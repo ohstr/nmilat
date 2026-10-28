@@ -69,7 +69,8 @@ const MaxReplaceAttempts = 3
 // malformed and the call waits, never closed); it waits with the payout as
 // Result, and the caller closes it on PayoutFinished. unknown re-places it
 // automatically after only lost replies (Replace then checks the quote is
-// still valid at ReplaceOptions.ChainTip), with confirmation after
+// still valid at ReplaceOptions.ChainTip, or the caller has no chain view,
+// ReplaceOptions.NoChainView), with confirmation after
 // REQUEST_REUSED, and closes it refused (reason code/detail) after a coded
 // refusal; a call recovered from withdraw_request_id (no quote) is never
 // re-placed.
@@ -157,8 +158,14 @@ type ReplaceOptions struct {
 	// is re-placed automatically (without Confirmed) only while its quote is
 	// still valid at ChainTip (NIP-CASH §Withdrawals); with ChainTip 0, or past
 	// the quote's holds_until, Replace shows the call instead, so its user can
-	// get a new quote.
+	// get a new quote, unless NoChainView is set.
 	ChainTip int64
+	// NoChainView says the caller has no view of the chain of its own. With
+	// ChainTip 0, a cash_withdraw's quote then counts as valid until a call of
+	// this withdrawal was refused quote_expired (NIP-CP §Lookups), which Recover
+	// closes as ActionCloseRefused, so Replace re-places it without Confirmed.
+	// A call whose LastDetail is quote_expired is still shown (quote_expired).
+	NoChainView bool
 }
 
 type replacementKey struct{}
@@ -286,7 +293,9 @@ func Replace(ctx context.Context, pc nipcash.PendingCall, j Journal, o ReplaceOp
 		switch {
 		case o.ChainTip > 0 && !nipcash.QuoteValidAt(holdsUntil, o.ChainTip):
 			return Action{Kind: ActionShow, Reason: "quote_expired"}, nil
-		case o.ChainTip <= 0 && !o.Confirmed:
+		case o.ChainTip <= 0 && o.NoChainView && o.Quote == nil && pc.LastDetail == nipcash.DetailQuoteExpired:
+			return Action{Kind: ActionShow, Reason: "quote_expired"}, nil
+		case o.ChainTip <= 0 && !o.Confirmed && !o.NoChainView:
 			return Action{Kind: ActionShow, Reason: "quote_unchecked"}, nil
 		}
 	}

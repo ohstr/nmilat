@@ -655,6 +655,20 @@ func TestT11_49_RecoverReplaceWithdraw(t *testing.T) {
 			t.Errorf("tip %d: %+v %v (sent %q), want shown %s", tip, act, err, sent.RequestID, reason)
 		}
 	}
+	// A caller with no chain view of its own treats the quote as valid until
+	// refused quote_expired (NIP-CP §Lookups); a tip it does know still wins.
+	sent = nipcash.PendingCall{}
+	if act, err := Replace(ctx, base, newTestJournal(), ReplaceOptions{NoChainView: true}, send); err != nil || act.Kind != ActionWait || sent.RequestID != derived {
+		t.Errorf("no chain view: %+v %v (sent %q)", act, err, sent.RequestID)
+	}
+	expired := with(func(p *nipcash.PendingCall) { p.LastDetail = nipcash.DetailQuoteExpired })
+	sent = nipcash.PendingCall{}
+	if act, err := Replace(ctx, expired, newTestJournal(), ReplaceOptions{NoChainView: true}, send); err != nil || act.Reason != "quote_expired" || sent.RequestID != "" {
+		t.Errorf("no chain view after quote_expired: %+v %v", act, err)
+	}
+	if act, err := Replace(ctx, base, newTestJournal(), ReplaceOptions{NoChainView: true, ChainTip: 101}, send); err != nil || act.Reason != "quote_expired" {
+		t.Errorf("no chain view with a known tip past the quote: %+v %v", act, err)
+	}
 	if _, err := Replace(ctx, base, newTestJournal(), ReplaceOptions{ChainTip: 100}, send); err != nil {
 		t.Fatal(err)
 	}
