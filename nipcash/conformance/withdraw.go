@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -742,6 +743,15 @@ func ctWd09(t *testing.T, s *suite) {
 
 // race runs a and b at once on one slice: exactly one commits, and the other
 // is refused RESTRICTED or with the tombstone of the bill the winner drained.
+// describeError is an outcome's error code and message, for a failure
+// message (the outcome itself prints a pointer).
+func describeError(o client.ItemOutcome) string {
+	if o.Error == nil {
+		return "(no error)"
+	}
+	return fmt.Sprintf("%s %q", o.Error.Code, o.Error.Message)
+}
+
 func race(t *testing.T, i int, a, b func() client.ItemOutcome) {
 	t.Helper()
 	var outs [2]client.ItemOutcome
@@ -761,7 +771,7 @@ func race(t *testing.T, i int, a, b func() client.ItemOutcome) {
 			wins++
 		case o.Gone != nil, o.Error != nil && o.Error.Code == nipcash.ErrCodeRestricted:
 		default:
-			t.Errorf("race %d: the losing call answered %+v, want RESTRICTED or the tombstone", i, o)
+			t.Errorf("race %d: the losing call answered %s %+v, want RESTRICTED or the tombstone", i, describeError(o), o)
 		}
 	}
 	if wins != 1 {
@@ -924,6 +934,7 @@ func ctWd12(t *testing.T, s *suite) {
 	var r holder
 	if faulty {
 		f.InjectFault(t, FaultHoldSign)
+		t.Cleanup(func() { f.InjectFault(t, FaultNone) })
 		r = s.pubkeyBill(t, wdAmount, 0)
 		_, rpc = s.withdrawOK(t, r, addr)
 		s.advance(t, 2*24*time.Hour)
