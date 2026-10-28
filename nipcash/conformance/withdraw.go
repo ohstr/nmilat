@@ -1241,25 +1241,25 @@ func ctWd21(t *testing.T, s *suite) {
 	s.withdrawals(t)
 	addr := s.address(t, p2wpkh)
 	holders := []holder{s.pubkeyBill(t, wdAmount, 0), s.ckBill(t, wdAmount), s.cashBill(t, wdAmount)}
-	var pcs []nipcash.PendingCall
-	for _, h := range holders {
+	// One holder at a time: a Hub may batch payouts, adding a new one to a
+	// broadcast batch by replacement, and the invalidation one cancel needs
+	// may pay the batch's other payouts. Each payout here is the only one in
+	// flight, so it is the one its withheld version and its cancel concern.
+	pcs := make([]nipcash.PendingCall, len(holders))
+	for i, h := range holders {
 		pc, txid := s.heldPayout(t, h, addr)
 		s.chain().Withhold(t, txid, true)
-		pcs = append(pcs, pc)
-	}
-	for i, h := range holders {
+		pcs[i] = pc
 		o := s.untilCancelServed(t, h, pcs[i])
 		if o.Result == nil || o.Result.State != nipcash.PayoutBroadcast {
 			t.Errorf("holder %d: the cancel answer %+v, want broadcast while the invalidation confirms", i, o)
 		}
-	}
-	for i, h := range holders {
 		p := s.waitPayout(t, h, pcs[i], true, isState(nipcash.PayoutCancelled))
 		r := s.checkRemint(t, p, h.cred, wdAmount)
 		if p.Tx != "" || p.Txid != "" || p.Vout != nil || p.Depth != nil {
 			t.Errorf("holder %d: a cancelled payout carries a transaction", i)
 		}
-		o := s.cancel(t, h, pcs[i])
+		o = s.cancel(t, h, pcs[i])
 		if o.Result == nil || o.Result.State != nipcash.PayoutCancelled || o.Result.NewWalletPubkey != p.NewWalletPubkey {
 			t.Errorf("holder %d: the cancel answer after the cancellation: %+v", i, o.ItemOutcome)
 		}
