@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"time"
@@ -17,6 +18,12 @@ import (
 // Work). It wraps ErrNotSent: nothing was published, and the caller closes the
 // written-ahead call as not sent.
 var ErrPowTooHard = fmt.Errorf("%w: proof of work too hard for the budget", ErrNotSent)
+
+// ErrPowRemineTooHard is a relay asking, after the first publish attempt, for
+// more proof of work than the session's budget allows, or for work not done
+// within it. That relay did not take the request; unlike ErrPowTooHard it does
+// not mean nothing was sent, since another relay may have taken it.
+var ErrPowRemineTooHard = errors.New("nipcash/client: a relay asks for more proof of work than the budget allows")
 
 // SessionOption configures a session: OpenBatchSession, Connect and
 // ConnectCashHub take them.
@@ -172,10 +179,20 @@ func (s *BatchSession) publishTo(ctx context.Context, relayURL *url.URL, req *ou
 		if stated == 0 {
 			return fmt.Errorf("refused: %s", ok.Message)
 		}
-		mctx, cancel := context.WithDeadline(ctx, time.Unix(req.notAfter, 0))
+		// The budget bounds a re-mine as it bounds the first mining: no more
+		// than its difficulty, and no longer than its duration or the deadline
+		// less MinPublishMargin.
+		if m := s.cfg.powMaxDifficulty; m > 0 && stated > m {
+			return fmt.Errorf("refused: %s: %w (asks %d, budget %d)", ok.Message, ErrPowRemineTooHard, stated, m)
+		}
+		mctx, cancel := s.miningContext(ctx, req.notAfter)
 		err = req.pow.Remine(mctx, stated)
+		mined := mctx.Err()
 		cancel()
 		if err != nil {
+			if mined != nil && ctx.Err() == nil {
+				return fmt.Errorf("re-mine to %d: %w (not done in time)", stated, ErrPowRemineTooHard)
+			}
 			return fmt.Errorf("re-mine to %d: %w", stated, err)
 		}
 		req.ev = req.pow.Event

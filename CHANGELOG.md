@@ -9,6 +9,8 @@
 - Adds `client.WithExpectedMinter` and `client.ErrBillUnverified`: `Connect`,
   `ConnectCashSlice` and `ConnectZap` refuse a bill whose provenance does not
   verify, or not against the expected Hub, before any relay is dialled.
+- Adds `client.ErrPowRemineTooHard`, a relay asking for more proof of work
+  than the session's budget after the first publish attempt.
 - Adds `transport.ErrEnvelopeKeys` and `transport.Item.UnmarshalJSON`, which
   reads an item by its exact keys.
 
@@ -21,6 +23,10 @@
 
 ### Fixed
 
+- Holds re-mining for a relay that raised its proof-of-work minimum to the
+  session's `WithPowBudget`: a minimum above its difficulty is refused, and
+  mining stops at its duration or the deadline less `MinPublishMargin`, not at
+  `not_after`.
 - Dials nothing in `client.Connect`, which opened the bill's first relay
   before its provenance was checked; the session dials the relays when a bill
   method runs, after the check.
