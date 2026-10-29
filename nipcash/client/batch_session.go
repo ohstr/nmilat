@@ -44,9 +44,12 @@ type BatchSession struct {
 	announcement *transport.Announcement
 	relays       []string
 	// unusable is set when the newest validly signed announcement was rejected:
-	// no call carrying a request_id goes to this Hub, and no older one is used.
-	unusable error
-	powMin   map[string]int
+	// the older one is dropped and no call goes to this Hub until a valid newer
+	// one is seen. rejectedAt is that announcement's created_at, so nothing older
+	// is ever adopted in its place.
+	unusable   error
+	rejectedAt int64
+	powMin     map[string]int
 	// accepted are the relays that accepted each withdrawal, by its notify,
 	// for WatchPayout.
 	accepted map[string][]string
@@ -185,18 +188,24 @@ func (s *BatchSession) Refresh(ctx context.Context) error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.announcement != nil && int64(newest.CreatedAt) < s.announcement.CreatedAt { //nolint:gosec // seconds
+	createdAt := int64(newest.CreatedAt) //nolint:gosec // seconds
+	if s.announcement != nil && createdAt < s.announcement.CreatedAt {
 		return nil
+	}
+	if s.unusable != nil && createdAt < s.rejectedAt {
+		return s.unusable
 	}
 	announcement, err := transport.ParseAnnouncement(newest, s.hubXOnly)
 	if err != nil {
 		// The newest validly signed announcement is the Hub's current policy; one
-		// the client cannot adopt makes the Hub unusable here, and an older one is
-		// never used in its place (NIP-CASH §Hub Announcement).
+		// the client cannot adopt makes the Hub unusable here, and the older one is
+		// dropped rather than used in its place (NIP-CASH §Hub Announcement).
 		s.unusable = fmt.Errorf("%w: newest announcement rejected: %v", ErrHubUnusable, err)
+		s.rejectedAt = createdAt
+		s.announcement = nil
 		return s.unusable
 	}
-	s.unusable = nil
+	s.unusable, s.rejectedAt = nil, 0
 	s.announcement = announcement
 	// Announced relays first, then the caller's own hints: if the announced
 	// relays go away, the hints are the way back.
@@ -228,7 +237,22 @@ func (s *BatchSession) Limits() transport.Limits {
 	return s.announcement.EffectiveLimits()
 }
 
+// usable returns the announcement calls go out under, or why none can: the
+// newest announcement was rejected (ErrHubUnusable), or none is held.
+func (s *BatchSession) usable() (*transport.Announcement, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.unusable != nil {
+		return nil, s.unusable
+	}
+	if s.announcement == nil {
+		return nil, fmt.Errorf("%w: no announcement held", ErrHubUnusable)
+	}
+	return s.announcement, nil
+}
+
 // Inbox is the key envelopes are encrypted and p-tagged to. NOT the hub identity.
+// It is "" while the Hub is unusable.
 func (s *BatchSession) Inbox() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()

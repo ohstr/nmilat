@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- Refuses every call, reads and bearer `cash_redeem` included, while a Hub's
+  newest announcement is rejected, and drops the older one instead of keeping
+  its inbox (`Inbox()` is then empty) until a valid newer one is seen.
 - Sorts canonical params keys by UTF-16 code units, as RFC 8785 and NIP-CASH
   §Item Proofs say, not by UTF-8 bytes. Hashes change only for keys above
   U+FFFF; `canonical-params.json` gains a case for that order.

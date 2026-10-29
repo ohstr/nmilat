@@ -58,6 +58,11 @@ func (s *BatchSession) sendBatch(ctx context.Context, builders []itemBuilder, op
 	if len(builders) == 0 {
 		return nil, nil
 	}
+	// No call of any kind goes to a Hub whose newest announcement was rejected:
+	// a read or a bearer redeem would otherwise reach a retired inbox.
+	if _, err := s.usable(); err != nil {
+		return nil, err
+	}
 	if err := s.checkBillCalls(builders, opts); err != nil {
 		return nil, err
 	}
@@ -190,15 +195,9 @@ func (s *BatchSession) checkBillCalls(builders []itemBuilder, opts sendOptions) 
 	if len(seen) == 0 {
 		return nil
 	}
-	s.mu.Lock()
-	ann := s.announcement
-	unusable := s.unusable
-	s.mu.Unlock()
-	if unusable != nil {
-		return unusable
-	}
-	if ann == nil {
-		return ErrHubUnusable
+	ann, err := s.usable()
+	if err != nil {
+		return err
 	}
 	return ann.ValidateForBillCalls()
 }
@@ -274,11 +273,13 @@ func withAccepted(out []ItemOutcome, accepted []string) []ItemOutcome {
 // sendOne publishes one envelope and waits for its reply. accepted names the
 // relays that took the request.
 func (s *BatchSession) sendOne(ctx context.Context, p packedEnvelope, index int) ([]ItemOutcome, []string, error) {
-	limits := s.Limits()
-	inbox := s.Inbox()
-	if inbox == "" {
-		return nil, nil, fmt.Errorf("%w: session has no announced inbox", ErrNotSent)
+	// One snapshot, re-checked per envelope: a Refresh mid-batch that rejects
+	// the newest announcement stops every envelope not yet published.
+	ann, err := s.usable()
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: %w", ErrNotSent, err)
 	}
+	limits, inbox := ann.EffectiveLimits(), ann.Inbox
 	plaintext, err := p.Envelope.Encode(limits)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: encode envelope %d: %v", ErrNotSent, index, err)
