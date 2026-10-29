@@ -19,6 +19,9 @@
   a build whose linked IDNA or NFC tables are another version (Go 1.27 links
   17.0.0) refuses those values with `nipIC.ErrUnicodeVersion` instead of
   computing canonical forms other clients do not share.
+- Runs `nipLS` encrypt and decrypt requests under the same lock as
+  `sign_event`, from `Policy.Authorize` through `AuthorizeResult`, so a policy's
+  quota or one-time approval on them is spent once under concurrent requests.
 
 ## [0.5.0]
 

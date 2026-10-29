@@ -117,9 +117,9 @@ func ParsePubKey(s string) (string, error) { return nip46.ParsePubKey(s) }
 // for a request the policy considers malformed; any other error refuses
 // with its message as the reason.
 //
-// Authorize for sign_event runs under a server-wide lock, immediately
-// before the key signs, so a policy can spend one-time state (an
-// attestation, a quota) without racing another request.
+// Authorize runs under a server-wide lock held until the key has signed,
+// encrypted or decrypted (and AuthorizeResult has run), so a policy can spend
+// one-time state (an attestation, a quota) without racing another request.
 type Policy interface {
 	Authorize(ctx context.Context, req *Request) error
 }
