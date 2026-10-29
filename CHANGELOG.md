@@ -7,6 +7,11 @@
 - Refuses an `email` user id whose local part starts with `@` in
   `nipIC.CanonicalUserID` and `NewConnectionKey`: NIP-IC says no value carries
   a leading `@`, and such a value is refused, never repaired.
+- Refuses the platform name `nostr` in `nipIC.ValidPlatformName` (new
+  `nipIC.PlatformNostr`), so no ConnectionKey, 35522 or nconnection is built on
+  it, and the `nipAZ` request and receipt builders refuse an identity whose
+  platform is not a NIP-IC platform name: a key sent with `nostr` was read as a
+  native pubkey.
 
 ## [0.5.0]
 

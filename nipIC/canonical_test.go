@@ -211,3 +211,39 @@ func TestConnectionKeyFromAttested_CanonicalPlatforms(t *testing.T) {
 		t.Errorf("canonical discord: %s %v", k, err)
 	}
 }
+
+// Nostr is not a Web Identity: "nostr" is no platform name, so a pubkey is
+// never hashed into a ConnectionKey, signed into a 35522 or carried in an
+// nconnection; names that only contain it stay valid.
+func TestPlatformNostrRefused(t *testing.T) {
+	ia, alice := newKeypair(t), newKeypair(t)
+	if ValidPlatformName(PlatformNostr) {
+		t.Error(`"nostr" is a valid platform name`)
+	}
+	if _, err := ConnectionKeyFromAttested(PlatformNostr, alice.pub); !errors.Is(err, ErrPlatformName) {
+		t.Errorf("attested key: %v", err)
+	}
+	if _, err := NewConnectionKey(PlatformNostr, alice.pub); !errors.Is(err, ErrPlatformName) {
+		t.Errorf("typed key: %v", err)
+	}
+	if _, err := NewAttestation(AttestationParams{PrivateKey: ia.priv, UserPubkey: alice.pub, Platform: PlatformNostr,
+		AuthType: "oauth", Evidence: Evidence{UserID: alice.pub}}); !errors.Is(err, ErrPlatformName) {
+		t.Errorf("35522 signed: %v", err)
+	}
+	key, _ := ConnectionKeyFromAttested("github", "Alice")
+	if _, err := EncodeNConnection(key, nil, PlatformNostr); !errors.Is(err, ErrPlatformName) {
+		t.Errorf("nconnection encoded: %v", err)
+	}
+	for _, p := range []WebIdentity{"nostr2", "nostr.example", "x-nostr", "nost", "github"} {
+		if !ValidPlatformName(p) {
+			t.Errorf("%q refused", p)
+		}
+		if _, err := ConnectionKeyFromAttested(p, "Alice"); err != nil {
+			t.Errorf("%q attested: %v", p, err)
+		}
+	}
+	if _, err := NewAttestation(AttestationParams{PrivateKey: ia.priv, UserPubkey: alice.pub, Platform: "nostr2",
+		AuthType: "oauth", Evidence: Evidence{UserID: "Alice"}}); err != nil {
+		t.Errorf("35522 on nostr2: %v", err)
+	}
+}

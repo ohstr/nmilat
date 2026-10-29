@@ -279,3 +279,42 @@ func TestT13_15_LinkAuthorization(t *testing.T) {
 		t.Errorf("authorized receipt validation: %v", err)
 	}
 }
+
+// NIP-AZ §Terminology: a ConnectionKey never goes out with platform "nostr",
+// which every receiver reads as a native pubkey; a native pubkey and a key on
+// a NIP-IC platform still build.
+func TestBuilders_RefuseNostrPlatformOnAKey(t *testing.T) {
+	hashed := nipAZ.ResolvedConnection(nipAZ.ConnectionKey(githubCK), "nostr")
+	base := nipAZ.AltZapRequestParams{PrivateKey: senderKey.Priv, Chain: "bitcoin", Lnurl: ownLnurl, AmountMloki: zapAmount, Relays: []string{testRelay}}
+	p := base
+	p.Recipient = hashed
+	if ev, err := nipAZ.NewAltZapRequest(p); !errors.Is(err, nipAZ.ErrInvalidIdentityTag) || ev != nil {
+		t.Errorf("9520 to a key on nostr: %v", err)
+	}
+	p.Recipient = nipAZ.Pubkey(recvKey.Pub)
+	p.PrivateKey = proxyKey.Priv
+	if ev, err := nipAZ.NewAltZapOnBehalfRequest(hashed, p); !errors.Is(err, nipAZ.ErrInvalidIdentityTag) || ev != nil {
+		t.Errorf("9523 from a key on nostr: %v", err)
+	}
+
+	github := nipAZ.ResolvedConnection(nipAZ.ConnectionKey(githubCK), "github")
+	req := buildRequest(t, nipAZ.AltZapRequestParams{Recipient: github, IA: ia1.Pub})
+	f := receiptFor(t, req, zapAmount)
+	rp := f.params
+	rp.Recipient = hashed
+	if ev, err := nipAZ.NewAltZapReceipt(rp); !errors.Is(err, nipAZ.ErrInvalidIdentityTag) || ev != nil {
+		t.Errorf("9521 to a key on nostr: %v", err)
+	}
+	if _, err := nipAZ.NewAltZapReceipt(f.params); err != nil {
+		t.Errorf("9521 to a key on github: %v", err)
+	}
+
+	native := buildRequest(t, nipAZ.AltZapRequestParams{})
+	if got := native.Tags[0]; len(got) != 2 || got[1] != recvKey.Pub {
+		t.Errorf("native p tag %v", got)
+	}
+	zr, err := nipAZ.ParseAltZapRequest(req)
+	if err != nil || zr.Recipient.WebIdentity() != "github" || zr.Recipient.Value() != githubCK {
+		t.Errorf("key on github: %v %v", zr, err)
+	}
+}

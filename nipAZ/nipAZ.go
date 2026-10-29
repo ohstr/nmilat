@@ -166,7 +166,8 @@ func Connection(platform WebIdentity, typed string) (Identity, error) {
 // already computed (e.g. resolved earlier in a request-handling pipeline and
 // passed through several layers) — unlike Connection, it does not hash
 // anything, so a caller who already has the key avoids computing the same
-// SHA256 twice for one logical identity.
+// SHA256 twice for one logical identity. platform must be a NIP-IC platform
+// name, never "nostr": the builders refuse any other (ErrInvalidIdentityTag).
 func ResolvedConnection(key ConnectionKey, platform WebIdentity) Identity {
 	return Identity{value: key.String(), webIdentity: platform}
 }
@@ -208,6 +209,16 @@ func (r *AltZapRequest) EconomicSender() Identity {
 // "nostr" are the same), ignoring any handle.
 func sameIdentity(a, b Identity) bool {
 	return a.value == b.value && a.webIdentity == b.webIdentity
+}
+
+// checkPlatform refuses an identity a receiver would misread: a platform other
+// than a NIP-IC platform name, "nostr" included, which every receiver reads as
+// a native pubkey even when the value is a ConnectionKey.
+func (id Identity) checkPlatform(key string) error {
+	if id.webIdentity != "" && !nipIC.ValidPlatformName(id.webIdentity) {
+		return fmt.Errorf("%w: %s tag platform", ErrInvalidIdentityTag, key)
+	}
+	return nil
 }
 
 // toSlice renders id as a Nostr tag array under key ("p" or "P"). Requests
@@ -880,6 +891,12 @@ func NewAltZapRequest(p AltZapRequestParams) (*nip01.Event, error) {
 // same tag rules a receiver applies (ParseAltZapRequest), and only then signs
 // it, so the signature always covers the final kind.
 func newAltZapRequest(kind int, p AltZapRequestParams) (*nip01.Event, error) {
+	if err := p.Recipient.checkPlatform("p"); err != nil {
+		return nil, err
+	}
+	if err := p.Sender.checkPlatform("P"); err != nil {
+		return nil, err
+	}
 	tags := [][]string{
 		p.Recipient.toSlice("p", false),
 		{"amount", strconv.FormatInt(p.AmountMloki, 10)},
@@ -968,6 +985,12 @@ type AltZapReceiptParams struct {
 func NewAltZapReceipt(p AltZapReceiptParams) (*nip01.Event, error) {
 	if (p.ResolvedRecipientPubkey != "" || p.ResolvedSenderPubkey != "") && !p.LinkAuthorized {
 		return nil, ErrLinkNotAuthorized
+	}
+	if err := p.Recipient.checkPlatform("p"); err != nil {
+		return nil, err
+	}
+	if err := p.Sender.checkPlatform("P"); err != nil {
+		return nil, err
 	}
 	tags := [][]string{
 		{"bolt11", p.Bolt11},

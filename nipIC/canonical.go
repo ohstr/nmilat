@@ -21,7 +21,8 @@ var (
 	// ErrTypedInputNotCanonical is typed input for a platform with no canonical
 	// form: its key comes from the recipient's attestation or nconnection.
 	ErrTypedInputNotCanonical = errors.New("nipIC: this platform has no canonical form; take the key from the recipient's attestation or nconnection")
-	// ErrPlatformName is a platform name outside [a-z0-9._-]+.
+	// ErrPlatformName is a platform name outside [a-z0-9._-]+, or "nostr",
+	// which names a native pubkey and never a Web Identity.
 	ErrPlatformName = errors.New("nipIC: platform name must match [a-z0-9._-]+")
 	// ErrConnectionKey is a ConnectionKey that is not 64 lowercase hex.
 	ErrConnectionKey = errors.New("nipIC: a ConnectionKey is 64 lowercase hex characters")
@@ -35,10 +36,16 @@ const (
 	PlatformDNS     WebIdentity = "dns"
 )
 
-// ValidPlatformName reports a platform name of one or more of a-z, 0-9, '.',
-// '_' and '-'. It is never lowercased for the caller.
+// PlatformNostr is the platform of a native Nostr pubkey in a NIP-AZ or NIP-CZ
+// identity tag. Nostr is not a Web Identity, so a pubkey is never hashed into a
+// ConnectionKey: ValidPlatformName refuses it.
+const PlatformNostr WebIdentity = "nostr"
+
+// ValidPlatformName reports a Web Identity platform name: one or more of a-z,
+// 0-9, '.', '_' and '-', and not "nostr" (NIP-IC §Terminology). It is never
+// lowercased for the caller.
 func ValidPlatformName(p WebIdentity) bool {
-	if p == "" {
+	if p == "" || p == PlatformNostr {
 		return false
 	}
 	for i := 0; i < len(p); i++ {
