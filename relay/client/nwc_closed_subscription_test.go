@@ -187,7 +187,7 @@ func TestNWCClient_ResponseWinsOverRacingClosed(t *testing.T) {
 }
 
 // TestNWCClient_MultiPayInvoice_ClosedBeforeAnyResults exercises waitAll's
-// own CLOSED handling (distinct from waitOne's, covered above) with the
+// own CLOSED handling (distinct from waitAnswer's, covered above) with the
 // simplest case: the relay closes the subscription before answering any
 // sub-payment at all.
 func TestNWCClient_MultiPayInvoice_ClosedBeforeAnyResults(t *testing.T) {
