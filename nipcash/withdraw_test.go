@@ -795,3 +795,29 @@ func TestQuoteForSlice(t *testing.T) {
 		}
 	}
 }
+
+// NIP-CASH §Quoting a Withdrawal row 7: a payout below the network's dust limit is refused below_min, and a zero
+// payout is refused whatever dust limit the Hub reports, a dust limit of 0 included.
+func TestCheckQuoteRequest_ZeroPayoutIsBelowMinAtAnyDustLimit(t *testing.T) {
+	check := func(payout, dust uint64) error {
+		return CheckQuoteRequest(QuoteCheck{
+			Found: true, Address: "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", NetworkHRP: "bc",
+			Pays: []ScriptType{{Version: 0, ProgramLen: 20}}, Claimable: true, AmountMillis: 900,
+			PayoutFor: func(ScriptType) (uint64, uint64, error) { return payout, dust, nil },
+		})
+	}
+	for _, c := range []struct {
+		payout, dust uint64
+		refused      bool
+	}{
+		{0, 0, true}, {0, 1000, true}, {999, 1000, true},
+		{1, 0, false}, {1000, 1000, false}, {1001, 1000, false},
+	} {
+		err := check(c.payout, c.dust)
+		var we *WithdrawError
+		refused := errors.As(err, &we) && we.Code == ErrCodeRestricted && we.Detail == DetailBelowMin && we.Row == 7
+		if refused != c.refused || (!c.refused && err != nil) {
+			t.Errorf("payout %d, dust %d: got %v, want refused=%v", c.payout, c.dust, err, c.refused)
+		}
+	}
+}
