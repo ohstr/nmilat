@@ -23,6 +23,9 @@
 
 ### Fixed
 
+- Serves a NIP-09 deletion request (kind 5) back by id and by kind once the
+  relay applied it, and never applies one against another deletion request.
+  ([#209](https://github.com/ohstr/nmilat/issues/209))
 - Omits `budget_renewal` from a `nipcw.CreateCircleWalletRequest` with no
   renewal, which wrote `""` and was refused as empty; `private-join.json`'s
   join params change with it.
