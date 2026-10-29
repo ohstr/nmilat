@@ -2,11 +2,20 @@
 
 ## [0.5.0-rc.45]
 
+### Added
+
+- Adds `transport.ErrEnvelopeKeys` and `transport.Item.UnmarshalJSON`, which
+  reads an item by its exact keys.
+
 ### Fixed
 
 - Refuses every call, reads and bearer `cash_redeem` included, while a Hub's
   newest announcement is rejected, and drops the older one instead of keeping
   its inbox (`Inbox()` is then empty) until a valid newer one is seen.
+- Matches envelope and item keys exactly: `ClassifyEnvelope` drops, and
+  `Decode` refuses, an envelope repeating a key or spelling one two ways that
+  differ only in case (`transport.ErrEnvelopeKeys`), and such an item is
+  omitted, so E2 to E4 check the `nonce` and `not_after` the run uses.
 - Sorts canonical params keys by UTF-16 code units, as RFC 8785 and NIP-CASH
   §Item Proofs say, not by UTF-8 bytes. Hashes change only for keys above
   U+FFFF; `canonical-params.json` gains a case for that order.
