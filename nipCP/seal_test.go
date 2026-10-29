@@ -274,6 +274,26 @@ func TestBalance(t *testing.T) {
 	}
 }
 
+// NIP-CP §Balance: the balance sums amount over live entries only; a pending
+// entry's amount (what a call sends) and every other state count nothing.
+func TestBalanceLiveOnly(t *testing.T) {
+	live := bill(hx('1', 64), 1, StateLive)
+	p := pendingEntry(hx('2', 32))
+	all := map[string]Entry{live.W: live, p.W: p}
+	for i, s := range []State{StateSpent, StateExpired, StateReclaimed, StateDone, StateUnknown} {
+		e := bill(hx(byte('3'+i), 64), 1, s)
+		all[e.W] = e
+	}
+	if got := Balance(all)["bitcoin"]; got != live.Amount {
+		t.Fatalf("balance %d, want %d", got, live.Amount)
+	}
+	second := bill(hx('9', 64), 1, StateLive)
+	all[second.W] = second
+	if got := Balance(all)["bitcoin"]; got != live.Amount+second.Amount {
+		t.Fatalf("balance with two live entries %d, want %d", got, live.Amount+second.Amount)
+	}
+}
+
 // T15-16: incremental sync filter and seen set (S-CP-46).
 func TestFilters(t *testing.T) {
 	_, user := key(t)
