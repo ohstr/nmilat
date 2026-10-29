@@ -10,13 +10,8 @@ import (
 	"github.com/ohstr/nmilat/nipIC"
 )
 
-// Compile-time checks of the Recipient/Target split (see Target's own doc
-// comment): namedIdentity (Pubkey/ConnectionKey) satisfies both; cashRecipient
-// (Anyone()) satisfies only Recipient; *CashTarget satisfies only Target.
-// There's no way to assert the NEGATIVE ("cashRecipient does NOT satisfy
-// Target") in Go's type system directly — the real guarantee is that
-// mint_cash.go/cash_transfer.go's own field types (Recipient vs. Target)
-// simply won't compile against the wrong constructor's return value.
+// Compile-time checks: namedIdentity (Pubkey/ConnectionKey) and *CashTarget
+// each satisfy both Recipient and Target.
 var (
 	_ Recipient = namedIdentity{}
 	_ Target    = namedIdentity{}
@@ -24,7 +19,7 @@ var (
 	_ Target    = (*CashTarget)(nil)
 )
 
-func TestPubkeyConnectionKeyAnyone_IdentityTypes(t *testing.T) {
+func TestPubkeyAndConnectionKey_IdentityTypes(t *testing.T) {
 	pk := Pubkey("aa")
 	if pk.identityType() != identityTypePubkey || pk.identityValue() != "aa" {
 		t.Fatalf("Pubkey: got type=%s value=%s", pk.identityType(), pk.identityValue())
