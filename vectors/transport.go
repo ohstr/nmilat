@@ -815,7 +815,7 @@ func buildProofVectors() (any, error) {
 		{"wrong method", func(x *transport.ProofBinding) { x.Method = "cash_transfer" }},
 		{"wrong params", func(x *transport.ProofBinding) { x.ParamsHash = strings.Repeat("c4", 32) }},
 		{"wrong envelope", func(x *transport.ProofBinding) { x.Nonce = envReplyTo }},
-		{"different not_after is not checked", func(x *transport.ProofBinding) { x.NotAfter = 1 }},
+		{"wrong not_after", func(x *transport.ProofBinding) { x.NotAfter = 1 }},
 	} {
 		w := b
 		c.mod(&w)

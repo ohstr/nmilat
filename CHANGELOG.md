@@ -10,6 +10,9 @@
 - Refuses a bolt11 invoice carrying more than one 32-byte payment hash field
   (`nip57.ErrBolt11PaymentHashRepeated`), where it kept the last: flnd keeps
   the first, so a redeem could bind a hash the Hub never pays.
+- Renames three vector cases whose names said the opposite of their expected
+  error (`claim.json` "an unparseable expiration is refused", "a repeated
+  platform tag is refused"; `proof.json` "wrong not_after").
 
 ## [0.5.0]
 

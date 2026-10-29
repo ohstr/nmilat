@@ -185,7 +185,7 @@ func buildClaim() (any, error) {
 	att := signedEvent(iaSecret, nipIC.KindAttestation, attTags(nil), "")
 	addAtt("valid", att)
 	addAtt("no expiration", signedEvent(iaSecret, nipIC.KindAttestation, attTags(drop("expiration")), ""))
-	addAtt("unparseable expiration is ignored", signedEvent(iaSecret, nipIC.KindAttestation, attTags(set("expiration", "soon")), ""))
+	addAtt("an unparseable expiration is refused", signedEvent(iaSecret, nipIC.KindAttestation, attTags(set("expiration", "soon")), ""))
 	addAtt("wrong kind", signedEvent(iaSecret, 1, attTags(nil), ""))
 	bad := att
 	bad.Sig = flipHex(bad.Sig)
@@ -201,7 +201,7 @@ func buildClaim() (any, error) {
 	addAtt("evidence with a string version", signedEvent(iaSecret, nipIC.KindAttestation, attTags(set("evidence", `{"version":"1","user_id":"x"}`)), ""))
 	addAtt("evidence with a fractional verified_at", signedEvent(iaSecret, nipIC.KindAttestation, attTags(set("evidence", `{"verified_at":1.5}`)), ""))
 	addAtt("evidence with unknown fields", signedEvent(iaSecret, nipIC.KindAttestation, attTags(set("evidence", `{"user_id":"x","extra":{"a":1}}`)), ""))
-	addAtt("a repeated tag: the last one wins", signedEvent(iaSecret, nipIC.KindAttestation, append(attTags(nil), []string{"platform", "x"}), ""))
+	addAtt("a repeated platform tag is refused", signedEvent(iaSecret, nipIC.KindAttestation, append(attTags(nil), []string{"platform", "x"}), ""))
 	addAtt("one-element tags are skipped", signedEvent(iaSecret, nipIC.KindAttestation, append(attTags(nil), []string{"d"}), ""))
 	parsedAtt, err := nipIC.ParseAttestation(&att)
 	if err != nil {
