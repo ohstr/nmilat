@@ -155,6 +155,8 @@ var katChecks = map[string][]kat{
 		k("K-IDNA-4", "", "canonicalUserId", "[id=K-IDNA-4]", "output"),
 		k("K-IDNA-5", "", "canonicalUserId", "[id=K-IDNA-5]", "output"),
 		k("K-IDNA-6", "", "canonicalUserId", "[id=K-IDNA-6]", "output"),
+		k("leading @ email", "nipIC: user id is not in canonical form", "canonicalUserId", "[input=@alice@example.com]", "error"),
+		k("nostr platform", "nipIC: platform name must match [a-z0-9._-]+", "kats", "[platform=nostr]", "error"),
 	},
 	"claim.json": {
 		k("K-CLAIM-1", "ad995b77237f369c79c5df82729d465eb9b5b4ddafb815995dee99db8d6b07c8", "kats", "[id=K-CLAIM-1]", "want"),

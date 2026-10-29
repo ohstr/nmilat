@@ -32,6 +32,9 @@
 - Refuses in `nipCZ.IdentityFromAttestation` an attestation whose `d` is not
   the ConnectionKey of its platform and evidence user id
   (`nipcash.ErrAttestationKey`), as `nipcash.ConnectionKeyFromAttestation` does.
+- Adds to `testdata/vectors/connection-key.json` a leading-`@` email, an empty
+  and a decomposed local part, a domain and an email domain at and one past
+  253 characters, and the platform `nostr` refused.
 
 ## [0.5.0]
 
