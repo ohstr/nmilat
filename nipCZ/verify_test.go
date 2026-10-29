@@ -467,3 +467,34 @@ func TestValidateForRelay(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Rule 9: the recipient's slice equals amount exactly, neither smaller nor
+// larger, and a claim is in place only with no new bill at all.
+func TestRule9ExactAmountAndInPlace(t *testing.T) {
+	z := &CashZap{Amount: 21000, Recipient: Identity{Value: "ab"}}
+	status := func(got uint64) *nipcash.CashStatusResult {
+		return &nipcash.CashStatusResult{Recipients: []nipcash.RecipientStatus{
+			{IdentityType: "pubkey", IdentityValue: "ab", AmountMillis: got}}}
+	}
+	for _, got := range []uint64{20999, 21001, 42000, 0} {
+		if err := CheckStatus(z, status(got)); !errors.Is(err, ErrRule9Amount) {
+			t.Errorf("slice %d: %v", got, err)
+		}
+	}
+	if err := CheckStatus(z, status(21000)); err != nil {
+		t.Errorf("slice of exactly amount: %v", err)
+	}
+	for name, res := range map[string]*nipcash.CashTransferResult{
+		"new token only":  {AmountMillis: 21000, NewWalletToken: "satscash1x"},
+		"smaller amount":  {AmountMillis: 20999},
+		"larger amount":   {AmountMillis: 21001},
+		"other and token": {AmountMillis: 20000, NewWalletToken: "satscash1x"},
+	} {
+		if err := CheckInPlaceTransfer(z, res); !errors.Is(err, ErrRule9NotInPlace) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if err := CheckInPlaceTransfer(z, &nipcash.CashTransferResult{AmountMillis: 21000}); err != nil {
+		t.Errorf("full in-place transfer: %v", err)
+	}
+}
