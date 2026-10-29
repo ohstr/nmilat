@@ -92,6 +92,7 @@ func decodeBolt11(bolt11 string) (*Invoice, error) {
 		inv.Timestamp = inv.Timestamp<<5 | int64(w)
 	}
 
+	seenPaymentHash := false
 	for i := 0; i+3 <= len(fields); {
 		fieldType := int(fields[i])
 		dataLen := int(fields[i+1])*32 + int(fields[i+2])
@@ -104,6 +105,15 @@ func decodeBolt11(bolt11 string) (*Invoice, error) {
 
 		switch fieldType {
 		case bolt11FieldPaymentHash:
+			// BOLT 11 skips a p field of another length; a second one of the right length is refused, since
+			// readers disagree on which one counts and a payer could pay another hash than the one checked.
+			if len(data) != bolt11HashFieldWords {
+				break
+			}
+			if seenPaymentHash {
+				return nil, ErrBolt11PaymentHashRepeated
+			}
+			seenPaymentHash = true
 			if h, err := bolt11HashHex(data); err == nil {
 				inv.PaymentHash = h
 			}
@@ -132,6 +142,9 @@ func decodeBolt11(bolt11 string) (*Invoice, error) {
 
 	return inv, nil
 }
+
+// ErrBolt11PaymentHashRepeated is returned for an invoice carrying more than one 32-byte payment hash field.
+var ErrBolt11PaymentHashRepeated = errors.New("bolt11 invoice has more than one payment_hash tag")
 
 // bolt11HashHex converts a 52-word (260-bit) tagged-field payload into its
 // 32-byte hex-encoded value, per BOLT11's encoding of the payment_hash and

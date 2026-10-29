@@ -7,6 +7,9 @@
 - Sorts canonical params keys by UTF-16 code units, as RFC 8785 and NIP-CASH
   §Item Proofs say, not by UTF-8 bytes. Hashes change only for keys above
   U+FFFF; `canonical-params.json` gains a case for that order.
+- Refuses a bolt11 invoice carrying more than one 32-byte payment hash field
+  (`nip57.ErrBolt11PaymentHashRepeated`), where it kept the last: flnd keeps
+  the first, so a redeem could bind a hash the Hub never pays.
 
 ## [0.5.0]
 
