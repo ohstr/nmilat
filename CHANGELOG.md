@@ -22,6 +22,9 @@
 - Runs `nipLS` encrypt and decrypt requests under the same lock as
   `sign_event`, from `Policy.Authorize` through `AuthorizeResult`, so a policy's
   quota or one-time approval on them is spent once under concurrent requests.
+- Adds `nipLS.Request.Encrypts` and `Decrypts`, which report
+  `nip44_message_keys` as both: its keys seal any plaintext under the payload's
+  nonce, so a policy that allows decryption but not encryption now refuses it.
 
 ## [0.5.0]
 
