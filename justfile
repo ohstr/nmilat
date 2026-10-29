@@ -20,8 +20,12 @@ vet:
 tidy:
     go mod tidy
 
-# Run build, vet, and test together (local pre-push / pre-tag check)
-check: build vet test
+# Refuse the identifiers the final cash NIPs removed
+legacy-check:
+    scripts/legacy-check.sh
+
+# Run build, vet, legacy-check and test together (local pre-push / pre-tag check)
+check: build vet legacy-check test
 
 # Benchmark the relay engine's hot paths (allocs/op, ns/op)
 bench:

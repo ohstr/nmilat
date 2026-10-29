@@ -59,6 +59,9 @@ jobs:
         with:
           version: v2.13
 
+      - name: Legacy markers
+        run: scripts/legacy-check.sh
+
   vulncheck:
     runs-on: ubuntu-latest
     steps:
