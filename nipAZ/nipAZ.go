@@ -123,7 +123,7 @@ type Chain string
 // another chain.
 var InvoiceCurrencies = map[Chain][]string{
 	"flokicoin": {"fc"},
-	"bitcoin":   {"bc", "tb", "tbs", "bcrt"},
+	"bitcoin":   {"bc"},
 }
 
 // WebIdentity and ConnectionKey are re-exported from nipIC — see the

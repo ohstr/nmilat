@@ -12,6 +12,9 @@
   it, and the `nipAZ` request and receipt builders refuse an identity whose
   platform is not a NIP-IC platform name: a key sent with `nostr` was read as a
   native pubkey.
+- Maps chain `bitcoin` to mainnet invoices (`bc`) only in
+  `nipAZ.InvoiceCurrencies`, so a testnet, signet or regtest invoice fails
+  receipt rule 4 and the relay no longer counts one as sats.
 
 ## [0.5.0]
 
