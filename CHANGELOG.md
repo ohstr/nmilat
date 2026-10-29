@@ -29,6 +29,9 @@
   `niplsp.MaxFutureSecs` (15 minutes) ahead of the client's clock, and `Seen`
   neither counts one as seen nor restores such a mark, so a future-dated event
   can no longer hide the node's later announcements, a `closed` one included.
+- Refuses in `nipCZ.IdentityFromAttestation` an attestation whose `d` is not
+  the ConnectionKey of its platform and evidence user id
+  (`nipcash.ErrAttestationKey`), as `nipcash.ConnectionKeyFromAttestation` does.
 
 ## [0.5.0]
 
