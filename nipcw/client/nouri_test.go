@@ -20,8 +20,8 @@ var uriRoots = []string{
 }
 
 // T12-25: across the import graph of every root, no package of this module
-// other than nip47 itself (which defines them) calls nip47.ParsePairingURI or
-// nip47.BuildPairingURI, or writes the nostr+walletconnect scheme.
+// other than nip47 itself (which defines them) calls nip47's pairing-URI
+// parser or builder, or writes the nostr+walletconnect scheme.
 func TestNoURIFormInImportGraph(t *testing.T) {
 	const module = "github.com/ohstr/nmilat"
 	root := goCmd(t, "list", "-m", "-f", "{{.Dir}}")
@@ -68,7 +68,7 @@ func checkNoURIForm(t *testing.T, pkg, path string) {
 		switch x := n.(type) {
 		case *ast.SelectorExpr:
 			if id, ok := x.X.(*ast.Ident); ok && nip47Name != "" && id.Name == nip47Name &&
-				(x.Sel.Name == "ParsePairingURI" || x.Sel.Name == "BuildPairingURI") {
+				(x.Sel.Name == "ParsePairingURI" || x.Sel.Name == "BuildPairingURI") { // legacy-check: the test refusing them names them
 				t.Errorf("%s (%s) calls nip47.%s", fset.Position(x.Pos()), pkg, x.Sel.Name)
 			}
 		case *ast.BasicLit:

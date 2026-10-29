@@ -62,7 +62,6 @@ func auditDConsolidateParams(sources int) string {
 func auditDEnvelope(t *testing.T, items []Item, nonce string) Envelope {
 	t.Helper()
 	return Envelope{
-		Version:  EnvelopeVersion,
 		NotAfter: time.Now().Add(60 * time.Second).Unix(),
 		Nonce:    nonce,
 		ReplyTo:  auditDNonce(t),
@@ -179,7 +178,6 @@ func TestAuditDPrivacy_ResponseLengthLeaksRosterSize(t *testing.T) {
 			int64(n)*1000000, strings.Join(parts, ","))
 
 		resp := ResponseEnvelope{
-			Version:  EnvelopeVersion,
 			ReqNonce: auditDNonce(t),
 			Seq:      1,
 			Total:    1,
@@ -253,7 +251,7 @@ func TestAuditDPrivacy_ClientNeverChecksTheReplyWasPadded(t *testing.T) {
 	nonce := auditDNonce(t)
 	ids := []string{"a", "b", "c"}
 	for n := 1; n <= len(ids); n++ {
-		resp := ResponseEnvelope{Version: EnvelopeVersion, ReqNonce: nonce, Seq: 1, Total: 1}
+		resp := ResponseEnvelope{ReqNonce: nonce, Seq: 1, Total: 1}
 		for i := 0; i < n; i++ {
 			resp.Results = append(resp.Results, Result{
 				ID: ids[i], ResultType: "cash_status", Result: json.RawMessage(`{"total_millis":1000000}`),

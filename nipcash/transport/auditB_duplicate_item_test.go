@@ -56,7 +56,7 @@ func TestAuditB_EnvelopeRefusesARepeatedItem(t *testing.T) {
 	two := one
 	two.ID = "2" // distinct id, identical request
 
-	env := Envelope{Version: EnvelopeVersion, NotAfter: notAfter, Nonce: nonce,
+	env := Envelope{NotAfter: notAfter, Nonce: nonce,
 		ReplyTo: replyTo, Items: []Item{one, two}}
 	_, err = env.Encode(DefaultLimits())
 	if !errors.Is(err, ErrDuplicateItem) {
@@ -137,7 +137,7 @@ func TestAuditB_DuplicateDetectionIsCanonical(t *testing.T) {
 	slice, _ := BuildItemProof(priv, binding)
 	bill, _ := BuildBillProof(priv, binding)
 
-	env := Envelope{Version: EnvelopeVersion, NotAfter: notAfter, Nonce: nonce, ReplyTo: replyTo,
+	env := Envelope{NotAfter: notAfter, Nonce: nonce, ReplyTo: replyTo,
 		Items: []Item{
 			{ID: "1", Target: target, Method: "cash_status", Params: a, Proof: slice, BillProof: bill},
 			{ID: "2", Target: target, Method: "cash_status", Params: b, Proof: slice, BillProof: bill},

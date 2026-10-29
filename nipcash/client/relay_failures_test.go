@@ -20,7 +20,7 @@ func TestPrivateTransport_ReportsEveryRelayFailure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	_, _, _, err := s.subscribeAndPublish(ctx, strings.Repeat("c", 64), &outgoing{ev: nip01.NewEvent(1, "x")})
+	_, err := s.subscribeAndPublish(ctx, strings.Repeat("c", 64), &outgoing{ev: nip01.NewEvent(1, "x")})
 	if err == nil {
 		t.Fatal("no error with every relay unreachable")
 	}

@@ -127,8 +127,10 @@ const (
 	// from a single envelope, which is a denial of service with valid syntax.
 	DefaultMaxVerifyBudget = 200
 
-	// DefaultMaxConsolidateSources caps the sources in one cash_consolidate item,
-	// and it is LOWER than NIP-CASH's own cap of 100 on the standard transport.
+	// DefaultMaxConsolidateSources caps the sources in one cash_consolidate item.
+	// NIP-CASH §Minting Cash says an implementation capping both mint_cash's
+	// recipients and consolidate's sources SHOULD use one limit (e.g. 100); this
+	// one is lower, and a Hub capping recipients at 100 departs from that SHOULD.
 	//
 	// That is not a preference, it is arithmetic: a source carries its own signed
 	// kind-23198 proof, so 100 sources is a ~96 KB item — past NIP-44's 65535-byte

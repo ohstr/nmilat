@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -392,6 +393,105 @@ func TestVerifyClaimProof_UnboundAmount(t *testing.T) {
 		want.Binding.AmountMillis = nil
 		if _, err := VerifyClaimProof(raw, want, f.now); !errors.Is(err, ErrClaimAmountUnbound) {
 			t.Errorf("%s with a nil amount: %v, want ErrClaimAmountUnbound", method, err)
+		}
+	}
+}
+
+// NIP-CASH §Claim Proofs step 5: each connection_key check refuses on its own. The claim proof is re-signed so that its
+// e tag names the altered attestation, so no other check can mask the one under test.
+func TestVerifyClaimProof_EachAttestationCheckRefusesOnItsOwn(t *testing.T) {
+	f := newClaimFixture(t)
+	iaPriv, iaPub := generateTestKeypair(t)
+	otherIA, _ := generateTestKeypair(t)
+	otherSigner, _ := generateTestKeypair(t)
+	otherSignerPub, _ := utils.GetPublicKey(otherSigner)
+	now := time.Now()
+	att := buildTestAttestation(t, iaPriv, f.pub, testDiscordKey(t), 1)
+	key := string(att.ConnectionKey)
+	base := ClaimExpectation{Binding: f.binding, SliceType: identityTypeConnectionKey, SliceValue: key, SliceIA: iaPub,
+		IATrusted: func(string) bool { return true }}
+
+	// pair re-signs an edited copy of the attestation with signer and returns the expectation carrying it and a
+	// claim proof whose connection_key is ck and whose e names it.
+	pair := func(edit func(*nip01.Event), signer, ck string) (ClaimExpectation, string) {
+		t.Helper()
+		ev := att.Copy()
+		edit(ev)
+		if err := ev.Sign(signer); err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := json.Marshal(ev)
+		w := base
+		w.Attestation = string(raw)
+		return w, f.sign(t, KindClaimProof, now.Unix(), append(f.binding.Tags(), []string{"connection_key", ck}, []string{"e", ev.ID}), "")
+	}
+	set := func(name, v string) func(*nip01.Event) {
+		return func(ev *nip01.Event) {
+			for _, tag := range ev.Tags {
+				if tag[0] == name {
+					tag[1] = v
+				}
+			}
+		}
+	}
+	keep := func(*nip01.Event) {}
+	unix := func(v int64) string { return strconv.FormatInt(v, 10) }
+
+	for _, c := range []struct {
+		name       string
+		edit       func(*nip01.Event)
+		signer, ck string
+		reason     string // "" = accepted
+	}{
+		{"the attestation as issued", keep, iaPriv, key, ""},
+		{"expiration one second after now", set("expiration", unix(now.Unix()+1)), iaPriv, key, ""},
+		{"author is not the slice's IA", keep, otherIA, key, "not by the slice's IA"},
+		{"d is not the slice's value", set("d", strings.Repeat("5", 64)), iaPriv, key, "attestation d is not"},
+		{"p is not the claim's signer", set("p", otherSignerPub), iaPriv, key, "attestation p is not the signer"},
+		{"expiration exactly now", set("expiration", unix(now.Unix())), iaPriv, key, "expiration has passed"},
+		{"expiration one second before now", set("expiration", unix(now.Unix()-1)), iaPriv, key, "expiration has passed"},
+		{"claim's connection_key is another", keep, iaPriv, strings.Repeat("6", 64), "connection_key is not the slice's"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w, proof := pair(c.edit, c.signer, c.ck)
+			_, err := VerifyClaimProof(proof, w, now)
+			if c.reason == "" {
+				if err != nil {
+					t.Fatalf("refused a valid attestation: %v", err)
+				}
+				return
+			}
+			var ce *ClaimError
+			if !errors.As(err, &ce) || ce.Code != "UNAUTHORIZED" || !strings.Contains(ce.Reason, c.reason) {
+				t.Fatalf("got %v, want UNAUTHORIZED %q", err, c.reason)
+			}
+		})
+	}
+}
+
+// NIP-CASH §Consolidating Tokens: each source's claim proof is bound by its s tag to the call's exact source list.
+func TestVerifyClaimProof_ConsolidateBoundToItsSourceList(t *testing.T) {
+	f := newClaimFixture(t)
+	a, b, c := strings.Repeat("1", 64), strings.Repeat("2", 64), strings.Repeat("3", 64)
+	signed, _ := SourcesHash([]string{a, b})
+	other, _ := SourcesHash([]string{a, c})
+	reordered, _ := SourcesHash([]string{b, a})
+	longer, _ := SourcesHash([]string{a, b, c})
+	amt := uint64(1000)
+	binding := ClaimBinding{Method: MethodCashConsolidate, Wallet: a, NewIdentityHash: NewIdentityHashOf("pubkey", f.pub, ""),
+		AmountMillis: &amt, SourcesHash: signed}
+	raw := f.sign(t, KindClaimProof, f.now.Unix(), binding.Tags(), "")
+	want := ClaimExpectation{Binding: binding, SliceType: identityTypePubkey, SliceValue: f.pub}
+	if _, err := VerifyClaimProof(raw, want, f.now); err != nil {
+		t.Fatalf("the signed source list: %v", err)
+	}
+	for name, h := range map[string]string{"another source list": other, "the same sources reordered": reordered,
+		"one more source": longer} {
+		w := want
+		w.Binding.SourcesHash = h
+		var ce *ClaimError
+		if _, err := VerifyClaimProof(raw, w, f.now); !errors.As(err, &ce) || ce.Code != "UNAUTHORIZED" || !strings.Contains(ce.Reason, `"s"`) {
+			t.Errorf("%s: got %v, want UNAUTHORIZED on the s tag", name, err)
 		}
 	}
 }

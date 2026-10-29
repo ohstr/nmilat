@@ -60,7 +60,7 @@ func TestKRH_NegativeVectors(t *testing.T) {
 	}
 }
 
-// T04-05: a signature over the removed lokicash-mint:v1:<hrp>:<wallet>:<amount>
+// T04-05: a signature over the removed v1 mint payload <prefix>-mint:v1:<hrp>:<wallet>:<amount>
 // payload carries no provenance: without TLV 8 the decoder marks the set
 // malformed, and with TLV 8 = 1 it is a signature over another text.
 func TestT04_05_RemovedPayloadHasNoProvenance(t *testing.T) {
@@ -70,7 +70,7 @@ func TestT04_05_RemovedPayloadHasNoProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sig, err := sign("lokicash-mint:v1:lokicash:" + wallet + ":21000")
+	sig, err := sign("lokicash-mint:v1:lokicash:" + wallet + ":21000") // legacy-check: T04-05 signs the removed payload to show it carries no provenance
 	if err != nil {
 		t.Fatal(err)
 	}

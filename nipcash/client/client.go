@@ -14,23 +14,21 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/ohstr/nmilat/nip47"
 	relayclient "github.com/ohstr/nmilat/relay/client"
 
 	"github.com/ohstr/nmilat/nipcash"
 	"github.com/ohstr/nmilat/nipcash/transport"
 )
 
-// Client is a NIP-CASH client bound to one Cash Hub or Cash Wallet
-// connection. Construct with Connect.
+// Client is a NIP-CASH client bound to one bill. Construct with Connect, which
+// verifies the bill's provenance and dials nothing; the first bill method opens
+// the session on the bill's relays.
 //
-// It hides which transport a call takes. Bill methods — cash_status, cash_redeem,
-// cash_transfer, cash_consolidate — travel over the PRIVATE transport, which is the
-// only transport that serves them (NIP-CASH §The Private Transport); hub methods such
-// as mint_cash keep the standard kind-23194 connection. A caller does neither piece of
-// bookkeeping: it dials and calls.
+// Bill methods — cash_status, cash_redeem, cash_transfer, cash_consolidate —
+// travel over the PRIVATE transport, which is the only transport that serves them
+// (NIP-CASH §The Private Transport); mint_cash is a Cash Hub method
+// (ConnectCashHub).
 type Client struct {
-	nwc          *relayclient.NWCClient
 	walletPubkey string
 
 	// token is the bill this client was dialled with. Bill methods need it: a bill's mint
@@ -77,6 +75,37 @@ func (c *Client) bill() (Bill, error) {
 // The hub identity comes from the bill's own mint signature, which is mandatory
 // (§Mint Provenance) precisely so this always works. A Client without a token has
 // no hub identity, so it cannot act on a bill.
+// ErrBillUnverified is a bill whose mint signature does not verify, or verifies
+// against another Hub than WithExpectedMinter names: none of its relays is
+// dialled.
+var ErrBillUnverified = errors.New("nipcash/client: this bill carries no verifiable mint signature, so its hub cannot be identified and its methods cannot be reached")
+
+// billMinter is the Hub identity a bill's provenance verifies against (a zap
+// bill's against zap), checked before anything is dialled (NIP-CASH §Mint
+// Provenance); with expected set, it must be that identity.
+func billMinter(t nipcash.Token, zap *nipcash.ZapContext, expected string) (string, error) {
+	var minter string
+	var ok bool
+	switch {
+	case t.Scheme == nipcash.SchemeZapV1 && zap == nil:
+		return "", ErrZapContextRequired
+	case t.Scheme == nipcash.SchemeZapV1:
+		minter, ok = nipcash.VerifyZapProvenance(t, *zap)
+	default:
+		minter, ok = nipcash.VerifyProvenance(t)
+	}
+	if !ok {
+		return "", ErrBillUnverified
+	}
+	if expected != "" {
+		x, err := transport.NormalizeNodeIdentity(expected)
+		if err != nil || !nipcash.HubIdentityEqual(x, minter) {
+			return "", ErrBillUnverified
+		}
+	}
+	return minter, nil
+}
+
 func (c *Client) billSession(ctx context.Context) (*BatchSession, error) {
 	c.sessionMu.Lock()
 	defer c.sessionMu.Unlock()
@@ -86,18 +115,9 @@ func (c *Client) billSession(ctx context.Context) (*BatchSession, error) {
 	if c.token == nil {
 		return nil, fmt.Errorf("nipcash/client: bill methods need a cash token: its mint signature names the hub the transport announcement is verified against")
 	}
-	var minter string
-	var ok bool
-	switch {
-	case c.token.Scheme == nipcash.SchemeZapV1 && c.zap == nil:
-		return nil, ErrZapContextRequired
-	case c.token.Scheme == nipcash.SchemeZapV1:
-		minter, ok = nipcash.VerifyZapProvenance(*c.token, *c.zap)
-	default:
-		minter, ok = nipcash.VerifyProvenance(*c.token)
-	}
-	if !ok {
-		return nil, fmt.Errorf("nipcash/client: this bill carries no verifiable mint signature, so its hub cannot be identified and its methods cannot be reached")
+	minter, err := billMinter(*c.token, c.zap, newSessionConfig(c.sessionOpts).expectedMinter)
+	if err != nil {
+		return nil, err
 	}
 	session, err := c.NewBatchSession(ctx, minter, c.token.UsableRelays())
 	if err != nil {
@@ -181,8 +201,11 @@ func oneItemOutcome(state OutcomeState, resultErr *transport.ResultError, sendEr
 //
 // A cashhub1 string is refused (ErrCashHubConnection; use ConnectCashHub). A
 // bill followed by "#<cash secret>" is dialled from its token half; use
-// ConnectCashSlice to keep the secret half. A token is dialled on its usable
-// relays.
+// ConnectCashSlice to keep the secret half. A bill whose provenance does not
+// verify, or not against WithExpectedMinter's Hub, is refused (ErrBillUnverified;
+// a zap bill without its context, ErrZapContextRequired: use ConnectZap) before
+// any relay is dialled, and a verified one is dialled on its usable relays only
+// when a bill method runs.
 func Connect(ctx context.Context, token string, opts ...SessionOption) (*Client, error) {
 	c, _, err := ConnectCashSlice(ctx, token, opts...)
 	return c, err
@@ -192,6 +215,13 @@ func Connect(ctx context.Context, token string, opts ...SessionOption) (*Client,
 // the first '#': the token half is dialled and the secret half returned, ""
 // when there is none.
 func ConnectCashSlice(ctx context.Context, s string, opts ...SessionOption) (*Client, string, error) {
+	return connectBill(s, nil, opts)
+}
+
+// connectBill decodes a bill and verifies its provenance before anything is
+// dialled: a tampered copy's relays never learn the caller's address. Nothing
+// is dialled here at all; the first bill method opens the session.
+func connectBill(s string, zap *nipcash.ZapContext, opts []SessionOption) (*Client, string, error) {
 	if strings.HasPrefix(strings.ToLower(s), nipcash.CashHubConnectionHRP+"1") {
 		return nil, "", ErrCashHubConnection
 	}
@@ -206,23 +236,20 @@ func ConnectCashSlice(ctx context.Context, s string, opts ...SessionOption) (*Cl
 	if secret != "" && secret == token.Secret {
 		return nil, "", ErrSecretIsConnectionSecret
 	}
-	pairing := &nip47.PairingInfo{WalletPubkey: token.WalletPubkey, RelayURLs: token.UsableRelays(), Secret: token.Secret}
-	nwc, err := relayclient.NewNWCClient(ctx, pairing, nip47.EncryptionNIP44V2)
-	if err != nil {
+	if len(token.UsableRelays()) == 0 {
+		return nil, "", fmt.Errorf("nipcash/client: the bill names no usable relay")
+	}
+	if _, err := billMinter(token, zap, newSessionConfig(opts).expectedMinter); err != nil {
 		return nil, "", err
 	}
-	return &Client{nwc: nwc, walletPubkey: token.WalletPubkey, connSecret: token.Secret, token: &token, sessionOpts: opts}, secret, nil
+	return &Client{walletPubkey: token.WalletPubkey, connSecret: token.Secret, token: &token, sessionOpts: opts, zap: zap}, secret, nil
 }
 
 // ConnectZap dials a zap bill (scheme 2) with its Cash Zap context, which
 // its provenance is verified against before any bill method runs.
 func ConnectZap(ctx context.Context, token string, z nipcash.ZapContext, opts ...SessionOption) (*Client, error) {
-	c, err := Connect(ctx, token, opts...)
-	if err != nil {
-		return nil, err
-	}
-	c.zap = &z
-	return c, nil
+	c, _, err := connectBill(token, &z, opts)
+	return c, err
 }
 
 // SelectVerifiedCopy picks, among copies of one bill, the first whose
@@ -264,8 +291,9 @@ func (c *Client) CashSecretCredential(secret string) (nipcash.Credential, error)
 	return nipcash.BySecret(secret), nil
 }
 
-// Close releases the underlying connection.
-func (c *Client) Close() { c.nwc.Close() }
+// Close releases the client. Its session dials relays per call, so nothing is
+// held open between calls.
+func (c *Client) Close() {}
 
 // WalletPubkey returns this connection's own wallet pubkey — the value
 // nipcash's Request builders bind a proof to.

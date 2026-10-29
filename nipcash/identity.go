@@ -19,11 +19,7 @@ type Recipient interface {
 
 // Target is who CashTransfer/CashConsolidate reassigns a slice to: a
 // pubkey- or connection_key-identified Recipient built with Pubkey/
-// ConnectionKey, or a *CashTarget for the cash-mode case. Anyone() does NOT
-// satisfy Target — see CashTarget's own doc comment for why mint_cash's
-// and cash_transfer's cash-mode cases need genuinely different credential-
-// generation semantics, not just a naming difference. Passing Anyone()
-// where a Target is expected is a compile error, not a runtime one.
+// ConnectionKey, or a *CashTarget for the cash-mode case.
 type Target interface {
 	// target is an unexported marker: only types this package constructs
 	// satisfy Target, so a caller can never hand-roll one.
@@ -32,10 +28,9 @@ type Target interface {
 
 // namedIdentity is Pubkey's and ConnectionKey's concrete Recipient/Target —
 // a Nostr pubkey or a nipIC.ConnectionKey (via nipAZ.Identity), never
-// cash mode. It's the only concrete type that satisfies both Recipient (valid
-// as a mint_cash allocation) and Target (valid as a cash_transfer/
-// cash_consolidate new_identity) — unlike cashRecipient (Anyone()), which
-// only ever satisfies Recipient.
+// cash mode. It satisfies both Recipient (a mint_cash allocation) and Target
+// (a cash_transfer/cash_consolidate new_identity), as *CashTarget does for
+// cash mode.
 type namedIdentity struct {
 	identity nipAZ.Identity
 	ia       string // Identity Authority pubkey, "" unless connection_key mode

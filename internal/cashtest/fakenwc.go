@@ -59,7 +59,7 @@ func (h *FakeHub) serveNWC(r *Relay, ev *nip01.Event) {
 	if err != nil {
 		return
 	}
-	encryption := nip47.EncryptionNIP04
+	encryption := nip47.EncryptionNIP04 // legacy-check: NIP-47's reading of a request with no encryption tag
 	if enc, err := utils.FindUniqueEventTagValue(ev.Tags, "encryption"); err == nil && enc != "" {
 		encryption = enc
 	}

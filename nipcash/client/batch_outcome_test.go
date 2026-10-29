@@ -190,7 +190,7 @@ func methodPacked(nonce string, notAfter int64, method string, ids ...string) pa
 		items = append(items, transport.Item{ID: id, Method: method})
 	}
 	return packedEnvelope{
-		Envelope: transport.Envelope{Version: transport.EnvelopeVersion, Nonce: nonce, NotAfter: notAfter, Items: items},
+		Envelope: transport.Envelope{Nonce: nonce, NotAfter: notAfter, Items: items},
 		ItemIDs:  ids,
 	}
 }

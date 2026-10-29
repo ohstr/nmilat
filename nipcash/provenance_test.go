@@ -268,7 +268,7 @@ func TestT04_18_IsReservedSignText(t *testing.T) {
 			t.Errorf("%q not reserved", s)
 		}
 	}
-	for _, s := range []string{"cash-mint", "satscash-mint:x", "hello"} {
+	for _, s := range []string{"cash-mint", "satscash-mint:x", "hello"} { // legacy-check: a removed prefix is no longer reserved
 		if IsReservedSignText(s) {
 			t.Errorf("%q reserved", s)
 		}

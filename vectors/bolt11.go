@@ -81,7 +81,7 @@ func exactMillis(amountPart string) *big.Int {
 
 func buildBolt11() (any, error) {
 	f := bolt11File{header: newHeader(
-		"bolt11 invoice fields nmilat reads: currency and amount from the HRP, payment hash, description and description hash. The signature is not checked.",
+		"bolt11 invoice fields nmilat reads: currency and amount from the HRP, payment hash, description and description hash. A second 32-byte payment hash field refuses the invoice (readers disagree on which one counts); a field of another length is skipped. The signature is not checked.",
 		"nip57/bolt11.go DecodeBolt11; real invoices from cashctl and nmilat test fixtures",
 	)}
 	ph := hashField(1, repeat(0xaa, 32))
@@ -114,7 +114,9 @@ func buildBolt11() (any, error) {
 	add("currency with a digit-free suffix", invoice("lnbcrt", ph), "")
 	add("description and its hash", invoice("lnfc1u", ph, field{13, words([]byte("coffee ☕"))}, hashField(23, repeat(0xdd, 32))), "1u")
 	add("unknown fields are skipped", invoice("lnfc1u", field{9, []byte{1, 2, 3}}, ph, field{31, nil}), "1u")
-	add("last valid payment hash wins", invoice("lnfc1u", ph, hashField(1, repeat(0xbb, 32))), "1u")
+	add("two payment hashes are refused", invoice("lnfc1u", ph, hashField(1, repeat(0xbb, 32))), "1u")
+	add("the same payment hash twice is refused", invoice("lnfc1u", ph, ph), "1u")
+	add("a payment hash with non-zero padding then a good one is refused", invoice("lnfc1u", field{1, setLastBit(words(repeat(0xaa, 32)))}, ph), "1u")
 	add("short payment hash is skipped", invoice("lnfc1u", field{1, words(repeat(0xaa, 31))}), "1u")
 	add("short payment hash then a good one", invoice("lnfc1u", field{1, words(repeat(0xaa, 31))}, ph), "1u")
 	add("payment hash with non-zero padding", invoice("lnfc1u", field{1, setLastBit(words(repeat(0xaa, 32)))}), "1u")

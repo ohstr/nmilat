@@ -98,7 +98,7 @@ type canonicalCase struct {
 
 func buildCanonicalParams() (any, error) {
 	f := canonicalFile{header: newHeader(
-		"The params hash (ph) an item proof binds: sha256 of params with keys sorted by UTF-8 bytes, no whitespace, number literals verbatim and RFC 8785 string escaping. Not stock JCS.",
+		"The params hash (ph) an item proof binds: sha256 of params with keys sorted and strings escaped as RFC 8785 does (keys by UTF-16 code units), no whitespace, and number literals verbatim, the one departure from RFC 8785.",
 		"nipcash/transport/envelope.go CanonicalParamsHash; canonical_jcs_test.go",
 	)}
 	add := func(name, params, canonical string) {
@@ -124,6 +124,7 @@ func buildCanonicalParams() (any, error) {
 		{"other control", `{"s":"\u000b"}`, `{"s":"\u000b"}`},
 		{"escaped surrogate pair", `{"s":"😀"}`, "{\"s\":\"😀\"}"},
 		{"lone surrogate becomes U+FFFD", `{"s":"\ud800"}`, "{\"s\":\"�\"}"},
+		{"a key above U+FFFF sorts before U+FFFF (UTF-16 code units, not UTF-8 bytes)", "{\"\uffff\":1,\"\U00010000\":2}", "{\"\U00010000\":2,\"\uffff\":1}"},
 		{"uppercase escape", `{"s":"é"}`, "{\"s\":\"é\"}"},
 	} {
 		add(c[0], c[1], c[2])
@@ -133,7 +134,7 @@ func buildCanonicalParams() (any, error) {
 		{"whitespace only", " \n\t"},
 		{"empty object", `{}`},
 		{"nested objects sort at every level", `{"b":{"z":1,"a":[{"y":2,"x":3}]},"a":0}`},
-		{"keys sort by UTF-8 bytes", "{\"￿\":1,\"\U00010000\":2,\"é\":3,\"z\":4,\"Z\":5,\"\":6}"},
+		{"keys sort by UTF-16 code units", "{\"￿\":1,\"\U00010000\":2,\"é\":3,\"z\":4,\"Z\":5,\"\":6}"},
 		{"duplicate keys: the last wins", `{"a":1,"a":2}`},
 		{"number literals kept: 1.0", `{"n":1.0}`},
 		{"number literals kept: 1e3", `{"n":1e3}`},
@@ -298,7 +299,7 @@ func statusItem(i int) transport.Item {
 }
 
 func envelopeWith(n int) transport.Envelope {
-	e := transport.Envelope{Version: 1, NotAfter: 1760000060, Nonce: envNonce, ReplyTo: envReplyTo}
+	e := transport.Envelope{NotAfter: 1760000060, Nonce: envNonce, ReplyTo: envReplyTo}
 	for i := 0; i < n; i++ {
 		e.Items = append(e.Items, statusItem(i))
 	}
@@ -532,11 +533,11 @@ func buildEnvelope() (any, error) {
 		{ID: "i0", ResultType: "cash_status", Result: json.RawMessage(`{"recipients":[{"identity_type":"cash","amount_millis":21000,"claimed":false}]}`)},
 		{ID: "i1", ResultType: "cash_redeem", Error: &transport.ResultError{Code: "RESTRICTED", Message: "no <>"}},
 	}
-	encR("results and an error", transport.ResponseEnvelope{Version: 1, ReqNonce: envNonce, Results: res}, d)
-	encR("chunk 2 of 3", transport.ResponseEnvelope{Version: 1, ReqNonce: envNonce, Results: res[:1], Seq: 2, Total: 3}, d)
-	encR("envelope-level error", transport.ResponseEnvelope{Version: 1, ReqNonce: envNonce, Error: &transport.ResultError{Code: "RATE_LIMITED"}}, d)
-	encR("seq past total", transport.ResponseEnvelope{Version: 1, ReqNonce: envNonce, Seq: 3, Total: 2}, d)
-	encR("bad req_nonce", transport.ResponseEnvelope{Version: 1, ReqNonce: "x"}, d)
+	encR("results and an error", transport.ResponseEnvelope{ReqNonce: envNonce, Results: res}, d)
+	encR("chunk 2 of 3", transport.ResponseEnvelope{ReqNonce: envNonce, Results: res[:1], Seq: 2, Total: 3}, d)
+	encR("envelope-level error", transport.ResponseEnvelope{ReqNonce: envNonce, Error: &transport.ResultError{Code: "RATE_LIMITED"}}, d)
+	encR("seq past total", transport.ResponseEnvelope{ReqNonce: envNonce, Seq: 3, Total: 2}, d)
+	encR("bad req_nonce", transport.ResponseEnvelope{ReqNonce: "x"}, d)
 
 	decR := func(name, pt string, ids []string) {
 		c := respDecodeCase{Name: name, Plaintext: pt, ReqNonce: envNonce, RequestedIDs: ids}
@@ -548,7 +549,7 @@ func buildEnvelope() (any, error) {
 		}
 		f.DecodeResp = append(f.DecodeResp, c)
 	}
-	full, _ := transport.ResponseEnvelope{Version: 1, ReqNonce: envNonce, Results: res}.EncodeResponse(d)
+	full, _ := transport.ResponseEnvelope{ReqNonce: envNonce, Results: res}.EncodeResponse(d)
 	decR("round trip", string(full), []string{"i0", "i1"})
 	decR("an omitted item", string(full), []string{"i0", "i1", "i2"})
 	decR("no seq or total means 1 of 1", `{"v":1,"req_nonce":"`+envNonce+`","results":[]}`, []string{"i0"})
@@ -576,7 +577,7 @@ func buildEnvelope() (any, error) {
 			Proof: signProof(transport.KindItemProof, claimantSecret, b, now), BillProof: signProof(transport.KindBillProof, strings.Repeat("09", 32), b, now)}
 	}
 	env := func(items ...transport.Item) transport.Envelope {
-		return transport.Envelope{Version: 1, NotAfter: now + 60, Nonce: envNonce, ReplyTo: envReplyTo, Items: items}
+		return transport.Envelope{NotAfter: now + 60, Nonce: envNonce, ReplyTo: envReplyTo, Items: items}
 	}
 	t1, t2 := strings.Repeat("a1", 32), strings.Repeat("b2", 32)
 	coh("coherent", hub, env(signed(t1, "cash_status", `{"scope":"mine"}`, hub)))
@@ -814,7 +815,7 @@ func buildProofVectors() (any, error) {
 		{"wrong method", func(x *transport.ProofBinding) { x.Method = "cash_transfer" }},
 		{"wrong params", func(x *transport.ProofBinding) { x.ParamsHash = strings.Repeat("c4", 32) }},
 		{"wrong envelope", func(x *transport.ProofBinding) { x.Nonce = envReplyTo }},
-		{"different not_after is not checked", func(x *transport.ProofBinding) { x.NotAfter = 1 }},
+		{"wrong not_after", func(x *transport.ProofBinding) { x.NotAfter = 1 }},
 	} {
 		w := b
 		c.mod(&w)

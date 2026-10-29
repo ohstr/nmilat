@@ -59,7 +59,7 @@ var ErrAttestationExpired = errors.New("nipcash: attestation has no expiration, 
 
 // targetFields narrows a Target (or Recipient) back to its identity_type/
 // identity_value/ia_pubkey triple — every concrete implementer (namedIdentity,
-// cashRecipient, *CashTarget) implements this unexported shape
+// *CashTarget) implements this unexported shape
 // internally; the type assertion is safe because neither interface has an
 // implementer outside this package (their marker methods are unexported).
 type targetFields interface {

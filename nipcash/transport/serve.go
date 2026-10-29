@@ -64,6 +64,11 @@ func ClassifyEnvelope(plaintext []byte, decryptErr error, limits Limits, now tim
 	if err := json.Unmarshal(plaintext, &raw); err != nil || raw == nil {
 		return drop(fmt.Errorf("%w: not a JSON object", ErrEnvelopeMalformed))
 	}
+	// A repeated or case-variant header key could make E2 to E4 check one value
+	// and the run use another, so no reply can be trusted to the envelope.
+	if err := exactKeys(plaintext, envelopeKeys...); err != nil {
+		return drop(err)
+	}
 	var replyTo string
 	if json.Unmarshal(raw["reply_to"], &replyTo) != nil || len(replyTo) != keyHexLen || !isLowerHex(replyTo) {
 		return drop(fmt.Errorf("%w: reply_to", ErrEnvelopeMalformed))
@@ -77,7 +82,7 @@ func ClassifyEnvelope(plaintext []byte, decryptErr error, limits Limits, now tim
 	if seen != nil && seen(nonce) {
 		return drop(errors.New("transport: nonce already served"))
 	}
-	header := &Envelope{Version: EnvelopeVersion, Nonce: nonce, ReplyTo: replyTo, NotAfter: notAfter}
+	header := &Envelope{Nonce: nonce, ReplyTo: replyTo, NotAfter: notAfter}
 	refuse := func(code string, err error) ServeVerdict {
 		return ServeVerdict{Action: ServeRefuse, Code: code, Envelope: header, Reason: err}
 	}
@@ -107,6 +112,10 @@ func ClassifyEnvelope(plaintext []byte, decryptErr error, limits Limits, now tim
 		return refuse("QUOTA_EXCEEDED", err)
 	case err != nil:
 		return refuse("BAD_REQUEST", err)
+	}
+	if env.Nonce != nonce || env.NotAfter != notAfter || env.ReplyTo != replyTo {
+		// Unreachable with exactKeys above; the run must use what E2 to E4 checked.
+		return refuse("BAD_REQUEST", fmt.Errorf("%w: header decoded two ways", ErrEnvelopeKeys))
 	}
 	return ServeVerdict{Action: ServeRun, Envelope: env, Served: true}
 }
