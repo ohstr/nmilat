@@ -23,6 +23,9 @@
 
 ### Fixed
 
+- Omits `budget_renewal` from a `nipcw.CreateCircleWalletRequest` with no
+  renewal, which wrote `""` and was refused as empty; `private-join.json`'s
+  join params change with it.
 - Holds re-mining for a relay that raised its proof-of-work minimum to the
   session's `WithPowBudget`: a minimum above its difficulty is refused, and
   mining stops at its duration or the deadline less `MinPublishMargin`, not at
