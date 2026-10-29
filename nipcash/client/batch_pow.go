@@ -27,6 +27,7 @@ type sessionConfig struct {
 	powMaxDuration   time.Duration // 0: deadline − MinPublishMargin − now
 	withdrawHRP      string        // "": the bill's coin's HRPs (WithWithdrawHRP)
 	relayAnswerWait  time.Duration // 0: the time to not_after shared among the relays
+	expectedMinter   string        // "": any minter the bill's signature recovers
 }
 
 func newSessionConfig(opts []SessionOption) sessionConfig {
@@ -54,6 +55,15 @@ func WithPowBudget(maxDifficulty int, maxDuration time.Duration) SessionOption {
 // envelope's not_after between that relay and every untried one.
 func WithRelayAnswerWait(d time.Duration) SessionOption {
 	return func(c *sessionConfig) { c.relayAnswerWait = d }
+}
+
+// WithExpectedMinter makes Connect, ConnectCashSlice and ConnectZap refuse a
+// bill whose provenance does not verify against minter, the Hub identity the
+// caller expects (x-only or compressed hex), with ErrBillUnverified before any
+// relay is dialled. Without it a bill is bound to whichever key its signature
+// recovers, and its relays are dialled to find that Hub's announcement.
+func WithExpectedMinter(minter string) SessionOption {
+	return func(c *sessionConfig) { c.expectedMinter = minter }
 }
 
 // outgoing is one kind-23190 ready to publish; pow is set when it was mined, so

@@ -6,11 +6,17 @@
 
 - Adds `relayclient.NWCOption`, `WithAnswerWait` and `DefaultAnswerWait`
   (`NewNWCClient` takes options), and `client.WithRelayAnswerWait`.
+- Adds `client.WithExpectedMinter` and `client.ErrBillUnverified`: `Connect`,
+  `ConnectCashSlice` and `ConnectZap` refuse a bill whose provenance does not
+  verify, or not against the expected Hub, before any relay is dialled.
 - Adds `transport.ErrEnvelopeKeys` and `transport.Item.UnmarshalJSON`, which
   reads an item by its exact keys.
 
 ### Fixed
 
+- Dials nothing in `client.Connect`, which opened the bill's first relay
+  before its provenance was checked; the session dials the relays when a bill
+  method runs, after the check.
 - Sends an NWC call on to the next relay hint when the relays it went to stay
   silent past their share of the call's deadline, or close its subscription,
   instead of waiting on the first relay that connected (NIP-CASH §Multiple
