@@ -178,3 +178,64 @@ func TestPolicyQuotaPerClient(t *testing.T) {
 		t.Errorf("%d client locks left after the requests", n)
 	}
 }
+
+// nip44_message_keys is both an encrypt and a decrypt.
+func TestMessageKeysGovernedAsEncryptAndDecrypt(t *testing.T) {
+	ctx := context.Background()
+	peer, _ := nip46.NewLocalKey(peerPriv)
+	user, _ := nip46.NewLocalKey(userPriv)
+	payload, err := peer.Encrypt(ctx, nip46.EncryptionNIP44V2, user.PubKey(), "one message")
+	if err != nil {
+		t.Fatal(err)
+	}
+	decryptOnly := policyServer(t, PolicyFunc(func(_ context.Context, c *Call) error {
+		if c.Encrypts() {
+			return nip46.Deny("no encryption")
+		}
+		return nil
+	}))
+	if r := handle(t, ctx, decryptOnly, nip46.MethodNIP44MessageKeys, peer.PubKey(), payload); r.Error == "" {
+		t.Error("message keys under a decrypt-only policy")
+	}
+	if r := handle(t, ctx, decryptOnly, nip46.MethodNIP44Decrypt, peer.PubKey(), payload); r.Result != "one message" {
+		t.Errorf("decrypt under a decrypt-only policy: %+v", r)
+	}
+	encryptOnly := policyServer(t, PolicyFunc(func(_ context.Context, c *Call) error {
+		if c.Decrypts() {
+			return nip46.Deny("no decryption")
+		}
+		return nil
+	}))
+	if r := handle(t, ctx, encryptOnly, nip46.MethodNIP44MessageKeys, peer.PubKey(), payload); r.Error == "" {
+		t.Error("message keys under an encrypt-only policy")
+	}
+	both := policyServer(t, PolicyFunc(func(_ context.Context, c *Call) error {
+		if c.Encrypts() && c.Decrypts() && c.Ciphertext == payload {
+			return nil
+		}
+		return nip46.Deny("not both")
+	}))
+	if r := handle(t, ctx, both, nip46.MethodNIP44MessageKeys, peer.PubKey(), payload); r.Error != "" {
+		t.Errorf("message keys allowed for both: %+v", r)
+	}
+}
+
+func TestCallEncryptsDecrypts(t *testing.T) {
+	for _, c := range []struct {
+		method       string
+		enc, decrypt bool
+	}{
+		{nip46.MethodNIP04Encrypt, true, false},
+		{nip46.MethodNIP44Encrypt, true, false},
+		{nip46.MethodNIP04Decrypt, false, true},
+		{nip46.MethodNIP44Decrypt, false, true},
+		{nip46.MethodNIP44MessageKeys, true, true},
+		{nip46.MethodSignEvent, false, false},
+		{nip46.MethodConnect, false, false},
+	} {
+		call := &Call{Method: c.method}
+		if call.Encrypts() != c.enc || call.Decrypts() != c.decrypt {
+			t.Errorf("%s: encrypts %v decrypts %v", c.method, call.Encrypts(), call.Decrypts())
+		}
+	}
+}

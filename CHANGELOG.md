@@ -38,6 +38,9 @@
 - Runs a `nip46/bunker` server's `Policy.Authorize` and the operation it
   allows one request at a time per client pubkey, so a client's quota or
   one-time approval is spent once, while other clients' requests still run.
+- Adds `nip46/bunker.Call.Encrypts` and `Decrypts`, which report
+  `nip44_message_keys` as both, as `nipLS` does, so a decrypt-only policy
+  refuses it.
 
 ## [0.5.0]
 

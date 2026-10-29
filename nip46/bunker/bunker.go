@@ -159,7 +159,8 @@ type Call struct {
 	Counterpart string
 	// Plaintext is set for nip04_encrypt and nip44_encrypt.
 	Plaintext string
-	// Ciphertext is set for nip04_decrypt and nip44_decrypt.
+	// Ciphertext is set for nip04_decrypt, nip44_decrypt and
+	// nip44_message_keys.
 	Ciphertext string
 
 	// Secret is the pairing secret a connect presented; the server only
@@ -177,6 +178,27 @@ type Call struct {
 	Rule string
 }
 
+// Encrypts reports a call that lets the app produce ciphertext under the
+// user's key: nip04_encrypt, nip44_encrypt and nip44_message_keys, whose keys
+// seal any plaintext under the payload's nonce.
+func (c *Call) Encrypts() bool {
+	switch c.Method {
+	case nip46.MethodNIP04Encrypt, nip46.MethodNIP44Encrypt, nip46.MethodNIP44MessageKeys:
+		return true
+	}
+	return false
+}
+
+// Decrypts reports a call that lets the app read ciphertext under the user's
+// key: nip04_decrypt, nip44_decrypt and nip44_message_keys.
+func (c *Call) Decrypts() bool {
+	switch c.Method {
+	case nip46.MethodNIP04Decrypt, nip46.MethodNIP44Decrypt, nip46.MethodNIP44MessageKeys:
+		return true
+	}
+	return false
+}
+
 // Policy decides every request a paired or pairing app makes. Return nil
 // to allow, nip46.Deny(reason) to refuse, or nip46.Invalid(reason) for a
 // malformed request; any other error refuses with its message.
@@ -192,6 +214,9 @@ type Call struct {
 // different clients run concurrently, so a prompt for one app never blocks
 // another; a policy that shares state across clients, such as one quota for
 // every app, must synchronise it itself.
+//
+// A policy that tells encryption from decryption asks Call.Encrypts and
+// Call.Decrypts: nip44_message_keys reports both.
 type Policy interface {
 	Authorize(ctx context.Context, call *Call) error
 }
