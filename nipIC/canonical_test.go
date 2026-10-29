@@ -6,6 +6,9 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"golang.org/x/net/idna"
+	"golang.org/x/text/unicode/norm"
 )
 
 // T05-01 (K-CK-1..3).
@@ -245,5 +248,41 @@ func TestPlatformNostrRefused(t *testing.T) {
 	if _, err := NewAttestation(AttestationParams{PrivateKey: ia.priv, UserPubkey: alice.pub, Platform: "nostr2",
 		AuthType: "oauth", Evidence: Evidence{UserID: "Alice"}}); err != nil {
 		t.Errorf("35522 on nostr2: %v", err)
+	}
+}
+
+// The linked UTS #46 and NFC tables are the Unicode version every client
+// canonicalizes with: a code point unassigned in 15.0.0 (CJK Extension I, a
+// letter from 15.1 on) is refused, an assigned one is accepted.
+func TestUnicodeTablesPinned(t *testing.T) {
+	if idna.UnicodeVersion != UnicodeVersion || norm.Version != UnicodeVersion || !tablesPinned {
+		t.Fatalf("idna %s, norm %s, want %s: canonical forms would differ from other clients'", idna.UnicodeVersion, norm.Version, UnicodeVersion)
+	}
+	if _, err := CanonicalUserID(PlatformDNS, "\U0002EBF0.example"); !errors.Is(err, ErrNotCanonical) {
+		t.Errorf("a CJK Extension I domain: %v", err)
+	}
+	if got, err := CanonicalUserID(PlatformDNS, "中.example"); err != nil || got != "xn--fiq.example" {
+		t.Errorf("a CJK domain = %q, %v", got, err)
+	}
+}
+
+// Linked with tables of another Unicode version, email and dns values are
+// refused, while numeric ids, which use no table, still canonicalize.
+func TestUnicodeVersionMismatchRefusesTableValues(t *testing.T) {
+	tablesPinned = false
+	t.Cleanup(func() { tablesPinned = true })
+	for _, c := range [][2]string{{"email", "alice@example.com"}, {"dns", "example.com"}} {
+		if _, err := CanonicalUserID(WebIdentity(c[0]), c[1]); !errors.Is(err, ErrUnicodeVersion) {
+			t.Errorf("%s: %v", c[0], err)
+		}
+		if _, err := ConnectionKeyFromAttested(WebIdentity(c[0]), c[1]); !errors.Is(err, ErrUnicodeVersion) {
+			t.Errorf("%s attested: %v", c[0], err)
+		}
+	}
+	if _, err := NewConnectionKey("discord", "80351110224678912"); err != nil {
+		t.Errorf("discord: %v", err)
+	}
+	if _, err := ConnectionKeyFromAttested("github", "Alice"); err != nil {
+		t.Errorf("github attested: %v", err)
 	}
 }

@@ -24,9 +24,22 @@ var (
 	// ErrPlatformName is a platform name outside [a-z0-9._-]+, or "nostr",
 	// which names a native pubkey and never a Web Identity.
 	ErrPlatformName = errors.New("nipIC: platform name must match [a-z0-9._-]+")
+	// ErrUnicodeVersion is an email or dns value met while the linked UTS #46
+	// or NFC tables are not UnicodeVersion: canonical forms would differ from
+	// other clients', so nothing is canonicalized.
+	ErrUnicodeVersion = errors.New("nipIC: the IDNA or NFC tables are not Unicode " + UnicodeVersion)
 	// ErrConnectionKey is a ConnectionKey that is not 64 lowercase hex.
 	ErrConnectionKey = errors.New("nipIC: a ConnectionKey is 64 lowercase hex characters")
 )
+
+// UnicodeVersion is the Unicode version of the UTS #46 and NFC tables email and
+// dns values are canonicalized with. Every client must get the same hash, and
+// the tables golang.org/x/net and x/text link follow the Go toolchain, so a
+// build linking other tables refuses those values (ErrUnicodeVersion).
+const UnicodeVersion = "15.0.0"
+
+// tablesPinned reports that the linked tables are UnicodeVersion; tests swap it.
+var tablesPinned = idna.UnicodeVersion == UnicodeVersion && norm.Version == UnicodeVersion
 
 // The platforms with a canonical form (NIP-IC §Canonical Platform User IDs).
 const (
@@ -78,11 +91,17 @@ func CanonicalUserID(p WebIdentity, typed string) (string, error) {
 	case PlatformX, PlatformDiscord:
 		return canonicalNumericID(typed)
 	case PlatformEmail:
+		if !tablesPinned {
+			return "", ErrUnicodeVersion
+		}
 		if !utf8.ValidString(typed) {
 			return "", ErrNotCanonical
 		}
 		return canonicalEmail(typed)
 	case PlatformDNS:
+		if !tablesPinned {
+			return "", ErrUnicodeVersion
+		}
 		if !utf8.ValidString(typed) {
 			return "", ErrNotCanonical
 		}
@@ -112,7 +131,11 @@ func ConnectionKeyFromAttested(p WebIdentity, userID string) (ConnectionKey, err
 		return "", ErrPlatformName
 	}
 	if HasCanonicalForm(p) {
-		if c, err := CanonicalUserID(p, userID); err != nil || c != userID {
+		c, err := CanonicalUserID(p, userID)
+		if err != nil {
+			return "", err
+		}
+		if c != userID {
 			return "", ErrNotCanonical
 		}
 	}
