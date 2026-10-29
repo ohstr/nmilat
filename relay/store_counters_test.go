@@ -85,19 +85,21 @@ func TestCounters_FollowEveryWrite(t *testing.T) {
 	assert.Equal(t, uint64(1), c.Kind(0))
 	assert.Equal(t, uint64(1), c.Kind(30023))
 
-	// A new author, then their only event deleted: authors back down.
+	// A new author, then their note deleted: the note goes, the kind 5 is kept and counted (NIP-09).
 	carols := signed(t, carol, 1, now-3)
 	InsertTestEvents(t, store, []*nip01.Event{carols})
 	assert.Equal(t, uint64(3), assertCountsExact(t, store).Authors)
 	InsertTestEvents(t, store, []*nip01.Event{signed(t, carol, 5, now-2, []string{"e", carols.ID})})
 	c = assertCountsExact(t, store)
-	assert.Equal(t, uint64(2), c.Authors, "the kind 5 itself isn't indexed, so carol has no events left")
+	assert.Equal(t, uint64(3), c.Authors, "carol's deletion request is still hers")
+	assert.Equal(t, uint64(1), c.Kind(5))
 
-	// Expired events are pruned and uncounted.
-	InsertTestEvents(t, store, []*nip01.Event{signed(t, carol, 1, now-30, []string{"expiration", strconv.FormatUint(now-20, 10)})})
-	assert.Equal(t, uint64(3), assertCountsExact(t, store).Authors)
+	// Expired events are pruned and uncounted: a new author's only event expires, authors back down.
+	dave := newTestKey(t, 4)
+	InsertTestEvents(t, store, []*nip01.Event{signed(t, dave, 1, now-30, []string{"expiration", strconv.FormatUint(now-20, 10)})})
+	assert.Equal(t, uint64(4), assertCountsExact(t, store).Authors)
 	require.NoError(t, store.pruneExpiredEvents())
-	require.Eventually(t, func() bool { return store.Counts().Authors == 2 }, 5*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return store.Counts().Authors == 3 }, 5*time.Second, 10*time.Millisecond)
 	assertCountsExact(t, store)
 }
 

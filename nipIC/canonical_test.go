@@ -6,6 +6,9 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"golang.org/x/net/idna"
+	"golang.org/x/text/unicode/norm"
 )
 
 // T05-01 (K-CK-1..3).
@@ -64,6 +67,30 @@ func TestT05_02_Email(t *testing.T) {
 	for _, in := range []string{"alice@BÜCHER.example", "alice@faß.de", "jürgen@x.example", "alice", "alice@example.com.", "@example.com"} {
 		if _, err := CanonicalUserID("email", in); !errors.Is(err, ErrNotCanonical) {
 			t.Errorf("%q: %v", in, err)
+		}
+	}
+}
+
+// No value carries a leading '@': an email whose local part starts with one is
+// refused, never repaired; an '@' elsewhere in the local part is kept.
+func TestEmail_LeadingAtRefused(t *testing.T) {
+	for _, in := range []string{"@alice@example.com", " @alice@example.com", "@@example.com", "\t@Alice@Example.com"} {
+		if out, err := CanonicalUserID("email", in); !errors.Is(err, ErrNotCanonical) {
+			t.Errorf("%q: got %q, %v; want ErrNotCanonical", in, out, err)
+		}
+		if _, err := NewConnectionKey("email", in); !errors.Is(err, ErrNotCanonical) {
+			t.Errorf("%q: key built: %v", in, err)
+		}
+	}
+	for in, want := range map[string]string{
+		"a@example.com":        "a@example.com",
+		" Alice@example.com":   "alice@example.com",
+		"alice@b@example.com":  "alice@b@example.com",
+		`"@alice"@example.com`: `"@alice"@example.com`,
+		"alice.@x@example.com": "alice.@x@example.com",
+	} {
+		if got, err := CanonicalUserID("email", in); err != nil || got != want {
+			t.Errorf("%q = %q (%v), want %q", in, got, err, want)
 		}
 	}
 }
@@ -185,5 +212,77 @@ func TestConnectionKeyFromAttested_CanonicalPlatforms(t *testing.T) {
 	}
 	if k, err := ConnectionKeyFromAttested("discord", "80351110224678912"); err != nil || k != "22ced17fc7b3a6f7262d2dbe00b42d302948595468e025f4392b0a5022b8319d" {
 		t.Errorf("canonical discord: %s %v", k, err)
+	}
+}
+
+// Nostr is not a Web Identity: "nostr" is no platform name, so a pubkey is
+// never hashed into a ConnectionKey, signed into a 35522 or carried in an
+// nconnection; names that only contain it stay valid.
+func TestPlatformNostrRefused(t *testing.T) {
+	ia, alice := newKeypair(t), newKeypair(t)
+	if ValidPlatformName(PlatformNostr) {
+		t.Error(`"nostr" is a valid platform name`)
+	}
+	if _, err := ConnectionKeyFromAttested(PlatformNostr, alice.pub); !errors.Is(err, ErrPlatformName) {
+		t.Errorf("attested key: %v", err)
+	}
+	if _, err := NewConnectionKey(PlatformNostr, alice.pub); !errors.Is(err, ErrPlatformName) {
+		t.Errorf("typed key: %v", err)
+	}
+	if _, err := NewAttestation(AttestationParams{PrivateKey: ia.priv, UserPubkey: alice.pub, Platform: PlatformNostr,
+		AuthType: "oauth", Evidence: Evidence{UserID: alice.pub}}); !errors.Is(err, ErrPlatformName) {
+		t.Errorf("35522 signed: %v", err)
+	}
+	key, _ := ConnectionKeyFromAttested("github", "Alice")
+	if _, err := EncodeNConnection(key, nil, PlatformNostr); !errors.Is(err, ErrPlatformName) {
+		t.Errorf("nconnection encoded: %v", err)
+	}
+	for _, p := range []WebIdentity{"nostr2", "nostr.example", "x-nostr", "nost", "github"} {
+		if !ValidPlatformName(p) {
+			t.Errorf("%q refused", p)
+		}
+		if _, err := ConnectionKeyFromAttested(p, "Alice"); err != nil {
+			t.Errorf("%q attested: %v", p, err)
+		}
+	}
+	if _, err := NewAttestation(AttestationParams{PrivateKey: ia.priv, UserPubkey: alice.pub, Platform: "nostr2",
+		AuthType: "oauth", Evidence: Evidence{UserID: "Alice"}}); err != nil {
+		t.Errorf("35522 on nostr2: %v", err)
+	}
+}
+
+// The linked UTS #46 and NFC tables are the Unicode version every client
+// canonicalizes with: a code point unassigned in 15.0.0 (CJK Extension I, a
+// letter from 15.1 on) is refused, an assigned one is accepted.
+func TestUnicodeTablesPinned(t *testing.T) {
+	if idna.UnicodeVersion != UnicodeVersion || norm.Version != UnicodeVersion || !tablesPinned {
+		t.Fatalf("idna %s, norm %s, want %s: canonical forms would differ from other clients'", idna.UnicodeVersion, norm.Version, UnicodeVersion)
+	}
+	if _, err := CanonicalUserID(PlatformDNS, "\U0002EBF0.example"); !errors.Is(err, ErrNotCanonical) {
+		t.Errorf("a CJK Extension I domain: %v", err)
+	}
+	if got, err := CanonicalUserID(PlatformDNS, "中.example"); err != nil || got != "xn--fiq.example" {
+		t.Errorf("a CJK domain = %q, %v", got, err)
+	}
+}
+
+// Linked with tables of another Unicode version, email and dns values are
+// refused, while numeric ids, which use no table, still canonicalize.
+func TestUnicodeVersionMismatchRefusesTableValues(t *testing.T) {
+	tablesPinned = false
+	t.Cleanup(func() { tablesPinned = true })
+	for _, c := range [][2]string{{"email", "alice@example.com"}, {"dns", "example.com"}} {
+		if _, err := CanonicalUserID(WebIdentity(c[0]), c[1]); !errors.Is(err, ErrUnicodeVersion) {
+			t.Errorf("%s: %v", c[0], err)
+		}
+		if _, err := ConnectionKeyFromAttested(WebIdentity(c[0]), c[1]); !errors.Is(err, ErrUnicodeVersion) {
+			t.Errorf("%s attested: %v", c[0], err)
+		}
+	}
+	if _, err := NewConnectionKey("discord", "80351110224678912"); err != nil {
+		t.Errorf("discord: %v", err)
+	}
+	if _, err := ConnectionKeyFromAttested("github", "Alice"); err != nil {
+		t.Errorf("github attested: %v", err)
 	}
 }

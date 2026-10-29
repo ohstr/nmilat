@@ -326,6 +326,10 @@ func NewEventStore(path string, limitation *nip11.Limitation, opts ...EventStore
 		_ = db.Close()
 		return nil, fmt.Errorf("failed to prepare the derived indexes: %w", err)
 	}
+	if err := es.indexStoredDeletions(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("failed to index the stored deletion requests: %w", err)
+	}
 
 	es.startWorkers()
 
@@ -606,7 +610,9 @@ func (s *EventStore) insert(tx *bolt.Tx, ev *nip01.Event) error {
 		if err := s.deleteAllRestricted(tx, ev, pes, allowedKinds); err != nil {
 			return err
 		}
-		if _, err := s.insertEvent(tx, ev); err != nil && !errors.Is(err, ErrEventDuplicated) {
+		// Indexed like any event: NIP-09 asks a relay to keep serving the
+		// request, by id and by kind, so other relays' clients learn of it.
+		if err := s.insertWithIndexes(tx, ev); err != nil {
 			return err
 		}
 
@@ -746,6 +752,10 @@ func (s *EventStore) deleteAllRestricted(tx *bolt.Tx, delEvent *nip01.Event, pes
 		}
 
 		if delEvent.PubKey != event.PubKey {
+			continue
+		}
+		// A deletion request against a deletion request has no effect (NIP-09).
+		if nip09.IsDeletionKind(event.Kind) {
 			continue
 		}
 

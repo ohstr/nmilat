@@ -77,12 +77,12 @@ func TestAuditC_SecA_CrossChunkDuplicateIDs_ArrivalOrderDecides(t *testing.T) {
 	s := hostileSession(limits, strings.Repeat("b", 64))
 
 	rich := transport.ResponseEnvelope{
-		Version: transport.EnvelopeVersion, ReqNonce: nonce, Seq: 1, Total: 2,
+		ReqNonce: nonce, Seq: 1, Total: 2,
 		Results: []transport.Result{{ID: "bill-1", ResultType: "cash_status",
 			Result: []byte(`{"amount_millis":1000000}`)}},
 	}
 	gone := transport.ResponseEnvelope{
-		Version: transport.EnvelopeVersion, ReqNonce: nonce, Seq: 2, Total: 2,
+		ReqNonce: nonce, Seq: 2, Total: 2,
 		Results: []transport.Result{{ID: "bill-1",
 			Error: &transport.ResultError{Code: "NOT_FOUND", Message: "no such bill"}}},
 	}
@@ -151,7 +151,7 @@ func TestAuditC_SecA_EnvelopeLevelErrorIsDiscarded(t *testing.T) {
 
 	ch := make(chan *nip01.Event, 1)
 	ch <- sealChunk(t, replyKey, limits, transport.ResponseEnvelope{
-		Version: transport.EnvelopeVersion, ReqNonce: nonce, Seq: 1, Total: 1,
+		ReqNonce: nonce, Seq: 1, Total: 1,
 		Error: &transport.ResultError{Code: "RATE_LIMITED", Message: "try again later"},
 	})
 
@@ -200,7 +200,6 @@ func TestAuditC_SecA_OverstatedTotalHasNoReplyDeadline(t *testing.T) {
 	// Already expired: no honest hub can still be producing chunks for this.
 	p := packedEnvelope{
 		Envelope: transport.Envelope{
-			Version:  transport.EnvelopeVersion,
 			Nonce:    nonce,
 			NotAfter: time.Now().Add(-10 * time.Minute).Unix(),
 		},
@@ -212,7 +211,7 @@ func TestAuditC_SecA_OverstatedTotalHasNoReplyDeadline(t *testing.T) {
 
 	ch := make(chan *nip01.Event, 1)
 	ch <- sealChunk(t, replyKey, limits, transport.ResponseEnvelope{
-		Version: transport.EnvelopeVersion, ReqNonce: nonce, Seq: 1, Total: 2,
+		ReqNonce: nonce, Seq: 1, Total: 2,
 		Results: []transport.Result{{ID: "x1", ResultType: "cash_status", Result: []byte(`{}`)}},
 	})
 
@@ -257,7 +256,7 @@ func TestAuditC_SecA_UnderstatedTotalNeverReadsAsWhole(t *testing.T) {
 	ch := make(chan *nip01.Event, 2)
 	// "1 of 1", but only one of the three requested items is answered.
 	ch <- sealChunk(t, replyKey, limits, transport.ResponseEnvelope{
-		Version: transport.EnvelopeVersion, ReqNonce: nonce, Seq: 1, Total: 1,
+		ReqNonce: nonce, Seq: 1, Total: 1,
 		Results: []transport.Result{{ID: "a", ResultType: "cash_status", Result: []byte(`{}`)}},
 	})
 

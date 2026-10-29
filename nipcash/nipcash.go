@@ -97,11 +97,9 @@ var (
 	ErrCashSource = errors.New("nipcash: cash_consolidate does not accept a cash-mode source")
 
 	// ErrConsolidateTargetInvalid is returned by CashConsolidate when To is
-	// nil — cash_consolidate itself now accepts a pubkey, connection_key,
-	// or cash-mode new_identity alike (previously pubkey-only; NIP-CASH's
-	// 2026-09-14 revision added cash/connection_key consolidate targets
-	// server-side), so nothing about a real Target's own type is rejected
-	// here anymore, only a target that was never set at all.
+	// nil. cash_consolidate accepts a pubkey, connection_key or cash-mode
+	// new_identity alike (NIP-CASH §Consolidating Tokens), so no real
+	// Target's type is rejected, only a target that was never set.
 	ErrConsolidateTargetInvalid = errors.New("nipcash: cash_consolidate requires a new_identity target")
 
 	// ErrNoRecipients is returned by MintCash when no recipient is given, or one

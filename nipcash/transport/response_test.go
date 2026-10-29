@@ -9,7 +9,7 @@ import (
 
 func testResponse(t *testing.T, reqNonce string, results ...Result) ResponseEnvelope {
 	t.Helper()
-	return ResponseEnvelope{Version: EnvelopeVersion, ReqNonce: reqNonce, Results: results}
+	return ResponseEnvelope{ReqNonce: reqNonce, Results: results}
 }
 
 func TestResponse_RoundTrip(t *testing.T) {

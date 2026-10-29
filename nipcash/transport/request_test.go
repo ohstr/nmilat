@@ -251,7 +251,6 @@ func TestWrapRequest_ClientCanReadTheReply(t *testing.T) {
 	}
 
 	response := ResponseEnvelope{
-		Version:  EnvelopeVersion,
 		ReqNonce: env.Nonce,
 		Results:  []Result{{ID: env.Items[0].ID, ResultType: "cash_status"}},
 	}

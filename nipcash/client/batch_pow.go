@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"time"
@@ -18,6 +19,12 @@ import (
 // written-ahead call as not sent.
 var ErrPowTooHard = fmt.Errorf("%w: proof of work too hard for the budget", ErrNotSent)
 
+// ErrPowRemineTooHard is a relay asking, after the first publish attempt, for
+// more proof of work than the session's budget allows, or for work not done
+// within it. That relay did not take the request; unlike ErrPowTooHard it does
+// not mean nothing was sent, since another relay may have taken it.
+var ErrPowRemineTooHard = errors.New("nipcash/client: a relay asks for more proof of work than the budget allows")
+
 // SessionOption configures a session: OpenBatchSession, Connect and
 // ConnectCashHub take them.
 type SessionOption func(*sessionConfig)
@@ -26,6 +33,8 @@ type sessionConfig struct {
 	powMaxDifficulty int           // 0: no cap
 	powMaxDuration   time.Duration // 0: deadline − MinPublishMargin − now
 	withdrawHRP      string        // "": the bill's coin's HRPs (WithWithdrawHRP)
+	relayAnswerWait  time.Duration // 0: the time to not_after shared among the relays
+	expectedMinter   string        // "": any minter the bill's signature recovers
 }
 
 func newSessionConfig(opts []SessionOption) sessionConfig {
@@ -45,6 +54,23 @@ func WithPowBudget(maxDifficulty int, maxDuration time.Duration) SessionOption {
 	return func(c *sessionConfig) {
 		c.powMaxDifficulty, c.powMaxDuration = maxDifficulty, maxDuration
 	}
+}
+
+// WithRelayAnswerWait sets how long a relay that took a request is given to
+// answer before the request also goes to the next untried relay (NIP-CASH
+// §Multiple Relay Hints). 0, the default, shares the time left until the
+// envelope's not_after between that relay and every untried one.
+func WithRelayAnswerWait(d time.Duration) SessionOption {
+	return func(c *sessionConfig) { c.relayAnswerWait = d }
+}
+
+// WithExpectedMinter makes Connect, ConnectCashSlice and ConnectZap refuse a
+// bill whose provenance does not verify against minter, the Hub identity the
+// caller expects (x-only or compressed hex), with ErrBillUnverified before any
+// relay is dialled. Without it a bill is bound to whichever key its signature
+// recovers, and its relays are dialled to find that Hub's announcement.
+func WithExpectedMinter(minter string) SessionOption {
+	return func(c *sessionConfig) { c.expectedMinter = minter }
 }
 
 // outgoing is one kind-23190 ready to publish; pow is set when it was mined, so
@@ -153,10 +179,20 @@ func (s *BatchSession) publishTo(ctx context.Context, relayURL *url.URL, req *ou
 		if stated == 0 {
 			return fmt.Errorf("refused: %s", ok.Message)
 		}
-		mctx, cancel := context.WithDeadline(ctx, time.Unix(req.notAfter, 0))
+		// The budget bounds a re-mine as it bounds the first mining: no more
+		// than its difficulty, and no longer than its duration or the deadline
+		// less MinPublishMargin.
+		if m := s.cfg.powMaxDifficulty; m > 0 && stated > m {
+			return fmt.Errorf("refused: %s: %w (asks %d, budget %d)", ok.Message, ErrPowRemineTooHard, stated, m)
+		}
+		mctx, cancel := s.miningContext(ctx, req.notAfter)
 		err = req.pow.Remine(mctx, stated)
+		mined := mctx.Err()
 		cancel()
 		if err != nil {
+			if mined != nil && ctx.Err() == nil {
+				return fmt.Errorf("re-mine to %d: %w (not done in time)", stated, ErrPowRemineTooHard)
+			}
 			return fmt.Errorf("re-mine to %d: %w", stated, err)
 		}
 		req.ev = req.pow.Event

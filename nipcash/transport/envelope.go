@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf16"
 )
 
 // Kinds for the private transport. Contiguous with NIP-47's own 23194-23197 and
@@ -40,17 +41,11 @@ const (
 	KindBillProof = 23193
 )
 
-// EnvelopeVersion is kept for source compatibility only. The envelope and the
-// response carry no version on the wire since nips 631341c; the Version fields
-// are never written or read.
-const EnvelopeVersion = 1
-
 // keyHexLen is the length of a hex-encoded 32-byte value: a pubkey, a nonce, or
 // a reply tag.
 const keyHexLen = 64
 
 var (
-	ErrEnvelopeVersion   = errors.New("transport: unsupported envelope version")
 	ErrEnvelopeNoItems   = errors.New("transport: envelope carries no items")
 	ErrEnvelopeExpired   = errors.New("transport: envelope not_after has passed")
 	ErrEnvelopeTooFresh  = errors.New("transport: envelope not_after is too far ahead")
@@ -139,8 +134,6 @@ func hasRawValue(raw json.RawMessage) bool {
 
 // Envelope is the plaintext inside one private-transport ciphertext.
 type Envelope struct {
-	// Version is never on the wire (see EnvelopeVersion).
-	Version int `json:"-"`
 	// NotAfter is the envelope's own expiry, in unix seconds. The wrapping event's
 	// created_at is randomised up to two days into the past (NIP-59), so it says
 	// nothing about freshness — replay protection has to live in here.
@@ -227,7 +220,7 @@ func canonicalJSON(raw json.RawMessage) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
-// writeCanonical writes v in NIP-CASH's canonical form: keys sorted, no
+// writeCanonical writes v in NIP-CASH's canonical form: keys sorted as RFC 8785 sorts them, no
 // insignificant whitespace, numbers verbatim, strings as RFC 8785 writes them.
 // Not json.Marshal: it escapes <, >, &, U+2028 and U+2029, so its hash differs
 // from any implementation following the spec.
@@ -261,7 +254,7 @@ func writeCanonical(buf *bytes.Buffer, v any) error {
 		for k := range v {
 			keys = append(keys, k)
 		}
-		sort.Strings(keys)
+		sort.Slice(keys, func(i, j int) bool { return lessUTF16(keys[i], keys[j]) })
 		buf.WriteByte('{')
 		for i, k := range keys {
 			if i > 0 {
@@ -278,6 +271,18 @@ func writeCanonical(buf *bytes.Buffer, v any) error {
 		return fmt.Errorf("unexpected JSON value of type %T", v)
 	}
 	return nil
+}
+
+// lessUTF16 orders keys as RFC 8785 §3.2.3 does, by UTF-16 code units; it
+// differs from byte order only when a key holds a character above U+FFFF.
+func lessUTF16(a, b string) bool {
+	ua, ub := utf16.Encode([]rune(a)), utf16.Encode([]rune(b))
+	for i := 0; i < len(ua) && i < len(ub); i++ {
+		if ua[i] != ub[i] {
+			return ua[i] < ub[i]
+		}
+	}
+	return len(ua) < len(ub)
 }
 
 // writeCanonicalString writes s as RFC 8785 does: only ", \ and control
@@ -471,15 +476,23 @@ func Decode(plaintext []byte, limits Limits) (*Envelope, error) {
 			ErrEnvelopeTooLarge, len(plaintext), limits.MaxEnvelopeBytes)
 	}
 	var wire struct {
-		NotAfter int64             `json:"not_after"`
-		Nonce    string            `json:"nonce"`
-		ReplyTo  string            `json:"reply_to"`
-		Items    []json.RawMessage `json:"items"`
+		NotAfter int64
+		Nonce    string
+		ReplyTo  string
+		Items    []json.RawMessage
 	}
-	if err := json.Unmarshal(plaintext, &wire); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrEnvelopeMalformed, err)
+	fields, err := exactFields(plaintext, envelopeKeys...)
+	if err != nil {
+		return nil, err
 	}
-	e := Envelope{Version: EnvelopeVersion, NotAfter: wire.NotAfter, Nonce: wire.Nonce, ReplyTo: wire.ReplyTo}
+	for key, dst := range map[string]any{"not_after": &wire.NotAfter, "nonce": &wire.Nonce, "reply_to": &wire.ReplyTo, "items": &wire.Items} {
+		if v, ok := fields[key]; ok {
+			if err := json.Unmarshal(v, dst); err != nil {
+				return nil, fmt.Errorf("%w: %s: %v", ErrEnvelopeMalformed, key, err)
+			}
+		}
+	}
+	e := Envelope{NotAfter: wire.NotAfter, Nonce: wire.Nonce, ReplyTo: wire.ReplyTo}
 	if len(e.Nonce) != keyHexLen || !isLowerHex(e.Nonce) {
 		return nil, fmt.Errorf("%w: nonce must be %d lowercase hex characters", ErrEnvelopeMalformed, keyHexLen)
 	}
@@ -521,8 +534,8 @@ func Decode(plaintext []byte, limits Limits) (*Envelope, error) {
 // ItemShapeOK is I1: an item is a JSON object with string id, target and method,
 // and params absent, null or an object. Anything else is omitted.
 func ItemShapeOK(raw json.RawMessage) bool {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
+	fields, err := exactFields(raw, itemKeys...)
+	if err != nil || fields == nil {
 		return false
 	}
 	for _, name := range []string{"id", "target", "method"} {
@@ -540,20 +553,114 @@ func ItemShapeOK(raw json.RawMessage) bool {
 	return true
 }
 
+// envelopeKeys and itemKeys are the wire names an envelope and an item are read by.
+var (
+	envelopeKeys = []string{"not_after", "nonce", "reply_to", "items", "pad"}
+	itemKeys     = []string{"id", "target", "method", "params", "proof", "bill_proof"}
+)
+
+// ErrEnvelopeKeys is an envelope or item object that repeats a key, or carries
+// two spellings of one key differing only in case.
+var ErrEnvelopeKeys = errors.New("transport: repeated or case-variant key")
+
+// exactKeys refuses an object that repeats a key, or carries two keys equal but
+// for case to one of known. Keys are matched exactly ("Nonce" alone is an unknown
+// key, not the nonce); refusing the pair stops a reader that folds case, as Go's
+// struct decoding does, from seeing another value than one that does not.
+func exactKeys(data []byte, known ...string) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	tok, err := dec.Token()
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrEnvelopeMalformed, err)
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '{' {
+		return fmt.Errorf("%w: not a JSON object", ErrEnvelopeMalformed)
+	}
+	seen := map[string]bool{}
+	folded := map[string]string{}
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return fmt.Errorf("%w: %v", ErrEnvelopeMalformed, err)
+		}
+		key, _ := tok.(string)
+		if seen[key] {
+			return fmt.Errorf("%w: %q repeated", ErrEnvelopeKeys, key)
+		}
+		seen[key] = true
+		for _, k := range known {
+			if strings.EqualFold(key, k) {
+				if prev, ok := folded[k]; ok {
+					return fmt.Errorf("%w: %q and %q", ErrEnvelopeKeys, prev, key)
+				}
+				folded[k] = key
+			}
+		}
+		var skip json.RawMessage
+		if err := dec.Decode(&skip); err != nil {
+			return fmt.Errorf("%w: %v", ErrEnvelopeMalformed, err)
+		}
+	}
+	return nil
+}
+
+// exactFields decodes an object into its fields by exact key, after exactKeys.
+func exactFields(data []byte, known ...string) (map[string]json.RawMessage, error) {
+	if err := exactKeys(data, known...); err != nil {
+		return nil, err
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrEnvelopeMalformed, err)
+	}
+	return m, nil
+}
+
+// UnmarshalJSON reads an item by its exact keys, as a Hub's checks do, never by
+// Go's case-insensitive match; an item repeating a key, or spelling one two ways,
+// is refused.
+func (i *Item) UnmarshalJSON(data []byte) error {
+	if bytes.Equal(bytes.TrimSpace(data), nullLiteral) {
+		return nil
+	}
+	m, err := exactFields(data, itemKeys...)
+	if err != nil {
+		return err
+	}
+	var it Item
+	for key, dst := range map[string]*string{"id": &it.ID, "target": &it.Target, "method": &it.Method} {
+		if v, ok := m[key]; ok {
+			if err := json.Unmarshal(v, dst); err != nil {
+				return fmt.Errorf("%w: item %s: %v", ErrEnvelopeMalformed, key, err)
+			}
+		}
+	}
+	for key, dst := range map[string]*json.RawMessage{"params": &it.Params, "proof": &it.Proof, "bill_proof": &it.BillProof} {
+		if v, ok := m[key]; ok {
+			*dst = append(json.RawMessage(nil), v...)
+		}
+	}
+	*i = it
+	return nil
+}
+
 // duplicateItemIDs reports two items, of whatever shape, carrying one string id.
 func duplicateItemIDs(items []json.RawMessage) bool {
 	seen := make(map[string]bool, len(items))
 	for _, raw := range items {
-		var it struct {
-			ID *string `json:"id"`
-		}
-		if json.Unmarshal(raw, &it) != nil || it.ID == nil {
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(raw, &fields) != nil {
 			continue
 		}
-		if seen[*it.ID] {
+		v, ok := fields["id"]
+		var id string
+		if !ok || bytes.Equal(bytes.TrimSpace(v), nullLiteral) || json.Unmarshal(v, &id) != nil {
+			continue
+		}
+		if seen[id] {
 			return true
 		}
-		seen[*it.ID] = true
+		seen[id] = true
 	}
 	return false
 }

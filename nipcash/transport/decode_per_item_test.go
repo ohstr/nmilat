@@ -34,7 +34,7 @@ func perItemFixture(t *testing.T, id string) (Item, string, int64) {
 
 func decodeItems(t *testing.T, nonce string, notAfter int64, items ...Item) (*Envelope, error) {
 	t.Helper()
-	raw, err := json.Marshal(Envelope{Version: EnvelopeVersion, NotAfter: notAfter, Nonce: nonce,
+	raw, err := json.Marshal(Envelope{NotAfter: notAfter, Nonce: nonce,
 		ReplyTo: strings.Repeat("cd", 32), Items: items})
 	if err != nil {
 		t.Fatal(err)
@@ -94,7 +94,7 @@ func TestEncode_RefusesABadItem(t *testing.T) {
 	good, nonce, notAfter := perItemFixture(t, "1")
 	bad := good
 	bad.ID, bad.Target, bad.BillProof = "2", strings.Repeat("bb", 32), nil
-	env := Envelope{Version: EnvelopeVersion, NotAfter: notAfter, Nonce: nonce,
+	env := Envelope{NotAfter: notAfter, Nonce: nonce,
 		ReplyTo: strings.Repeat("cd", 32), Items: []Item{good, bad}}
 	if _, err := env.Encode(DefaultLimits()); !errors.Is(err, ErrEnvelopeMalformed) {
 		t.Fatalf("Encode err = %v, want ErrEnvelopeMalformed", err)

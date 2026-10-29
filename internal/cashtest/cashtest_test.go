@@ -51,7 +51,7 @@ func request(t *testing.T, h *cashtest.FakeHub, notAfter time.Time) sent {
 	if err != nil {
 		t.Fatal(err)
 	}
-	env := transport.Envelope{Version: transport.EnvelopeVersion, Nonce: nonce, ReplyTo: replyTo,
+	env := transport.Envelope{Nonce: nonce, ReplyTo: replyTo,
 		NotAfter: notAfter.Unix(), Items: []transport.Item{{ID: "1", Target: target, Method: "cash_status",
 			Params: params, Proof: proof, BillProof: billProof}}}
 	plaintext, err := env.Encode(h.Limits)

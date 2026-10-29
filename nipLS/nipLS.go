@@ -117,9 +117,14 @@ func ParsePubKey(s string) (string, error) { return nip46.ParsePubKey(s) }
 // for a request the policy considers malformed; any other error refuses
 // with its message as the reason.
 //
-// Authorize for sign_event runs under a server-wide lock, immediately
-// before the key signs, so a policy can spend one-time state (an
-// attestation, a quota) without racing another request.
+// Authorize runs under a server-wide lock held until the key has signed,
+// encrypted or decrypted (and AuthorizeResult has run), so a policy can spend
+// one-time state (an attestation, a quota) without racing another request.
+//
+// A policy that tells encryption from decryption asks Request.Encrypts and
+// Request.Decrypts rather than which text field is set: nip44_message_keys
+// reports both, since its keys let the caller seal any plaintext under that
+// payload's nonce as well as open the payload.
 type Policy interface {
 	Authorize(ctx context.Context, req *Request) error
 }
@@ -178,6 +183,26 @@ type Request struct {
 	// Rule optionally names what decided, for the decision hook. A Policy
 	// may set it.
 	Rule string
+}
+
+// Encrypts reports a request that lets the caller produce ciphertext under the
+// signer's key: nip04_encrypt, nip44_encrypt and nip44_message_keys.
+func (r *Request) Encrypts() bool {
+	switch r.Method {
+	case nip46.MethodNIP04Encrypt, nip46.MethodNIP44Encrypt, nip46.MethodNIP44MessageKeys:
+		return true
+	}
+	return false
+}
+
+// Decrypts reports a request that lets the caller read ciphertext under the
+// signer's key: nip04_decrypt, nip44_decrypt and nip44_message_keys.
+func (r *Request) Decrypts() bool {
+	switch r.Method {
+	case nip46.MethodNIP04Decrypt, nip46.MethodNIP44Decrypt, nip46.MethodNIP44MessageKeys:
+		return true
+	}
+	return false
 }
 
 // Decision reports one policy-gated request, or a refused connection

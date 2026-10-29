@@ -277,6 +277,12 @@ func buildLSP() (any, error) {
 	after := client
 	after.Now = lspExpires + 1
 	parse("step 4: a second after its expiration", k1, &after)
+	ahead := client
+	ahead.Now = lspCreated - niplsp.MaxFutureSecs
+	parse("created exactly 15 minutes ahead of the client's clock", k1, &ahead)
+	tooFar := client
+	tooFar.Now = lspCreated - niplsp.MaxFutureSecs - 1
+	parse("step 4: created more than 15 minutes ahead of the client's clock", k1, &tooFar)
 	parse("step 5: a chain the client does not use", k1, &lspClient{Chains: []string{"flokicoin"}, Networks: []string{"mainnet"}, Now: client.Now})
 	parse("step 5: a network the client does not use", k1, &lspClient{Chains: []string{"bitcoin"}, Networks: []string{"testnet", "regtest"}, Now: client.Now})
 	parse("step 4 before step 5", k1, &lspClient{Chains: []string{"flokicoin"}, Networks: []string{"mainnet"}, Now: lspExpires + 1})

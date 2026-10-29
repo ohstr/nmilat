@@ -9,7 +9,7 @@ import (
 )
 
 // okName matches a case name that promises success.
-var okName = regexp.MustCompile(`(?i)\b(fine|accepted|ok|okay)\b`)
+var okName = regexp.MustCompile(`(?i)\b(fine|accepted|ok|okay|ignored|wins|not checked)\b`)
 
 // A case whose name says it succeeds must not expect an error.
 func TestCaseNames_MatchExpectedResult(t *testing.T) {

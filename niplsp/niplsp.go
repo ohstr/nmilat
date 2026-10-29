@@ -30,6 +30,10 @@ const (
 	// MaxExpirySecs is how far after created_at an announcement's expiration
 	// may lie: 30 days (NIP-LSP §The Announcement, §Client Behavior step 4).
 	MaxExpirySecs = 30 * 24 * 60 * 60
+	// MaxFutureSecs is how far ahead of the client's clock an announcement's
+	// created_at may lie: 15 minutes (NIP-LSP §Client Behavior step 4). One
+	// dated further ahead does not count as seen.
+	MaxFutureSecs = 15 * 60
 	// MaxTitle is the display cap of title, in user-perceived characters, on
 	// one line (NIP-LSP §Client Behavior).
 	MaxTitle = 40

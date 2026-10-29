@@ -58,6 +58,11 @@ func (s *BatchSession) sendBatch(ctx context.Context, builders []itemBuilder, op
 	if len(builders) == 0 {
 		return nil, nil
 	}
+	// No call of any kind goes to a Hub whose newest announcement was rejected:
+	// a read or a bearer redeem would otherwise reach a retired inbox.
+	if _, err := s.usable(); err != nil {
+		return nil, err
+	}
 	if err := s.checkBillCalls(builders, opts); err != nil {
 		return nil, err
 	}
@@ -190,15 +195,9 @@ func (s *BatchSession) checkBillCalls(builders []itemBuilder, opts sendOptions) 
 	if len(seen) == 0 {
 		return nil
 	}
-	s.mu.Lock()
-	ann := s.announcement
-	unusable := s.unusable
-	s.mu.Unlock()
-	if unusable != nil {
-		return unusable
-	}
-	if ann == nil {
-		return ErrHubUnusable
+	ann, err := s.usable()
+	if err != nil {
+		return err
 	}
 	return ann.ValidateForBillCalls()
 }
@@ -274,11 +273,13 @@ func withAccepted(out []ItemOutcome, accepted []string) []ItemOutcome {
 // sendOne publishes one envelope and waits for its reply. accepted names the
 // relays that took the request.
 func (s *BatchSession) sendOne(ctx context.Context, p packedEnvelope, index int) ([]ItemOutcome, []string, error) {
-	limits := s.Limits()
-	inbox := s.Inbox()
-	if inbox == "" {
-		return nil, nil, fmt.Errorf("%w: session has no announced inbox", ErrNotSent)
+	// One snapshot, re-checked per envelope: a Refresh mid-batch that rejects
+	// the newest announcement stops every envelope not yet published.
+	ann, err := s.usable()
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: %w", ErrNotSent, err)
 	}
+	limits, inbox := ann.EffectiveLimits(), ann.Inbox
 	plaintext, err := p.Envelope.Encode(limits)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: encode envelope %d: %v", ErrNotSent, index, err)
@@ -294,13 +295,13 @@ func (s *BatchSession) sendOne(ctx context.Context, p packedEnvelope, index int)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: reply key for envelope %d: %v", ErrNotSent, index, err)
 	}
-	replies, accepted, stop, err := s.subscribeAndPublish(ctx, p.Envelope.ReplyTo, req)
+	fan, err := s.subscribeAndPublish(ctx, p.Envelope.ReplyTo, req)
 	if err != nil {
 		return nil, nil, fmt.Errorf("send envelope %d: %w", index, err)
 	}
-	defer stop()
-	out, err := s.collectReply(ctx, replies, replyKey, p, index)
-	return out, accepted, err
+	defer fan.stop()
+	out, err := s.collectFrom(ctx, fan, replyKey, p, index)
+	return out, fan.acceptedRelays(), err
 }
 
 // ErrIncompleteReply means some chunks of a multi-event reply never arrived.
@@ -328,6 +329,21 @@ var ErrIncompleteReply = errors.New("nipcash/client: reply arrived in fewer chun
 func (s *BatchSession) collectReply(
 	ctx context.Context,
 	replies <-chan *nip01.Event,
+	replyKey [32]byte,
+	p packedEnvelope,
+	index int,
+) ([]ItemOutcome, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	return s.collectFrom(ctx, staticReplies(ctx, replies), replyKey, p, index)
+}
+
+// collectFrom is collectReply over a fan-out: while no chunk has arrived, a relay
+// silent past its share of the wait, or every open stream ending, moves the
+// request on to the next untried relay.
+func (s *BatchSession) collectFrom(
+	ctx context.Context,
+	fan *replyFanout,
 	replyKey [32]byte,
 	p packedEnvelope,
 	index int,
@@ -364,45 +380,107 @@ func (s *BatchSession) collectReply(
 		return out, err
 	}
 
+	var silence *time.Timer
+	var silent <-chan time.Time
+	// take reads one event; done is set once the reply is complete.
+	take := func(ev *nip01.Event) (out []ItemOutcome, done bool, err error) {
+		// The same event from two relays is one chunk, not a repeat (NIP-CASH
+		// §Chunked Replies). An event without an id is keyed by its content, so a
+		// copy is still recognised as one.
+		key := ev.ID
+		if key == "" {
+			key = "content:" + ev.Content
+		}
+		if _, dup := seenEvents[key]; dup {
+			return nil, false, nil
+		}
+		seenEvents[key] = struct{}{}
+		plaintext, err := nip44.Decrypt(ev.Content, replyKey[:])
+		if err != nil {
+			// Addressed to us but not written by the hub. The p-tag addresses a
+			// response; it does not authenticate one. Only the derived key proves
+			// authorship (the author is never checked, §The Reply Key), so this is
+			// discarded and the real reply may still arrive.
+			return nil, false, nil
+		}
+		chunk, err := transport.DecodeResponseChunk([]byte(plaintext), p.Envelope.Nonce, p.ItemIDs, maxBytes)
+		if err != nil {
+			// Unusable as a whole (bad JSON, another request's nonce, oversized):
+			// it decides nothing. The chunk it should have been stays missing, so
+			// the reply cannot complete without it, and the reason is reported.
+			state.decodeErrs = append(state.decodeErrs, fmt.Errorf("decode reply chunk: %w", err))
+			return nil, false, nil
+		}
+		state.add(key, chunk)
+		if state.complete() {
+			out, err := state.outcomes(index)
+			return out, true, err
+		}
+		// A relay answered: it serves the request, and no other is contacted.
+		if silent != nil {
+			silence.Stop()
+			silent = nil
+		}
+		return nil, false, nil
+	}
+
+	arm := func() {
+		if silence != nil {
+			silence.Stop()
+		}
+		silent = nil
+		if n := fan.untried(); n > 0 && state.decoded == 0 && p.Envelope.NotAfter > 0 {
+			silence = time.NewTimer(relayAnswerWait(s.cfg.relayAnswerWait, p.Envelope.NotAfter, n))
+			silent = silence.C
+		}
+	}
+	arm()
+	defer func() {
+		if silence != nil {
+			silence.Stop()
+		}
+	}()
+
 	for {
 		select {
-		case ev, ok := <-replies:
-			if !ok {
-				// The relay closed on us: the same fact as a timeout. Some chunks may
-				// have arrived and the rest never will.
-				return finish(errors.New("reply channel closed"))
+		case <-silent:
+			// Up but not answering, as a relay the Hub no longer reads: the same
+			// request goes to the next hint too.
+			silent = nil
+			if state.decoded == 0 && fan.sendNext(ctx) {
+				arm()
 			}
-			// The same event from two relays is one chunk, not a repeat (NIP-CASH
-			// §Chunked Replies). An event without an id is keyed by its content, so a
-			// copy is still recognised as one.
-			key := ev.ID
-			if key == "" {
-				key = "content:" + ev.Content
-			}
-			if _, dup := seenEvents[key]; dup {
+		case ev := <-fan.out:
+			if ev != nil {
+				if out, done, err := take(ev); done {
+					return out, err
+				}
 				continue
 			}
-			seenEvents[key] = struct{}{}
-			plaintext, err := nip44.Decrypt(ev.Content, replyKey[:])
-			if err != nil {
-				// Addressed to us but not written by the hub. The p-tag addresses a
-				// response; it does not authenticate one. Only the derived key proves
-				// authorship (the author is never checked, §The Reply Key), so this is
-				// discarded and the real reply may still arrive.
+			if fan.openStreams() > 0 {
 				continue
 			}
-			chunk, err := transport.DecodeResponseChunk([]byte(plaintext), p.Envelope.Nonce, p.ItemIDs, maxBytes)
-			if err != nil {
-				// Unusable as a whole (bad JSON, another request's nonce, oversized):
-				// it decides nothing. The chunk it should have been stays missing, so
-				// the reply cannot complete without it, and the reason is reported.
-				state.decodeErrs = append(state.decodeErrs, fmt.Errorf("decode reply chunk: %w", err))
+			// Every stream has ended and all they sent is queued: read it first.
+			for drained := false; !drained; {
+				select {
+				case ev := <-fan.out:
+					if ev == nil {
+						continue
+					}
+					if out, done, err := take(ev); done {
+						return out, err
+					}
+				default:
+					drained = true
+				}
+			}
+			if state.decoded == 0 && fan.sendNext(ctx) {
+				arm()
 				continue
 			}
-			state.add(key, chunk)
-			if state.complete() {
-				return state.outcomes(index)
-			}
+			// The relays closed on us: the same fact as a timeout. Some chunks may
+			// have arrived and the rest never will.
+			return finish(errors.New("reply channel closed"))
 
 		case <-ctx.Done():
 			return finish(ctx.Err())
@@ -414,12 +492,13 @@ func (s *BatchSession) collectReply(
 // the reply subscription before publishing anyway.
 const subscriptionAckWait = 2 * time.Second
 
-// subscribeAndPublish sends one request and returns the stream its reply will arrive on.
+// subscribeAndPublish sends one request and returns the fan-out its reply will arrive on.
 //
 // The reply is published on the relay the request arrived on (NIP-CASH §Addressing the
 // Response), so the request goes to the relay this client is listening on, never to
 // another. Relays are tried in order (§Multiple Relay Hints): subscribe there, then
 // publish there, and the first relay that accepts the request is the one it went to.
+// The rest stay untried until that relay fails to answer (replyFanout.sendNext).
 //
 // Subscribe BEFORE publishing. A hub may answer immediately, and a subscription opened
 // afterwards can miss an ephemeral event entirely — relays are not required to store
@@ -427,93 +506,192 @@ const subscriptionAckWait = 2 * time.Second
 //
 // A relay whose publish failed keeps its subscription. A publish that timed out may
 // still have reached the hub, whose reply then lands there; a client that sent to
-// several relays listens on all of them. The returned stream merges every one and
-// closes once all of them have.
-func (s *BatchSession) subscribeAndPublish(ctx context.Context, replyTo string, req *outgoing) (<-chan *nip01.Event, []string, func(), error) {
+// several relays listens on all of them, merged into one stream.
+func (s *BatchSession) subscribeAndPublish(ctx context.Context, replyTo string, req *outgoing) (*replyFanout, error) {
 	relays := s.Relays()
 	if len(relays) == 0 {
-		return nil, nil, nil, fmt.Errorf("%w: session has no relays", ErrNotSent)
+		return nil, fmt.Errorf("%w: session has no relays", ErrNotSent)
 	}
-
-	var (
-		streams   []<-chan *nip01.Event
-		stops     []func()
-		failures  []error
-		attempted bool
-	)
-	stopAll := func() {
-		for _, stop := range stops {
-			stop()
-		}
+	f := newReplyFanout(ctx, s, replyTo, req, relays)
+	if f.sendNext(ctx) {
+		return f, nil
 	}
-	for _, raw := range relays {
-		relayURL, err := url.Parse(raw)
-		if err != nil {
-			failures = append(failures, fmt.Errorf("relay %q: %w", raw, err))
-			continue
-		}
-		events, ready, stop, err := subscribeReplies(ctx, relayURL, replyTo)
-		if err != nil {
-			failures = append(failures, fmt.Errorf("relay %q: %w", raw, err))
-			continue
-		}
-		streams, stops = append(streams, events), append(stops, stop)
-		// The REQ and the request travel on separate connections, so nothing
-		// orders them at the relay: a request that overtook its subscription had
-		// its reply delivered to nobody, and the client waited out not_after for
-		// an answer the hub had sent. EOSE is the relay saying it has the
-		// subscription. Bounded, so a relay that never sends one still gets the
-		// request.
-		select {
-		case <-ready:
-		case <-time.After(subscriptionAckWait):
-		case <-ctx.Done():
-		}
-		attempted = true
-		err = s.publishTo(ctx, relayURL, req)
-		if err != nil {
-			failures = append(failures, fmt.Errorf("relay %q: %w", raw, err))
-			continue
-		}
-		if f := afterPublishFrom(ctx); f != nil {
-			f()
-		}
-		return mergeEvents(ctx, streams), []string{raw}, stopAll, nil
-	}
-	stopAll()
+	f.stop()
 	// Every relay's failure is kept, not just the last: with failover the useful
 	// question is why all of them failed (NIP-CASH §Multiple Relay Hints).
-	if !attempted {
-		return nil, nil, nil, fmt.Errorf("%w: no relay could be reached: %w", ErrNotSent, errors.Join(failures...))
+	if !f.attempted {
+		return nil, fmt.Errorf("%w: no relay could be reached: %w", ErrNotSent, errors.Join(f.failures...))
 	}
-	return nil, nil, nil, fmt.Errorf("nipcash/client: no relay took the request: %w", errors.Join(failures...))
+	return nil, fmt.Errorf("nipcash/client: no relay took the request: %w", errors.Join(f.failures...))
 }
 
-// mergeEvents forwards every stream into one, closed once all of them are.
-func mergeEvents(ctx context.Context, streams []<-chan *nip01.Event) <-chan *nip01.Event {
-	if len(streams) == 1 {
-		return streams[0]
-	}
-	out := make(chan *nip01.Event, 8)
-	var wg sync.WaitGroup
-	for _, in := range streams {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for ev := range in {
-				select {
-				case out <- ev:
-				case <-ctx.Done():
-					return
-				}
-			}
-		}()
-	}
+// replyFanout is one request on the relays it has gone to so far, in hint order,
+// and the replies from every one of them merged into one stream. A relay that
+// accepted the request but stays silent, or closes, is followed by the next
+// untried one (NIP-CASH §Multiple Relay Hints: continue on failure, never give up
+// while a listed relay is untried). The same event goes to each, so the Hub's
+// nonce check runs it once.
+type replyFanout struct {
+	ctx     context.Context
+	s       *BatchSession
+	replyTo string
+	req     *outgoing
+	relays  []string
+	// out carries every stream's events, and a nil each time a stream ends.
+	out chan *nip01.Event
+
+	mu        sync.Mutex
+	next      int
+	open      int
+	stops     []func()
+	accepted  []string
+	failures  []error
+	attempted bool
+}
+
+func newReplyFanout(ctx context.Context, s *BatchSession, replyTo string, req *outgoing, relays []string) *replyFanout {
+	return &replyFanout{ctx: ctx, s: s, replyTo: replyTo, req: req, relays: relays,
+		out: make(chan *nip01.Event, 8)}
+}
+
+// staticReplies is a fan-out over one stream already open, with no relay to move to.
+func staticReplies(ctx context.Context, in <-chan *nip01.Event) *replyFanout {
+	f := newReplyFanout(ctx, nil, "", nil, nil)
+	f.add(in, func() {})
+	return f
+}
+
+// add forwards stream into the merged one until it closes or the send ends.
+func (f *replyFanout) add(in <-chan *nip01.Event, stop func()) {
+	f.mu.Lock()
+	f.open++
+	f.stops = append(f.stops, stop)
+	f.mu.Unlock()
 	go func() {
-		wg.Wait()
-		close(out)
+		for ev := range in {
+			if ev == nil {
+				continue
+			}
+			select {
+			case f.out <- ev:
+			case <-f.ctx.Done():
+				return
+			}
+		}
+		// Counted down after the stream's last event went out, then a nil marks
+		// the end: once none is open, every event sent is already queued.
+		f.mu.Lock()
+		f.open--
+		f.mu.Unlock()
+		select {
+		case f.out <- nil:
+		case <-f.ctx.Done():
+		}
 	}()
-	return out
+}
+
+// sendNext subscribes and publishes on the next untried relays until one accepts
+// the request, and reports whether one did.
+func (f *replyFanout) sendNext(ctx context.Context) bool {
+	for {
+		f.mu.Lock()
+		if f.next >= len(f.relays) {
+			f.mu.Unlock()
+			return false
+		}
+		raw := f.relays[f.next]
+		f.next++
+		f.mu.Unlock()
+		if f.sendTo(ctx, raw) {
+			return true
+		}
+	}
+}
+
+func (f *replyFanout) sendTo(ctx context.Context, raw string) bool {
+	fail := func(err error) bool {
+		f.mu.Lock()
+		f.failures = append(f.failures, fmt.Errorf("relay %q: %w", raw, err))
+		f.mu.Unlock()
+		return false
+	}
+	relayURL, err := url.Parse(raw)
+	if err != nil {
+		return fail(err)
+	}
+	events, ready, stop, err := subscribeReplies(f.ctx, relayURL, f.replyTo)
+	if err != nil {
+		return fail(err)
+	}
+	f.add(events, stop)
+	// The REQ and the request travel on separate connections, so nothing
+	// orders them at the relay: a request that overtook its subscription had
+	// its reply delivered to nobody, and the client waited out not_after for
+	// an answer the hub had sent. EOSE is the relay saying it has the
+	// subscription. Bounded, so a relay that never sends one still gets the
+	// request.
+	select {
+	case <-ready:
+	case <-time.After(subscriptionAckWait):
+	case <-ctx.Done():
+	}
+	f.mu.Lock()
+	f.attempted = true
+	f.mu.Unlock()
+	if err := f.s.publishTo(ctx, relayURL, f.req); err != nil {
+		return fail(err)
+	}
+	f.mu.Lock()
+	f.accepted = append(f.accepted, raw)
+	f.mu.Unlock()
+	if hook := afterPublishFrom(ctx); hook != nil {
+		hook()
+	}
+	return true
+}
+
+func (f *replyFanout) untried() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.relays) - f.next
+}
+
+func (f *replyFanout) openStreams() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.open
+}
+
+// acceptedRelays are the relays that took the request, in the order they did.
+func (f *replyFanout) acceptedRelays() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.accepted...)
+}
+
+func (f *replyFanout) stop() {
+	f.mu.Lock()
+	stops := f.stops
+	f.stops = nil
+	f.mu.Unlock()
+	for _, stop := range stops {
+		stop()
+	}
+}
+
+// minRelayAnswerWait is the shortest a relay is given to answer before the
+// request also goes to the next hint.
+const minRelayAnswerWait = time.Second
+
+// relayAnswerWait is fixed when set (WithRelayAnswerWait), else what is left
+// until notAfter shared between the relay just sent to and every untried one, so
+// each is tried before the envelope expires.
+func relayAnswerWait(fixed time.Duration, notAfter int64, untried int) time.Duration {
+	if fixed > 0 {
+		return fixed
+	}
+	w := time.Until(time.Unix(notAfter, 0)) / time.Duration(untried+1)
+	return max(w, minRelayAnswerWait)
 }
 
 // subscribeReplies opens a subscription for one envelope's response on one relay.

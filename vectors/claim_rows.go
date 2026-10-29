@@ -72,6 +72,15 @@ func ownRowCases(userPub string, ck nipIC.ConnectionKey, iaPub string, targets [
 	add("mine answered with another identity's row", "signing", "mine", rs("pubkey", other, "", 2000))
 	add("all: the caller's row among others", "signing", "all", rs("pubkey", other, "", 2000), rs("pubkey", userPub, "", 1000))
 	add("all: no match", "signing", "all", rs("pubkey", other, "", 2000), rs("cash", commit, "", 1000))
+	claimedRow := func(amount uint64, at int64) nipcash.RecipientStatus {
+		r := rs("pubkey", userPub, "", amount)
+		r.Claimed, r.ClaimedAt = true, &at
+		return r
+	}
+	add("all: the unclaimed row after claimed history", "signing", "all", claimedRow(500, 100), claimedRow(600, 200), rs("pubkey", userPub, "", 1000))
+	add("all: the unclaimed row before claimed history", "signing", "all", rs("pubkey", userPub, "", 1000), claimedRow(500, 100))
+	add("all: only claimed history, the latest", "signing", "all", claimedRow(600, 200), claimedRow(500, 100))
+	add("all: two unclaimed rows", "signing", "all", rs("pubkey", userPub, "", 1000), rs("pubkey", userPub, "", 2000))
 
 	const exp = int64(1720000000)
 	withExp := func(r nipcash.RecipientStatus, at int64) nipcash.RecipientStatus {

@@ -74,7 +74,7 @@ var katChecks = map[string][]kat{
 		k("K-BP-6", "1803808800", "start", "[id=K-BP-6]", "start"),
 		k("K-BP-7", "1835431200", "start", "[id=K-BP-7]", "start"),
 		k("K-BP-8 daily", "1706781600", "start", "[renewal=daily]", "start"),
-		k("K-BP-8 weekly", "1707300000", "start", "[renewal=weekly]", "start"),
+		k("K-BP-9", "1707300000", "start", "[id=K-BP-9]", "start"),
 	},
 	"cw-fees.json": {
 		k("K-CWFEE-1 399", "0", "feeSkim", "[amount=399]", "want"),
@@ -155,6 +155,8 @@ var katChecks = map[string][]kat{
 		k("K-IDNA-4", "", "canonicalUserId", "[id=K-IDNA-4]", "output"),
 		k("K-IDNA-5", "", "canonicalUserId", "[id=K-IDNA-5]", "output"),
 		k("K-IDNA-6", "", "canonicalUserId", "[id=K-IDNA-6]", "output"),
+		k("leading @ email", "nipIC: user id is not in canonical form", "canonicalUserId", "[input=@alice@example.com]", "error"),
+		k("nostr platform", "nipIC: platform name must match [a-z0-9._-]+", "kats", "[platform=nostr]", "error"),
 	},
 	"claim.json": {
 		k("K-CLAIM-1", "ad995b77237f369c79c5df82729d465eb9b5b4ddafb815995dee99db8d6b07c8", "kats", "[id=K-CLAIM-1]", "want"),
@@ -378,6 +380,12 @@ func init() {
 	} {
 		l = append(l, k(c.id, c.ev, "events", "[id="+c.id+"]", "event", "id"), k(c.id+" step", c.step, "events", "[id="+c.id+"]", "step"))
 	}
+	l = append(l,
+		k("created 900 s ahead: accepted", "0", "parse", "[name=created exactly 15 minutes ahead of the client's clock]", "step"),
+		k("created 900 s ahead: client now", "1792712700", "parse", "[name=created exactly 15 minutes ahead of the client's clock]", "client", "now"),
+		k("created 901 s ahead: step 4", "4", "parse", "[name=step 4: created more than 15 minutes ahead of the client's clock]", "step"),
+		k("created 901 s ahead: client now", "1792712699", "parse", "[name=step 4: created more than 15 minutes ahead of the client's clock]", "client", "now"),
+	)
 	katChecks["lsp-announcement.json"] = l
 }
 

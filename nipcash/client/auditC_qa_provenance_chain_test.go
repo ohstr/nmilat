@@ -170,16 +170,12 @@ func TestAuditCQA_UnverifiableProvenanceFailsClosed(t *testing.T) {
 	}
 }
 
-// TestAuditCQA_PairingURIClientFailsClosedWithoutTouchingTheNetwork pins the
-// documented half-capable client: Connect accepts a pairing URI as well as a cash
-// token, and a URI-built client can mint but cannot act on a bill. That failure is
-// the right direction, and until now nothing asserted it.
-//
-// Also pins that it costs no relay round trip — the nil-token guard runs before
-// anything is fetched, so the message is immediate and not a timeout.
-func TestAuditCQA_PairingURIClientFailsClosedWithoutTouchingTheNetwork(t *testing.T) {
+// A Client with no token cannot act on a bill, and says so before any relay is
+// fetched: the nil-token guard runs first, so the message is immediate and not a
+// timeout.
+func TestClient_WithoutATokenFailsClosedWithoutTouchingTheNetwork(t *testing.T) {
 	connSecret, walletPubkey := sessionKeypair(t)
-	c := &Client{walletPubkey: walletPubkey, connSecret: connSecret} // token nil: a pairing URI
+	c := &Client{walletPubkey: walletPubkey, connSecret: connSecret} // no token
 
 	// No relay is running and none is configured; a cancelled context proves the
 	// guard fires before any I/O rather than after it.

@@ -41,7 +41,7 @@ func newReplyFixture(t *testing.T) *replyFixture {
 func (f *replyFixture) chunk(id string, seq, total int, results ...transport.Result) *nip01.Event {
 	f.t.Helper()
 	ev := sealChunk(f.t, f.key, f.limits, transport.ResponseEnvelope{
-		Version: transport.EnvelopeVersion, ReqNonce: f.nonce, Seq: seq, Total: total, Results: results,
+		ReqNonce: f.nonce, Seq: seq, Total: total, Results: results,
 	})
 	ev.ID = id
 	return ev
@@ -299,7 +299,7 @@ func TestT01_13_ForeignKeyIgnoredAuthorUnchecked(t *testing.T) {
 	var otherKey [32]byte
 	copy(otherKey[:], strings.Repeat("x", 32))
 	forged := sealChunk(t, otherKey, f.limits, transport.ResponseEnvelope{
-		Version: transport.EnvelopeVersion, ReqNonce: f.nonce, Seq: 1, Total: 1,
+		ReqNonce: f.nonce, Seq: 1, Total: 1,
 		Results: []transport.Result{refused("a", "NOT_FOUND")},
 	})
 	forged.ID = "forged"

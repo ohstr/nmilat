@@ -67,6 +67,9 @@ type FakeHub struct {
 	closed    chan struct{}
 	circle    *circleHub
 	ledger    *WithdrawLedger
+	// nwcSeen are the NIP-47 request ids served: a copy of one arriving on
+	// another relay is the same event and is not served again.
+	nwcSeen map[string]bool
 }
 
 // Option configures a FakeHub.
@@ -249,7 +252,16 @@ func (h *FakeHub) onEvent(r *Relay, ev *nip01.Event) {
 	case transport.KindPrivateRequest:
 		h.publish(r, h.serve(r, ev))
 	case kindNWCRequest:
-		h.serveNWC(r, ev)
+		h.mu.Lock()
+		seen := h.nwcSeen[ev.ID]
+		if h.nwcSeen == nil {
+			h.nwcSeen = map[string]bool{}
+		}
+		h.nwcSeen[ev.ID] = true
+		h.mu.Unlock()
+		if !seen {
+			h.serveNWC(r, ev)
+		}
 	}
 }
 

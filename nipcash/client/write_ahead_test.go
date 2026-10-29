@@ -401,3 +401,51 @@ func expirationTag(ev *nip01.Event) (int64, bool) {
 	}
 	return 0, false
 }
+
+// NIP-CASH §Proof of Work: a relay raising its minimum after the first mining is re-mined to only within the
+// session's budget: a minimum above its difficulty is refused at once, and a re-mine longer than its duration stops
+// there rather than at not_after. A minimum at the budget, or with no budget, is re-mined and served.
+func TestPow_RemineRespectsTheBudget(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		raiseTo int
+		budget  SessionOption
+		served  bool
+	}{
+		{"above the budget's difficulty", 30, WithPowBudget(20, 0), false},
+		{"longer than the budget's duration", 40, WithPowBudget(0, 50*time.Millisecond), false},
+		{"at the budget's difficulty", 10, WithPowBudget(10, 0), true},
+		{"no budget", 10, nil, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			hub := newTestHub(t, answerTransfer)
+			relay := cashtest.NewRelay(t)
+			relay.SetMinPow(2)
+			hub.hub(t, relay)
+			w := newWATransferOn(t, hub, relay, c.budget)
+			ctx, cancel := e2eContext(t)
+			defer cancel()
+			if w.s.powMinimum(ctx) != 2 { // read and cached at the old minimum
+				t.Fatal("minimum not read")
+			}
+			relay.SetMinPow(c.raiseTo)
+			start := time.Now()
+			out, err := w.s.TransferMany(ctx, []BatchTransfer{w.item}, newTestJournal(), "d")
+			if c.served {
+				if err != nil || !out[0].Succeeded() || len(requestsOn(relay)) != 1 {
+					t.Fatalf("TransferMany: %v %+v, %d accepted", err, out, len(requestsOn(relay)))
+				}
+				return
+			}
+			if !errors.Is(err, ErrPowRemineTooHard) || errors.Is(err, ErrNotSent) {
+				t.Fatalf("err = %v, want ErrPowRemineTooHard and not ErrNotSent", err)
+			}
+			if d := time.Since(start); d > 5*time.Second {
+				t.Errorf("took %v: the re-mine was not bounded by the budget", d)
+			}
+			if len(requestsOn(relay)) != 0 {
+				t.Fatal("published")
+			}
+		})
+	}
+}

@@ -53,7 +53,7 @@ func TestDecodeResponseChunk_ReportsInsteadOfRefusing(t *testing.T) {
 // complete answer of omissions, and EncodeResponse writes it for an empty reply.
 func TestResponse_EmptyResultsAreWritten(t *testing.T) {
 	nonce := strings.Repeat("ab", 32)
-	enc, err := ResponseEnvelope{Version: EnvelopeVersion, ReqNonce: nonce}.EncodeResponse(DefaultLimits())
+	enc, err := ResponseEnvelope{ReqNonce: nonce}.EncodeResponse(DefaultLimits())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestResultError_Detail(t *testing.T) {
 // An E4 refusal echoes a malformed nonce as sent; nothing else may carry one.
 func TestEncodeResponse_RefusalEchoesAMalformedNonce(t *testing.T) {
 	bad := strings.ToUpper(strings.Repeat("ab", 32))
-	refusal := ResponseEnvelope{Version: EnvelopeVersion, ReqNonce: bad, Error: &ResultError{Code: "BAD_REQUEST"}}
+	refusal := ResponseEnvelope{ReqNonce: bad, Error: &ResultError{Code: "BAD_REQUEST"}}
 	enc, err := refusal.EncodeResponse(DefaultLimits())
 	if err != nil {
 		t.Fatalf("refusal: %v", err)
@@ -104,7 +104,7 @@ func TestEncodeResponse_RefusalEchoesAMalformedNonce(t *testing.T) {
 	if c, err := DecodeResponseChunk(enc, bad, nil, 0); err != nil || c.Error.Code != "BAD_REQUEST" {
 		t.Fatalf("decode: %v", err)
 	}
-	results := ResponseEnvelope{Version: EnvelopeVersion, ReqNonce: bad, Results: []Result{}}
+	results := ResponseEnvelope{ReqNonce: bad, Results: []Result{}}
 	if _, err := results.EncodeResponse(DefaultLimits()); !errors.Is(err, ErrResponseMalformed) {
 		t.Fatalf("a results reply with a malformed nonce: %v", err)
 	}

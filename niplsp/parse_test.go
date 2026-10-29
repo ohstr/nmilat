@@ -274,6 +274,16 @@ func TestParseAnnouncementTimeAndChain(t *testing.T) {
 		wantStep(t, err, 5)
 	}
 
+	// created_at at most 15 minutes ahead of the clock.
+	o = mainnet
+	o.Now = exampleCreatedAt - MaxFutureSecs
+	if _, err := ParseAnnouncement(ev, o); err != nil {
+		t.Fatalf("created 15 minutes ahead: %v", err)
+	}
+	o.Now--
+	_, err = ParseAnnouncement(ev, o)
+	wantStep(t, err, 4)
+
 	// Step 4 before step 5: expired and on a chain the client does not use.
 	o = CheckOptions{Chains: []string{"flokicoin"}, Networks: []string{"mainnet"}, Now: exampleExpiration + 1}
 	_, err = ParseAnnouncement(ev, o)

@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// K-BP-1..8 (NIP-CW §Budget Renewal Floor).
+// K-BP-1..9 (NIP-CW §Budget Renewal Floor).
 func TestBudgetPeriodStart_KnownAnswers(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -22,7 +22,7 @@ func TestBudgetPeriodStart_KnownAnswers(t *testing.T) {
 		{"K-BP-6", 1709200800, RenewalYearly, 3, 1803808800},
 		{"K-BP-7", 1709200800, RenewalYearly, 4, 1835431200},
 		{"K-BP-8 daily", 1706695200, RenewalDaily, 1, 1706781600},
-		{"K-BP-8 weekly", 1706695200, RenewalWeekly, 1, 1707300000},
+		{"K-BP-9 weekly", 1706695200, RenewalWeekly, 1, 1707300000},
 	}
 	for _, c := range cases {
 		got, err := BudgetPeriodStart(time.Unix(c.created, 0), c.renewal, c.k)

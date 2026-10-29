@@ -67,7 +67,6 @@ func auditBEnvelope(t *testing.T, n int, method string, params func(int) string)
 		items = append(items, auditBItem(t, fmt.Sprintf("%d", i), method, params(i), nonce))
 	}
 	return Envelope{
-		Version:  EnvelopeVersion,
 		NotAfter: time.Now().Add(60 * time.Second).Unix(),
 		Nonce:    nonce,
 		ReplyTo:  replyTo,

@@ -49,8 +49,6 @@ type ResultError struct {
 // A caller reads an omission as "not served", which carries the same information
 // an error would without confirming anything about what the hub holds.
 type ResponseEnvelope struct {
-	// Version is never on the wire (see EnvelopeVersion).
-	Version int `json:"-"`
 	// ReqNonce ties this response to the request that produced it, so a client
 	// cannot be confused by a response to something else.
 	ReqNonce string `json:"req_nonce"`

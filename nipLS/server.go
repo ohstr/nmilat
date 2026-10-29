@@ -63,9 +63,9 @@ type Server struct {
 	allowGID map[int]bool
 	connSeq  atomic.Uint64
 
-	// signMu serializes authorize -> sign so a policy can spend one-time
-	// state safely.
-	signMu     sync.Mutex
+	// policyMu serializes authorize -> sign, encrypt or decrypt -> result
+	// check, so a policy can spend one-time state safely.
+	policyMu   sync.Mutex
 	decisionMu sync.Mutex
 }
 
@@ -340,8 +340,8 @@ func (s *Server) handleSign(ctx context.Context, req *Request) (string, error) {
 	}
 	req.Event = ev.Copy()
 
-	s.signMu.Lock()
-	defer s.signMu.Unlock()
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
 	if err := s.cfg.Policy.Authorize(ctx, req); err != nil {
 		return "", s.decide(req, nip46.AsRefusal(err))
 	}
@@ -387,6 +387,8 @@ func (s *Server) handleCrypto(ctx context.Context, req *Request) (string, error)
 	if req.Method == nip46.MethodNIP44MessageKeys && !canKey {
 		return "", s.decide(req, Invalid("unsupported method: "+req.Method))
 	}
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
 	if err := s.cfg.Policy.Authorize(ctx, req); err != nil {
 		return "", s.decide(req, nip46.AsRefusal(err))
 	}

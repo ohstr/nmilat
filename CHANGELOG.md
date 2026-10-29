@@ -8,6 +8,26 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `relayclient.NWCOption`, `WithAnswerWait` and `DefaultAnswerWait`
+  (`NewNWCClient` takes options), and `client.WithRelayAnswerWait`.
+  ([#220](https://github.com/ohstr/nmilat/pull/220))
+- Adds `client.WithExpectedMinter` and `client.ErrBillUnverified`: `Connect`,
+  `ConnectCashSlice` and `ConnectZap` refuse a bill whose provenance does not
+  verify, or not against the expected Hub, before any relay is dialled.
+  ([#220](https://github.com/ohstr/nmilat/pull/220))
+- Adds `client.ErrPowRemineTooHard`, a relay asking for more proof of work
+  than the session's budget after the first publish attempt.
+  ([#220](https://github.com/ohstr/nmilat/pull/220))
+- Adds `nipcash.ErrRowAmbiguous`, a scope-all roster with two unclaimed rows
+  for the caller.
+  ([#220](https://github.com/ohstr/nmilat/pull/220))
+- Adds `transport.ErrEnvelopeKeys` and `transport.Item.UnmarshalJSON`, which
+  reads an item by its exact keys.
+  ([#220](https://github.com/ohstr/nmilat/pull/220))
+- Adds to `testdata/vectors/connection-key.json` a leading-`@` email, an empty
+  and a decomposed local part, a domain and an email domain at and one past
+  253 characters, and the platform `nostr` refused.
+  ([#220](https://github.com/ohstr/nmilat/pull/220))
 - Adds `resultToState` to `testdata/vectors/pocket.json` (K-POCKET-7): NIP-CP
   §Balance's result to state table, so every client tests the same mapping.
   ([#218](https://github.com/ohstr/nmilat/pull/218))
@@ -934,6 +954,11 @@ privacy and performance fixes.
 
 ### Removed
 
+- Removes `transport.EnvelopeVersion`, `transport.ErrEnvelopeVersion` and the
+  `Version` fields of `transport.Envelope` and `transport.ResponseEnvelope`,
+  kept since the envelope lost its version on the wire; drop them from
+  struct literals.
+  ([#220](https://github.com/ohstr/nmilat/pull/220))
 - Removes `nipcw.CreateCircleWalletParams.Request`, `ParseResult` and `Item`
   (use `Prepare`), `CreateCircleWalletResponse.PairingURI`,
   `CircleHubConnection.WalletPubkey`/`RelayURLs`, the standard-transport
@@ -955,6 +980,115 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Sends `MultiPayInvoice` and `MultiPayKeysend` on to the next relay hint as
+  a single call does, with the same signed request, so the wallet pays each
+  item once; the first answer per item wins.
+  ([#220](https://github.com/ohstr/nmilat/pull/220))
+- Makes `nipcash.OwnRow` with scope `all` take the caller's unclaimed row
+  wherever the roster lists it, then its most recently claimed one, instead of
+  the first match, now that a Hub lists claimed history rows too.
+  ([#220](https://github.com/ohstr/nmilat/pull/220))
+- Serves a NIP-09 deletion request (kind 5) back by id and by kind once the
+  relay applied it, and never applies one against another deletion request.
+  ([#220](https://github.com/ohstr/nmilat/pull/220))
+- Indexes, once when the relay opens a store, the deletion requests earlier
+  versions stored without indexes, and drops their extra copies, so they are
+  served and a republish is a duplicate.
+  ([#220](https://github.com/ohstr/nmilat/pull/220))
+- Omits `budget_renewal` from a `nipcw.CreateCircleWalletRequest` with no
+  renewal, which wrote `""` and was refused as empty; `private-join.json`'s
+  join params change with it.
+  ([#220](https://github.com/ohstr/nmilat/pull/220))
+- Holds re-mining for a relay that raised its proof-of-work minimum to the
+  session's `WithPowBudget`: a minimum above its difficulty is refused, and
+  mining stops at its duration or the deadline less `MinPublishMargin`, not at
+  `not_after`.
+  ([#220](https://github.com/ohstr/nmilat/pull/220))
+- Dials nothing in `client.Connect`, which opened the bill's first relay
+  before its provenance was checked; the session dials the relays when a bill
+  method runs, after the check.
+  ([#220](https://github.com/ohstr/nmilat/pull/220))
+- Sends an NWC call on to the next relay hint when the relays it went to stay
+  silent past their share of the call's deadline, or close its subscription,
+  instead of waiting on the first relay that connected (NIP-CASH §Multiple
+  Relay Hints); the first answer from any of them is the call's.
+  ([#220](https://github.com/ohstr/nmilat/pull/220))
+- Sends a private-transport envelope on to the next relay when the one that
+  took it stays silent past its share of the time to `not_after`, or closes,
+  instead of waiting out `not_after` there.
+  ([#220](https://github.com/ohstr/nmilat/pull/220))
+- Refuses every call, reads and bearer `cash_redeem` included, while a Hub's
+  newest announcement is rejected, and drops the older one instead of keeping
+  its inbox (`Inbox()` is then empty) until a valid newer one is seen.
+  ([#220](https://github.com/ohstr/nmilat/pull/220))
+- Matches envelope and item keys exactly: `ClassifyEnvelope` drops, and
+  `Decode` refuses, an envelope repeating a key or spelling one two ways that
+  differ only in case (`transport.ErrEnvelopeKeys`), and such an item is
+  omitted, so E2 to E4 check the `nonce` and `not_after` the run uses.
+  ([#220](https://github.com/ohstr/nmilat/pull/220))
+- Sorts canonical params keys by UTF-16 code units, as RFC 8785 and NIP-CASH
+  §Item Proofs say, not by UTF-8 bytes. Hashes change only for keys above
+  U+FFFF; `canonical-params.json` gains a case for that order.
+  ([#220](https://github.com/ohstr/nmilat/pull/220))
+- Refuses a bolt11 invoice carrying more than one 32-byte payment hash field
+  (`nip57.ErrBolt11PaymentHashRepeated`), where it kept the last: flnd keeps
+  the first, so a redeem could bind a hash the Hub never pays.
+  ([#220](https://github.com/ohstr/nmilat/pull/220))
+- Renames three vector cases whose names said the opposite of their expected
+  error (`claim.json` "an unparseable expiration is refused", "a repeated
+  platform tag is refused"; `proof.json` "wrong not_after").
+  ([#220](https://github.com/ohstr/nmilat/pull/220))
+- Gives `lookup.json`'s `done` cases the shape NIP-CASH §Looking Up a Call
+  defines, a destroyed bill's tombstone in place of its token, and drops the
+  withdrawal tombstone case; renames `request-id.json`'s list to
+  `privateTransportRequiresRequestId`.
+  ([#220](https://github.com/ohstr/nmilat/pull/220))
+- Renames `budget-period.json`'s weekly case from `K-BP-8`, which the daily
+  case also carried, to `K-BP-9`.
+  ([#220](https://github.com/ohstr/nmilat/pull/220))
+- Refuses an `email` user id whose local part starts with `@` in
+  `nipIC.CanonicalUserID` and `NewConnectionKey`: NIP-IC says no value carries
+  a leading `@`, and such a value is refused, never repaired.
+  ([#220](https://github.com/ohstr/nmilat/pull/220))
+- Refuses the platform name `nostr` in `nipIC.ValidPlatformName` (new
+  `nipIC.PlatformNostr`), so no ConnectionKey, 35522 or nconnection is built on
+  it, and the `nipAZ` request and receipt builders refuse an identity whose
+  platform is not a NIP-IC platform name: a key sent with `nostr` was read as a
+  native pubkey.
+  ([#220](https://github.com/ohstr/nmilat/pull/220))
+- Maps chain `bitcoin` to mainnet invoices (`bc`) only in
+  `nipAZ.InvoiceCurrencies`, so a testnet, signet or regtest invoice fails
+  receipt rule 4 and the relay no longer counts one as sats.
+  ([#220](https://github.com/ohstr/nmilat/pull/220))
+- Pins email and dns canonicalization to Unicode 15.0.0 (`nipIC.UnicodeVersion`):
+  a build whose linked IDNA or NFC tables are another version (Go 1.27 links
+  17.0.0) refuses those values with `nipIC.ErrUnicodeVersion` instead of
+  computing canonical forms other clients do not share.
+  ([#220](https://github.com/ohstr/nmilat/pull/220))
+- Runs `nipLS` encrypt and decrypt requests under the same lock as
+  `sign_event`, from `Policy.Authorize` through `AuthorizeResult`, so a policy's
+  quota or one-time approval on them is spent once under concurrent requests.
+  ([#220](https://github.com/ohstr/nmilat/pull/220))
+- Refuses `nip44_message_keys` under a `nipLS` policy that allows decryption
+  but not encryption, since its keys seal any plaintext under the payload's
+  nonce; new `nipLS.Request.Encrypts` and `Decrypts` report it as both.
+  ([#220](https://github.com/ohstr/nmilat/pull/220))
+- Refuses at `niplsp` step 4 an announcement whose `created_at` is more than
+  `niplsp.MaxFutureSecs` (15 minutes) ahead of the client's clock, and `Seen`
+  neither counts one as seen nor restores such a mark, so a future-dated event
+  can no longer hide the node's later announcements, a `closed` one included.
+  ([#220](https://github.com/ohstr/nmilat/pull/220))
+- Refuses in `nipCZ.IdentityFromAttestation` an attestation whose `d` is not
+  the ConnectionKey of its platform and evidence user id
+  (`nipcash.ErrAttestationKey`), as `nipcash.ConnectionKeyFromAttestation` does.
+  ([#220](https://github.com/ohstr/nmilat/pull/220))
+- Runs a `nip46/bunker` server's `Policy.Authorize` and the operation it
+  allows one request at a time per client pubkey, so a client's quota or
+  one-time approval is spent once, while other clients' requests still run.
+  ([#220](https://github.com/ohstr/nmilat/pull/220))
+- Refuses `nip44_message_keys` under a decrypt-only `nip46/bunker` policy, as
+  `nipLS` does; new `Call.Encrypts` and `Decrypts` report it as both.
+  ([#220](https://github.com/ohstr/nmilat/pull/220))
 - Fixes GO-2026-5970 and GO-2026-5026 by updating `golang.org/x/text` to
   v0.39.0 and `golang.org/x/net` to v0.55.0.
   ([#218](https://github.com/ohstr/nmilat/pull/218))

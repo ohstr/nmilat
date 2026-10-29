@@ -26,7 +26,7 @@ func coherentEnvelope(t *testing.T, hubXOnly string, bills int) Envelope {
 	}
 	notAfter := time.Now().Add(60 * time.Second).Unix()
 
-	env := Envelope{Version: EnvelopeVersion, NotAfter: notAfter, Nonce: nonce, ReplyTo: replyTo}
+	env := Envelope{NotAfter: notAfter, Nonce: nonce, ReplyTo: replyTo}
 	for i := 0; i < bills; i++ {
 		billPriv, billTarget := testKeypair(t)
 		const params = `{}`

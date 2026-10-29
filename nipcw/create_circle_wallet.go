@@ -60,7 +60,7 @@ type CreateCircleWalletRequest struct {
 	MaxAmount        uint64 `json:"max_amount"`
 	MaxReceive       uint64 `json:"max_receive"`
 	Expiry           uint64 `json:"expiry"`
-	BudgetRenewal    string `json:"budget_renewal"`
+	BudgetRenewal    string `json:"budget_renewal,omitempty"`
 	IdentityEvent    string `json:"identity_event"`
 }
 

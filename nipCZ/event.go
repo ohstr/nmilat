@@ -52,10 +52,20 @@ func IdentityFromTyped(platform nipIC.WebIdentity, typed string) (Identity, erro
 }
 
 // IdentityFromAttestation is the ConnectionKey a recipient's 35522 attests,
-// byte for byte, and the IA that attested it (the ia to name).
+// byte for byte, and the IA that attested it (the ia to name). Its d must be
+// the ConnectionKey of its platform and evidence user id
+// (nipcash.ErrAttestationKey otherwise): an attestation keyed otherwise
+// addresses no account.
 func IdentityFromAttestation(att *nipIC.Attestation) (id Identity, ia string, err error) {
 	if att == nil || att.Event == nil {
 		return Identity{}, "", ErrIdentity
+	}
+	key, err := nipIC.ConnectionKeyFromAttested(att.Platform, att.Evidence.UserID)
+	if err != nil {
+		return Identity{}, "", err
+	}
+	if key != att.ConnectionKey {
+		return Identity{}, "", nipcash.ErrAttestationKey
 	}
 	id = Identity{Value: string(att.ConnectionKey), Platform: string(att.Platform)}
 	if !id.valid() {

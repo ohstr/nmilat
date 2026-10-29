@@ -3,10 +3,12 @@ package nipcash
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nipcash/transport"
 	"github.com/ohstr/nmilat/utils"
 )
@@ -74,7 +76,7 @@ func TestItemConstructors_ProduceEnvelopesThatValidate(t *testing.T) {
 		}},
 	}
 
-	env := transport.Envelope{Version: transport.EnvelopeVersion, NotAfter: b.NotAfter, Nonce: b.Nonce}
+	env := transport.Envelope{NotAfter: b.NotAfter, Nonce: b.Nonce}
 	replyTo, err := transport.NewNonce()
 	if err != nil {
 		t.Fatal(err)
@@ -237,4 +239,86 @@ func TestStatusItem_CashModeCarriesNoSecret(t *testing.T) {
 func connSecretFor(target string) string {
 	sum := sha256.Sum256([]byte("conn-secret:" + target))
 	return hex.EncodeToString(sum[:])
+}
+
+// NIP-CASH §Item Proofs: an item proof is signed by the key that signed the item's claim proof, so a Hub's
+// ItemSignerMatchesClaim holds. For a consolidate that is Sources[0]'s key, never another source's.
+func TestItemConstructors_ItemProofSignerIsTheClaimSigner(t *testing.T) {
+	_, hubXOnly := itemTestKeypair(t)
+	b := testBinding(t, hubXOnly)
+	priv, wallet := itemTestKeypair(t)
+	secondPriv, secondWallet := itemTestKeypair(t)
+	_, toPub := itemTestKeypair(t)
+	iaPriv, _ := itemTestKeypair(t)
+	ckPriv, ckPub := itemTestKeypair(t)
+	ckCred, err := BySigningConnectionKey(ckPriv, buildTestAttestation(t, iaPriv, ckPub, testDiscordKey(t), 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	signerOf := func(t *testing.T, raw string) string {
+		t.Helper()
+		var ev nip01.Event
+		if err := json.Unmarshal([]byte(raw), &ev); err != nil || ev.PubKey == "" {
+			t.Fatalf("not a signed event: %v %q", err, raw)
+		}
+		return ev.PubKey
+	}
+	claimSigners := func(t *testing.T, item transport.Item) []string {
+		t.Helper()
+		var p struct {
+			IdentityEvent string `json:"identity_event"`
+			Sources       []struct {
+				IdentityEvent string `json:"identity_event"`
+			} `json:"sources"`
+		}
+		if err := json.Unmarshal(item.Params, &p); err != nil {
+			t.Fatal(err)
+		}
+		if p.IdentityEvent != "" {
+			return []string{signerOf(t, p.IdentityEvent)}
+		}
+		var out []string
+		for _, s := range p.Sources {
+			out = append(out, signerOf(t, s.IdentityEvent))
+		}
+		return out
+	}
+	for _, c := range []struct {
+		name string
+		make func() (transport.Item, error)
+	}{
+		{"cash_redeem, pubkey", func() (transport.Item, error) {
+			return CashRedeemParams{Invoice: testInvoice, Credential: BySigning(priv)}.Item("r", wallet, connSecretFor(wallet), b)
+		}},
+		{"cash_redeem, connection_key", func() (transport.Item, error) {
+			return CashRedeemParams{Invoice: testInvoice, Credential: ckCred}.Item("k", wallet, connSecretFor(wallet), b)
+		}},
+		{"cash_transfer", func() (transport.Item, error) {
+			return CashTransferParams{RequestID: testRID, Credential: BySigning(priv), To: Pubkey(toPub), CurrentAmount: 1000}.
+				Item("t", wallet, connSecretFor(wallet), b)
+		}},
+		{"cash_consolidate", func() (transport.Item, error) {
+			return CashConsolidateParams{RequestID: testRID, To: Pubkey(toPub), Sources: []Source{
+				{WalletPubkey: wallet, Amount: 1000, Credential: BySigning(priv)},
+				{WalletPubkey: secondWallet, Amount: 2000, Credential: BySigning(secondPriv)},
+			}}.Item("c", wallet, connSecretFor(wallet), b)
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			item, err := c.make()
+			if err != nil {
+				t.Fatal(err)
+			}
+			itemSigner := signerOf(t, string(item.Proof))
+			signers := claimSigners(t, item)
+			if len(signers) == 0 || !ItemSignerMatchesClaim(itemSigner, ClaimVerdict{Signer: signers[0]}) {
+				t.Fatalf("item proof signed by %s, claim proof by %v", itemSigner, signers)
+			}
+			for _, other := range signers[1:] {
+				if ItemSignerMatchesClaim(itemSigner, ClaimVerdict{Signer: other}) {
+					t.Fatalf("item proof signed by a later source's key %s", other)
+				}
+			}
+		})
+	}
 }
