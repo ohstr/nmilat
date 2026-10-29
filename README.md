@@ -67,7 +67,10 @@ go get github.com/ohstr/nmilat
 - **[`nipB0`](https://github.com/nostr-protocol/nips/blob/master/B0.md)** — Web bookmarks
 - **[`nipB7`](https://github.com/nostr-protocol/nips/blob/master/B7.md)** — Blossom media
 - **[`nipcash`](https://github.com/ohstr/nips/blob/main/NIP-CASH.md)** — Cash Hub: ecash system
+- **[`nipCO`](https://github.com/ohstr/nips/blob/main/NIP-CO.md)** — Cash Order: order a bill from a Cash Hub and pay for it over Lightning or on-chain
+- **[`nipCP`](https://github.com/ohstr/nips/blob/main/NIP-CP.md)** — Cash Pocket: the bills a wallet holds and its calls in flight, gift-wrapped to the user's own pubkey
 - **[`nipcw`](https://github.com/ohstr/nips/blob/main/NIP-CW.md)** — Circle Wallet: shared self-service wallets
+- **[`nipCZ`](https://github.com/ohstr/nips/blob/main/NIP-CZ.md)** — Cash Zaps: a zap paid with a cash token instead of a Lightning invoice
 - **[`nipIC`](https://github.com/ohstr/nips/blob/main/NIP-IC.md)** — Identity Connection: binds Web Identity accounts to Nostr pubkeys
 - **[`nipLS`](https://github.com/ohstr/nips/blob/main/NIP-LS.md)** — Local Signer: NIP-46 over a unix socket (`bunker+unix://`), client and policy-gated server
 - **[`niplsp`](https://github.com/ohstr/nips/blob/main/NIP-LSP.md)** — Lightning Service Provider Announcement: a node's LSPS offer in one kind 10735 event signed by its node key, built from its LSPS answers and checked against the live ones
