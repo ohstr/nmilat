@@ -168,12 +168,13 @@ func asciiLower(s string) string {
 }
 
 // canonicalEmail trims, splits at the last '@', ASCII-lowercases the whole
-// address, keeps a local part only if NFC leaves it unchanged, and converts the
-// domain part to A-labels.
+// address, keeps a local part only if it is not empty, does not start with '@'
+// (no value carries a leading '@') and NFC leaves it unchanged, and converts
+// the domain part to A-labels.
 func canonicalEmail(s string) (string, error) {
 	s = asciiLower(trimASCII(s))
 	at := strings.LastIndexByte(s, '@')
-	if at <= 0 {
+	if at <= 0 || s[0] == '@' {
 		return "", ErrNotCanonical
 	}
 	local := s[:at]

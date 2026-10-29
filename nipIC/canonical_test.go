@@ -68,6 +68,30 @@ func TestT05_02_Email(t *testing.T) {
 	}
 }
 
+// No value carries a leading '@': an email whose local part starts with one is
+// refused, never repaired; an '@' elsewhere in the local part is kept.
+func TestEmail_LeadingAtRefused(t *testing.T) {
+	for _, in := range []string{"@alice@example.com", " @alice@example.com", "@@example.com", "\t@Alice@Example.com"} {
+		if out, err := CanonicalUserID("email", in); !errors.Is(err, ErrNotCanonical) {
+			t.Errorf("%q: got %q, %v; want ErrNotCanonical", in, out, err)
+		}
+		if _, err := NewConnectionKey("email", in); !errors.Is(err, ErrNotCanonical) {
+			t.Errorf("%q: key built: %v", in, err)
+		}
+	}
+	for in, want := range map[string]string{
+		"a@example.com":        "a@example.com",
+		" Alice@example.com":   "alice@example.com",
+		"alice@b@example.com":  "alice@b@example.com",
+		`"@alice"@example.com`: `"@alice"@example.com`,
+		"alice.@x@example.com": "alice.@x@example.com",
+	} {
+		if got, err := CanonicalUserID("email", in); err != nil || got != want {
+			t.Errorf("%q = %q (%v), want %q", in, got, err, want)
+		}
+	}
+}
+
 // T05-03, T05-20 (K-CK-7, K-CK-9, K-IDNA-1..6).
 func TestT05_03_DNS(t *testing.T) {
 	for _, in := range []string{"bücher.example", "BüCHER.example", "XN--BCHER-KVA.EXAMPLE"} {

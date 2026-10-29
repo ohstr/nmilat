@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.0-rc.45]
+
+### Fixed
+
+- Refuses an `email` user id whose local part starts with `@` in
+  `nipIC.CanonicalUserID` and `NewConnectionKey`: NIP-IC says no value carries
+  a leading `@`, and such a value is refused, never repaired.
+
 ## [0.5.0]
 
 NIP-CASH's private transport, NIP-29 groups hosted by the relay, huddle audio,
