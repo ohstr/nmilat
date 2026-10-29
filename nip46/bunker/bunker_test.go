@@ -487,7 +487,6 @@ func TestClientCallLifecycle(t *testing.T) {
 		}
 		return nil
 	}), Methods: map[string]Handler{"slow": func(context.Context, *Call) (string, error) { return "late", nil }}})
-	t.Cleanup(func() { close(block) })
 	c := dial(t, h, ClientOptions{})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -495,7 +494,9 @@ func TestClientCallLifecycle(t *testing.T) {
 	if _, err := c.Call(ctx, "slow"); !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("deadline: %v", err)
 	}
-	// Still usable: requests are matched by id.
+	// Still usable once the slow call is answered late: requests are matched
+	// by id, so the late answer is dropped.
+	close(block)
 	if err := c.Ping(ctx5(t)); err != nil {
 		t.Errorf("ping after timeout: %v", err)
 	}

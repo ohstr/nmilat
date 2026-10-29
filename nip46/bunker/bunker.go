@@ -185,6 +185,13 @@ type Call struct {
 // its own goroutine. A connect reaches it only after presenting an armed
 // secret (NewBunkerURI); a nostrconnect:// pairing (AcceptNostrconnect) is
 // the operator's own decision and does not.
+//
+// Requests from one client (Call.Client) reach Authorize one at a time, each
+// held until its operation is done, so a policy's per-client state (a quota,
+// a one-time approval) is checked and spent atomically. Requests from
+// different clients run concurrently, so a prompt for one app never blocks
+// another; a policy that shares state across clients, such as one quota for
+// every app, must synchronise it itself.
 type Policy interface {
 	Authorize(ctx context.Context, call *Call) error
 }

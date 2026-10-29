@@ -67,6 +67,10 @@ type Server struct {
 	life      context.Context
 
 	decisionMu sync.Mutex
+	// clientMu guards clientLocks: one per client pubkey with a request in
+	// flight, serializing that client's authorize -> operation.
+	clientMu    sync.Mutex
+	clientLocks map[string]*clientLock
 }
 
 var builtinMethods = map[string]bool{
@@ -140,6 +144,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		transportPub: transportPub,
 		relays:       relays,
 		guard:        nip46.NewKeyGuard(guarded, cfg.Guard...),
+		clientLocks:  map[string]*clientLock{},
 	}
 	filter := nip01.NewSubscriptionFilterGroup(&nip01.SubscriptionFilter{
 		Kinds: []int{nip46.KindRequest},
@@ -376,8 +381,48 @@ func (s *Server) dispatch(ctx context.Context, call *Call) (string, error) {
 	return "", nip46.Invalid("unsupported method: " + call.Method)
 }
 
-// authorized runs the policy, then do.
+// clientLock is a channel so a request waiting for it honours its context;
+// users counts the requests holding or waiting for it.
+type clientLock struct {
+	sem   chan struct{}
+	users int
+}
+
+// lockClient waits until no other request of client runs authorize ->
+// operation, or ctx ends. unlock releases it.
+func (s *Server) lockClient(ctx context.Context, client string) (unlock func(), err error) {
+	s.clientMu.Lock()
+	l := s.clientLocks[client]
+	if l == nil {
+		l = &clientLock{sem: make(chan struct{}, 1)}
+		s.clientLocks[client] = l
+	}
+	l.users++
+	s.clientMu.Unlock()
+	release := func() {
+		s.clientMu.Lock()
+		if l.users--; l.users == 0 {
+			delete(s.clientLocks, client)
+		}
+		s.clientMu.Unlock()
+	}
+	select {
+	case l.sem <- struct{}{}:
+		return func() { <-l.sem; release() }, nil
+	case <-ctx.Done():
+		release()
+		return nil, ctx.Err()
+	}
+}
+
+// authorized runs the policy, then do, one request of the calling client at
+// a time; other clients' requests run concurrently.
 func (s *Server) authorized(ctx context.Context, call *Call, do func() (string, error)) (string, error) {
+	unlock, err := s.lockClient(ctx, call.Client)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
 	if err := s.cfg.Policy.Authorize(ctx, call); err != nil {
 		return "", nip46.AsRefusal(err)
 	}
