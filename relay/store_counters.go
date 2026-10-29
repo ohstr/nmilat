@@ -13,7 +13,7 @@ import (
 // indexCounters keeps exact counts so they're O(1) to read: stored events
 // per kind ('k' + kind(8) -> n) and distinct authors ("authors" -> n). They
 // change in the same transaction as the indexes they mirror. Only indexed
-// events count (a stored kind 5 deletion has no indexes and isn't served).
+// events count.
 //
 // A store from before counters is backfilled in chunks, each in its own
 // write transaction, so writes never wait long. A watermark ("kinds-mark",

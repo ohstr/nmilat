@@ -982,6 +982,10 @@ privacy and performance fixes.
 - Serves a NIP-09 deletion request (kind 5) back by id and by kind once the
   relay applied it, and never applies one against another deletion request.
   ([#209](https://github.com/ohstr/nmilat/issues/209))
+- Indexes, once when the relay opens a store, the deletion requests earlier
+  versions stored without indexes, and drops their extra copies, so they are
+  served and a republish is a duplicate.
+  ([#209](https://github.com/ohstr/nmilat/issues/209))
 - Omits `budget_renewal` from a `nipcw.CreateCircleWalletRequest` with no
   renewal, which wrote `""` and was refused as empty; `private-join.json`'s
   join params change with it.

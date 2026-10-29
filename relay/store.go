@@ -326,6 +326,10 @@ func NewEventStore(path string, limitation *nip11.Limitation, opts ...EventStore
 		_ = db.Close()
 		return nil, fmt.Errorf("failed to prepare the derived indexes: %w", err)
 	}
+	if err := es.indexStoredDeletions(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("failed to index the stored deletion requests: %w", err)
+	}
 
 	es.startWorkers()
 
