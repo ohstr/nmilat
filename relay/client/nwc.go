@@ -550,18 +550,6 @@ func (c *NWCClient) unregister(subID string) {
 	}
 }
 
-// subscribeAndSend builds, signs, and sends a NIP-47 request, registering a
-// bufSize-buffered response channel under a fresh subscription ID before
-// sending, so no response can race the registration. The returned cleanup
-// func must be called (typically via defer) exactly once.
-func (c *NWCClient) subscribeAndSend(ctx context.Context, method string, params any, bufSize int, opts ...nip47.RequestOption) (*nwcSub, func(), error) {
-	call, cleanup, err := c.send(ctx, method, params, bufSize, opts...)
-	if err != nil {
-		return nil, cleanup, err
-	}
-	return call.sub, cleanup, nil
-}
-
 // nwcCallState is one sent call: its subscription, filters and signed request,
 // and the next hint in rest it has not gone to.
 type nwcCallState struct {
@@ -572,7 +560,10 @@ type nwcCallState struct {
 	next    int
 }
 
-// send is subscribeAndSend keeping what a failover needs to resend the call.
+// send builds, signs, and sends a NIP-47 request, registering a
+// bufSize-buffered response channel under a fresh subscription ID before
+// sending, so no response can race the registration, and keeps what a failover
+// needs to resend the call. The returned cleanup func must be called exactly once.
 func (c *NWCClient) send(ctx context.Context, method string, params any, bufSize int, opts ...nip47.RequestOption) (*nwcCallState, func(), error) {
 	select {
 	case <-ctx.Done():
@@ -728,53 +719,76 @@ func (c *NWCClient) drainOrClosedErr(sub *nwcSub) (*nip47.ResponseEvent, error) 
 
 // waitAll collects one response per id in ids (matched via
 // ResponseEvent.SubPaymentID), ignoring stray or duplicate responses, until
-// every id has answered, the relay closes the subscription, or ctx is done.
-// Returns whatever was collected so far alongside a non-nil error on
-// partial completion.
-func (c *NWCClient) waitAll(ctx context.Context, sub *nwcSub, ids []string) (map[string]*nip47.ResponseEvent, error) {
+// every id has answered, the relays close the subscription, or ctx is done.
+// It fails over as waitAnswer does: while some id is unanswered, relays silent
+// past their share of the wait since the last new answer, or a CLOSED, send the
+// same signed request on to the next hint, so the wallet sees one event id and
+// pays each item once; the first answer per id wins. Returns whatever was
+// collected so far alongside a non-nil error on partial completion.
+func (c *NWCClient) waitAll(ctx context.Context, call *nwcCallState, ids []string) (map[string]*nip47.ResponseEvent, error) {
 	want := make(map[string]struct{}, len(ids))
 	for _, id := range ids {
 		want[id] = struct{}{}
 	}
 	got := make(map[string]*nip47.ResponseEvent, len(ids))
+	take := func(resp *nip47.ResponseEvent) {
+		if _, expected := want[resp.SubPaymentID]; !expected {
+			return
+		}
+		if _, dup := got[resp.SubPaymentID]; !dup {
+			got[resp.SubPaymentID] = resp
+		}
+	}
+	closed := call.sub.closed
+	sent := false // the call also went to an extra hint
 	for len(got) < len(want) {
+		var timer *time.Timer
+		var silent <-chan time.Time
+		if call.next < len(c.rest) {
+			timer = time.NewTimer(c.answerWaitFor(ctx, len(c.rest)-call.next))
+			silent = timer.C
+		}
+		stop := func() {
+			if timer != nil {
+				timer.Stop()
+			}
+		}
 		select {
-		case resp, ok := <-sub.ch:
+		case resp, ok := <-call.sub.ch:
+			stop()
 			if !ok {
 				return got, c.err()
 			}
-			if _, expected := want[resp.SubPaymentID]; !expected {
-				continue
-			}
-			if _, dup := got[resp.SubPaymentID]; dup {
-				continue
-			}
-			got[resp.SubPaymentID] = resp
-		case <-sub.closed:
-			// Drain whatever responses are already buffered before
-			// reporting the closure — same priority rule as waitAnswer, just
-			// collecting every match instead of stopping at the first.
-			for {
+			take(resp)
+		case <-closed:
+			stop()
+			closed = nil
+			// Responses already buffered take priority over the closure.
+			for drained := false; !drained; {
 				select {
-				case resp, ok := <-sub.ch:
+				case resp, ok := <-call.sub.ch:
 					if !ok {
 						return got, c.err()
 					}
-					if _, expected := want[resp.SubPaymentID]; expected {
-						if _, dup := got[resp.SubPaymentID]; !dup {
-							got[resp.SubPaymentID] = resp
-						}
-					}
-					continue
+					take(resp)
 				default:
+					drained = true
 				}
-				break
 			}
 			if len(got) >= len(want) {
 				return got, nil
 			}
-			return got, &SubscriptionClosedError{Reason: sub.reason}
+			if c.sendNext(ctx, call) {
+				sent = true
+			} else if !sent {
+				return got, &SubscriptionClosedError{Reason: call.sub.reason}
+			}
+		case <-silent:
+			if c.sendNext(ctx, call) {
+				sent = true
+			}
 		case <-ctx.Done():
+			stop()
 			return got, ctx.Err()
 		}
 	}
@@ -907,7 +921,8 @@ func validateSubPaymentIDs(ids []string) error {
 }
 
 // MultiPayInvoice pays multiple BOLT11 invoices in one request, waiting for
-// every sub-payment's response event or ctx.Done(), whichever first. On
+// every sub-payment's response event, from any relay hint (failing over as a
+// single call does), or ctx.Done(), whichever first. On
 // full success every params.Invoices item has a corresponding entry (in
 // request order) with either Result or Error set — a per-item wallet
 // decline does not fail the overall call. On partial completion (ctx
@@ -923,13 +938,14 @@ func (c *NWCClient) MultiPayInvoice(ctx context.Context, params nip47.MultiPayIn
 		return nil, err
 	}
 
-	sub, cleanup, err := c.subscribeAndSend(ctx, nip47.MethodMultiPayInvoice, params, len(ids))
+	// Room for every hint's answers, so another relay's duplicates never crowd out a missing one.
+	call, cleanup, err := c.send(ctx, nip47.MethodMultiPayInvoice, params, len(ids)*(len(c.rest)+1))
 	if err != nil {
 		return nil, err
 	}
 	defer cleanup()
 
-	got, waitErr := c.waitAll(ctx, sub, ids)
+	got, waitErr := c.waitAll(ctx, call, ids)
 
 	results := make([]MultiPayInvoiceResult, 0, len(got))
 	for _, id := range ids {
@@ -962,13 +978,14 @@ func (c *NWCClient) MultiPayKeysend(ctx context.Context, params nip47.MultiPayKe
 		return nil, err
 	}
 
-	sub, cleanup, err := c.subscribeAndSend(ctx, nip47.MethodMultiPayKeysend, params, len(ids))
+	// Room for every hint's answers, so another relay's duplicates never crowd out a missing one.
+	call, cleanup, err := c.send(ctx, nip47.MethodMultiPayKeysend, params, len(ids)*(len(c.rest)+1))
 	if err != nil {
 		return nil, err
 	}
 	defer cleanup()
 
-	got, waitErr := c.waitAll(ctx, sub, ids)
+	got, waitErr := c.waitAll(ctx, call, ids)
 
 	results := make([]MultiPayKeysendResult, 0, len(got))
 	for _, id := range ids {

@@ -973,6 +973,9 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Sends `MultiPayInvoice` and `MultiPayKeysend` on to the next relay hint as
+  a single call does, with the same signed request, so the wallet pays each
+  item once; the first answer per item wins.
 - Makes `nipcash.OwnRow` with scope `all` take the caller's unclaimed row
   wherever the roster lists it, then its most recently claimed one, instead of
   the first match, now that a Hub lists claimed history rows too.
