@@ -208,3 +208,34 @@ func TestHiddenMembers(t *testing.T) {
 		t.Fatal("SealHiddenMembers never changed the order")
 	}
 }
+
+// NIP-CW §Membership (Which event): a version even one second older than the
+// last successful resolution is not adopted and counts as a failed refresh,
+// one a second newer is, and one dated exactly 15 minutes ahead is still read.
+func TestResolveFollowSet_Edges(t *testing.T) {
+	f := newSetFixture(t)
+	_, a := generateTestKeypair(t)
+	_, b := generateTestKeypair(t)
+	now := f.now.Unix()
+	d := []string{"d", f.addr.D}
+
+	last := &Resolution{EventID: "ff", CreatedAt: now - 10, Members: map[string]bool{a: true}}
+	older := f.set(t, f.providerPriv, KindFollowSet, now-11, d, []string{"p", b})
+	if r, ok := ResolveFollowSet([]*nip01.Event{older}, f.addr, nil, f.now, last); ok || r != last {
+		t.Fatalf("a version 1 s older than the last resolution was adopted: %v %v", members(r), ok)
+	}
+
+	newer := f.set(t, f.providerPriv, KindFollowSet, now-9, d, []string{"p", b})
+	if r, ok := ResolveFollowSet([]*nip01.Event{newer}, f.addr, nil, f.now, last); !ok || !r.Members[b] {
+		t.Fatalf("a version 1 s newer than the last resolution was not adopted")
+	}
+
+	atLimit := f.set(t, f.providerPriv, KindFollowSet, now+FollowSetMaxFuture, d, []string{"p", b})
+	if r, ok := ResolveFollowSet([]*nip01.Event{atLimit}, f.addr, nil, f.now, nil); !ok || !r.Members[b] {
+		t.Fatalf("a version exactly 15 minutes ahead was ignored")
+	}
+	past := f.set(t, f.providerPriv, KindFollowSet, now+FollowSetMaxFuture+1, d, []string{"p", b})
+	if _, ok := ResolveFollowSet([]*nip01.Event{past}, f.addr, nil, f.now, nil); ok {
+		t.Fatalf("a version more than 15 minutes ahead was read")
+	}
+}
