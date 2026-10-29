@@ -67,3 +67,42 @@ func TestT10_62_Claimable(t *testing.T) {
 		t.Error("expired")
 	}
 }
+
+// NIP-CASH §cash_status: scope all lists every slice, claimed history included. OwnRow takes the caller's unclaimed
+// row wherever it is listed, before or after its claimed rows; with none, its most recently claimed row.
+func TestOwnRow_PrefersTheUnclaimedRowOverClaimedHistory(t *testing.T) {
+	priv, pub := generateTestKeypair(t)
+	_, other := generateTestKeypair(t)
+	at := func(v int64) *int64 { return &v }
+	live := RecipientStatus{IdentityType: "pubkey", IdentityValue: pub, AmountMillis: 5}
+	old := RecipientStatus{IdentityType: "pubkey", IdentityValue: pub, AmountMillis: 1, Claimed: true, ClaimedAt: at(100)}
+	newer := RecipientStatus{IdentityType: "pubkey", IdentityValue: pub, AmountMillis: 2, Claimed: true, ClaimedAt: at(200)}
+	stranger := RecipientStatus{IdentityType: "pubkey", IdentityValue: other, AmountMillis: 9}
+	cred := BySigning(priv)
+	for _, c := range []struct {
+		name string
+		rows []RecipientStatus
+		want uint64
+		err  error
+	}{
+		{"live first, history after", []RecipientStatus{live, old, newer}, 5, nil},
+		{"history first, live after", []RecipientStatus{old, newer, live}, 5, nil},
+		{"live between history rows", []RecipientStatus{newer, live, old}, 5, nil},
+		{"only history: the latest claimed", []RecipientStatus{newer, stranger, old}, 2, nil},
+		{"only history, other order", []RecipientStatus{old, newer}, 2, nil},
+		{"a stranger's live row is not the caller's", []RecipientStatus{stranger, old}, 1, nil},
+		{"two unclaimed rows", []RecipientStatus{live, old, live}, 0, ErrRowAmbiguous},
+		{"no row of the caller", []RecipientStatus{stranger}, 0, ErrClaimNotFound},
+	} {
+		r, err := OwnRow(c.rows, cred, ScopeAll)
+		if c.err != nil {
+			if !errors.Is(err, c.err) {
+				t.Errorf("%s: %v, want %v", c.name, err, c.err)
+			}
+			continue
+		}
+		if err != nil || r.AmountMillis != c.want {
+			t.Errorf("%s: %+v %v, want amount %d", c.name, r, err, c.want)
+		}
+	}
+}

@@ -11,6 +11,8 @@
   verify, or not against the expected Hub, before any relay is dialled.
 - Adds `client.ErrPowRemineTooHard`, a relay asking for more proof of work
   than the session's budget after the first publish attempt.
+- Adds `nipcash.ErrRowAmbiguous`, a scope-all roster with two unclaimed rows
+  for the caller.
 - Adds `transport.ErrEnvelopeKeys` and `transport.Item.UnmarshalJSON`, which
   reads an item by its exact keys.
 
@@ -23,6 +25,9 @@
 
 ### Fixed
 
+- Makes `nipcash.OwnRow` with scope `all` take the caller's unclaimed row
+  wherever the roster lists it, then its most recently claimed one, instead of
+  the first match, now that a Hub lists claimed history rows too.
 - Serves a NIP-09 deletion request (kind 5) back by id and by kind once the
   relay applied it, and never applies one against another deletion request.
   ([#209](https://github.com/ohstr/nmilat/issues/209))
