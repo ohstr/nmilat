@@ -96,8 +96,8 @@ var (
 //     decimals and booleans, six lsps2_fee positions, https website and image,
 //     p, ISO-639-1 labels, ws or wss relays), and no lsps1 option or lsps5
 //     field appears twice;
-//  4. expiration has not passed at o.Now and is at most MaxExpirySecs after
-//     created_at;
+//  4. created_at is at most MaxFutureSecs ahead of o.Now, and expiration has
+//     not passed at o.Now and is at most MaxExpirySecs after created_at;
 //  5. n is in o.Chains and network in o.Networks.
 //
 // It ignores tags NIP-LSP does not define, L and l tags of another namespace,
@@ -116,6 +116,9 @@ func ParseAnnouncement(ev *nip01.Event, o CheckOptions) (*Announcement, error) {
 		return nil, err
 	}
 	created := int64(ev.CreatedAt) //nolint:gosec // event timestamps are seconds
+	if err := checkNotFuture(created, o.now()); err != nil {
+		return nil, err
+	}
 	if now := o.now(); now > f.Expiration {
 		return nil, stepErr(4, "expired at %d, now %d", f.Expiration, now)
 	}
@@ -129,6 +132,14 @@ func ParseAnnouncement(ev *nip01.Event, o CheckOptions) (*Announcement, error) {
 		return nil, stepErr(5, "network %q is not one the client uses", f.Network)
 	}
 	return &Announcement{Event: ev, CreatedAt: created, Fields: f}, nil
+}
+
+// checkNotFuture is step 4's bound on created_at.
+func checkNotFuture(created, now int64) error {
+	if created > now+MaxFutureSecs {
+		return stepErr(4, "created_at %d is more than 15 minutes ahead of now %d", created, now)
+	}
+	return nil
 }
 
 // checkSignature is step 1.

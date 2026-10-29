@@ -145,3 +145,74 @@ func (s signOnly) Encrypt(ctx context.Context, scheme, peer, pt string) (string,
 func (s signOnly) Decrypt(ctx context.Context, scheme, peer, ct string) (string, error) {
 	return s.k.Decrypt(ctx, scheme, peer, ct)
 }
+
+// nip44_message_keys is both an encrypt and a decrypt: its keys seal any
+// plaintext under the payload's nonce. A policy allowing decryption but not
+// encryption refuses it and still allows nip44_decrypt; one allowing both
+// allows it.
+func TestMessageKeysGovernedAsEncryptAndDecrypt(t *testing.T) {
+	ctx := context.Background()
+	peer := mustPeer(t)
+	decryptOnly := PolicyFunc(func(_ context.Context, r *Request) error {
+		if r.Encrypts() {
+			return Deny("no encryption")
+		}
+		return nil
+	})
+	c := dial(t, start(t, ServerConfig{Policy: decryptOnly}))
+	payload, err := peer.Encrypt(ctx, nip46.EncryptionNIP44V2, c.PubKey(), "one message")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.MessageKeys(ctx, peer.PubKey(), payload); !errors.Is(err, ErrDenied) {
+		t.Fatalf("message keys under a decrypt-only policy: %v", err)
+	}
+	if plain, err := c.Decrypt(ctx, nip46.EncryptionNIP44V2, peer.PubKey(), payload); err != nil || plain != "one message" {
+		t.Fatalf("decrypt under a decrypt-only policy: %q %v", plain, err)
+	}
+	if _, err := c.Encrypt(ctx, nip46.EncryptionNIP44V2, peer.PubKey(), "x"); !errors.Is(err, ErrDenied) {
+		t.Fatalf("encrypt under a decrypt-only policy: %v", err)
+	}
+
+	encryptOnly := PolicyFunc(func(_ context.Context, r *Request) error {
+		if r.Decrypts() {
+			return Deny("no decryption")
+		}
+		return nil
+	})
+	c = dial(t, start(t, ServerConfig{Policy: encryptOnly}))
+	if _, err := c.MessageKeys(ctx, peer.PubKey(), payload); !errors.Is(err, ErrDenied) {
+		t.Fatalf("message keys under an encrypt-only policy: %v", err)
+	}
+
+	both := PolicyFunc(func(_ context.Context, r *Request) error {
+		if r.Encrypts() && r.Decrypts() && r.Counterpart == peer.PubKey() {
+			return nil
+		}
+		return Deny("not both")
+	})
+	c = dial(t, start(t, ServerConfig{Policy: both}))
+	if _, err := c.MessageKeys(ctx, peer.PubKey(), payload); err != nil {
+		t.Fatalf("message keys allowed for both: %v", err)
+	}
+}
+
+func TestRequestEncryptsDecrypts(t *testing.T) {
+	for _, c := range []struct {
+		method       string
+		enc, decrypt bool
+	}{
+		{nip46.MethodNIP04Encrypt, true, false},
+		{nip46.MethodNIP44Encrypt, true, false},
+		{nip46.MethodNIP04Decrypt, false, true},
+		{nip46.MethodNIP44Decrypt, false, true},
+		{nip46.MethodNIP44MessageKeys, true, true},
+		{nip46.MethodSignEvent, false, false},
+		{nip46.MethodPing, false, false},
+	} {
+		r := &Request{Method: c.method}
+		if r.Encrypts() != c.enc || r.Decrypts() != c.decrypt {
+			t.Errorf("%s: encrypts %v decrypts %v", c.method, r.Encrypts(), r.Decrypts())
+		}
+	}
+}

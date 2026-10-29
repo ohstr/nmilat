@@ -482,3 +482,34 @@ func TestLookup_ChecksInvoiceAndAddress(t *testing.T) {
 		t.Fatalf("pay_by not the invoice expiry: %v, want ErrOrderReplyInvalid", err)
 	}
 }
+
+// NIP-CO §The Buyer Key: a fresh buyer key is never the recipient's Nostr
+// key. A draw equal to it is refused before anything is written; any other
+// draw places the order with that key.
+func TestPlace_BuyerKeyNeverTheRecipients(t *testing.T) {
+	_, book := orderHub(t)
+	ctx, cancel := testContext(t)
+	defer cancel()
+	c := connect(t, ctx, book)
+	sk, pk := cashtest.Keypair(t)
+	otherSK, otherPK := cashtest.Keypair(t)
+	draw := sk
+	drawPK := pk
+	orig := newBuyerKey
+	newBuyerKey = func() (string, string, error) { return draw, drawPK, nil }
+	t.Cleanup(func() { newBuyerKey = orig })
+
+	p := nipCO.CashOrderParams{Recipient: nipcash.Pubkey(pk), AmountMillis: 5_000_000, Payment: nipCO.PaymentLightning}
+	j := newJournal()
+	if _, err := c.Place(ctx, p, j, "dev"); !errors.Is(err, ErrBuyerKeyIsRecipient) || j.count() != 0 {
+		t.Fatalf("buyer key = recipient key: %v, %d written", err, j.count())
+	}
+	draw, drawPK = otherSK, otherPK
+	j = newJournal()
+	if _, err := c.Place(ctx, p, j, "dev"); err != nil {
+		t.Fatalf("another buyer key: %v", err)
+	}
+	if got := j.only(t).BuyerKey; got != otherSK {
+		t.Fatalf("placed with buyer key %q, want the drawn one", got)
+	}
+}

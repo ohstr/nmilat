@@ -16,7 +16,7 @@ func TestCoinNames(t *testing.T) {
 	for _, c := range []struct {
 		currency string
 		want     Coin
-	}{{"bc", CoinSats}, {"tb", CoinSats}, {"tbs", CoinSats}, {"bcrt", CoinSats}, {"fc", CoinLoki}, {"xx", CoinUnknown}, {"", CoinUnknown}} {
+	}{{"bc", CoinSats}, {"tb", CoinUnknown}, {"tbs", CoinUnknown}, {"bcrt", CoinUnknown}, {"fc", CoinLoki}, {"xx", CoinUnknown}, {"", CoinUnknown}} {
 		assert.Equal(t, c.want, coinForCurrency(c.currency), c.currency)
 	}
 	for _, name := range []string{"sats", "loki", "SATS"} {

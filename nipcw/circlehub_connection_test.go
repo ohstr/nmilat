@@ -207,3 +207,74 @@ func FuzzDecodeCircleHubConnection(f *testing.F) {
 		}
 	})
 }
+
+// NIP-CW §The Circle Wallet Hub Connection: decoding is strict, and every
+// signed field is bound by the signature.
+func TestDecodeCircleHubConnection_StrictAndBound(t *testing.T) {
+	c := kcwh(t, key1)
+	pub, _ := hex.DecodeString(c.Pubkey)
+	sec, _ := hex.DecodeString(c.Secret)
+	id, _ := hex.DecodeString(c.HubIdentity)
+	type tv struct {
+		typ uint8
+		v   []byte
+	}
+	enc := func(es ...tv) string {
+		var buf bytes.Buffer
+		for _, e := range es {
+			credcodec.WriteTLV(&buf, e.typ, e.v)
+		}
+		s, err := credcodec.EncodeBech32(CircleHubConnectionHRP, buf.Bytes())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	base := []tv{{0, pub}, {1, []byte(c.Relays[0])}, {2, sec}, {3, []byte(c.Label)}, {4, id}, {5, c.Signature}, {6, []byte(c.Chain)}}
+	with := func(extra ...tv) string { return enc(append(append([]tv{}, base...), extra...)...) }
+	replace := func(typ uint8, v []byte) string {
+		es := append([]tv{}, base...)
+		for i := range es {
+			if es[i].typ == typ {
+				es[i].v = v
+			}
+		}
+		return enc(es...)
+	}
+	if d, err := DecodeCircleHubConnection(enc(base...)); err != nil || d.Verify() != nil {
+		t.Fatalf("the unmodified string: %v", err)
+	}
+	for name, s := range map[string]string{
+		"TLV 0 twice":     with(tv{0, pub}),
+		"TLV 2 twice":     with(tv{2, sec}),
+		"TLV 5 twice":     with(tv{5, c.Signature}),
+		"TLV 6 twice":     with(tv{6, []byte(c.Chain)}),
+		"31-byte TLV 0":   replace(0, pub[:31]),
+		"33-byte TLV 2":   replace(2, append(append([]byte{}, sec...), 1)),
+		"64-byte TLV 5":   replace(5, c.Signature[:64]),
+		"label not UTF-8": replace(3, []byte{0xff, 0xfe}),
+		"mixed case":      kcwhString[:20] + strings.ToUpper(kcwhString[20:]),
+	} {
+		if _, err := DecodeCircleHubConnection(s); err == nil {
+			t.Errorf("%s: decoded", name)
+		}
+	}
+	other := make([]byte, 32)
+	other[31] = 7
+	for name, s := range map[string]string{
+		"relay swapped":  replace(1, []byte("wss://evil.example")),
+		"label swapped":  replace(3, []byte("Bob's Circle")),
+		"pubkey swapped": replace(0, other),
+		"secret swapped": replace(2, other),
+		"chain swapped":  replace(6, []byte("testnet")),
+	} {
+		d, err := DecodeCircleHubConnection(s)
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		if d.Verify() == nil {
+			t.Errorf("%s: verified", name)
+		}
+	}
+}

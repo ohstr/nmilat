@@ -21,11 +21,25 @@ var (
 	// ErrTypedInputNotCanonical is typed input for a platform with no canonical
 	// form: its key comes from the recipient's attestation or nconnection.
 	ErrTypedInputNotCanonical = errors.New("nipIC: this platform has no canonical form; take the key from the recipient's attestation or nconnection")
-	// ErrPlatformName is a platform name outside [a-z0-9._-]+.
+	// ErrPlatformName is a platform name outside [a-z0-9._-]+, or "nostr",
+	// which names a native pubkey and never a Web Identity.
 	ErrPlatformName = errors.New("nipIC: platform name must match [a-z0-9._-]+")
+	// ErrUnicodeVersion is an email or dns value met while the linked UTS #46
+	// or NFC tables are not UnicodeVersion: canonical forms would differ from
+	// other clients', so nothing is canonicalized.
+	ErrUnicodeVersion = errors.New("nipIC: the IDNA or NFC tables are not Unicode " + UnicodeVersion)
 	// ErrConnectionKey is a ConnectionKey that is not 64 lowercase hex.
 	ErrConnectionKey = errors.New("nipIC: a ConnectionKey is 64 lowercase hex characters")
 )
+
+// UnicodeVersion is the Unicode version of the UTS #46 and NFC tables email and
+// dns values are canonicalized with. Every client must get the same hash, and
+// the tables golang.org/x/net and x/text link follow the Go toolchain, so a
+// build linking other tables refuses those values (ErrUnicodeVersion).
+const UnicodeVersion = "15.0.0"
+
+// tablesPinned reports that the linked tables are UnicodeVersion; tests swap it.
+var tablesPinned = idna.UnicodeVersion == UnicodeVersion && norm.Version == UnicodeVersion
 
 // The platforms with a canonical form (NIP-IC §Canonical Platform User IDs).
 const (
@@ -35,10 +49,16 @@ const (
 	PlatformDNS     WebIdentity = "dns"
 )
 
-// ValidPlatformName reports a platform name of one or more of a-z, 0-9, '.',
-// '_' and '-'. It is never lowercased for the caller.
+// PlatformNostr is the platform of a native Nostr pubkey in a NIP-AZ or NIP-CZ
+// identity tag. Nostr is not a Web Identity, so a pubkey is never hashed into a
+// ConnectionKey: ValidPlatformName refuses it.
+const PlatformNostr WebIdentity = "nostr"
+
+// ValidPlatformName reports a Web Identity platform name: one or more of a-z,
+// 0-9, '.', '_' and '-', and not "nostr" (NIP-IC §Terminology). It is never
+// lowercased for the caller.
 func ValidPlatformName(p WebIdentity) bool {
-	if p == "" {
+	if p == "" || p == PlatformNostr {
 		return false
 	}
 	for i := 0; i < len(p); i++ {
@@ -71,11 +91,17 @@ func CanonicalUserID(p WebIdentity, typed string) (string, error) {
 	case PlatformX, PlatformDiscord:
 		return canonicalNumericID(typed)
 	case PlatformEmail:
+		if !tablesPinned {
+			return "", ErrUnicodeVersion
+		}
 		if !utf8.ValidString(typed) {
 			return "", ErrNotCanonical
 		}
 		return canonicalEmail(typed)
 	case PlatformDNS:
+		if !tablesPinned {
+			return "", ErrUnicodeVersion
+		}
 		if !utf8.ValidString(typed) {
 			return "", ErrNotCanonical
 		}
@@ -105,7 +131,11 @@ func ConnectionKeyFromAttested(p WebIdentity, userID string) (ConnectionKey, err
 		return "", ErrPlatformName
 	}
 	if HasCanonicalForm(p) {
-		if c, err := CanonicalUserID(p, userID); err != nil || c != userID {
+		c, err := CanonicalUserID(p, userID)
+		if err != nil {
+			return "", err
+		}
+		if c != userID {
 			return "", ErrNotCanonical
 		}
 	}
@@ -168,12 +198,13 @@ func asciiLower(s string) string {
 }
 
 // canonicalEmail trims, splits at the last '@', ASCII-lowercases the whole
-// address, keeps a local part only if NFC leaves it unchanged, and converts the
-// domain part to A-labels.
+// address, keeps a local part only if it is not empty, does not start with '@'
+// (no value carries a leading '@') and NFC leaves it unchanged, and converts
+// the domain part to A-labels.
 func canonicalEmail(s string) (string, error) {
 	s = asciiLower(trimASCII(s))
 	at := strings.LastIndexByte(s, '@')
-	if at <= 0 {
+	if at <= 0 || s[0] == '@' {
 		return "", ErrNotCanonical
 	}
 	local := s[:at]

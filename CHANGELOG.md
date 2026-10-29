@@ -1,6 +1,10 @@
 # Changelog
 
-## [0.5.0-rc.45]
+## [0.5.0]
+
+NIP-CASH's private transport, NIP-29 groups hosted by the relay, huddle audio,
+NIP-86 relay management and HTTP bridges, and a long run of relay access,
+privacy and performance fixes.
 
 ### Added
 
@@ -15,68 +19,9 @@
   for the caller.
 - Adds `transport.ErrEnvelopeKeys` and `transport.Item.UnmarshalJSON`, which
   reads an item by its exact keys.
-
-### Removed
-
-- Removes `transport.EnvelopeVersion`, `transport.ErrEnvelopeVersion` and the
-  `Version` fields of `transport.Envelope` and `transport.ResponseEnvelope`,
-  kept since the envelope lost its version on the wire; drop them from
-  struct literals.
-
-### Fixed
-
-- Makes `nipcash.OwnRow` with scope `all` take the caller's unclaimed row
-  wherever the roster lists it, then its most recently claimed one, instead of
-  the first match, now that a Hub lists claimed history rows too.
-- Serves a NIP-09 deletion request (kind 5) back by id and by kind once the
-  relay applied it, and never applies one against another deletion request.
-  ([#209](https://github.com/ohstr/nmilat/issues/209))
-- Omits `budget_renewal` from a `nipcw.CreateCircleWalletRequest` with no
-  renewal, which wrote `""` and was refused as empty; `private-join.json`'s
-  join params change with it.
-- Holds re-mining for a relay that raised its proof-of-work minimum to the
-  session's `WithPowBudget`: a minimum above its difficulty is refused, and
-  mining stops at its duration or the deadline less `MinPublishMargin`, not at
-  `not_after`.
-- Dials nothing in `client.Connect`, which opened the bill's first relay
-  before its provenance was checked; the session dials the relays when a bill
-  method runs, after the check.
-- Sends an NWC call on to the next relay hint when the relays it went to stay
-  silent past their share of the call's deadline, or close its subscription,
-  instead of waiting on the first relay that connected (NIP-CASH §Multiple
-  Relay Hints); the first answer from any of them is the call's.
-- Sends a private-transport envelope on to the next relay when the one that
-  took it stays silent past its share of the time to `not_after`, or closes,
-  instead of waiting out `not_after` there.
-- Refuses every call, reads and bearer `cash_redeem` included, while a Hub's
-  newest announcement is rejected, and drops the older one instead of keeping
-  its inbox (`Inbox()` is then empty) until a valid newer one is seen.
-- Matches envelope and item keys exactly: `ClassifyEnvelope` drops, and
-  `Decode` refuses, an envelope repeating a key or spelling one two ways that
-  differ only in case (`transport.ErrEnvelopeKeys`), and such an item is
-  omitted, so E2 to E4 check the `nonce` and `not_after` the run uses.
-- Sorts canonical params keys by UTF-16 code units, as RFC 8785 and NIP-CASH
-  §Item Proofs say, not by UTF-8 bytes. Hashes change only for keys above
-  U+FFFF; `canonical-params.json` gains a case for that order.
-- Refuses a bolt11 invoice carrying more than one 32-byte payment hash field
-  (`nip57.ErrBolt11PaymentHashRepeated`), where it kept the last: flnd keeps
-  the first, so a redeem could bind a hash the Hub never pays.
-- Renames three vector cases whose names said the opposite of their expected
-  error (`claim.json` "an unparseable expiration is refused", "a repeated
-  platform tag is refused"; `proof.json` "wrong not_after").
-- Gives `lookup.json`'s `done` cases the shape NIP-CASH §Looking Up a Call
-  defines, a destroyed bill's tombstone in place of its token, and drops the
-  withdrawal tombstone case; renames `request-id.json`'s list to
-  `privateTransportRequiresRequestId`.
-
-## [0.5.0]
-
-NIP-CASH's private transport, NIP-29 groups hosted by the relay, huddle audio,
-NIP-86 relay management and HTTP bridges, and a long run of relay access,
-privacy and performance fixes.
-
-### Added
-
+- Adds to `testdata/vectors/connection-key.json` a leading-`@` email, an empty
+  and a decomposed local part, a domain and an email domain at and one past
+  253 characters, and the platform `nostr` refused.
 - Adds `resultToState` to `testdata/vectors/pocket.json` (K-POCKET-7): NIP-CP
   §Balance's result to state table, so every client tests the same mapping.
   ([#218](https://github.com/ohstr/nmilat/pull/218))
@@ -1003,6 +948,10 @@ privacy and performance fixes.
 
 ### Removed
 
+- Removes `transport.EnvelopeVersion`, `transport.ErrEnvelopeVersion` and the
+  `Version` fields of `transport.Envelope` and `transport.ResponseEnvelope`,
+  kept since the envelope lost its version on the wire; drop them from
+  struct literals.
 - Removes `nipcw.CreateCircleWalletParams.Request`, `ParseResult` and `Item`
   (use `Prepare`), `CreateCircleWalletResponse.PairingURI`,
   `CircleHubConnection.WalletPubkey`/`RelayURLs`, the standard-transport
@@ -1024,6 +973,82 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Makes `nipcash.OwnRow` with scope `all` take the caller's unclaimed row
+  wherever the roster lists it, then its most recently claimed one, instead of
+  the first match, now that a Hub lists claimed history rows too.
+- Serves a NIP-09 deletion request (kind 5) back by id and by kind once the
+  relay applied it, and never applies one against another deletion request.
+  ([#209](https://github.com/ohstr/nmilat/issues/209))
+- Omits `budget_renewal` from a `nipcw.CreateCircleWalletRequest` with no
+  renewal, which wrote `""` and was refused as empty; `private-join.json`'s
+  join params change with it.
+- Holds re-mining for a relay that raised its proof-of-work minimum to the
+  session's `WithPowBudget`: a minimum above its difficulty is refused, and
+  mining stops at its duration or the deadline less `MinPublishMargin`, not at
+  `not_after`.
+- Dials nothing in `client.Connect`, which opened the bill's first relay
+  before its provenance was checked; the session dials the relays when a bill
+  method runs, after the check.
+- Sends an NWC call on to the next relay hint when the relays it went to stay
+  silent past their share of the call's deadline, or close its subscription,
+  instead of waiting on the first relay that connected (NIP-CASH §Multiple
+  Relay Hints); the first answer from any of them is the call's.
+- Sends a private-transport envelope on to the next relay when the one that
+  took it stays silent past its share of the time to `not_after`, or closes,
+  instead of waiting out `not_after` there.
+- Refuses every call, reads and bearer `cash_redeem` included, while a Hub's
+  newest announcement is rejected, and drops the older one instead of keeping
+  its inbox (`Inbox()` is then empty) until a valid newer one is seen.
+- Matches envelope and item keys exactly: `ClassifyEnvelope` drops, and
+  `Decode` refuses, an envelope repeating a key or spelling one two ways that
+  differ only in case (`transport.ErrEnvelopeKeys`), and such an item is
+  omitted, so E2 to E4 check the `nonce` and `not_after` the run uses.
+- Sorts canonical params keys by UTF-16 code units, as RFC 8785 and NIP-CASH
+  §Item Proofs say, not by UTF-8 bytes. Hashes change only for keys above
+  U+FFFF; `canonical-params.json` gains a case for that order.
+- Refuses a bolt11 invoice carrying more than one 32-byte payment hash field
+  (`nip57.ErrBolt11PaymentHashRepeated`), where it kept the last: flnd keeps
+  the first, so a redeem could bind a hash the Hub never pays.
+- Renames three vector cases whose names said the opposite of their expected
+  error (`claim.json` "an unparseable expiration is refused", "a repeated
+  platform tag is refused"; `proof.json` "wrong not_after").
+- Gives `lookup.json`'s `done` cases the shape NIP-CASH §Looking Up a Call
+  defines, a destroyed bill's tombstone in place of its token, and drops the
+  withdrawal tombstone case; renames `request-id.json`'s list to
+  `privateTransportRequiresRequestId`.
+- Refuses an `email` user id whose local part starts with `@` in
+  `nipIC.CanonicalUserID` and `NewConnectionKey`: NIP-IC says no value carries
+  a leading `@`, and such a value is refused, never repaired.
+- Refuses the platform name `nostr` in `nipIC.ValidPlatformName` (new
+  `nipIC.PlatformNostr`), so no ConnectionKey, 35522 or nconnection is built on
+  it, and the `nipAZ` request and receipt builders refuse an identity whose
+  platform is not a NIP-IC platform name: a key sent with `nostr` was read as a
+  native pubkey.
+- Maps chain `bitcoin` to mainnet invoices (`bc`) only in
+  `nipAZ.InvoiceCurrencies`, so a testnet, signet or regtest invoice fails
+  receipt rule 4 and the relay no longer counts one as sats.
+- Pins email and dns canonicalization to Unicode 15.0.0 (`nipIC.UnicodeVersion`):
+  a build whose linked IDNA or NFC tables are another version (Go 1.27 links
+  17.0.0) refuses those values with `nipIC.ErrUnicodeVersion` instead of
+  computing canonical forms other clients do not share.
+- Runs `nipLS` encrypt and decrypt requests under the same lock as
+  `sign_event`, from `Policy.Authorize` through `AuthorizeResult`, so a policy's
+  quota or one-time approval on them is spent once under concurrent requests.
+- Refuses `nip44_message_keys` under a `nipLS` policy that allows decryption
+  but not encryption, since its keys seal any plaintext under the payload's
+  nonce; new `nipLS.Request.Encrypts` and `Decrypts` report it as both.
+- Refuses at `niplsp` step 4 an announcement whose `created_at` is more than
+  `niplsp.MaxFutureSecs` (15 minutes) ahead of the client's clock, and `Seen`
+  neither counts one as seen nor restores such a mark, so a future-dated event
+  can no longer hide the node's later announcements, a `closed` one included.
+- Refuses in `nipCZ.IdentityFromAttestation` an attestation whose `d` is not
+  the ConnectionKey of its platform and evidence user id
+  (`nipcash.ErrAttestationKey`), as `nipcash.ConnectionKeyFromAttestation` does.
+- Runs a `nip46/bunker` server's `Policy.Authorize` and the operation it
+  allows one request at a time per client pubkey, so a client's quota or
+  one-time approval is spent once, while other clients' requests still run.
+- Refuses `nip44_message_keys` under a decrypt-only `nip46/bunker` policy, as
+  `nipLS` does; new `Call.Encrypts` and `Decrypts` report it as both.
 - Fixes GO-2026-5970 and GO-2026-5026 by updating `golang.org/x/text` to
   v0.39.0 and `golang.org/x/net` to v0.55.0.
   ([#218](https://github.com/ohstr/nmilat/pull/218))

@@ -28,8 +28,9 @@ type seenEntry struct {
 // whether it passed the checks. It keeps only the newest: an older version
 // offered later is refused, and when the newest fails a check the node has no
 // usable announcement until a newer one passes; there is no fallback (NIP-LSP
-// §Client Behavior). An event whose kind or signature fails (step 1) is not
-// the node's and changes nothing.
+// §Client Behavior). An event whose kind or signature fails (step 1), and one
+// dated more than MaxFutureSecs ahead of Options.Now, does not count as seen
+// and changes nothing, so it cannot hide the node's later announcements.
 //
 // Keep the marks across runs (Marks, Remember) so that a relay serving an old
 // version later cannot bring it back. Seen is safe for concurrent use.
@@ -52,11 +53,15 @@ func NewSeen(o CheckOptions) *Seen {
 // event of a mark restored by Remember is checked and held); and the
 // check's *AnnouncementError otherwise, in which case a newer-but-failing ev
 // still becomes the newest and leaves the node with no usable announcement.
+// A future-dated ev (step 4) is refused without becoming the newest.
 func (s *Seen) Offer(ev *nip01.Event) (*Announcement, error) {
 	if err := checkSignature(ev); err != nil {
 		return nil, err
 	}
 	created := int64(ev.CreatedAt) //nolint:gosec // event timestamps are seconds
+	if err := checkNotFuture(created, s.Options.now()); err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.nodes == nil {
@@ -118,8 +123,13 @@ func (s *Seen) Marks() map[string]Mark {
 }
 
 // Remember restores a mark kept from an earlier run: versions older than it
-// are refused from now on, and the mark's own event is taken when offered. It never lowers a newer mark already held.
+// are refused from now on, and the mark's own event is taken when offered. It
+// never lowers a newer mark already held, and ignores a mark dated more than
+// MaxFutureSecs ahead of Options.Now, which does not count as seen.
 func (s *Seen) Remember(nodeKey string, m Mark) {
+	if checkNotFuture(m.CreatedAt, s.Options.now()) != nil {
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.nodes == nil {

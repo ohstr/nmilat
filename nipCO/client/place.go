@@ -14,6 +14,9 @@ import (
 // buyer key is never the recipient's Nostr key.
 var ErrBuyerKeyIsRecipient = errors.New("nipCO/client: the buyer key would be the recipient's key")
 
+// newBuyerKey draws a fresh buyer key; tests swap it.
+var newBuyerKey = nipCO.NewBuyerKey
+
 // Place places one order (NIP-CO §Client Behavior, steps 2 and 3). It re-reads
 // the terms first (ErrOrderNotSold when they sell nothing of p.Payment, nothing
 // written); generates notify and request_id when empty; takes the buyer key from
@@ -63,7 +66,7 @@ func (c *OrderClient) Place(ctx context.Context, p nipCO.CashOrderParams, j cash
 		}
 	} else {
 		var pk string
-		if buyerKey, pk, err = nipCO.NewBuyerKey(); err != nil {
+		if buyerKey, pk, err = newBuyerKey(); err != nil {
 			return nil, err
 		}
 		if req.Recipient.IdentityValue == pk {

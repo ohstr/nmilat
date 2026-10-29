@@ -229,6 +229,7 @@ func buildConnectionKey() (any, error) {
 	kat("K-CK-9", "github", "12345", "attested")
 	kat("K-CK-9", "dns", "example.com", "typed")
 	kat("", "github", "12345", "typed")
+	kat("nostr is no platform: a pubkey is never hashed", "nostr", strings.Repeat("ab", 32), "attested")
 
 	canon := func(id, platform, input string) userIDCase {
 		out, err := nipIC.CanonicalUserID(nipIC.WebIdentity(platform), input)
@@ -244,6 +245,18 @@ func buildConnectionKey() (any, error) {
 		{"dns", "ｂücher.example"}, {"dns", "bücher。example"}, {"dns", "ς.example"}, {"dns", "a\u200cb.example"}, {"dns", "-a.example"}, {"dns", "a_b.example"},
 		{"dns", "a..example"}, {"dns", strings.Repeat("a", 64) + ".example"}, {"dns", "\u05d0a.example"}, {"dns", "example.com."}, {"dns", "xn--fa-hia.de"},
 		{"github", "12345"}, {"telegram", "12345"},
+	} {
+		f.Canonical = append(f.Canonical, canon("", c[0], c[1]))
+	}
+	// No value carries a leading '@'; an empty or decomposed local part is
+	// refused; a domain is at most 253 characters; nostr is no platform name.
+	label63 := strings.Repeat("a", 63)
+	domain253 := label63 + "." + label63 + "." + label63 + "." + strings.Repeat("a", 61)
+	for _, c := range [][2]string{
+		{"email", "@alice@example.com"}, {"email", " @alice@example.com"}, {"email", `"@alice"@example.com`},
+		{"email", "@example.com"}, {"email", "e\u0301@x.example"}, {"email", "\u00e9@x.example"},
+		{"dns", domain253}, {"dns", domain253 + "a"}, {"email", "a@" + domain253}, {"email", "a@" + domain253 + "a"},
+		{"nostr", strings.Repeat("ab", 32)},
 	} {
 		f.Canonical = append(f.Canonical, canon("", c[0], c[1]))
 	}

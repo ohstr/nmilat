@@ -237,3 +237,27 @@ func legacyValidateReceipt(ev *nip01.Event) error {
 	_, err := ValidateAltZapReceipt(ev, ReceiptPolicy{NostrPubkeyFor: func(string) (string, error) { return ev.PubKey, nil }})
 	return err
 }
+
+// Receipt rule 4: chain bitcoin is Bitcoin's main network only, so a testnet,
+// signet or regtest invoice does not belong to it.
+func TestAltZapReceiptBitcoinIsMainnetOnly(t *testing.T) {
+	receipt := &nip01.Event{Kind: KindAltZapReceipt, Tags: [][]string{
+		{"bolt11", "lnbc-zap"},
+		{"chain", "bitcoin"},
+		{"preimage", testPreimage},
+		{"p", "0000000000000000000000000000000000000000000000000000000000000001"},
+	}}
+	if err := receipt.Sign(zapsTestPrivKey); err != nil {
+		t.Fatal(err)
+	}
+	for _, currency := range []string{"tb", "tbs", "bcrt", "fc", "BC"} {
+		stubAltZapInvoice(t, &nip57.Invoice{Currency: currency, PaymentHash: testPaymentHash, AmountMloki: 1000})
+		if err := legacyValidateReceipt(receipt); !errors.Is(err, ErrChainMismatch) {
+			t.Errorf("%s invoice on a bitcoin receipt: got %v, want ErrChainMismatch", currency, err)
+		}
+	}
+	stubAltZapInvoice(t, &nip57.Invoice{Currency: "bc", PaymentHash: testPaymentHash, AmountMloki: 1000})
+	if err := legacyValidateReceipt(receipt); err != nil {
+		t.Errorf("bc invoice on a bitcoin receipt: %v", err)
+	}
+}
