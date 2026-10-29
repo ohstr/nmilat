@@ -28,7 +28,7 @@ func TestCollectReply_TotalIsBoundedByItemsRequested(t *testing.T) {
 
 	ch := make(chan *nip01.Event, 1)
 	ch <- sealChunk(t, replyKey, limits, transport.ResponseEnvelope{
-		Version: transport.EnvelopeVersion, ReqNonce: nonce, Seq: 1, Total: 1000,
+		ReqNonce: nonce, Seq: 1, Total: 1000,
 		Results: []transport.Result{{ID: "only", ResultType: "cash_status", Result: []byte(`{}`)}},
 	})
 
@@ -75,7 +75,7 @@ func TestCollectReply_LaterBadChunkKeepsEarlierOutcomes(t *testing.T) {
 
 	ch := make(chan *nip01.Event, 2)
 	ch <- sealChunk(t, replyKey, limits, transport.ResponseEnvelope{
-		Version: transport.EnvelopeVersion, ReqNonce: nonce, Seq: 1, Total: 2,
+		ReqNonce: nonce, Seq: 1, Total: 2,
 		Results: []transport.Result{{ID: "x1", ResultType: "cash_status", Result: []byte(`{"new_wallet_token":"only-copy"}`)}},
 	})
 	// Chunk 2 answers another request: unusable as a whole, so it decides nothing.
@@ -84,7 +84,7 @@ func TestCollectReply_LaterBadChunkKeepsEarlierOutcomes(t *testing.T) {
 		t.Fatal(err)
 	}
 	ch <- sealChunk(t, replyKey, limits, transport.ResponseEnvelope{
-		Version: transport.EnvelopeVersion, ReqNonce: other, Seq: 2, Total: 2,
+		ReqNonce: other, Seq: 2, Total: 2,
 		Results: []transport.Result{{ID: "x2", ResultType: "cash_status", Result: []byte(`{}`)}},
 	})
 

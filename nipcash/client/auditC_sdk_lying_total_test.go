@@ -98,8 +98,8 @@ func (h *lyingHub) handleRequest(t *testing.T, ev *nip01.Event) {
 
 	for seq := 1; seq <= h.publishChunks; seq++ {
 		part := transport.ResponseEnvelope{
-			Version: transport.EnvelopeVersion, ReqNonce: env.Nonce,
-			Seq: seq, Total: h.declaredTotal,
+			ReqNonce: env.Nonce,
+			Seq:      seq, Total: h.declaredTotal,
 		}
 		if seq == 1 {
 			part.Results = results // the whole truth, in chunk 1

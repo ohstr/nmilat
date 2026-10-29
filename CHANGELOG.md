@@ -12,6 +12,13 @@
 - Adds `transport.ErrEnvelopeKeys` and `transport.Item.UnmarshalJSON`, which
   reads an item by its exact keys.
 
+### Removed
+
+- Removes `transport.EnvelopeVersion`, `transport.ErrEnvelopeVersion` and the
+  `Version` fields of `transport.Envelope` and `transport.ResponseEnvelope`,
+  kept since the envelope lost its version on the wire; drop them from
+  struct literals.
+
 ### Fixed
 
 - Dials nothing in `client.Connect`, which opened the bill's first relay

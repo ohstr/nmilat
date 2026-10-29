@@ -114,7 +114,6 @@ func packOne(builders []itemBuilder, hubXOnly string, limits transport.Limits, n
 
 	binding := nipcash.ItemBinding{HubXOnly: hubXOnly, Nonce: nonce, NotAfter: notAfter}
 	env := transport.Envelope{
-		Version:  transport.EnvelopeVersion,
 		NotAfter: notAfter,
 		Nonce:    nonce,
 		ReplyTo:  replyTo,

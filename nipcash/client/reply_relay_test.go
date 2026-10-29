@@ -161,12 +161,12 @@ func TestCollectReply_SameEventFromTwoRelaysIsOneChunk(t *testing.T) {
 	s := hostileSession(limits, strings.Repeat("b", 64))
 
 	first := sealChunk(t, replyKey, limits, transport.ResponseEnvelope{
-		Version: transport.EnvelopeVersion, ReqNonce: nonce, Seq: 1, Total: 2,
+		ReqNonce: nonce, Seq: 1, Total: 2,
 		Results: []transport.Result{{ID: "x1", ResultType: "cash_status", Result: []byte(`{}`)}},
 	})
 	first.ID = strings.Repeat("1", 64)
 	second := sealChunk(t, replyKey, limits, transport.ResponseEnvelope{
-		Version: transport.EnvelopeVersion, ReqNonce: nonce, Seq: 2, Total: 2,
+		ReqNonce: nonce, Seq: 2, Total: 2,
 		Results: []transport.Result{{ID: "x2", ResultType: "cash_status", Result: []byte(`{}`)}},
 	})
 	second.ID = strings.Repeat("2", 64)

@@ -76,7 +76,7 @@ func TestItemConstructors_ProduceEnvelopesThatValidate(t *testing.T) {
 		}},
 	}
 
-	env := transport.Envelope{Version: transport.EnvelopeVersion, NotAfter: b.NotAfter, Nonce: b.Nonce}
+	env := transport.Envelope{NotAfter: b.NotAfter, Nonce: b.Nonce}
 	replyTo, err := transport.NewNonce()
 	if err != nil {
 		t.Fatal(err)

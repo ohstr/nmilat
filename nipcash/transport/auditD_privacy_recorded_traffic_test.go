@@ -45,7 +45,6 @@ func auditDBillPlaintext(t *testing.T) ([]byte, string, string) {
 	item.Target = target
 
 	env := Envelope{
-		Version:  EnvelopeVersion,
 		NotAfter: time.Now().Add(60 * time.Second).Unix(),
 		Nonce:    nonce,
 		ReplyTo:  auditDNonce(t),
@@ -82,7 +81,7 @@ func auditDRecordTraffic(t *testing.T, inboxPriv, inboxXOnly string) (auditDReco
 		t.Fatal(err)
 	}
 	resp := ResponseEnvelope{
-		Version: EnvelopeVersion, ReqNonce: mustEnvelopeNonce(t, plaintext), Seq: 1, Total: 1,
+		ReqNonce: mustEnvelopeNonce(t, plaintext), Seq: 1, Total: 1,
 		Results: []Result{{
 			ID: "x1", ResultType: "cash_transfer",
 			Result: json.RawMessage(`{"new_token":"lokicash1` + strings.Repeat("z", 120) + `","amount_millis":4200000}`),

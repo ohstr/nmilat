@@ -82,7 +82,7 @@ func ClassifyEnvelope(plaintext []byte, decryptErr error, limits Limits, now tim
 	if seen != nil && seen(nonce) {
 		return drop(errors.New("transport: nonce already served"))
 	}
-	header := &Envelope{Version: EnvelopeVersion, Nonce: nonce, ReplyTo: replyTo, NotAfter: notAfter}
+	header := &Envelope{Nonce: nonce, ReplyTo: replyTo, NotAfter: notAfter}
 	refuse := func(code string, err error) ServeVerdict {
 		return ServeVerdict{Action: ServeRefuse, Code: code, Envelope: header, Reason: err}
 	}

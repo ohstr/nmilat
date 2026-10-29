@@ -41,17 +41,11 @@ const (
 	KindBillProof = 23193
 )
 
-// EnvelopeVersion is kept for source compatibility only. The envelope and the
-// response carry no version on the wire since nips 631341c; the Version fields
-// are never written or read.
-const EnvelopeVersion = 1
-
 // keyHexLen is the length of a hex-encoded 32-byte value: a pubkey, a nonce, or
 // a reply tag.
 const keyHexLen = 64
 
 var (
-	ErrEnvelopeVersion   = errors.New("transport: unsupported envelope version")
 	ErrEnvelopeNoItems   = errors.New("transport: envelope carries no items")
 	ErrEnvelopeExpired   = errors.New("transport: envelope not_after has passed")
 	ErrEnvelopeTooFresh  = errors.New("transport: envelope not_after is too far ahead")
@@ -140,8 +134,6 @@ func hasRawValue(raw json.RawMessage) bool {
 
 // Envelope is the plaintext inside one private-transport ciphertext.
 type Envelope struct {
-	// Version is never on the wire (see EnvelopeVersion).
-	Version int `json:"-"`
 	// NotAfter is the envelope's own expiry, in unix seconds. The wrapping event's
 	// created_at is randomised up to two days into the past (NIP-59), so it says
 	// nothing about freshness — replay protection has to live in here.
@@ -500,7 +492,7 @@ func Decode(plaintext []byte, limits Limits) (*Envelope, error) {
 			}
 		}
 	}
-	e := Envelope{Version: EnvelopeVersion, NotAfter: wire.NotAfter, Nonce: wire.Nonce, ReplyTo: wire.ReplyTo}
+	e := Envelope{NotAfter: wire.NotAfter, Nonce: wire.Nonce, ReplyTo: wire.ReplyTo}
 	if len(e.Nonce) != keyHexLen || !isLowerHex(e.Nonce) {
 		return nil, fmt.Errorf("%w: nonce must be %d lowercase hex characters", ErrEnvelopeMalformed, keyHexLen)
 	}

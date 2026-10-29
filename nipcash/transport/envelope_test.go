@@ -24,7 +24,6 @@ func newTestEnvelope(t *testing.T, items ...Item) Envelope {
 		items = []Item{newTestItem(t, "1", "cash_status", `{}`, nonce)}
 	}
 	return Envelope{
-		Version:  EnvelopeVersion,
 		NotAfter: time.Now().Add(60 * time.Second).Unix(),
 		Nonce:    nonce,
 		ReplyTo:  replyTo,
@@ -303,8 +302,8 @@ func FuzzDecode(f *testing.F) {
 	limits := DefaultLimits()
 
 	env := Envelope{
-		Version: EnvelopeVersion, NotAfter: time.Now().Unix(),
-		Nonce: strings.Repeat("a", 64), ReplyTo: strings.Repeat("b", 64),
+		NotAfter: time.Now().Unix(),
+		Nonce:    strings.Repeat("a", 64), ReplyTo: strings.Repeat("b", 64),
 		Items: []Item{{ID: "1", Target: strings.Repeat("c", 64), Method: "cash_status",
 			Params: json.RawMessage(`{}`), Proof: json.RawMessage(`{}`)}},
 	}
@@ -327,9 +326,6 @@ func FuzzDecode(f *testing.F) {
 		}
 		// Anything that decoded must satisfy every invariant the checks promise,
 		// so a later stage can rely on them without re-checking.
-		if decoded.Version != EnvelopeVersion {
-			t.Fatalf("accepted version %d", decoded.Version)
-		}
 		if len(decoded.Items) == 0 || len(decoded.Items) > limits.MaxItems {
 			t.Fatalf("accepted %d items", len(decoded.Items))
 		}
