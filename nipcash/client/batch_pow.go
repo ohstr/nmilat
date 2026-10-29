@@ -26,6 +26,7 @@ type sessionConfig struct {
 	powMaxDifficulty int           // 0: no cap
 	powMaxDuration   time.Duration // 0: deadline − MinPublishMargin − now
 	withdrawHRP      string        // "": the bill's coin's HRPs (WithWithdrawHRP)
+	relayAnswerWait  time.Duration // 0: the time to not_after shared among the relays
 }
 
 func newSessionConfig(opts []SessionOption) sessionConfig {
@@ -45,6 +46,14 @@ func WithPowBudget(maxDifficulty int, maxDuration time.Duration) SessionOption {
 	return func(c *sessionConfig) {
 		c.powMaxDifficulty, c.powMaxDuration = maxDifficulty, maxDuration
 	}
+}
+
+// WithRelayAnswerWait sets how long a relay that took a request is given to
+// answer before the request also goes to the next untried relay (NIP-CASH
+// §Multiple Relay Hints). 0, the default, shares the time left until the
+// envelope's not_after between that relay and every untried one.
+func WithRelayAnswerWait(d time.Duration) SessionOption {
+	return func(c *sessionConfig) { c.relayAnswerWait = d }
 }
 
 // outgoing is one kind-23190 ready to publish; pow is set when it was mined, so

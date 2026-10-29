@@ -128,17 +128,17 @@ func TestSubscribeAndPublish_ListensOnTheRelayItSentTo(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	events, _, stop, err := s.subscribeAndPublish(ctx, replyTo, &outgoing{ev: nip01.NewEvent(transport.KindPrivateRequest, "req")})
+	fan, err := s.subscribeAndPublish(ctx, replyTo, &outgoing{ev: nip01.NewEvent(transport.KindPrivateRequest, "req")})
 	if err != nil {
 		t.Fatalf("subscribeAndPublish: %v", err)
 	}
-	defer stop()
+	defer fan.stop()
 	if serving.publishedCount() != 1 {
 		t.Fatalf("the serving relay took %d requests, want 1", serving.publishedCount())
 	}
 
 	select {
-	case got, ok := <-events:
+	case got, ok := <-fan.out:
 		if !ok || got == nil || got.ID != testReply(replyTo).ID {
 			t.Fatalf("got %+v (open %v), want the reply from the relay the request went to", got, ok)
 		}
@@ -195,7 +195,7 @@ func TestSubscribeAndPublish_ARefusedRequestIsNotSent(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, _, _, err := s.subscribeAndPublish(ctx, replyTo, &outgoing{ev: nip01.NewEvent(transport.KindPrivateRequest, "req")})
+	_, err := s.subscribeAndPublish(ctx, replyTo, &outgoing{ev: nip01.NewEvent(transport.KindPrivateRequest, "req")})
 	if err == nil || !strings.Contains(err.Error(), "refused") {
 		t.Fatalf("err = %v, want the relay's refusal", err)
 	}
@@ -256,13 +256,13 @@ func TestSubscribeAndPublish_WaitsForTheSubscriptionBeforePublishing(t *testing.
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	events, _, stop, err := s.subscribeAndPublish(ctx, replyTo, &outgoing{ev: nip01.NewEvent(transport.KindPrivateRequest, "req")})
+	fan, err := s.subscribeAndPublish(ctx, replyTo, &outgoing{ev: nip01.NewEvent(transport.KindPrivateRequest, "req")})
 	if err != nil {
 		t.Fatalf("subscribeAndPublish: %v", err)
 	}
-	defer stop()
+	defer fan.stop()
 	select {
-	case got, ok := <-events:
+	case got, ok := <-fan.out:
 		if !ok || got == nil || got.ID != reply.ID {
 			t.Fatalf("got %+v (open %v), want the reply", got, ok)
 		}

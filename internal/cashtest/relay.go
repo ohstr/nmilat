@@ -24,7 +24,7 @@ import (
 // Drop withholds an event from subscribers, Duplicate delivers it twice (to
 // subscribers and OnEvent listeners alike), Reorder
 // holds deliveries and releases them in reverse, RefuseFrom answers a publish
-// OK false.
+// OK false, Mute accepts one and hands it to no one.
 type Relay struct {
 	t   testing.TB
 	srv *httptest.Server
@@ -35,9 +35,9 @@ type Relay struct {
 	accepted  []*nip01.Event
 	listeners []func(*Relay, *nip01.Event)
 
-	drop, duplicate, refuse func(*nip01.Event) bool
-	reorder                 int
-	held                    []*nip01.Event
+	drop, duplicate, refuse, mute func(*nip01.Event) bool
+	reorder                       int
+	held                          []*nip01.Event
 
 	minPow  int
 	powSeen map[string]int64
@@ -89,6 +89,11 @@ func (r *Relay) Reorder(n int) { r.mu.Lock(); r.reorder = n; r.mu.Unlock() }
 // stored, not delivered and not seen by listeners.
 func (r *Relay) RefuseFrom(f func(*nip01.Event) bool) { r.mu.Lock(); r.refuse = f; r.mu.Unlock() }
 
+// Mute accepts every publish f matches with OK true but neither stores it nor
+// delivers it to subscribers or OnEvent listeners, as a relay that is up but no
+// longer read by the Hub. It is still recorded in Accepted.
+func (r *Relay) Mute(f func(*nip01.Event) bool) { r.mu.Lock(); r.mute = f; r.mu.Unlock() }
+
 // OnEvent registers f to be called, in its own goroutine, with every event the
 // relay accepts. A fake Hub listens on its inbox relays this way.
 func (r *Relay) OnEvent(f func(*Relay, *nip01.Event)) {
@@ -117,6 +122,10 @@ func (r *Relay) Publish(ev *nip01.Event) (bool, string) {
 		return false, msg
 	}
 	r.accepted = append(r.accepted, ev)
+	if r.mute != nil && r.mute(ev) {
+		r.mu.Unlock()
+		return true, ""
+	}
 	switch k := ev.Kind; {
 	case k >= 20000 && k < 30000:
 	case k >= 10000 && k < 20000:

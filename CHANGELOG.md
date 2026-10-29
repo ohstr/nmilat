@@ -5,7 +5,7 @@
 ### Added
 
 - Adds `relayclient.NWCOption`, `WithAnswerWait` and `DefaultAnswerWait`
-  (`NewNWCClient` takes options).
+  (`NewNWCClient` takes options), and `client.WithRelayAnswerWait`.
 - Adds `transport.ErrEnvelopeKeys` and `transport.Item.UnmarshalJSON`, which
   reads an item by its exact keys.
 
@@ -15,6 +15,9 @@
   silent past their share of the call's deadline, or close its subscription,
   instead of waiting on the first relay that connected (NIP-CASH §Multiple
   Relay Hints); the first answer from any of them is the call's.
+- Sends a private-transport envelope on to the next relay when the one that
+  took it stays silent past its share of the time to `not_after`, or closes,
+  instead of waiting out `not_after` there.
 - Refuses every call, reads and bearer `cash_redeem` included, while a Hub's
   newest announcement is rejected, and drops the older one instead of keeping
   its inbox (`Inbox()` is then empty) until a valid newer one is seen.
