@@ -13,6 +13,10 @@
 - Renames three vector cases whose names said the opposite of their expected
   error (`claim.json` "an unparseable expiration is refused", "a repeated
   platform tag is refused"; `proof.json` "wrong not_after").
+- Gives `lookup.json`'s `done` cases the shape NIP-CASH §Looking Up a Call
+  defines, a destroyed bill's tombstone in place of its token, and drops the
+  withdrawal tombstone case; renames `request-id.json`'s list to
+  `privateTransportRequiresRequestId`.
 
 ## [0.5.0]
 

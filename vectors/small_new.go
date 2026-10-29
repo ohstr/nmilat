@@ -76,7 +76,7 @@ type requestIDFile struct {
 	header
 	Valid    []validCase   `json:"valid"`
 	Derived  []derivedCase `json:"derived"`
-	Requires []methodFlag  `json:"requiresRequestId"`
+	Requires []methodFlag  `json:"privateTransportRequiresRequestId"`
 }
 
 type validCase struct {
@@ -102,7 +102,7 @@ var cashMethods = []string{"mint_cash", "cash_redeem", "cash_transfer", "cash_co
 
 func buildRequestID() (any, error) {
 	f := requestIDFile{header: newHeader(
-		"request_id: 32 to 64 lowercase hex characters of even length; the derived id of a re-placed call is sha256(\"retry:\" || replaced id).",
+		"request_id: 32 to 64 lowercase hex characters of even length; the derived id of a re-placed call is sha256(\"retry:\" || replaced id). privateTransportRequiresRequestId is the private transport's I6 list, the methods refused BAD_REQUEST there without one; mint_cash is not served there, and needs a request_id on NIP-47.",
 		"nipcash/request_id.go; nipcash/deadline_lookup_test.go (K-RID-1, K-DID-1..2)",
 	)}
 	for _, c := range [][2]string{
@@ -191,7 +191,7 @@ type lookupResultCase struct {
 
 func buildLookup() (any, error) {
 	f := lookupFile{header: newHeader(
-		"Deadlines and cash_lookup: CheckDeadline against the Hub's horizon H, DecideLookup (pending with retry_after, unknown, expired, done; a join lookup's window), retention, lookup params, and done results (a tombstone, an order's current state, a withdrawal's current payout).",
+		"Deadlines and cash_lookup: CheckDeadline against the Hub's horizon H, DecideLookup (pending with retry_after, unknown, expired, done; a join lookup's window), retention, lookup params, and done results (a destroyed bill's tombstone in place of its token, an order's current state, a withdrawal's current payout).",
 		"nipcash/{lookup_decision,cash_lookup,expiry,tombstone,withdraw_payout}.go; nipcash/deadline_lookup_test.go (K-DL-1, K-LK-1..7, K-JLK-1)",
 	)}
 	const T, H = int64(1720000000), int64(300)
@@ -281,12 +281,11 @@ func buildLookup() (any, error) {
 	res("unknown", nipcash.MethodCashTransfer, `{"status":"unknown"}`)
 	res("expired", nipcash.MethodCashTransfer, `{"status":"expired"}`)
 	res("done with the method's result", nipcash.MethodCashTransfer, `{"status":"done","result":{"amount_millis":21000,"identity_type":"pubkey","identity_value":"`+wdSlice+`","new_wallet_token":""}}`)
-	res("done with a tombstone", nipcash.MethodCashTransfer, `{"status":"done","result":{"status":"spent","reason":"transferred","retained_until":1722592000}}`)
-	res("done with a written-off tombstone", nipcash.MethodCashRedeem, `{"status":"done","result":{"status":"spent"}}`)
+	res("done: a destroyed new bill is its tombstone in place of its token", nipcash.MethodCashTransfer, `{"status":"done","result":{"amount_millis":21000,"identity_type":"pubkey","identity_value":"`+wdSlice+`","new_wallet_token":{"status":"spent","reason":"transferred","retained_until":1722592000}}}`)
+	res("done: past retained_until the tombstone carries status and reason only", nipcash.MethodMintCash, `{"status":"done","result":{"wallet_pubkey":"`+wdSlice+`","cash_token":{"status":"spent","reason":"redeemed"},"recipients":[{"identity_type":"pubkey","identity_value":"`+wdSlice+`","amount_millis":21000}]}}`)
 	res("order done: the current state", "cash_order", `{"status":"done","result":{"state":"paid","order_id":"`+vecRID+`"}}`)
 	payout := `{"state":"broadcast","address":"` + kAddr1 + `","amount_millis":21000000,"fee_millis":1742000,"payout_millis":19258000,"sent_by":1720003600,"final_depth":1,"signed":true,"receipt":"{}","txid":"` + strings.Repeat("ab", 32) + `","vout":0,"depth":0}`
 	res("withdraw done: the current payout", nipcash.MethodCashWithdraw, `{"status":"done","result":`+payout+`}`)
-	res("withdraw done: a tombstone", nipcash.MethodCashWithdraw, `{"status":"done","result":{"status":"spent","withdraw_request_id":"`+vecRID+`"}}`)
 	res("unknown status", nipcash.MethodCashTransfer, `{"status":"maybe"}`)
 	res("pending without retry_after", nipcash.MethodCashTransfer, `{"status":"pending"}`)
 	res("done without a result", nipcash.MethodCashTransfer, `{"status":"done"}`)
