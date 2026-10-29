@@ -468,3 +468,30 @@ func TestVerifyClaimProof_EachAttestationCheckRefusesOnItsOwn(t *testing.T) {
 		})
 	}
 }
+
+// NIP-CASH §Consolidating Tokens: each source's claim proof is bound by its s tag to the call's exact source list.
+func TestVerifyClaimProof_ConsolidateBoundToItsSourceList(t *testing.T) {
+	f := newClaimFixture(t)
+	a, b, c := strings.Repeat("1", 64), strings.Repeat("2", 64), strings.Repeat("3", 64)
+	signed, _ := SourcesHash([]string{a, b})
+	other, _ := SourcesHash([]string{a, c})
+	reordered, _ := SourcesHash([]string{b, a})
+	longer, _ := SourcesHash([]string{a, b, c})
+	amt := uint64(1000)
+	binding := ClaimBinding{Method: MethodCashConsolidate, Wallet: a, NewIdentityHash: NewIdentityHashOf("pubkey", f.pub, ""),
+		AmountMillis: &amt, SourcesHash: signed}
+	raw := f.sign(t, KindClaimProof, f.now.Unix(), binding.Tags(), "")
+	want := ClaimExpectation{Binding: binding, SliceType: identityTypePubkey, SliceValue: f.pub}
+	if _, err := VerifyClaimProof(raw, want, f.now); err != nil {
+		t.Fatalf("the signed source list: %v", err)
+	}
+	for name, h := range map[string]string{"another source list": other, "the same sources reordered": reordered,
+		"one more source": longer} {
+		w := want
+		w.Binding.SourcesHash = h
+		var ce *ClaimError
+		if _, err := VerifyClaimProof(raw, w, f.now); !errors.As(err, &ce) || ce.Code != "UNAUTHORIZED" || !strings.Contains(ce.Reason, `"s"`) {
+			t.Errorf("%s: got %v, want UNAUTHORIZED on the s tag", name, err)
+		}
+	}
+}
