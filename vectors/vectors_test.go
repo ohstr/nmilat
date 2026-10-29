@@ -230,3 +230,47 @@ func TestListingJSON_ReferencedEventsPresent(t *testing.T) {
 		}
 	}
 }
+
+// repeatedIDs returns the case ids given more than once; cases with no id are skipped.
+func repeatedIDs(ids []string) []string {
+	seen := map[string]int{}
+	var out []string
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if seen[id]++; seen[id] == 2 {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// Each budget-period case with an id names one case, so a consumer can key its results by id.
+func TestBudgetPeriod_CaseIDsAreUnique(t *testing.T) {
+	if got := repeatedIDs([]string{"K-BP-8", "", "K-BP-9", "", "K-BP-8"}); len(got) != 1 || got[0] != "K-BP-8" {
+		t.Fatalf("repeatedIDs on a planted repeat = %v, want [K-BP-8]", got)
+	}
+	if got := repeatedIDs([]string{"K-BP-8", "K-BP-9", "", ""}); len(got) != 0 {
+		t.Fatalf("repeatedIDs on distinct ids = %v, want none", got)
+	}
+	raw, err := os.ReadFile(filepath.Join(committedDir, "budget-period.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f struct {
+		Start []struct {
+			ID string `json:"id"`
+		} `json:"start"`
+	}
+	if err := json.Unmarshal(raw, &f); err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, c := range f.Start {
+		ids = append(ids, c.ID)
+	}
+	if dup := repeatedIDs(ids); len(dup) != 0 {
+		t.Errorf("budget-period.json repeats ids %v", dup)
+	}
+}

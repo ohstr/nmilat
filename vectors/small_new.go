@@ -426,7 +426,7 @@ type budgetStartCase struct {
 func buildBudgetPeriod() (any, error) {
 	f := budgetPeriodFile{header: newHeader(
 		"NIP-CW budget periods: the start of the k-th period of a wallet created at created, in UTC. Monthly and yearly stay anchored to the creation day, clamped to the month's last day, counted from the creation.",
-		"nipcw/budget_period.go BudgetPeriodStart; nipcw/budget_period_test.go (K-BP-1..8)",
+		"nipcw/budget_period.go BudgetPeriodStart; nipcw/budget_period_test.go (K-BP-1..9)",
 	)}
 	add := func(id string, created int64, renewal string, k int64) {
 		t, err := nipcw.BudgetPeriodStart(time.Unix(created, 0), renewal, k)
@@ -443,7 +443,7 @@ func buildBudgetPeriod() (any, error) {
 		add("K-BP-"+strconv.FormatInt(k+3, 10), 1709200800, "yearly", k)
 	}
 	add("K-BP-8", 1706695200, "daily", 1)
-	add("K-BP-8", 1706695200, "weekly", 1)
+	add("K-BP-9", 1706695200, "weekly", 1)
 	add("", 1706695200, "monthly", 0)
 	add("", 1706695200, "monthly", 12)
 	add("", 1706695200, "never", 0)

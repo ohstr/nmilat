@@ -1023,6 +1023,8 @@ privacy and performance fixes.
   defines, a destroyed bill's tombstone in place of its token, and drops the
   withdrawal tombstone case; renames `request-id.json`'s list to
   `privateTransportRequiresRequestId`.
+- Renames `budget-period.json`'s weekly case from `K-BP-8`, which the daily
+  case also carried, to `K-BP-9`.
 - Refuses an `email` user id whose local part starts with `@` in
   `nipIC.CanonicalUserID` and `NewConnectionKey`: NIP-IC says no value carries
   a leading `@`, and such a value is refused, never repaired.
