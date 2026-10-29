@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.0-rc.45]
+
+### Fixed
+
+- Sorts canonical params keys by UTF-16 code units, as RFC 8785 and NIP-CASH
+  §Item Proofs say, not by UTF-8 bytes. Hashes change only for keys above
+  U+FFFF; `canonical-params.json` gains a case for that order.
+
 ## [0.5.0]
 
 NIP-CASH's private transport, NIP-29 groups hosted by the relay, huddle audio,

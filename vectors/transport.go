@@ -98,7 +98,7 @@ type canonicalCase struct {
 
 func buildCanonicalParams() (any, error) {
 	f := canonicalFile{header: newHeader(
-		"The params hash (ph) an item proof binds: sha256 of params with keys sorted by UTF-8 bytes, no whitespace, number literals verbatim and RFC 8785 string escaping. Not stock JCS.",
+		"The params hash (ph) an item proof binds: sha256 of params with keys sorted and strings escaped as RFC 8785 does (keys by UTF-16 code units), no whitespace, and number literals verbatim, the one departure from RFC 8785.",
 		"nipcash/transport/envelope.go CanonicalParamsHash; canonical_jcs_test.go",
 	)}
 	add := func(name, params, canonical string) {
@@ -124,6 +124,7 @@ func buildCanonicalParams() (any, error) {
 		{"other control", `{"s":"\u000b"}`, `{"s":"\u000b"}`},
 		{"escaped surrogate pair", `{"s":"😀"}`, "{\"s\":\"😀\"}"},
 		{"lone surrogate becomes U+FFFD", `{"s":"\ud800"}`, "{\"s\":\"�\"}"},
+		{"a key above U+FFFF sorts before U+FFFF (UTF-16 code units, not UTF-8 bytes)", "{\"\uffff\":1,\"\U00010000\":2}", "{\"\U00010000\":2,\"\uffff\":1}"},
 		{"uppercase escape", `{"s":"é"}`, "{\"s\":\"é\"}"},
 	} {
 		add(c[0], c[1], c[2])
@@ -133,7 +134,7 @@ func buildCanonicalParams() (any, error) {
 		{"whitespace only", " \n\t"},
 		{"empty object", `{}`},
 		{"nested objects sort at every level", `{"b":{"z":1,"a":[{"y":2,"x":3}]},"a":0}`},
-		{"keys sort by UTF-8 bytes", "{\"￿\":1,\"\U00010000\":2,\"é\":3,\"z\":4,\"Z\":5,\"\":6}"},
+		{"keys sort by UTF-16 code units", "{\"￿\":1,\"\U00010000\":2,\"é\":3,\"z\":4,\"Z\":5,\"\":6}"},
 		{"duplicate keys: the last wins", `{"a":1,"a":2}`},
 		{"number literals kept: 1.0", `{"n":1.0}`},
 		{"number literals kept: 1e3", `{"n":1e3}`},

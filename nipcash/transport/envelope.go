@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf16"
 )
 
 // Kinds for the private transport. Contiguous with NIP-47's own 23194-23197 and
@@ -227,7 +228,7 @@ func canonicalJSON(raw json.RawMessage) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
-// writeCanonical writes v in NIP-CASH's canonical form: keys sorted, no
+// writeCanonical writes v in NIP-CASH's canonical form: keys sorted as RFC 8785 sorts them, no
 // insignificant whitespace, numbers verbatim, strings as RFC 8785 writes them.
 // Not json.Marshal: it escapes <, >, &, U+2028 and U+2029, so its hash differs
 // from any implementation following the spec.
@@ -261,7 +262,7 @@ func writeCanonical(buf *bytes.Buffer, v any) error {
 		for k := range v {
 			keys = append(keys, k)
 		}
-		sort.Strings(keys)
+		sort.Slice(keys, func(i, j int) bool { return lessUTF16(keys[i], keys[j]) })
 		buf.WriteByte('{')
 		for i, k := range keys {
 			if i > 0 {
@@ -278,6 +279,18 @@ func writeCanonical(buf *bytes.Buffer, v any) error {
 		return fmt.Errorf("unexpected JSON value of type %T", v)
 	}
 	return nil
+}
+
+// lessUTF16 orders keys as RFC 8785 §3.2.3 does, by UTF-16 code units; it
+// differs from byte order only when a key holds a character above U+FFFF.
+func lessUTF16(a, b string) bool {
+	ua, ub := utf16.Encode([]rune(a)), utf16.Encode([]rune(b))
+	for i := 0; i < len(ua) && i < len(ub); i++ {
+		if ua[i] != ub[i] {
+			return ua[i] < ub[i]
+		}
+	}
+	return len(ua) < len(ub)
 }
 
 // writeCanonicalString writes s as RFC 8785 does: only ", \ and control
