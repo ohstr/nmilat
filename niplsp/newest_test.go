@@ -184,3 +184,53 @@ func TestSeenConcurrent(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+// NIP-LSP §Client Behavior: an announcement dated more than 15 minutes ahead
+// fails step 4 and does not count as seen, so the node's later announcements,
+// a closed one included, still replace the last one seen; one dated exactly
+// 15 minutes ahead counts.
+func TestSeenFutureDated(t *testing.T) {
+	now := int64(exampleCreatedAt + 1000)
+	o := mainnet
+	o.Now = now
+	seen := NewSeen(o)
+	v1 := version(t, now-100, "v1")
+	if _, err := seen.Offer(v1); err != nil {
+		t.Fatal(err)
+	}
+	future := version(t, now+MaxFutureSecs+1, "future")
+	_, err := seen.Offer(future)
+	wantStep(t, err, 4)
+	if m := seen.Marks()[key1Pub]; m.ID != v1.ID {
+		t.Fatalf("future-dated event moved the mark: %+v", m)
+	}
+	if a, err := seen.Current(key1Pub); err != nil || a.Display.Title != "v1" {
+		t.Fatalf("current after a future-dated event: %v", err)
+	}
+	f := exampleFields()
+	f.Status = StatusClosed
+	f.Expiration = now + MaxExpirySecs
+	closed := signed(t, f, now)
+	if a, err := seen.Offer(closed); err != nil || a.Status != StatusClosed {
+		t.Fatalf("closed after a future-dated event: %v", err)
+	}
+
+	atBound := version(t, now+MaxFutureSecs, "at bound")
+	if a, err := seen.Offer(atBound); err != nil || a.Display.Title != "at bound" {
+		t.Fatalf("15 minutes ahead: %v", err)
+	}
+	if _, err := seen.Offer(version(t, now+10, "older")); !errors.Is(err, ErrNotNewer) {
+		t.Fatalf("older than the 15-minute one: %v", err)
+	}
+
+	// A future-dated mark kept by an earlier run is not restored either.
+	next := NewSeen(o)
+	next.Remember(key1Pub, Mark{CreatedAt: now + MaxFutureSecs + 1, ID: future.ID})
+	if _, ok := next.Marks()[key1Pub]; ok {
+		t.Fatal("future-dated mark restored")
+	}
+	next.Remember(key1Pub, Mark{CreatedAt: now + MaxFutureSecs, ID: atBound.ID})
+	if m := next.Marks()[key1Pub]; m.ID != atBound.ID {
+		t.Fatalf("mark at the bound not restored: %+v", m)
+	}
+}

@@ -25,6 +25,10 @@
 - Adds `nipLS.Request.Encrypts` and `Decrypts`, which report
   `nip44_message_keys` as both: its keys seal any plaintext under the payload's
   nonce, so a policy that allows decryption but not encryption now refuses it.
+- Refuses at `niplsp` step 4 an announcement whose `created_at` is more than
+  `niplsp.MaxFutureSecs` (15 minutes) ahead of the client's clock, and `Seen`
+  neither counts one as seen nor restores such a mark, so a future-dated event
+  can no longer hide the node's later announcements, a `closed` one included.
 
 ## [0.5.0]
 

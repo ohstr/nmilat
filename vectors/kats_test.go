@@ -378,6 +378,12 @@ func init() {
 	} {
 		l = append(l, k(c.id, c.ev, "events", "[id="+c.id+"]", "event", "id"), k(c.id+" step", c.step, "events", "[id="+c.id+"]", "step"))
 	}
+	l = append(l,
+		k("created 900 s ahead: accepted", "0", "parse", "[name=created exactly 15 minutes ahead of the client's clock]", "step"),
+		k("created 900 s ahead: client now", "1792712700", "parse", "[name=created exactly 15 minutes ahead of the client's clock]", "client", "now"),
+		k("created 901 s ahead: step 4", "4", "parse", "[name=step 4: created more than 15 minutes ahead of the client's clock]", "step"),
+		k("created 901 s ahead: client now", "1792712699", "parse", "[name=step 4: created more than 15 minutes ahead of the client's clock]", "client", "now"),
+	)
 	katChecks["lsp-announcement.json"] = l
 }
 
