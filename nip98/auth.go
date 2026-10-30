@@ -124,7 +124,7 @@ func VerifyAnyPubkey(r *http.Request, opts Options) (string, error) {
 
 func verify(r *http.Request, opts Options, pubkeyAllowed func(pubkey string) bool) (string, error) {
 	authHeader := r.Header.Get("Authorization")
-	if len(authHeader) < 7 || authHeader[:6] != "Nostr " {
+	if len(authHeader) < 7 || len(authHeader) > MaxHeader || authHeader[:6] != "Nostr " {
 		return "", ErrMissingAuthHeader
 	}
 
@@ -138,8 +138,10 @@ func verify(r *http.Request, opts Options, pubkeyAllowed func(pubkey string) boo
 		return "", ErrInvalidNIP98Event
 	}
 
-	// 1. Must be kind 27235
-	if event.Kind != 27235 {
+	// 1. Must be kind 27235, from a key in its one spelling (64 lower-case hex):
+	// a key sent in upper case would otherwise verify and come back as sent, a
+	// second name for one key in whatever a caller keys on it (limits, maps, logs)
+	if event.Kind != 27235 || !lowerHex64(event.PubKey) {
 		return "", ErrInvalidNIP98Event
 	}
 
@@ -259,4 +261,22 @@ func urlMatches(tagURL, reqURL string, normalizeRoot bool) bool {
 		return false
 	}
 	return strings.TrimSuffix(tagURL, "/") == strings.TrimSuffix(reqURL, "/")
+}
+
+// MaxHeader bounds the Authorization header a verifier reads: an auth event is a
+// few hundred bytes, so anything near this is not one.
+const MaxHeader = 16 << 10
+
+// lowerHex64: 64 characters of lower-case hex, a key's one spelling.
+func lowerHex64(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
