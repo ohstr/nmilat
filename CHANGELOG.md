@@ -8,6 +8,14 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `nip98.Sign` and `nip98.EventSigner`: a NIP-98 header signed through
+  any event signer (`nip46.LocalKey`, `nipLS.Client`, a NIP-46 client), each
+  event with a random `salt` tag so two requests in one second get two ids;
+  `NewAuthHeader` is `Sign` with a hex key.
+- Adds `nip98.Options.Window`, `Seen`, `ExpectURL`, `ExpectMethod` and `Now`,
+  and `nip98.SeenIDs` (`NewSeenIDs`, `ErrReplayed`, `ErrReplayCacheFull`): a
+  server that gates on NIP-98 accepts each event once within its window, at
+  the exact URL and method it expects.
 - Adds `relayclient.NWCOption`, `WithAnswerWait` and `DefaultAnswerWait`
   (`NewNWCClient` takes options), and `client.WithRelayAnswerWait`.
   ([#220](https://github.com/ohstr/nmilat/pull/220))
@@ -980,6 +988,10 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes `nip98.Verify` accepting a pubkey in upper or mixed case, a second
+  spelling of one key, and reading an Authorization header of any size: it
+  refuses both, the header past `nip98.MaxHeader` (16 KiB), and checks every
+  `payload` tag against the body, not only the first.
 - Sends `MultiPayInvoice` and `MultiPayKeysend` on to the next relay hint as
   a single call does, with the same signed request, so the wallet pays each
   item once; the first answer per item wins.
