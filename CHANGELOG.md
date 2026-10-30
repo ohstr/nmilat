@@ -980,6 +980,9 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Strips the full ballot-X emoji block (U+1F5F4–U+1F5F7) from untrusted text, not just the
+  bold-script-X pair, so two script-X badge look-alikes can no longer survive sanitization.
+  ([#221](https://github.com/ohstr/nmilat/pull/221))
 - Sends `MultiPayInvoice` and `MultiPayKeysend` on to the next relay hint as
   a single call does, with the same signed request, so the wallet pays each
   item once; the first answer per item wins.
