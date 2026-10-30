@@ -53,10 +53,16 @@ func Sign(ctx context.Context, signer Signer, subordinateHex, conditions string)
 	if err := utils.Validate32Key(subordinateHex); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidSubordinatePubkey, err)
 	}
+	// Canonicalize to lowercase hex: Validate32Key accepts A-F, but the
+	// self-attestation guard and the signed preimage must use canonical
+	// bytes so an uppercase variant of the attester's own key can't evade
+	// the guard and get self-attested.
+	subordinateHex = strings.ToLower(subordinateHex)
 	attester := signer.PubKey()
 	if err := utils.Validate32Key(attester); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidOwnerPubkey, err)
 	}
+	attester = strings.ToLower(attester)
 	if attester == subordinateHex {
 		return nil, ErrSelfAttestation
 	}
@@ -152,7 +158,7 @@ func NewRemoteSigner(caller Caller, pubkey string) (*RemoteSigner, error) {
 	if err := utils.Validate32Key(pubkey); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidOwnerPubkey, err)
 	}
-	return &RemoteSigner{caller: caller, pub: pubkey}, nil
+	return &RemoteSigner{caller: caller, pub: strings.ToLower(pubkey)}, nil
 }
 
 // PubKey is the remote key's pubkey, lowercase hex.

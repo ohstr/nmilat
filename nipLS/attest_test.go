@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"testing"
 
 	"github.com/ohstr/nmilat/nipOA"
@@ -86,6 +87,27 @@ func TestAttestationMethod_ThroughClient(t *testing.T) {
 	}
 	if _, err := c.Call(ctx, nipOA.MethodSignAttestation, sub); err == nil {
 		t.Fatal("one param signed")
+	}
+}
+
+// A gate that refuses one key by its lowercase hex must still refuse the
+// uppercase form of that key: AttestationMethod canonicalizes the
+// subordinate before authorize sees it, so case cannot evade the denial.
+func TestAttestationMethod_UppercaseDoesNotEvadeGate(t *testing.T) {
+	sub, _ := utils.GetPublicKey(attestSubPriv)
+	c, _ := startAttestServer(t, func(_ context.Context, _ *Request, s string, _ nipOA.Conditions) error {
+		if s == sub {
+			return Deny("this key is banned")
+		}
+		return nil
+	})
+	ctx := context.Background()
+	upper := strings.ToUpper(sub)
+	if upper == sub {
+		t.Fatal("test key has no case variant")
+	}
+	if _, err := c.Call(ctx, nipOA.MethodSignAttestation, upper, "created_at<4102444800"); !errors.Is(err, ErrDenied) {
+		t.Fatalf("uppercase banned key: got %v, want ErrDenied", err)
 	}
 }
 

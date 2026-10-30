@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -119,6 +120,20 @@ func TestSign_TimeBounds(t *testing.T) {
 	nb, _ := ParseConditions("created_at>" + strconv.FormatInt(now.Unix(), 10))
 	if !nb.ExpiredAt(now) || nb.ExpiredAt(now.Add(time.Second)) {
 		t.Fatal("created_at> bound misread")
+	}
+}
+
+// Self-attestation can't be smuggled past the guard by upper-casing the
+// subordinate: Sign canonicalizes it to lowercase before comparing it to
+// the attester's own (lowercase) key.
+func TestSign_SelfAttestationCaseVariant(t *testing.T) {
+	s := mustSigner(t)
+	upper := strings.ToUpper(s.PubKey())
+	if upper == s.PubKey() {
+		t.Fatal("attester key has no case variant")
+	}
+	if _, err := Sign(context.Background(), s, upper, "kind=1"); !errors.Is(err, ErrSelfAttestation) {
+		t.Fatalf("got %v, want ErrSelfAttestation", err)
 	}
 }
 

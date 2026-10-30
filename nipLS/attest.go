@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/ohstr/nmilat/nipOA"
-	"github.com/ohstr/nmilat/utils"
 )
 
 // AttestFunc decides one attestation request: subordinate is the key to
@@ -28,7 +27,13 @@ func AttestationMethod(signer nipOA.Signer, authorize AttestFunc) Handler {
 			return "", Invalid(nipOA.MethodSignAttestation + " requires [subordinate pubkey, conditions]")
 		}
 		subordinate, raw := req.Params[0], req.Params[1]
-		if err := utils.Validate32Key(subordinate); err != nil {
+		// Canonicalize to lowercase hex (ParsePubKey validates and lowercases,
+		// as the rest of nipLS does) BEFORE the gate or the signer see it: the
+		// authorize gate and nipOA.Sign's self-attestation guard both compare
+		// case-exactly against lowercase, so an uppercase variant of a denied
+		// or own key must not slip past as a distinct string.
+		subordinate, err := ParsePubKey(subordinate)
+		if err != nil {
 			return "", Invalid("invalid subordinate pubkey")
 		}
 		cond, err := nipOA.ParseConditions(raw)
