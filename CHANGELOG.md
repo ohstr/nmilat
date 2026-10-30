@@ -8,6 +8,12 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `nipOA.Sign`, `Signer`, `KeySigner`, `RemoteSigner`, `Caller`,
+  `MethodSignAttestation` (`nipoa_attest`), `Until` and
+  `Conditions.ExpiredAt`: an owner attestation signed by a key here or
+  through a remote signer, verified before it is returned; and
+  `nipLS.AttestationMethod`, which serves `nipoa_attest` from a signer's
+  custom methods, refusing every request unless its `AttestFunc` allows it.
 - Adds `relayclient.NWCOption`, `WithAnswerWait` and `DefaultAnswerWait`
   (`NewNWCClient` takes options), and `client.WithRelayAnswerWait`.
   ([#220](https://github.com/ohstr/nmilat/pull/220))
