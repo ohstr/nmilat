@@ -8,6 +8,8 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `nip59.WrapOption`s to `WrapSeal`: `WithWrapExpiration` puts a NIP-40
+  expiration on a wrap sealed through a signer, as it does for `WrapWithKey`.
 - Adds `relayclient.NWCOption`, `WithAnswerWait` and `DefaultAnswerWait`
   (`NewNWCClient` takes options), and `client.WithRelayAnswerWait`.
   ([#220](https://github.com/ohstr/nmilat/pull/220))
