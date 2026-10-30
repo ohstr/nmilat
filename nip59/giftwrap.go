@@ -64,7 +64,7 @@ func RandomizedCreatedAt() uint64 {
 	return uint64(now.Add(-offset).Unix())
 }
 
-// WrapOption tunes WrapWithKey.
+// WrapOption tunes WrapWithKey and WrapSeal.
 type WrapOption func(*wrapConfig)
 
 type wrapConfig struct {
