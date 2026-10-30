@@ -22,7 +22,9 @@ func TestSanitize(t *testing.T) {
 		// go too, a selector after one included; a legitimate emoji and text stay.
 		{"\u274c\u26a0\u274e\U0001F5F9 Alice", 40, Options{}, " Alice"},
 		{"\u26a0\ufe0f warning", 40, Options{}, " warning"},
-		{"ok \u2612\u2715\u2716\u2717\u2718\U0001F5F6\U0001F5F7 done", 40, Options{}, "ok  done"},
+		{"ok \u2612\u2717\u2718\U0001F5F6\U0001F5F7 done", 40, Options{}, "ok  done"},
+		// multiplication signs are maths, not status badges: kept.
+		{"5\u2715\u2716 is maths", 40, Options{}, "5\u2715\u2716 is maths"},
 		{"Caf\u00e9 \u2764 5x3 a=b", 40, Options{}, "Caf\u00e9 \u2764 5x3 a=b"},
 		{"A\r\nB\tC\rD\u2028E", 0, Options{}, "A B C D E"},
 		// Directional marks and other invisibles.

@@ -37,12 +37,13 @@ type Options struct {
 // own verified or warning mark, which a wallet MUST draw outside the lister's
 // text (NIP-CASH §Untrusted text and images). Two families: verified/check
 // (U+2713, U+2714, U+2705, U+2611, U+1F5F8, U+1F5F9, U+221A) and warning/negative
-// (U+26A0, U+274C, U+274E, U+2612, U+2715, U+2716, U+2717, U+2718, U+1F5F6,
-// U+1F5F7).
+// (U+26A0, U+274C, U+274E, U+2612, U+2717, U+2718, U+1F5F6, U+1F5F7). The
+// multiplication signs U+2715/U+2716 are deliberately NOT stripped - they are
+// maths operators (e.g. "2560x1440"), not verified/warning status badges.
 func statusMark(r rune) bool {
 	switch r {
 	case 0x2713, 0x2714, 0x2705, 0x2611, 0x1F5F8, 0x1F5F9, 0x221A,
-		0x26A0, 0x274C, 0x274E, 0x2612, 0x2715, 0x2716, 0x2717, 0x2718, 0x1F5F6, 0x1F5F7:
+		0x26A0, 0x274C, 0x274E, 0x2612, 0x2717, 0x2718, 0x1F5F6, 0x1F5F7:
 		return true
 	}
 	return false
