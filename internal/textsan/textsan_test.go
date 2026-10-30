@@ -18,6 +18,12 @@ func TestSanitize(t *testing.T) {
 		{"Alice\u200b's\u202e cash counter", 40, Options{}, "Alice's cash counter"},
 		{"\u2714\ufe0f Alice", 40, Options{}, " Alice"},
 		{"\u2066x\u2069\u2060\ufeff\u200c\u200d\u221a\u2611\u2705\U0001F5F8\u2713", 0, Options{}, "x"},
+		// A4-NM-1: warning/negative badge look-alikes and the extra check sibling
+		// go too, a selector after one included; a legitimate emoji and text stay.
+		{"\u274c\u26a0\u274e\U0001F5F9 Alice", 40, Options{}, " Alice"},
+		{"\u26a0\ufe0f warning", 40, Options{}, " warning"},
+		{"ok \u2612\u2715\u2716\u2717\u2718\U0001F5F6\U0001F5F7 done", 40, Options{}, "ok  done"},
+		{"Caf\u00e9 \u2764 5x3 a=b", 40, Options{}, "Caf\u00e9 \u2764 5x3 a=b"},
 		{"A\r\nB\tC\rD\u2028E", 0, Options{}, "A B C D E"},
 		// Directional marks and other invisibles.
 		{"a\u200eb\u200fc\u061cd\u00ade\u180ef\u2061g\u2064h", 0, Options{}, "abcdefgh"},
