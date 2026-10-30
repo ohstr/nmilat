@@ -23,6 +23,11 @@ func TestSanitize(t *testing.T) {
 		{"\u274c\u26a0\u274e\U0001F5F9 Alice", 40, Options{}, " Alice"},
 		{"\u26a0\ufe0f warning", 40, Options{}, " warning"},
 		{"ok \u2612\u2717\u2718\U0001F5F6\U0001F5F7 done", 40, Options{}, "ok  done"},
+		// R-NM-TEXTSAN: the whole ballot-X block U+1F5F4-U+1F5F7 goes, not just the
+		// bold pair - the script-X pair U+1F5F4/U+1F5F5 is a badge look-alike too,
+		// and a variation selector after one is swallowed with it.
+		{"ok \U0001F5F4\U0001F5F5\U0001F5F6\U0001F5F7 done", 40, Options{}, "ok  done"},
+		{"\U0001F5F4\ufe0f\U0001F5F5\ufe0f ballot", 40, Options{}, " ballot"},
 		// multiplication signs are maths, not status badges: kept.
 		{"5\u2715\u2716 is maths", 40, Options{}, "5\u2715\u2716 is maths"},
 		{"Caf\u00e9 \u2764 5x3 a=b", 40, Options{}, "Caf\u00e9 \u2764 5x3 a=b"},
