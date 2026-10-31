@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	btcec "github.com/flokiorg/go-flokicoin/crypto"
@@ -94,7 +95,8 @@ func Seal(ctx context.Context, sender Sealer, rumor *nip01.Event, recipientPubKe
 }
 
 // WrapSeal gift-wraps seal to recipientPubKey under a one-time key.
-func WrapSeal(seal *nip01.Event, recipientPubKey string) (*nip01.Event, error) {
+// WithWrapExpiration sets a NIP-40 expiration tag on the wrap.
+func WrapSeal(seal *nip01.Event, recipientPubKey string, opts ...WrapOption) (*nip01.Event, error) {
 	if err := checkPubKey(recipientPubKey); err != nil {
 		return nil, err
 	}
@@ -118,8 +120,15 @@ func WrapSeal(seal *nip01.Event, recipientPubKey string) (*nip01.Event, error) {
 	if err != nil {
 		return nil, fmt.Errorf("nip59: encrypt wrap: %w", err)
 	}
+	var cfg wrapConfig
+	for _, o := range opts {
+		o(&cfg)
+	}
 	wrap := nip01.NewEvent(KindGiftWrap, content)
 	wrap.Tags = [][]string{{"p", strings.ToLower(recipientPubKey)}}
+	if cfg.expiration > 0 {
+		wrap.Tags = append(wrap.Tags, []string{"expiration", strconv.FormatInt(cfg.expiration, 10)})
+	}
 	wrap.CreatedAt = RandomizedCreatedAt()
 	if err := wrap.Sign(hex.EncodeToString(ephemeralPriv.Serialize())); err != nil {
 		return nil, fmt.Errorf("nip59: sign wrap: %w", err)
