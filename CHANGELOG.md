@@ -14,6 +14,23 @@ privacy and performance fixes.
   through a remote signer, verified before it is returned; and
   `nipLS.AttestationMethod`, which serves `nipoa_attest` from a signer's
   custom methods, refusing every request unless its `AttestFunc` allows it.
+- Adds `nip98.Sign` and `nip98.EventSigner`: a NIP-98 header signed through
+  any event signer (`nip46.LocalKey`, `nipLS.Client`, a NIP-46 client), each
+  event with a random `salt` tag so two requests in one second get two ids;
+  `NewAuthHeader` is `Sign` with a hex key.
+- Adds `nip98.Options.Window`, `Seen`, `ExpectURL`, `ExpectMethod` and `Now`,
+  and `nip98.SeenIDs` (`NewSeenIDs`, `ErrReplayed`, `ErrReplayCacheFull`): a
+  server that gates on NIP-98 accepts each event once within its window, at
+  the exact URL and method it expects.
+- Adds `nippf`, NIP-PF Poll Forms: forms (kind 1069), responses and
+  withdrawals (1019), results (1070) and NIP-88 poll extras (`rec`,
+  `noteRequired`, `why`, notes on votes). Strict parsers, every form,
+  response and result validity rule, the lifecycle (open, ended, decided,
+  default, cancelled, expired), selection and tally, builders that read back
+  what they write, and private delivery: one rumor gift-wrapped to each `p`
+  and to the sender.
+- Adds `nip59.WrapOption`s to `WrapSeal`: `WithWrapExpiration` puts a NIP-40
+  expiration on a wrap sealed through a signer, as it does for `WrapWithKey`.
 - Adds `relayclient.NWCOption`, `WithAnswerWait` and `DefaultAnswerWait`
   (`NewNWCClient` takes options), and `client.WithRelayAnswerWait`.
   ([#220](https://github.com/ohstr/nmilat/pull/220))
@@ -986,6 +1003,13 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes `nip98.Verify` accepting a pubkey in upper or mixed case, a second
+  spelling of one key, and reading an Authorization header of any size: it
+  refuses both, the header past `nip98.MaxHeader` (16 KiB), and checks every
+  `payload` tag against the body, not only the first.
+- Strips the full ballot-X emoji block (U+1F5F4–U+1F5F7) from untrusted text, not just the
+  bold-script-X pair, so two script-X badge look-alikes can no longer survive sanitization.
+  ([#221](https://github.com/ohstr/nmilat/pull/221))
 - Sends `MultiPayInvoice` and `MultiPayKeysend` on to the next relay hint as
   a single call does, with the same signed request, so the wallet pays each
   item once; the first answer per item wins.
