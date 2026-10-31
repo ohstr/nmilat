@@ -1,6 +1,11 @@
 // Package nip98 implements NIP-98: HTTP Auth, a signed kind-27235 event
 // carried in an HTTP Authorization header to prove control of a pubkey to
 // an HTTP server (e.g. a file upload endpoint).
+//
+// A client signs with Sign, through any event signer. A server that gates on
+// it verifies strictly: Options with ExpectURL (its public URL for this
+// request), ExpectMethod, Body and RequirePayload, a Window (60 s by
+// default) and a shared SeenIDs, so that each login is accepted once.
 package nip98
 
 import (
@@ -27,7 +32,13 @@ var (
 	ErrMissingPayloadTag = errors.New("NIP-98 event is missing the required payload tag")
 	ErrPayloadMismatch   = errors.New("NIP-98 payload tag does not match the request body")
 	ErrNoAllowedPubkeys  = errors.New("no pubkey is authorized for this endpoint")
+	ErrReplayed          = errors.New("NIP-98 event was already used")
+	ErrReplayCacheFull   = errors.New("NIP-98 replay cache is full")
 )
+
+// DefaultWindow is how far an event's created_at may be from the server's
+// clock, either way, when Options.Window is zero.
+const DefaultWindow = 60 * time.Second
 
 // Options tunes Verify for callers needing more than VerifyAuthHeader's
 // defaults -- NIP-86 in particular, which requires the payload tag NIP-98
@@ -53,6 +64,31 @@ type Options struct {
 	// "/". Without it the comparison is byte-exact and that client gets a 401
 	// it cannot diagnose.
 	NormalizeRootPath bool
+
+	// Window is how far created_at may be from now, either way. Zero is
+	// DefaultWindow (60 s).
+	Window time.Duration
+
+	// Seen, when set, refuses an event id it has already accepted within
+	// the window (ErrReplayed): each login works once. An id is recorded
+	// only after every other check passed, so a forged or refused event
+	// never takes a place in it. Share one Seen across the handlers that
+	// accept the same logins.
+	Seen *SeenIDs
+
+	// ExpectURL, when set, is the exact URL the u tag must name, in place
+	// of the URL rebuilt from the request (scheme, Host, RequestURI). A
+	// server behind a tunnel or proxy sets it per request from its public
+	// origin, which the request itself can't prove. NormalizeRootPath
+	// still applies.
+	ExpectURL string
+
+	// ExpectMethod, when set, is the method the method tag must name, on
+	// top of matching the request's own method.
+	ExpectMethod string
+
+	// Now overrides the clock, for tests.
+	Now func() time.Time
 }
 
 // VerifyAuthHeader validates an incoming HTTP request against the NIP-98 spec,
@@ -88,7 +124,7 @@ func VerifyAnyPubkey(r *http.Request, opts Options) (string, error) {
 
 func verify(r *http.Request, opts Options, pubkeyAllowed func(pubkey string) bool) (string, error) {
 	authHeader := r.Header.Get("Authorization")
-	if len(authHeader) < 7 || authHeader[:6] != "Nostr " {
+	if len(authHeader) < 7 || len(authHeader) > MaxHeader || authHeader[:6] != "Nostr " {
 		return "", ErrMissingAuthHeader
 	}
 
@@ -102,8 +138,10 @@ func verify(r *http.Request, opts Options, pubkeyAllowed func(pubkey string) boo
 		return "", ErrInvalidNIP98Event
 	}
 
-	// 1. Must be kind 27235
-	if event.Kind != 27235 {
+	// 1. Must be kind 27235, from a key in its one spelling (64 lower-case hex):
+	// a key sent in upper case would otherwise verify and come back as sent, a
+	// second name for one key in whatever a caller keys on it (limits, maps, logs)
+	if event.Kind != 27235 || !lowerHex64(event.PubKey) {
 		return "", ErrInvalidNIP98Event
 	}
 
@@ -125,16 +163,27 @@ func verify(r *http.Request, opts Options, pubkeyAllowed func(pubkey string) boo
 		return "", ErrInvalidNIP98Event
 	}
 
-	// 4. Timestamp check (Must be within 60 seconds of now)
-	now := uint64(time.Now().Unix())
-	if event.CreatedAt < now-60 || event.CreatedAt > now+60 {
+	// 4. Timestamp check: within the window of now, either way.
+	window := opts.Window
+	if window <= 0 {
+		window = DefaultWindow
+	}
+	nowT := time.Now()
+	if opts.Now != nil {
+		nowT = opts.Now()
+	}
+	now, w := nowT.Unix(), int64(window/time.Second)
+	if event.CreatedAt > uint64(maxUnix) || int64(event.CreatedAt) < now-w || int64(event.CreatedAt) > now+w {
 		return "", ErrEventExpired
 	}
 
 	// 5. Verify tags
 	var hasURL, hasMethod bool
-	var payloadTag string
+	var payloadTags []string
 	reqURL := utils.GetFullHTTPURL(r)
+	if opts.ExpectURL != "" {
+		reqURL = opts.ExpectURL
+	}
 
 	for _, tag := range event.Tags {
 		if len(tag) < 2 {
@@ -148,11 +197,11 @@ func verify(r *http.Request, opts Options, pubkeyAllowed func(pubkey string) boo
 			}
 		case "method":
 			hasMethod = true
-			if tag[1] != r.Method {
+			if tag[1] != r.Method || (opts.ExpectMethod != "" && tag[1] != opts.ExpectMethod) {
 				return "", ErrMethodMismatch
 			}
 		case "payload":
-			payloadTag = tag[1]
+			payloadTags = append(payloadTags, tag[1])
 		}
 	}
 
@@ -167,18 +216,31 @@ func verify(r *http.Request, opts Options, pubkeyAllowed func(pubkey string) boo
 	// one. That split lets an endpoint gain body binding from clients that send
 	// the tag without turning away older ones that do not, while NIP-86 -- where
 	// the spec makes it mandatory -- sets RequirePayload.
-	if opts.RequirePayload && payloadTag == "" {
+	if opts.RequirePayload && len(payloadTags) == 0 {
 		return "", ErrMissingPayloadTag
 	}
-	if payloadTag != "" && (opts.Body != nil || opts.RequirePayload) {
-		sum := sha256.Sum256(opts.Body)
-		if !strings.EqualFold(payloadTag, hex.EncodeToString(sum[:])) {
-			return "", ErrPayloadMismatch
+	if len(payloadTags) > 0 && (opts.Body != nil || opts.RequirePayload) {
+		sum := hex.EncodeToString(func() []byte { s := sha256.Sum256(opts.Body); return s[:] }())
+		for _, p := range payloadTags {
+			if !strings.EqualFold(p, sum) {
+				return "", ErrPayloadMismatch
+			}
+		}
+	}
+
+	// 7. Once only: the id is spent for as long as the event could still
+	// pass the window.
+	if opts.Seen != nil {
+		if err := opts.Seen.Use(event.ID, time.Unix(int64(event.CreatedAt), 0).Add(window+time.Second), nowT); err != nil {
+			return "", err
 		}
 	}
 
 	return event.PubKey, nil
 }
+
+// maxUnix bounds created_at so the int64 comparisons above can't overflow.
+const maxUnix = 1<<62 - 1
 
 func allowed(pubkeys []string, pubkey string) bool {
 	for _, p := range pubkeys {
@@ -199,4 +261,22 @@ func urlMatches(tagURL, reqURL string, normalizeRoot bool) bool {
 		return false
 	}
 	return strings.TrimSuffix(tagURL, "/") == strings.TrimSuffix(reqURL, "/")
+}
+
+// MaxHeader bounds the Authorization header a verifier reads: an auth event is a
+// few hundred bytes, so anything near this is not one.
+const MaxHeader = 16 << 10
+
+// lowerHex64: 64 characters of lower-case hex, a key's one spelling.
+func lowerHex64(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
