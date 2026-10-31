@@ -16,6 +16,15 @@ privacy and performance fixes.
   and `nip98.SeenIDs` (`NewSeenIDs`, `ErrReplayed`, `ErrReplayCacheFull`): a
   server that gates on NIP-98 accepts each event once within its window, at
   the exact URL and method it expects.
+- Adds `nippf`, NIP-PF Poll Forms: forms (kind 1069), responses and
+  withdrawals (1019), results (1070) and NIP-88 poll extras (`rec`,
+  `noteRequired`, `why`, notes on votes). Strict parsers, every form,
+  response and result validity rule, the lifecycle (open, ended, decided,
+  default, cancelled, expired), selection and tally, builders that read back
+  what they write, and private delivery: one rumor gift-wrapped to each `p`
+  and to the sender.
+- Adds `nip59.WrapOption`s to `WrapSeal`: `WithWrapExpiration` puts a NIP-40
+  expiration on a wrap sealed through a signer, as it does for `WrapWithKey`.
 - Adds `relayclient.NWCOption`, `WithAnswerWait` and `DefaultAnswerWait`
   (`NewNWCClient` takes options), and `client.WithRelayAnswerWait`.
   ([#220](https://github.com/ohstr/nmilat/pull/220))
