@@ -8,6 +8,12 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `nipOA.Sign`, `Signer`, `KeySigner`, `RemoteSigner`, `Caller`,
+  `MethodSignAttestation` (`nipoa_attest`), `Until` and
+  `Conditions.ExpiredAt`: an owner attestation signed by a key here or
+  through a remote signer, verified before it is returned; and
+  `nipLS.AttestationMethod`, which serves `nipoa_attest` from a signer's
+  custom methods, refusing every request unless its `AttestFunc` allows it.
 - Adds `nip98.Sign` and `nip98.EventSigner`: a NIP-98 header signed through
   any event signer (`nip46.LocalKey`, `nipLS.Client`, a NIP-46 client), each
   event with a random `salt` tag so two requests in one second get two ids;
