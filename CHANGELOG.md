@@ -8,6 +8,10 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `relay.NewCountHandler` and `SessionHandler.CountHandler`: `POST /count`
+  (NIP-45) over the HTTP bridge, with the same request, NIP-98 and access
+  rules as `POST /query`, answering `{"count": n}` (`"approximate": true`
+  when it is a lower bound).
 - Adds `nipOA.Sign`, `Signer`, `KeySigner`, `RemoteSigner`, `Caller`,
   `MethodSignAttestation` (`nipoa_attest`), `Until` and
   `Conditions.ExpiredAt`: an owner attestation signed by a key here or

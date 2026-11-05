@@ -11,9 +11,8 @@ import (
 	"github.com/ohstr/nmilat/nip98"
 )
 
-// MaxQueryBodyBytes caps a POST /query request body. A buzz-relay client
-// sends a small array of filters, so anything larger is a mistake or an
-// attack.
+// MaxQueryBodyBytes caps a POST /query request body. A client sends a
+// small array of filters, so anything larger is a mistake or an attack.
 const MaxQueryBodyBytes = 1 << 20
 
 // NewQueryHandler returns an http.Handler serving POST /query: a NIP-98-
@@ -24,10 +23,9 @@ const MaxQueryBodyBytes = 1 << 20
 // REQ, just over HTTP instead of a socket, with no subscription/live
 // behavior.
 //
-// This serves the baseline, non-windowed case of buzz's own NIP-CW
-// (https://github.com/block/buzz/blob/main/docs/nips/NIP-CW.md) -- a
-// different spec from this module's unrelated nipcw package (NIP-CASH's
-// Circle Wallet), which merely happens to share the short name. NIP-CW's
+// This serves the baseline, non-windowed case of the NIP-CW HTTP query
+// bridge -- a different spec from this module's unrelated nipcw package
+// (NIP-CASH's Circle Wallet), which merely happens to share the short name. NIP-CW's
 // optional windowing/cursor extension fields are not implemented; only
 // the base NIP-01 filter fields are read (kinds, authors, ids,
 // since/until, limit, single-letter tag filters).
@@ -59,58 +57,24 @@ type queryHandler struct {
 	// recipientOnly, when set, withholds its RecipientOnlyKinds from all
 	// but their recipient, the signer standing in for the AUTHed pubkey.
 	recipientOnly *SessionConfig
+	// count answers POST /count ({"count": n}) instead of the events.
+	count bool
+}
+
+// NewCountHandler is NewQueryHandler for POST /count (NIP-45): the same
+// request and checks, answered with {"count": n}, plus "approximate": true
+// when the count is a lower bound.
+func NewCountHandler(store *EventStore, limitation *nip11.Limitation, membership *MembershipService, groups *GroupsService) http.Handler {
+	return &queryHandler{store: store, limitation: limitation, membership: membership, groups: groups, count: true}
 }
 
 func (h *queryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	reader, filters, ok := h.admit(w, r)
+	if !ok {
 		return
 	}
-
-	body, err := io.ReadAll(io.LimitReader(r.Body, MaxQueryBodyBytes+1))
-	if err != nil {
-		http.Error(w, "failed to read body", http.StatusBadRequest)
-		return
-	}
-	if len(body) > MaxQueryBodyBytes {
-		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
-		return
-	}
-
-	pubkey, err := nip98.VerifyAnyPubkey(r, nip98.Options{Body: body, NormalizeRootPath: true})
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusUnauthorized)
-		return
-	}
-
-	// Same gate as processRequest's REQ/COUNT check: NIP-43's "if at least
-	// one authenticated pubkey ... holds active or virtual membership" has
-	// no connection to hold multiple identities on here, so the NIP-98
-	// signer is the one pubkey being asked about. No membership service
-	// configured fails closed, same as nip86's empty-AllowedPubkeys
-	// posture: an operator who turned MembershipRequired on without
-	// wiring membership through to this handler gets a closed endpoint,
-	// not an accidentally open one.
-	if h.limitation != nil && h.limitation.MembershipRequired {
-		if h.membership == nil || !h.membership.IsMember(pubkey) {
-			http.Error(w, "restricted: valid NIP-43 membership required", http.StatusForbidden)
-			return
-		}
-	}
-
-	var filters []*nip01.SubscriptionFilter
-	if err := json.Unmarshal(body, &filters); err != nil {
-		http.Error(w, "body must be a JSON array of NIP-01 filters", http.StatusBadRequest)
-		return
-	}
-
-	// NIP-29: the same visibility REQ applies, for the NIP-98 signer -- a
-	// filter naming a group it can't see is refused, and anything else a
-	// private group holds is withheld per event.
-	reader := pubkeyReader{pubkey}
-	if groupID, denied := h.groups.deniedPrivateGroupFilter(reader, nip01.NewSubscriptionFilterGroup(filters...)); denied {
-		http.Error(w, "restricted: valid membership in group "+groupID+" is required", http.StatusForbidden)
+	if h.count {
+		h.serveCount(w, r, reader, filters)
 		return
 	}
 
@@ -152,4 +116,96 @@ func (h *queryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	b.WriteByte(']')
 	_, _ = w.Write([]byte(b.String()))
+}
+
+// admit runs every check a request passes before its filters are read:
+// method, body size, NIP-98, NIP-43 membership and NIP-29 group filters.
+// On failure it has already written the response.
+func (h *queryHandler) admit(w http.ResponseWriter, r *http.Request) (pubkeyReader, []*nip01.SubscriptionFilter, bool) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return pubkeyReader{}, nil, false
+	}
+
+	body, err := io.ReadAll(io.LimitReader(r.Body, MaxQueryBodyBytes+1))
+	if err != nil {
+		http.Error(w, "failed to read body", http.StatusBadRequest)
+		return pubkeyReader{}, nil, false
+	}
+	if len(body) > MaxQueryBodyBytes {
+		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+		return pubkeyReader{}, nil, false
+	}
+
+	pubkey, err := nip98.VerifyAnyPubkey(r, nip98.Options{Body: body, NormalizeRootPath: true})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return pubkeyReader{}, nil, false
+	}
+
+	// Same gate as processRequest's REQ/COUNT check: NIP-43's "if at least
+	// one authenticated pubkey ... holds active or virtual membership" has
+	// no connection to hold multiple identities on here, so the NIP-98
+	// signer is the one pubkey being asked about. No membership service
+	// configured fails closed, same as nip86's empty-AllowedPubkeys
+	// posture: an operator who turned MembershipRequired on without
+	// wiring membership through to this handler gets a closed endpoint,
+	// not an accidentally open one.
+	if h.limitation != nil && h.limitation.MembershipRequired {
+		if h.membership == nil || !h.membership.IsMember(pubkey) {
+			http.Error(w, "restricted: valid NIP-43 membership required", http.StatusForbidden)
+			return pubkeyReader{}, nil, false
+		}
+	}
+
+	var filters []*nip01.SubscriptionFilter
+	if err := json.Unmarshal(body, &filters); err != nil {
+		http.Error(w, "body must be a JSON array of NIP-01 filters", http.StatusBadRequest)
+		return pubkeyReader{}, nil, false
+	}
+
+	// NIP-29: the same visibility REQ applies, for the NIP-98 signer -- a
+	// filter naming a group it can't see is refused, and anything else a
+	// private group holds is withheld per event.
+	reader := pubkeyReader{pubkey}
+	if groupID, denied := h.groups.deniedPrivateGroupFilter(reader, nip01.NewSubscriptionFilterGroup(filters...)); denied {
+		http.Error(w, "restricted: valid membership in group "+groupID+" is required", http.StatusForbidden)
+		return pubkeyReader{}, nil, false
+	}
+	return reader, filters, true
+}
+
+// serveCount answers POST /count (NIP-45) the way processCount answers a
+// COUNT: only events the signer could read are counted, and a scan that
+// stops at its limit is reported as approximate.
+func (h *queryHandler) serveCount(w http.ResponseWriter, r *http.Request, reader pubkeyReader, filters []*nip01.SubscriptionFilter) {
+	group := nip01.NewSubscriptionFilterGroup(filters...)
+	checkGroups := h.groups.needsPrivacyCheck(group)
+	checkRecipient := h.recipientOnly.mayMatchRecipientOnlyKind(filters...)
+
+	var count int64
+	var approx bool
+	var err error
+	if checkGroups || checkRecipient {
+		count, approx, err = h.store.CountEventsApprox(r.Context(), group, func(pe *PotentialEvent) bool {
+			return (checkGroups && h.groups.deniedPrivateGroupPotentialEvent(reader, pe)) ||
+				(checkRecipient && h.recipientOnly.deniedRecipientOnlyPotentialEvent(reader, pe))
+		})
+	} else if n, ok := h.store.CountFromCounters(group); ok {
+		count = n
+	} else {
+		count, approx, err = h.store.CountEventsApprox(r.Context(), group, nil)
+	}
+	if err != nil {
+		http.Error(w, "count failed", http.StatusInternalServerError)
+		return
+	}
+
+	resp := struct {
+		Count       int64 `json:"count"`
+		Approximate bool  `json:"approximate,omitempty"`
+	}{count, approx}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
 }

@@ -136,6 +136,14 @@ func (sh *SessionHandler) QueryHandler() http.Handler {
 	return &queryHandler{store: sh.store, limitation: limitation, membership: sh.membership, groups: sh.groups, recipientOnly: sh.config}
 }
 
+// CountHandler is QueryHandler for POST /count (NIP-45), counting only what
+// the NIP-98 signer could read through QueryHandler.
+func (sh *SessionHandler) CountHandler() http.Handler {
+	h := sh.QueryHandler().(*queryHandler)
+	h.count = true
+	return h
+}
+
 // allFilters is fg's filters, nil-safe.
 func allFilters(fg *nip01.SubscriptionFilterGroup) []*nip01.SubscriptionFilter {
 	if fg == nil {
