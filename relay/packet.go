@@ -633,6 +633,8 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 		}
 	}
 
+	s.recordPresence(ep.Event)
+
 	task := NewEventInsertTask([]*nip01.Event{ep.Event})
 
 	// Every EVENT gets exactly one OK: a queued event that outlives

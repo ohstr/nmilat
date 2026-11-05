@@ -114,6 +114,10 @@ type SessionConfig struct {
 	// See WithRelayAuthoredKinds.
 	RelayAuthoredKinds []int
 
+	// PresenceQueryKind, when non-zero, turns on presence snapshot queries
+	// on POST /query. See WithPresenceQueryKind.
+	PresenceQueryKind int
+
 	// RequestHandlers run, in order, ahead of the built-in REQ handlers
 	// (NIP-50 search, cache, NIP-43, NIP-01), after the auth and NIP-29
 	// gates. A handler that returns true ends the chain; one that returns

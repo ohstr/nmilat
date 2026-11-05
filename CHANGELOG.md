@@ -8,6 +8,11 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds presence snapshots (`WithPresenceQueryKind`, `DefaultPresenceQueryKind`
+  40902): `POST /query` for `{"kinds":[40902],"authors":[...]}` answers one
+  relay-signed kind 20001 per author, "online" while it has an authenticated
+  connection (or the status its latest kind 20001 gave), else "offline".
+  Built on the spot, never stored.
 - Adds `GroupsService.SetMemberNotices`: a relay-signed event (kinds of the
   operator's choice, `DefaultMemberNoticeKinds` 44100/44101) whenever a pubkey
   gains or loses a seat in a hosted group, by any path, readable only by that

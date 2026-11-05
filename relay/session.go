@@ -169,6 +169,10 @@ type SessionContext struct {
 	// test that constructs a SessionContext directly without wiring one in.
 	groups *GroupsService
 
+	// presence holds the KindPresence statuses its handler's connections
+	// published; nil outside a SessionHandler.
+	presence *presenceStatuses
+
 	*replyer
 }
 
@@ -741,6 +745,9 @@ type SessionHandler struct {
 	// declaration and structural validation of the group-related event
 	// kinds, not whether group hosting itself is active.
 	groups *GroupsService
+
+	// presence is each connected pubkey's latest KindPresence status.
+	presence *presenceStatuses
 }
 
 // NewSessionHandler constructs a SessionHandler ready to be used as an
@@ -801,6 +808,7 @@ func NewSessionHandler(store *EventStore, relayMetadata *nip11.Metadata, searchS
 		VerificationWorker: NewProfileVerificationWorker(store, cfg.Verification),
 		membership:         membership,
 		groups:             groups,
+		presence:           &presenceStatuses{},
 	}
 	membership.onRemove = sh.revokeMembership
 	membership.onAdd = sh.grantMembership
@@ -857,12 +865,14 @@ func (sh *SessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	sc := NewSessionContext(sh.store, info, sh.relayMetadata, sh.searchService, sh.VerificationWorker, sh.config)
 	sc.membership = sh.membership
 	sc.groups = sh.groups
+	sc.presence = sh.presence
 	session := NewSession(sessID, ws, sc, sh.relayMetadata.Limitation.MaxMessageLength)
 	sh.sessions.Store(sessID, session)
 	sh.sessionCount.Add(1)
 	sh.config.observer().SessionOpened()
 	defer func() {
 		sh.sessions.Delete(sessID)
+		sh.forgetPresence(session)
 		sh.sessionCount.Add(-1)
 		sh.config.observer().SessionClosed()
 	}()

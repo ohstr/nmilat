@@ -59,6 +59,8 @@ type queryHandler struct {
 	recipientOnly *SessionConfig
 	// count answers POST /count ({"count": n}) instead of the events.
 	count bool
+	// presence, when set, answers presence snapshot queries.
+	presence *presenceSnapshot
 }
 
 // NewCountHandler is NewQueryHandler for POST /count (NIP-45): the same
@@ -75,6 +77,10 @@ func (h *queryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.count {
 		h.serveCount(w, r, reader, filters)
+		return
+	}
+	if authors, ok := h.presence.asks(filters); ok {
+		h.presence.serve(w, authors)
 		return
 	}
 
