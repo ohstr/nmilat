@@ -8,6 +8,13 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `GroupsService.SetMemberNotices`: a relay-signed event (kinds of the
+  operator's choice, `DefaultMemberNoticeKinds` 44100/44101) whenever a pubkey
+  gains or loses a seat in a hosted group, by any path, readable only by that
+  member and relay admins.
+- Adds `SessionConfig.RelayAuthoredKinds` (`WithRelayAuthoredKinds`) and
+  `WithEventsRelayAuthoredKinds`: more kinds only the relay's key may publish,
+  refused from clients over the WebSocket and `POST /events`.
 - Adds `relay.NewCountHandler` and `SessionHandler.CountHandler`: `POST /count`
   (NIP-45) over the HTTP bridge, with the same request, NIP-98 and access
   rules as `POST /query`, answering `{"count": n}` (`"approximate": true`

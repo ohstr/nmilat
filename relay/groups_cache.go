@@ -149,6 +149,10 @@ type GroupsService struct {
 	// the relay master key or by group admins". Set by SetRelayAdmins.
 	relayAdmins atomic.Pointer[map[string]bool]
 
+	// memberNotices, when set, are the kinds of the seat notices the
+	// relay signs; see SetMemberNotices.
+	memberNotices atomic.Pointer[MemberNoticeKinds]
+
 	// moderationLog, when set, stores accepted moderation events so
 	// clients can read a group's log; see SetModerationLog.
 	moderationLog atomic.Bool

@@ -68,12 +68,20 @@ func WithEventsPolicy(policy EventPolicy) EventsHandlerOption {
 	return func(h *eventsHandler) { h.policy = policy }
 }
 
+// WithEventsRelayAuthoredKinds refuses these kinds unless the relay's own
+// key signed them, as SessionConfig.RelayAuthoredKinds does over the
+// WebSocket.
+func WithEventsRelayAuthoredKinds(kinds ...int) EventsHandlerOption {
+	return func(h *eventsHandler) { h.relayAuthored = append([]int(nil), kinds...) }
+}
+
 type eventsHandler struct {
-	store      *EventStore
-	limitation *nip11.Limitation
-	membership *MembershipService
-	selfPubkey string
-	policy     EventPolicy
+	store         *EventStore
+	limitation    *nip11.Limitation
+	membership    *MembershipService
+	selfPubkey    string
+	policy        EventPolicy
+	relayAuthored []int
 }
 
 func (h *eventsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -118,7 +126,7 @@ func (h *eventsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if ok, msg := CheckSelfAuthored(&ev, h.selfPubkey); !ok {
+	if ok, msg := CheckSelfAuthored(&ev, h.selfPubkey, h.relayAuthored...); !ok {
 		http.Error(w, msg, http.StatusForbidden)
 		return
 	}

@@ -23,6 +23,14 @@ func WithRecipientOnlyKinds(kinds ...int) SessionOption {
 	}
 }
 
+// WithRelayAuthoredKinds sets SessionConfig.RelayAuthoredKinds: kinds only
+// the relay's own key may publish, refused from any client.
+func WithRelayAuthoredKinds(kinds ...int) SessionOption {
+	return func(cfg *SessionConfig) {
+		cfg.RelayAuthoredKinds = append([]int(nil), kinds...)
+	}
+}
+
 // recipientOnly reports whether kind is served only to its recipient.
 func (c *SessionConfig) recipientOnly(kind int) bool {
 	return c != nil && slices.Contains(c.RecipientOnlyKinds, kind)
