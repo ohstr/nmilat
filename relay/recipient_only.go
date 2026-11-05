@@ -23,6 +23,14 @@ func WithRecipientOnlyKinds(kinds ...int) SessionOption {
 	}
 }
 
+// WithRelayAuthoredKinds sets SessionConfig.RelayAuthoredKinds: kinds only
+// the relay's own key may publish, refused from any client.
+func WithRelayAuthoredKinds(kinds ...int) SessionOption {
+	return func(cfg *SessionConfig) {
+		cfg.RelayAuthoredKinds = append([]int(nil), kinds...)
+	}
+}
+
 // recipientOnly reports whether kind is served only to its recipient.
 func (c *SessionConfig) recipientOnly(kind int) bool {
 	return c != nil && slices.Contains(c.RecipientOnlyKinds, kind)
@@ -133,7 +141,19 @@ func (sh *SessionHandler) QueryHandler() http.Handler {
 	if sh.relayMetadata != nil {
 		limitation = &sh.relayMetadata.Limitation
 	}
-	return &queryHandler{store: sh.store, limitation: limitation, membership: sh.membership, groups: sh.groups, recipientOnly: sh.config}
+	h := &queryHandler{store: sh.store, limitation: limitation, membership: sh.membership, groups: sh.groups, recipientOnly: sh.config}
+	if kind := sh.config.PresenceQueryKind; kind != 0 {
+		h.presence = &presenceSnapshot{kind: kind, status: sh.PresenceStatus, privKey: sh.config.PrivKey}
+	}
+	return h
+}
+
+// CountHandler is QueryHandler for POST /count (NIP-45), counting only what
+// the NIP-98 signer could read through QueryHandler.
+func (sh *SessionHandler) CountHandler() http.Handler {
+	h := sh.QueryHandler().(*queryHandler)
+	h.count = true
+	return h
 }
 
 // allFilters is fg's filters, nil-safe.

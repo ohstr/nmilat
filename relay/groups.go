@@ -105,6 +105,7 @@ func (g *GroupsService) handleCreate(ctx context.Context, s *Session, ev *nip01.
 
 	publishGroupMetadataMirror(ctx, s, rec)
 	publishGroupRosterMirrors(ctx, s, rec)
+	g.publishMemberNotice(ctx, s, groupID, ev.PubKey, ev.PubKey, ev.ID, true)
 	if s.config.PrivKey != "" {
 		g.publishRoles(ctx, s.selfPubkey, s.config.PrivKey, rec.ID)
 	}
@@ -165,6 +166,9 @@ func (g *GroupsService) handleDeleteGroup(ctx context.Context, s *Session, ev *n
 
 	var children []string
 	if deleted != nil {
+		for _, m := range deleted.Members {
+			g.publishMemberNotice(ctx, s, groupID, m.Pubkey, ev.PubKey, ev.ID, false)
+		}
 		children = deleted.Metadata.Children
 		// A deleted subgroup must also leave its parent's child list, or
 		// the parent keeps advertising an id every read of it now refuses.
@@ -241,6 +245,7 @@ func (g *GroupsService) handlePutUser(ctx context.Context, s *Session, ev *nip01
 		return
 	}
 
+	wasMember := g.IsMember(action.GroupID, action.Pubkey)
 	rec, err := g.UpsertMember(action.GroupID, GroupMember{Pubkey: action.Pubkey, Roles: action.Roles})
 	if err != nil {
 		s.config.Logger.Error().Err(err).Str("group", action.GroupID).Msg("failed to add group member")
@@ -249,6 +254,9 @@ func (g *GroupsService) handlePutUser(ctx context.Context, s *Session, ev *nip01
 	}
 
 	publishGroupRosterMirrors(ctx, s, rec)
+	if !wasMember {
+		g.publishMemberNotice(ctx, s, action.GroupID, action.Pubkey, ev.PubKey, ev.ID, true)
+	}
 	g.clearPendingJoins(ctx, s, action.GroupID, action.Pubkey)
 	g.recordModeration(ctx, s, ev)
 	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: member added."})
@@ -271,6 +279,7 @@ func (g *GroupsService) handleRemoveUser(ctx context.Context, s *Session, ev *ni
 		return
 	}
 
+	wasMember := g.IsMember(action.GroupID, action.Pubkey)
 	rec, err := g.RemoveMember(action.GroupID, action.Pubkey)
 	if err != nil {
 		s.config.Logger.Error().Err(err).Str("group", action.GroupID).Msg("failed to remove group member")
@@ -279,6 +288,9 @@ func (g *GroupsService) handleRemoveUser(ctx context.Context, s *Session, ev *ni
 	}
 
 	publishGroupRosterMirrors(ctx, s, rec)
+	if wasMember {
+		g.publishMemberNotice(ctx, s, action.GroupID, action.Pubkey, ev.PubKey, ev.ID, false)
+	}
 	g.clearPendingJoins(ctx, s, action.GroupID, action.Pubkey)
 	g.recordModeration(ctx, s, ev)
 	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: member removed."})
@@ -643,6 +655,7 @@ func (g *GroupsService) handleJoinRequest(ctx context.Context, s *Session, ev *n
 	}
 
 	publishGroupRosterMirrors(ctx, s, rec)
+	g.publishMemberNotice(ctx, s, jr.GroupID, ev.PubKey, ev.PubKey, ev.ID, true)
 	g.clearPendingJoins(ctx, s, jr.GroupID, ev.PubKey)
 	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: welcome to the group!"})
 }
@@ -678,6 +691,7 @@ func (g *GroupsService) handleLeaveRequest(ctx context.Context, s *Session, ev *
 	}
 
 	publishGroupRosterMirrors(ctx, s, rec)
+	g.publishMemberNotice(ctx, s, lr.GroupID, ev.PubKey, ev.PubKey, ev.ID, false)
 	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: you have left the group."})
 }
 
@@ -1037,7 +1051,8 @@ func (g *GroupsService) deniedGroupWrite(ev *nip01.Event) string {
 // deniedPrivateGroupPotentialEvent: whenever a private group exists, since
 // its content can match any filter, not just a group-metadata one.
 func (g *GroupsService) needsPrivacyCheck(filters *nip01.SubscriptionFilterGroup) bool {
-	return g.anyPrivate() || mayDeliverGroupMetadataKind(filters) || mayDeliverModerationKind(filters)
+	return g.anyPrivate() || mayDeliverGroupMetadataKind(filters) || mayDeliverModerationKind(filters) ||
+		g.mayDeliverMemberNotice(filters)
 }
 
 // mayDeliverModerationKind is mayDeliverGroupMetadataKind for the stored
@@ -1116,6 +1131,9 @@ func mayDeliverGroupMetadataKind(filters *nip01.SubscriptionFilterGroup) bool {
 func (g *GroupsService) deniedPrivateGroupEvent(s groupReader, ev *nip01.Event) bool {
 	if g == nil || ev == nil {
 		return false
+	}
+	if g.isMemberNoticeKind(ev.Kind) {
+		return g.deniedMemberNotice(s, ev)
 	}
 	if nip29.IsModerationKind(ev.Kind) {
 		return g.deniedModerationEvent(s, ev)

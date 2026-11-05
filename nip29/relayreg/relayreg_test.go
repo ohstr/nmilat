@@ -132,14 +132,14 @@ func TestRelayValidatesEachModerationKind(t *testing.T) {
 	}
 }
 
-// buzz builds its huddle backing channel out of these kinds, so a relay that
+// Huddle clients build their backing channel out of these kinds, so a relay that
 // silently stopped validating them would break interop quietly. They are a
 // real lifecycle against one group -- create, then edit, then leave -- so
 // this runs them over a single connection/store, not a fresh one per event:
 // relay/groups.go backs these with real state now, not just structural
 // validation, and edit/leave only succeed against a group that actually
 // exists (and, for edit, one this pubkey actually administers).
-func TestRelayAcceptsBuzzHuddleLifecycleEvents(t *testing.T) {
+func TestRelayAcceptsHuddleLifecycleEvents(t *testing.T) {
 	pubkey, err := utils.GetPublicKey(testPrivKey)
 	if err != nil {
 		t.Fatalf("GetPublicKey: %v", err)
@@ -154,7 +154,7 @@ func TestRelayAcceptsBuzzHuddleLifecycleEvents(t *testing.T) {
 		ev.CreatedAt = uint64(time.Now().Unix())
 		accepted, message := publish(t, conn, sign(t, ev))
 		if !accepted {
-			t.Errorf("relay rejected buzz lifecycle kind %d: %q", ev.Kind, message)
+			t.Errorf("relay rejected huddle lifecycle kind %d: %q", ev.Kind, message)
 		}
 	}
 }

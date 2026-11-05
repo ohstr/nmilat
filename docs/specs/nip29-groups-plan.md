@@ -28,12 +28,10 @@ the relay's own key. Nothing else in the repo fills that gap (`find . -iname
 membership, which has a full `relay/membership_cache.go` +
 `relay/store_membership.go` pair.
 
-Meanwhile `block/buzz` (a sibling org's relay, different codebase, not this
-one) already has a real, working channel/group model: `buzz-admin
-ReconcileChannels` backfills kind:39000/39001/39002 discovery events, and
-"channel" is a live concept throughout `buzz-relay` (`connection.rs`,
-`subscription.rs`, `router.rs`, `state.rs`). That's the bar nmilat should
-match for ncli.
+Meanwhile another community relay (a different codebase) already has a
+real, working channel/group model: an admin reconcile command backfills
+kind:39000/39001/39002 discovery events, and "channel" is a live concept
+throughout that relay. That's the bar nmilat should match for ncli.
 
 ## Decisions locked (do not re-ask the user)
 
@@ -201,8 +199,8 @@ already suffice once Phase 1 ships.
 
 ## Reference prior art
 
-`block/buzz`'s `crates/buzz-admin/src/main.rs` `ReconcileChannels` subcommand
-(kind:39000/39001/39002 discovery-event backfill/reconciliation) is useful
+That other relay's reconcile command (kind:39000/39001/39002
+discovery-event backfill/reconciliation) is useful
 prior art for shape, even though it's a different codebase on a different
 relay-wide-vs-group-scoped membership model — don't port its Redis-roster-push
 mechanism (nmilat has no Redis dependency and shouldn't gain one for this;

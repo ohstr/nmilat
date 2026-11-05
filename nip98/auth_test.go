@@ -66,7 +66,7 @@ func TestVerifyAuthHeader_Success(t *testing.T) {
 }
 
 // A client-side anti-replay nonce (2-element ["nonce", <uuid>], e.g.
-// buzz-acp's sign_nip98) must not be confused with NIP-13's proof-of-work
+// an agent bridge's NIP-98 signer) must not be confused with NIP-13's proof-of-work
 // nonce (3-element ["nonce", <hex>, <difficulty>]) merely because both use
 // the tag name "nonce".
 func TestVerifyAuthHeader_ToleratesAntiReplayNonceTag(t *testing.T) {

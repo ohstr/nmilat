@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/ohstr/nmilat/nip01"
@@ -213,9 +214,10 @@ func publishSelfSigned(ctx context.Context, s *Session, ev *nip01.Event) {
 // every other kind passes unconditionally. selfPubkey == "" (no self
 // identity configured) means every relay-authored kind is rejected outright
 // -- there is no valid signer for them, so failing closed is the only sound
-// default.
-func CheckSelfAuthored(ev *nip01.Event, selfPubkey string) (ok bool, message string) {
-	if !nip43.IsRelayAuthoredKind(ev.Kind) {
+// default. extra names more relay-authored kinds (SessionConfig.
+// RelayAuthoredKinds).
+func CheckSelfAuthored(ev *nip01.Event, selfPubkey string, extra ...int) (ok bool, message string) {
+	if !nip43.IsRelayAuthoredKind(ev.Kind) && !slices.Contains(extra, ev.Kind) {
 		return true, ""
 	}
 	if selfPubkey == "" || ev.PubKey != selfPubkey {

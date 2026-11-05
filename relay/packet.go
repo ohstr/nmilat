@@ -481,7 +481,7 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 	// before spending any Validate/Verify/PoW CPU on them -- ev.Kind and
 	// ev.PubKey are both readable straight off the wire struct, no crypto
 	// needed to make this determination.
-	if ok, msg := CheckSelfAuthored(ep.Event, s.selfPubkey); !ok {
+	if ok, msg := CheckSelfAuthored(ep.Event, s.selfPubkey, s.config.RelayAuthoredKinds...); !ok {
 		s.finishEvent(ep.Event, start, false, msg)
 		return nil
 	}
@@ -632,6 +632,8 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 			return nil
 		}
 	}
+
+	s.recordPresence(ep.Event)
 
 	task := NewEventInsertTask([]*nip01.Event{ep.Event})
 

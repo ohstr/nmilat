@@ -8,6 +8,11 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `nipB7/server`, a Blossom blob server a relay can mount on its own origin, storing blobs in a directory or S3-compatible storage such as MinIO. Uploads need a kind 24242 token naming the server and the blob's hash. ([#231](https://github.com/ohstr/nmilat/pull/231))
+- Adds presence snapshots (`WithPresenceQueryKind`): `POST /query` for kind 40902 and a list of authors answers one relay-signed kind 20001 each, online or offline. Nothing is stored. ([#231](https://github.com/ohstr/nmilat/pull/231))
+- Adds seat notices (`GroupsService.SetMemberNotices`): the relay signs an event, default kinds 44100/44101, to each pubkey that gains or loses a seat in a hosted group. Only that member and relay admins can read it. ([#231](https://github.com/ohstr/nmilat/pull/231))
+- Adds `RelayAuthoredKinds` and `WithEventsRelayAuthoredKinds`: extra kinds only the relay's key may publish. ([#231](https://github.com/ohstr/nmilat/pull/231))
+- Adds `POST /count` (NIP-45) to the HTTP bridge (`NewCountHandler`, `SessionHandler.CountHandler`), with the same rules as `POST /query`. ([#231](https://github.com/ohstr/nmilat/pull/231))
 - Adds `nipOA.Sign`, `Signer`, `KeySigner`, `RemoteSigner`, `Caller`,
   `MethodSignAttestation` (`nipoa_attest`), `Until` and
   `Conditions.ExpiredAt`: an owner attestation signed by a key here or

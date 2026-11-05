@@ -108,6 +108,16 @@ type SessionConfig struct {
 	// serves every kind to anyone. See WithRecipientOnlyKinds.
 	RecipientOnlyKinds []int
 
+	// RelayAuthoredKinds are kinds, beyond NIP-43's, that only the relay's
+	// own key may publish: a client submitting one is refused. List the
+	// kinds the relay itself signs, such as GroupsService member notices.
+	// See WithRelayAuthoredKinds.
+	RelayAuthoredKinds []int
+
+	// PresenceQueryKind, when non-zero, turns on presence snapshot queries
+	// on POST /query. See WithPresenceQueryKind.
+	PresenceQueryKind int
+
 	// RequestHandlers run, in order, ahead of the built-in REQ handlers
 	// (NIP-50 search, cache, NIP-43, NIP-01), after the auth and NIP-29
 	// gates. A handler that returns true ends the chain; one that returns

@@ -91,8 +91,8 @@ func TestFindEventsLimitReturnsNewestNotArbitrary(t *testing.T) {
 }
 
 // TestFindEventsBeforeIDResumesPastSameTimestampTieWithoutDuplicationOrLoss
-// is NIP-CW's composite cursor, exercised the way buzz-acp's own
-// query_raw_all actually uses it: page by Limit, and on a full page, cursor
+// is NIP-CW's composite cursor, exercised the way an HTTP-bridge
+// client pages with it: page by Limit, and on a full page, cursor
 // the next request with Until=last page entry's CreatedAt,
 // BeforeID=that entry's id. Until alone ("created_at <= Until") cannot
 // disambiguate a same-second tie -- it re-matches the boundary event(s) on
