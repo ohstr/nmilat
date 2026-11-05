@@ -8,6 +8,12 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `nipB7/server`, a Blossom (BUD-01, BUD-02) blob server: uploads
+  authorized by kind 24242 naming the server and the blob's hash, downloads
+  by sha256 with Range (optionally members-only, with a `get` token),
+  deletes by an uploader or an admin, size and in-flight limits, CORS. Blobs
+  live in a directory (`NewDirStore`) or S3-compatible storage such as MinIO
+  (`NewS3Store`).
 - Adds presence snapshots (`WithPresenceQueryKind`, `DefaultPresenceQueryKind`
   40902): `POST /query` for `{"kinds":[40902],"authors":[...]}` answers one
   relay-signed kind 20001 per author, "online" while it has an authenticated
