@@ -13,8 +13,7 @@ group visibility gate, unconditional NIP-42 challenges, and the
 restricted-vs-empty signal. That closes the plan as originally scoped.
 
 This doc is what's left to make a relay genuinely trustworthy and complete
-as a **community relay** — the bar `block/buzz` already clears for its own
-communities — found by actually exercising every piece end-to-end against
+as a **community relay** — the bar other community relays already clear — found by actually exercising every piece end-to-end against
 a real relay process rather than trusting unit tests alone. Two real bugs
 (the connection-closing retry failure, the challenge/`auth_required`
 coupling) were only found this way; assume more are findable the same way,
@@ -90,7 +89,7 @@ production-ready.
 
 ### 4. No agent-identity delegation layer
 
-`block/buzz` layers NIP-OA (owner attestation) → NIP-AA (agent inherits
+Other community relays layer NIP-OA (owner attestation) → NIP-AA (agent inherits
 owner's membership) → NIP-FI (federated identity) → NIP-IA (archival) on
 top of the same NIP-42/43/29 base this relay has. nmilat has none of
 these. Orthogonal to group-hosting correctness itself, but relevant if

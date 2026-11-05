@@ -19,13 +19,13 @@ const MaxEventsBodyBytes = 1 << 20
 
 // NewEventsHandler returns an http.Handler serving POST /events: a NIP-98-
 // authenticated HTTP bridge for submitting one already-signed event, the
-// write-side counterpart to NewQueryHandler's POST /query. A buzz-relay
-// client (and the buzz CLI buzz-acp drives) uses this instead of opening a
+// write-side counterpart to NewQueryHandler's POST /query. An HTTP-bridge
+// client (an agent bridge and its CLI) uses this instead of opening a
 // WebSocket connection purely to publish -- e.g. reactions, NIP-AM turn
 // metrics, and chat replies.
 //
 // The request body is a single signed NIP-01 event object (not an array --
-// buzz-acp submits one event per call). The response is {"event_id":"...",
+// clients submit one event per call). The response is {"event_id":"...",
 // "accepted":true} on success.
 //
 // Mirrors processEvent's admission pipeline (session.go) as faithfully as a
@@ -37,7 +37,7 @@ const MaxEventsBodyBytes = 1 << 20
 //     pre-signed, non-protected, non-membership-gated event; this handler
 //     never allows that, since it would otherwise be straightforward abuse
 //     with no connection-level participation to anchor it. Every real
-//     caller (the buzz CLI, buzz-acp itself) already signs the NIP-98
+//     caller already signs the NIP-98
 //     wrapper and the event with the same key, so this costs nothing in
 //     practice.
 //   - NIP-AA virtual membership is not evaluated: only a direct NIP-43

@@ -840,34 +840,34 @@ func TestEditMetadataCarriesMetadataFields(t *testing.T) {
 }
 
 /////////////////////////////////////////////////////////////////////
-// Interop: buzz uses these kinds for its huddle lifecycle
+// Interop: the kinds huddle clients use for a huddle's lifecycle
 /////////////////////////////////////////////////////////////////////
 
-// TestBuzzHuddleLifecycleKinds pins the NIP-29 kinds block/buzz uses for its
+// TestHuddleLifecycleKinds pins the NIP-29 kinds huddle clients use for a
 // huddle (voice room) lifecycle, so a rename or renumber here shows up as a
 // failing interop test rather than as a silently broken client.
 //
-// Observed in buzz's mobile/HUDDLES.md: it creates the ephemeral backing
+// Observed in a huddle client: it creates the ephemeral backing
 // channel with 9007, counts members from a 39002 snapshot, submits 9022 when
 // another human remains, and archives the ended huddle with 9002.
-func TestBuzzHuddleLifecycleKinds(t *testing.T) {
+func TestHuddleLifecycleKinds(t *testing.T) {
 	if KindCreateGroup != 9007 {
-		t.Errorf("KindCreateGroup = %d, want 9007 (buzz creates its backing channel with this)", KindCreateGroup)
+		t.Errorf("KindCreateGroup = %d, want 9007 (huddle clients create their backing channel with this)", KindCreateGroup)
 	}
 	if KindGroupMembers != 39002 {
-		t.Errorf("KindGroupMembers = %d, want 39002 (buzz counts non-bot members from this)", KindGroupMembers)
+		t.Errorf("KindGroupMembers = %d, want 39002 (huddle clients count non-bot members from this)", KindGroupMembers)
 	}
 	if KindLeaveRequest != 9022 {
-		t.Errorf("KindLeaveRequest = %d, want 9022 (buzz submits this when another human remains)", KindLeaveRequest)
+		t.Errorf("KindLeaveRequest = %d, want 9022 (huddle clients submit this when another human remains)", KindLeaveRequest)
 	}
 	if KindEditMetadata != 9002 {
-		t.Errorf("KindEditMetadata = %d, want 9002 (buzz archives the ended huddle with this)", KindEditMetadata)
+		t.Errorf("KindEditMetadata = %d, want 9002 (huddle clients archive the ended huddle with this)", KindEditMetadata)
 	}
 	if KindJoinRequest != 9021 {
 		t.Errorf("KindJoinRequest = %d, want 9021", KindJoinRequest)
 	}
 
-	// Each must round-trip through this package, since a buzz client's events
+	// Each must round-trip through this package, since a huddle client's events
 	// have to survive our parsers to interoperate at all.
 	for _, event := range []*nip01.Event{
 		NewCreateGroup(testPubkeyA, "huddle-1"),

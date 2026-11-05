@@ -114,7 +114,7 @@ func TestQueryHandlerDedupesAcrossFilters(t *testing.T) {
 // counterpart to relay/store_limit_consumers_test.go's FindEvents test,
 // through the actual public /query contract: a client paging with Limit,
 // cursoring Until/BeforeID off the previous page's last entry exactly as
-// buzz-acp's own query_raw_all does, must see every event exactly once and
+// an HTTP-bridge client does, must see every event exactly once and
 // must terminate. Until alone cannot disambiguate a same-second tie -- it
 // re-matches the boundary event(s) forever.
 func TestQueryHandlerBeforeIDResumesPastSameTimestampTie(t *testing.T) {

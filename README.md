@@ -112,7 +112,7 @@ itself — nmilat ships no router or mux of its own:
   bridge, a one-shot alternative to a WebSocket REQ/EOSE round trip. The
   body is a JSON array of plain NIP-01 filters; the response is the
   matching stored events as a flat JSON array. This is the baseline case
-  of buzz's own NIP-CW (not this module's unrelated `nipcw` package,
+  of the NIP-CW HTTP query bridge (not this module's unrelated `nipcw` package,
   which is NIP-CASH's Circle Wallet and merely shares the short name).
   NIP-98 binds identity/freshness, not authorization by itself, but this
   endpoint is not exempt from whatever access control an equivalent REQ

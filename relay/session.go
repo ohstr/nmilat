@@ -506,9 +506,9 @@ func (s *Session) Start(parent context.Context) error {
 	// blocking whatever writes are meant to stay open (e.g. kind:9007
 	// group creation). With it off, neither of those REQ-time gates could
 	// ever be satisfied -- nothing else ever sent a challenge for an
-	// unauthenticated connection to answer. block/buzz's own relay sends
-	// this unconditionally on every connection for exactly this reason
-	// (crates/buzz-relay/src/connection.rs): individual resources decide
+	// unauthenticated connection to answer. Other community relays send
+	// this unconditionally on every connection for exactly this reason:
+	// individual resources decide
 	// afterward whether to require the result; the challenge itself is
 	// never withheld. An anonymous-only relay is unaffected -- nothing
 	// requires a response to a challenge nobody needs.
