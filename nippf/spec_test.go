@@ -32,7 +32,7 @@ func pub(t testing.TB, priv string) string {
 	return p
 }
 
-// The spec's examples (NIP-PF.md at 503d428, "Examples"), verbatim but for
+// The spec's examples (NIP-PF.md at 7920162, "Examples"), verbatim but for
 // their placeholders (<operator 1>, <form id>, …), which the tests fill.
 const (
 	specPrivateForm = `{
@@ -51,6 +51,8 @@ const (
     ["option", "restart", "Restart now", "0"],
     ["option", "wait", "Wait", "0"],
     ["option", "other", "Something else", "0"],
+    ["detail", "restart", "Drops in-flight requests; the service is back in about 40 seconds."],
+    ["detail", "wait", "Changes nothing now; this form's default if no outcome is reached."],
     ["rec", "restart"],
     ["noteRequired", "other"],
     ["default", "0", "wait"],
@@ -181,7 +183,7 @@ func TestSpecPrivateApprovalWithQuorum(t *testing.T) {
 	q0, q1 := f.Questions[0], f.Questions[1]
 	restart, _ := q0.Option("restart")
 	other, _ := q0.Option("other")
-	if q0.Type != TypeSingle || q0.Why == "" || !restart.Rec || !other.NoteRequired || !slices.Equal(q0.Defaults, []string{"wait"}) {
+	if q0.Type != TypeSingle || q0.Why == "" || !restart.Rec || restart.Detail == "" || !other.NoteRequired || !slices.Equal(q0.Defaults, []string{"wait"}) {
 		t.Fatalf("q0: %+v", q0)
 	}
 	if q1.Type != TypeTime || !q1.Optional || q1.Max != "1793430000" || q1.Min != "" {

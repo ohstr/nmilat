@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip88"
@@ -73,6 +74,8 @@ type Option struct {
 	Rec bool `json:"rec,omitempty"`
 	// NoteRequired: choosing it requires a note.
 	NoteRequired bool `json:"note_required,omitempty"`
+	// Detail: what choosing it does; shown with it, never counted.
+	Detail string `json:"detail,omitempty"`
 }
 
 // Question is one question of a form, with its options in their tags' order.
@@ -256,6 +259,7 @@ func ParseFormTags(content string, tags [][]string, private bool) (*Form, error)
 		mins, maxs, defaults []indexValue
 		recs, noteReqs       []string
 		quorum               string
+		details              = map[string][]string{}
 		once                 = map[string]int{}
 	)
 	for _, t := range tags {
@@ -330,6 +334,11 @@ func ParseFormTags(content string, tags [][]string, private bool) (*Form, error)
 			} else {
 				noteReqs = append(noteReqs, t[1])
 			}
+		case "detail":
+			if len(t) < 3 {
+				continue
+			}
+			details[t[1]] = append(details[t[1]], t[2])
 		case "context":
 			f.Context = t[1]
 		case "alt":
@@ -483,12 +492,19 @@ func ParseFormTags(content string, tags [][]string, private bool) (*Form, error)
 	for i := 0; i < len(qs); i++ {
 		f.Questions = append(f.Questions, *qs[i])
 	}
-	// rec and noteRequired naming no option are ignored.
+	// rec, noteRequired and detail naming no option are ignored.
 	for qi := range f.Questions {
 		for oi := range f.Questions[qi].Options {
 			o := &f.Questions[qi].Options[oi]
 			o.Rec = slices.Contains(recs, o.ID)
 			o.NoteRequired = slices.Contains(noteReqs, o.ID)
+			switch d := details[o.ID]; len(d) {
+			case 0:
+			case 1:
+				o.Detail = d[0]
+			default:
+				return nil, invalidForm("option %q has more than one detail", o.ID)
+			}
 		}
 	}
 	if once["quorum"] > 0 {
@@ -560,6 +576,7 @@ func (f *Form) Tags() [][]string {
 	qs := slices.Clone(f.Questions)
 	sort.SliceStable(qs, func(i, j int) bool { return qs[i].Index < qs[j].Index })
 	var recs, notes []string
+	var details [][]string
 	for _, q := range qs {
 		i := strconv.Itoa(q.Index)
 		if q.Why != "" {
@@ -574,6 +591,9 @@ func (f *Form) Tags() [][]string {
 			}
 			if o.NoteRequired {
 				notes = append(notes, o.ID)
+			}
+			if o.Detail != "" {
+				details = append(details, []string{"detail", o.ID, o.Detail})
 			}
 		}
 		if q.Optional {
@@ -595,14 +615,25 @@ func (f *Form) Tags() [][]string {
 	for _, id := range notes {
 		add("noteRequired", id)
 	}
+	for _, d := range details {
+		add(d...)
+	}
 	return tags
 }
 
 // Event: the form as an unsigned kind-1069 event by author at createdAt,
 // read back before it is returned. A public or group form without Alt gets
-// "Form: <title>" (NIP-31's alt is required there).
+// "Form: <title>" (NIP-31's alt is required there); each option's detail is
+// kept under MaxText characters.
 func (f *Form) Event(author string, createdAt int64) (*nip01.Event, error) {
 	g := *f
+	for _, q := range g.Questions {
+		for _, o := range q.Options {
+			if utf8.RuneCountInString(o.Detail) >= MaxText {
+				return nil, invalidForm("option %q's detail has %d characters or more", o.ID, MaxText)
+			}
+		}
+	}
 	if !g.Private && g.Alt == "" {
 		g.Alt = "Form: " + g.Title
 	}
@@ -620,8 +651,8 @@ func (f *Form) Event(author string, createdAt int64) (*nip01.Event, error) {
 }
 
 // Text: the form for a reader — the title, context, each question with its
-// options (recommended ones marked, with why; notes required; defaults),
-// bounds and whether it is optional. Plain text, for display only.
+// options (recommended ones marked, with why; notes required; details;
+// defaults), bounds and whether it is optional. Plain text, for display only.
 func (f *Form) Text() string {
 	var b strings.Builder
 	b.WriteString(f.Title + "\n")
@@ -649,6 +680,9 @@ func (f *Form) Text() string {
 				b.WriteString(" (a note is required)")
 			}
 			b.WriteString("\n")
+			if o.Detail != "" {
+				fmt.Fprintf(&b, "      %s\n", o.Detail)
+			}
 		}
 		if q.Why != "" {
 			fmt.Fprintf(&b, "  why: %s\n", q.Why)
