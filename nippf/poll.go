@@ -2,6 +2,7 @@ package nippf
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 
@@ -10,24 +11,28 @@ import (
 )
 
 // PollExtras are what NIP-PF adds to a NIP-88 poll: the recommended options
-// and the reason, the options that require a note, the expiration. They
-// never change how nip88 selects and counts votes.
+// and the reason, the options that require a note, what each option does,
+// the expiration. They never change how nip88 selects and counts votes.
 type PollExtras struct {
 	Rec          []string `json:"rec,omitempty"`
 	NoteRequired []string `json:"note_required,omitempty"`
+	// Detail: what choosing each option does, by option id; an option with
+	// more than one detail tag has none.
+	Detail map[string]string `json:"detail,omitempty"`
 	// Why: the poll's one why tag; with more than one, none is read.
 	Why        string `json:"why,omitempty"`
 	Expiration int64  `json:"expiration,omitempty"`
 }
 
-// ParsePollExtras reads a parsed poll's extras; rec and noteRequired tags
-// naming no option of the poll are ignored.
+// ParsePollExtras reads a parsed poll's extras; rec, noteRequired and detail
+// tags naming no option of the poll are ignored.
 func ParsePollExtras(p *nip88.Poll) PollExtras {
 	var x PollExtras
 	has := func(id string) bool {
 		return slices.ContainsFunc(p.Options, func(o nip88.PollOption) bool { return o.ID == id })
 	}
 	var whys []string
+	details := map[string][]string{}
 	for _, t := range p.Tags {
 		if len(t) < 2 {
 			continue
@@ -41,6 +46,10 @@ func ParsePollExtras(p *nip88.Poll) PollExtras {
 			if has(t[1]) && !slices.Contains(x.NoteRequired, t[1]) {
 				x.NoteRequired = append(x.NoteRequired, t[1])
 			}
+		case "detail":
+			if len(t) >= 3 && has(t[1]) {
+				details[t[1]] = append(details[t[1]], t[2])
+			}
 		case "why":
 			whys = append(whys, t[1])
 		case "expiration":
@@ -51,6 +60,14 @@ func ParsePollExtras(p *nip88.Poll) PollExtras {
 	}
 	if len(whys) == 1 {
 		x.Why = whys[0]
+	}
+	for id, d := range details {
+		if len(d) == 1 {
+			if x.Detail == nil {
+				x.Detail = map[string]string{}
+			}
+			x.Detail[id] = d[0]
+		}
 	}
 	return x
 }
@@ -63,6 +80,9 @@ func (x PollExtras) Tags() [][]string {
 	}
 	for _, id := range x.NoteRequired {
 		tags = append(tags, []string{"noteRequired", id})
+	}
+	for _, id := range slices.Sorted(maps.Keys(x.Detail)) {
+		tags = append(tags, []string{"detail", id, x.Detail[id]})
 	}
 	if x.Why != "" {
 		tags = append(tags, []string{"why", x.Why})

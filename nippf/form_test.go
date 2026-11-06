@@ -30,6 +30,7 @@ func baseTags(t testing.TB) [][]string {
 		{"option", "other", "Other", "0"},
 		{"rec", "yes"},
 		{"noteRequired", "other"},
+		{"detail", "yes", "Books the room."},
 		{"default", "0", "no"},
 		{"question", "1", "Days?", TypeMulti},
 		{"option", "sat", "Saturday", "1"},
@@ -131,6 +132,7 @@ func TestFormValidityRules(t *testing.T) {
 		{"option id with a space", with(b, []string{"option", "a b", "X", "1"}), false},
 		{"option id not ASCII", with(b, []string{"option", "café", "X", "1"}), false},
 		{"empty option id", with(b, []string{"option", "", "X", "1"}), false},
+		{"detail twice for an option", with(b, []string{"detail", "yes", "again"}), false},
 		// indexes named by optional, min, max, default exist
 		{"optional names no question", with(b, []string{"optional", "9"}), false},
 		{"min names no question", with(b, []string{"min", "9", "1"}), false},
@@ -285,5 +287,32 @@ func TestFormEventFillsAlt(t *testing.T) {
 	}
 	if !strings.Contains(baseForm(t, false).Text(), "[yes] Yes — recommended") {
 		t.Fatal(baseForm(t, false).Text())
+	}
+}
+
+// A detail is read onto its option, shown by Text, ignored when it names no
+// option, and kept under MaxText characters by the builder.
+func TestFormDetail(t *testing.T) {
+	f := baseForm(t, false)
+	if o, _ := f.Questions[0].Option("yes"); o.Detail != "Books the room." {
+		t.Fatalf("detail: %+v", o)
+	}
+	if !strings.Contains(f.Text(), "[yes] Yes — recommended\n      Books the room.") {
+		t.Fatal(f.Text())
+	}
+	g, err := ParseFormTags("base", with(baseTags(t), []string{"detail", "zz", "x"}, []string{"detail", "no"}), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o, _ := g.Questions[0].Option("no"); o.Detail != "" {
+		t.Fatalf("detail: %+v", o)
+	}
+	f.Questions[0].Options[0].Detail = strings.Repeat("é", MaxText)
+	if _, err := f.Event(f.Author, 1); !errors.Is(err, ErrInvalidForm) {
+		t.Fatalf("a long detail: %v", err)
+	}
+	f.Questions[0].Options[0].Detail = strings.Repeat("é", MaxText-1)
+	if _, err := f.Event(f.Author, 1); err != nil {
+		t.Fatalf("%d characters: %v", MaxText-1, err)
 	}
 }

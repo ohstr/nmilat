@@ -9,8 +9,8 @@ import (
 	"github.com/ohstr/nmilat/nip01"
 )
 
-// MaxText: the builders keep each note and answer under this many characters
-// (a client SHOULD, says the spec); parsers accept longer ones.
+// MaxText: the builders keep each note, answer and option detail under this
+// many characters (a client SHOULD, says the spec); parsers accept longer ones.
 const MaxText = 1000
 
 func invalidResponse(f string, a ...any) error {

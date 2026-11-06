@@ -2,6 +2,7 @@ package nippf
 
 import (
 	"errors"
+	"maps"
 	"slices"
 	"testing"
 	"time"
@@ -28,15 +29,21 @@ func testPoll(t *testing.T, pollType string, extra ...[]string) *nip88.Poll {
 }
 
 func TestPollExtras(t *testing.T) {
-	x := PollExtras{Rec: []string{"a"}, NoteRequired: []string{"c"}, Why: "It is free.", Expiration: 3000}
-	p := testPoll(t, nip88.PollTypeSingle, append(x.Tags(), []string{"rec", "zz"}, []string{"noteRequired", "zz"})...)
+	x := PollExtras{Rec: []string{"a"}, NoteRequired: []string{"c"}, Why: "It is free.", Expiration: 3000,
+		Detail: map[string]string{"a": "Quiet; open until 20:00.", "b": "Costs a drink."}}
+	p := testPoll(t, nip88.PollTypeSingle, append(x.Tags(), []string{"rec", "zz"}, []string{"noteRequired", "zz"}, []string{"detail", "zz", "x"})...)
 	got := ParsePollExtras(p)
-	if !slices.Equal(got.Rec, x.Rec) || !slices.Equal(got.NoteRequired, x.NoteRequired) || got.Why != x.Why || got.Expiration != 3000 {
+	if !slices.Equal(got.Rec, x.Rec) || !slices.Equal(got.NoteRequired, x.NoteRequired) || got.Why != x.Why || got.Expiration != 3000 ||
+		!maps.Equal(got.Detail, x.Detail) {
 		t.Fatalf("extras: %+v", got)
 	}
 	// Two why tags: none is read.
 	if w := ParsePollExtras(testPoll(t, "", []string{"why", "one"}, []string{"why", "two"})).Why; w != "" {
 		t.Fatalf("why: %q", w)
+	}
+	// Two detail tags for an option: it has none.
+	if d := ParsePollExtras(testPoll(t, "", []string{"detail", "a", "one"}, []string{"detail", "a", "two"}, []string{"detail", "b", "ok"})).Detail; !maps.Equal(d, map[string]string{"b": "ok"}) {
+		t.Fatalf("detail: %v", d)
 	}
 	// A vote nip88 accepts stays accepted with a note; the note is read, not counted.
 	vote := nip88.NewPollResponse(nip88.PollResponseParams{PollEventID: p.ID, OptionIDs: []string{"c"}})

@@ -1,11 +1,11 @@
 // Package nippf implements NIP-PF, Poll Forms: a form (kind 1069) asks one or
 // more questions answered in one response (kind 1019); its author closes it
 // with a result (kind 1070); NIP-88 polls (kind 1068) may carry the same
-// recommendations, notes and closing result.
+// recommendations, details, notes and closing result.
 //
 // The spec implemented is ohstr's draft at commit
-// 503d428c4afc15fc4ff59dfd6c2ece3961fcbe87 (2026-10-30,
-// https://github.com/ohstr/nips/blob/503d428c4afc15fc4ff59dfd6c2ece3961fcbe87/NIP-PF.md).
+// 792016253fcde73ca90ce3b4ae0f524383456aa4 (2026-11-06,
+// https://github.com/ohstr/nips/blob/792016253fcde73ca90ce3b4ae0f524383456aa4/NIP-PF.md).
 //
 // Tags are read at fixed positions, in any order; positions after the ones the
 // spec names are ignored. What each part does:
