@@ -175,15 +175,19 @@ the metadata (kinds 39000-39005) from non-members. The relay's own key
 (NIP-11 `self`) is admin of every hosted group. Everything else is opt-in:
 
 ```go
-groups := handler.Groups()
-
 // Which roles may send which moderation kinds (default: only "admin",
 // which a group's creator holds). Each group's kind 39003 lists these.
-groups.SetModerationPolicy(nip29.ModerationPolicy{
-	"admin":     {nip29.KindPutUser, nip29.KindRemoveUser, nip29.KindEditMetadata, nip29.KindDeleteEvent, nip29.KindDeleteGroup, nip29.KindCreateInvite, nip29.KindUpdatePinList},
-	"moderator": {nip29.KindDeleteEvent, nip29.KindUpdatePinList},
-})
-groups.SetRoleDescriptions(map[string]string{"moderator": "keeps the peace"})
+// Given here, they are in place before the startup republish of every
+// group's 39001 and 39003; groups.SetModerationPolicy and
+// SetRoleDescriptions change them later.
+handler := relay.NewSessionHandler(store, metadata, nil,
+	relay.WithGroupsModerationPolicy(nip29.ModerationPolicy{
+		"admin":     {nip29.KindPutUser, nip29.KindRemoveUser, nip29.KindEditMetadata, nip29.KindDeleteEvent, nip29.KindDeleteGroup, nip29.KindCreateInvite, nip29.KindUpdatePinList},
+		"moderator": {nip29.KindDeleteEvent, nip29.KindUpdatePinList},
+	}),
+	relay.WithGroupsRoleDescriptions(map[string]string{"moderator": "keeps the peace"}),
+)
+groups := handler.Groups()
 
 groups.SetRelayAdmins(operatorPubkeyHex) // more keys that moderate every group
 groups.SetModerationLog(true)            // keep 9000-9020 so members can read who did what
