@@ -24,7 +24,10 @@ import (
 const DefaultMaxKeys = 100_000
 
 // Rate is a token bucket: Events requests per Per, with up to Burst at
-// once. Events or Per zero means no limit; Burst zero means Events.
+// once. Events or Per zero means no limit; Burst zero means Events. New
+// refuses a negative field, a Burst with no rate, and a rate finer than
+// one token per nanosecond or a burst whose window overflows a
+// time.Duration.
 type Rate struct {
 	Events int
 	Per    time.Duration
@@ -37,12 +40,42 @@ func (r Rate) enabled() bool { return r.Events > 0 && r.Per > 0 }
 func (r Rate) interval() time.Duration { return r.Per / time.Duration(r.Events) }
 
 // tolerance is how far ahead of now a key may run: its burst less one.
+// It saturates rather than overflow; New refuses a Rate that would.
 func (r Rate) tolerance() time.Duration {
-	burst := r.Burst
-	if burst <= 0 {
-		burst = r.Events
+	burst := r.burst()
+	iv := r.interval()
+	if burst <= 1 || iv <= 0 {
+		return 0
 	}
-	return time.Duration(burst-1) * r.interval()
+	if int64(burst-1) > math.MaxInt64/int64(iv) {
+		return math.MaxInt64
+	}
+	return time.Duration(burst-1) * iv
+}
+
+func (r Rate) burst() int {
+	if r.Burst <= 0 {
+		return r.Events
+	}
+	return r.Burst
+}
+
+// validate reports what is wrong with r, naming it field.
+func (r Rate) validate(field string) error {
+	switch {
+	case r.Events < 0 || r.Per < 0 || r.Burst < 0:
+		return fmt.Errorf("ratelimit: %s: Events, Per and Burst must not be negative", field)
+	case !r.enabled():
+		if r.Burst > 0 {
+			return fmt.Errorf("ratelimit: %s: Burst needs Events and Per", field)
+		}
+		return nil
+	case r.interval() <= 0:
+		return fmt.Errorf("ratelimit: %s: %d events per %s is under 1ns each", field, r.Events, r.Per)
+	case int64(r.burst()-1) > math.MaxInt64/int64(r.interval()):
+		return fmt.Errorf("ratelimit: %s: Burst %d at %s each overflows a time.Duration", field, r.burst(), r.interval())
+	}
+	return nil
 }
 
 // Limit is one action's limits, each counted on its own: per signer or
@@ -70,6 +103,9 @@ const (
 )
 
 var actionNames = [numActions]string{"events", "requests", "requests", "uploads", "requests"}
+
+// limitNames are Config's field names, for errors.
+var limitNames = [numActions]string{"Event", "Read", "HTTP", "Upload", "Download"}
 
 // Config sets a Limiter's limits. The zero value limits nothing.
 type Config struct {
@@ -115,9 +151,18 @@ type Limiter struct {
 	conns  map[string]int
 }
 
-// New returns a Limiter for cfg, or an error for a malformed
-// TrustedProxies entry.
+// New returns a Limiter for cfg, or an error naming the field for a
+// malformed Rate or TrustedProxies entry.
 func New(cfg Config) (*Limiter, error) {
+	limits := [numActions]Limit{cfg.Event, cfg.Read, cfg.HTTP, cfg.Upload, cfg.Download}
+	for a, lim := range limits {
+		if err := lim.PerPubkey.validate(limitNames[a] + ".PerPubkey"); err != nil {
+			return nil, err
+		}
+		if err := lim.PerIP.validate(limitNames[a] + ".PerIP"); err != nil {
+			return nil, err
+		}
+	}
 	l := &Limiter{cfg: cfg, now: cfg.Now, conns: make(map[string]int)}
 	if l.now == nil {
 		l.now = time.Now
@@ -133,7 +178,7 @@ func New(cfg Config) (*Limiter, error) {
 	if maxKeys <= 0 {
 		maxKeys = DefaultMaxKeys
 	}
-	for a, lim := range [numActions]Limit{cfg.Event, cfg.Read, cfg.HTTP, cfg.Upload, cfg.Download} {
+	for a, lim := range limits {
 		if lim.PerPubkey.enabled() {
 			l.pubkey[a] = newTable(lim.PerPubkey, maxKeys)
 		}

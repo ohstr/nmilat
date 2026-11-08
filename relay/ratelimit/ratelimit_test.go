@@ -2,8 +2,10 @@ package ratelimit
 
 import (
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -170,6 +172,42 @@ func TestExemptSkipsOnlyPerPubkey(t *testing.T) {
 	}
 	if got := allowed(l, Event, "", "user", 10); got != 1 {
 		t.Fatalf("other pubkey: %d allowed, want 1", got)
+	}
+}
+
+func TestNewRejectsMalformedRates(t *testing.T) {
+	cases := []struct {
+		name  string
+		cfg   Config
+		field string
+	}{
+		{"negative events", Config{Event: Limit{PerPubkey: Rate{Events: -1, Per: time.Second}}}, "Event.PerPubkey"},
+		{"negative per", Config{Read: Limit{PerIP: Rate{Events: 1, Per: -time.Second}}}, "Read.PerIP"},
+		{"negative burst", Config{HTTP: Limit{PerIP: Rate{Events: 1, Per: time.Second, Burst: -2}}}, "HTTP.PerIP"},
+		{"burst without events", Config{Upload: Limit{PerPubkey: Rate{Burst: 5}}}, "Upload.PerPubkey"},
+		{"burst without per", Config{Upload: Limit{PerIP: Rate{Events: 3, Burst: 5}}}, "Upload.PerIP"},
+		{"interval under 1ns", Config{Download: Limit{PerIP: Rate{Events: 2_000_000_000, Per: time.Second}}}, "Download.PerIP"},
+		{"burst overflows", Config{Event: Limit{PerIP: Rate{Events: 1, Per: time.Hour, Burst: math.MaxInt32}}}, "Event.PerIP"},
+	}
+	for _, c := range cases {
+		_, err := New(c.cfg)
+		if err == nil || !strings.Contains(err.Error(), c.field) {
+			t.Errorf("%s: err %v, want one naming %s", c.name, err, c.field)
+		}
+	}
+	// The largest burst that fits is accepted.
+	if _, err := New(Config{Event: Limit{PerIP: Rate{Events: 1, Per: time.Hour, Burst: int(math.MaxInt64/int64(time.Hour)) + 1}}}); err != nil {
+		t.Fatalf("largest burst refused: %v", err)
+	}
+}
+
+func TestToleranceSaturates(t *testing.T) {
+	r := Rate{Events: 1, Per: time.Hour, Burst: math.MaxInt32}
+	if got := r.tolerance(); got != math.MaxInt64 {
+		t.Fatalf("tolerance %d, want saturated", got)
+	}
+	if got := (Rate{Events: 1, Per: time.Second}).tolerance(); got != 0 {
+		t.Fatalf("burst 1 tolerance %s, want 0", got)
 	}
 }
 
