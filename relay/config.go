@@ -145,9 +145,9 @@ type SessionConfig struct {
 	// Observer receives activity for metrics. nil discards it.
 	Observer Observer
 
-	// RateLimiter, when set, limits EVENTs, REQs and COUNTs, the HTTP
-	// bridge (QueryHandler, CountHandler) and connections per IP. nil (the
-	// default) limits nothing. See WithRateLimiter.
+	// RateLimiter, when set, limits EVENTs, REQs, COUNTs, NEG-OPENs and
+	// AUTHs, the HTTP bridge (QueryHandler, CountHandler) and connections
+	// per IP. nil (the default) limits nothing. See WithRateLimiter.
 	RateLimiter *ratelimit.Limiter
 
 	// Verification tunes NIP-05/LUD-16/picture checks.
