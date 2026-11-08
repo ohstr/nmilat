@@ -1017,6 +1017,7 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes `GroupsService.SetModerationPolicy` leaving each group's kind 39001 listing the admins of the old policy: it now republishes 39001 with 39003, as does relay startup, skipping any that are unchanged.
 - Fixes `POST /events` skipping the NIP-29 rules the WebSocket applies: it now refuses kinds 9000-9022 (send them over a WebSocket), and with the new `WithEventsGroups` refuses a non-member's event in a private, closed or restricted group.
 - Fixes concurrent NIP-29 group writes losing changes, such as members added at once leaving only one, and a write racing a group's deletion recreating it: every `GroupsService` mutator, and each moderation event's checks with the change they allow, now run under one lock.
 - Fixes NIP-29 invite codes (logged kind 9009) and pending join requests being readable by any member holding a role, even one the moderation policy gives nothing: they now follow `CanPerform` for kind 9009, and for kind 9000 or 9001.

@@ -209,14 +209,16 @@ func NewGroupsService(store *EventStore) *GroupsService {
 }
 
 // SetModerationPolicy replaces the policy CanPerform consults, and
-// republishes every hosted group's kind:39003 to match. A no-op on a nil
-// *GroupsService.
+// republishes every hosted group's kind:39003, and its kind:39001 (which
+// lists only members holding a role the policy gives a moderation kind),
+// to match. A no-op on a nil *GroupsService.
 func (g *GroupsService) SetModerationPolicy(policy nip29.ModerationPolicy) {
 	if g == nil {
 		return
 	}
 	g.policy.Store(&policy)
 	g.publishAllRoles(context.Background())
+	g.publishAllAdmins(context.Background())
 }
 
 // SetModerationLog turns the moderation log on or off. On, every accepted
@@ -841,12 +843,44 @@ func (g *GroupsService) groupRolesEvent(selfPubkey, id string) *nip01.Event {
 }
 
 // publishRoles signs and stores group id's kind:39003, unless the stored
-// one already lists the same roles. Its created_at is strictly newer than
-// the stored one's, so a same-second republish can't lose the tie.
+// one already lists the same roles.
 func (g *GroupsService) publishRoles(ctx context.Context, pubkey, privkey, id string) {
-	ev := g.groupRolesEvent(pubkey, id)
+	g.publishIfChanged(ctx, privkey, id, g.groupRolesEvent(pubkey, id))
+}
+
+// publishAdmins signs and stores rec's kind:39001, unless the stored one
+// already lists the same admins.
+func (g *GroupsService) publishAdmins(ctx context.Context, pubkey, privkey string, rec *GroupRecord) {
+	g.publishIfChanged(ctx, privkey, rec.ID, g.groupAdminsEvent(pubkey, rec))
+}
+
+// publishAllAdmins republishes every hosted group's kind:39001 with the
+// signer from setSigner (a no-op until one is set), so a policy change
+// that gives a role powers, or takes them away, lists or drops its
+// holders. It holds g.mu, so no roster change publishes in between.
+func (g *GroupsService) publishAllAdmins(ctx context.Context) {
+	sg := g.signer.Load()
+	if sg == nil {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	snap := g.cache.snap.Load()
+	if snap == nil {
+		return
+	}
+	for _, rec := range snap.groups {
+		g.publishAdmins(ctx, sg.pubkey, sg.privkey, rec)
+	}
+}
+
+// publishIfChanged signs and stores ev, a relay-authored addressable
+// event for group id, unless the stored one has the same tags. Its
+// created_at is strictly newer than the stored one's, so a same-second
+// republish can't lose the tie.
+func (g *GroupsService) publishIfChanged(ctx context.Context, privkey, id string, ev *nip01.Event) {
 	prev, err := g.store.QueryEvents(ctx, &nip01.SubscriptionFilter{
-		Kinds: []int{nip29.KindGroupRoles}, Authors: []string{pubkey}, Tags: map[string][]string{"d": {id}}, Limit: 1,
+		Kinds: []int{ev.Kind}, Authors: []string{ev.PubKey}, Tags: map[string][]string{"d": {id}}, Limit: 1,
 	})
 	if err == nil && len(prev) == 1 {
 		if tagsEqual(prev[0].Tags, ev.Tags) {

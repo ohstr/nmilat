@@ -782,22 +782,30 @@ func publishGroupMetadataMirror(ctx context.Context, s *Session, rec *GroupRecor
 	publishSelfSigned(ctx, s, ev)
 }
 
+// groupAdminsEvent builds rec's unsigned kind:39001: every member holding
+// a role with at least one moderation kind in the policy.
+func (g *GroupsService) groupAdminsEvent(selfPubkey string, rec *GroupRecord) *nip01.Event {
+	var admins []nip29.Admin
+	for _, m := range rec.Members {
+		if g.hasPrivilege(m.Roles) {
+			admins = append(admins, nip29.Admin{Pubkey: m.Pubkey, Roles: m.Roles})
+		}
+	}
+	return nip29.NewGroupAdmins(nip29.GroupAdminsParams{SelfPubkey: selfPubkey, ID: rec.ID, Admins: admins})
+}
+
 // publishGroupRosterMirrors self-signs+stores rec's current roster as a
 // kind:39001 (every member holding a role with at least one moderation
 // kind in the policy -- NIP-29's "any roles that have any privilege";
 // a role the policy gives nothing is not listed) and kind:39002 (every
 // member) event.
 func (g *GroupsService) publishGroupRosterMirrors(ctx context.Context, s *Session, rec *GroupRecord) {
-	var admins []nip29.Admin
 	members := make([]string, 0, len(rec.Members))
 	for _, m := range rec.Members {
 		members = append(members, m.Pubkey)
-		if g.hasPrivilege(m.Roles) {
-			admins = append(admins, nip29.Admin{Pubkey: m.Pubkey, Roles: m.Roles})
-		}
 	}
 
-	adminsEv := nip29.NewGroupAdmins(nip29.GroupAdminsParams{SelfPubkey: s.selfPubkey, ID: rec.ID, Admins: admins})
+	adminsEv := g.groupAdminsEvent(s.selfPubkey, rec)
 	adminsEv.CreatedAt = mirrorCreatedAt(ctx, s, nip29.KindGroupAdmins, rec.ID)
 	publishSelfSigned(ctx, s, adminsEv)
 

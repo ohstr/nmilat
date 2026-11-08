@@ -318,3 +318,59 @@ func TestGroupAdmins_ListsOnlyPrivilegedRoles(t *testing.T) {
 		t.Fatalf("kind:39001 lists %v, want the admin and the moderator only", got)
 	}
 }
+
+// listedAdmins returns the pubkeys groupA's stored kind:39001 lists.
+func listedAdmins(t *testing.T, sess *Session) map[string]bool {
+	t.Helper()
+	evs, err := sess.store.QueryEvents(context.Background(), &nip01.SubscriptionFilter{
+		Kinds: []int{nip29.KindGroupAdmins}, Tags: map[string][]string{"d": {groupA}}, Limit: 1,
+	})
+	if err != nil || len(evs) != 1 {
+		t.Fatalf("kind:39001 = %d events, err %v", len(evs), err)
+	}
+	admins, err := nip29.ParseGroupAdmins(evs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, a := range admins.Admins {
+		got[a.Pubkey] = true
+	}
+	return got
+}
+
+// A policy change republishes kind:39001: a role it gives powers lists
+// its holders, one it takes them from drops them.
+func TestSetModerationPolicy_RepublishesGroupAdmins(t *testing.T) {
+	sess := newCeilingSession(t, false)
+	sess.groups.setSigner(authTestPubKey, authTestPrivKey)
+	vip := pubkeyOfPrivKey(t, thirdTestPrivKey)
+	moderator := secondTestPubKey(t)
+	if resp := sendEventAndAwaitOKForSession(t, sess, putUserEvent(t, groupA, vip, authTestPrivKey, "vip")); !resp.Accepted {
+		t.Fatal(resp.Message)
+	}
+	if got := listedAdmins(t, sess); got[vip] || !got[moderator] {
+		t.Fatalf("before: kind:39001 lists %v", got)
+	}
+
+	sess.groups.SetModerationPolicy(nip29.ModerationPolicy{
+		"admin": defaultGroupModerationPolicy["admin"],
+		"vip":   {nip29.KindDeleteEvent},
+	})
+	got := listedAdmins(t, sess)
+	if !got[authTestPubKey] || !got[vip] || got[moderator] || len(got) != 2 {
+		t.Fatalf("after: kind:39001 lists %v, want the admin and the vip", got)
+	}
+
+	// The same policy again changes nothing, so nothing is republished.
+	before, _ := sess.store.QueryEvents(context.Background(), &nip01.SubscriptionFilter{
+		Kinds: []int{nip29.KindGroupAdmins}, Tags: map[string][]string{"d": {groupA}}, Limit: 1,
+	})
+	sess.groups.SetModerationPolicy(*sess.groups.policy.Load())
+	after, _ := sess.store.QueryEvents(context.Background(), &nip01.SubscriptionFilter{
+		Kinds: []int{nip29.KindGroupAdmins}, Tags: map[string][]string{"d": {groupA}}, Limit: 1,
+	})
+	if len(before) != 1 || len(after) != 1 || before[0].ID != after[0].ID {
+		t.Fatal("an unchanged policy republished kind:39001")
+	}
+}

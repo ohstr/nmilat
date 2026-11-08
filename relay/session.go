@@ -791,9 +791,11 @@ func NewSessionHandler(store *EventStore, relayMetadata *nip11.Metadata, searchS
 	}
 	if relayMetadata != nil {
 		// Groups created before roles were published, or under another
-		// policy, get a current kind:39003; unchanged ones are skipped.
+		// policy, get a current kind:39003 and kind:39001; unchanged ones
+		// are skipped.
 		groups.setSigner(relayMetadata.Self, cfg.PrivKey)
 		groups.publishAllRoles(context.Background())
+		groups.publishAllAdmins(context.Background())
 	}
 
 	// Not fatal: a relay that only ever hosts public groups works fine
