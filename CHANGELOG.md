@@ -1022,6 +1022,7 @@ privacy and performance fixes.
 ### Fixed
 
 - Fixes anyone stalling every NIP-29 group write with kind 9002 events naming a parent, or kind 9008 or 9002 on a linked group: a sender who may not make the change is now refused holding its own group's lock, never every group's.
+- Fixes `SetModerationPolicy` and `WithGroupsModerationPolicy` keeping the caller's map: they now store a copy, so changing the map or its slices afterwards no longer changes what `CanPerform` allows.
 - Fixes NEG-OPEN skipping the read gates REQ applies: it now refuses as REQ does where NIP-42 authentication or NIP-43 membership is required and for a private group named by `d` or `h`, and leaves events the reader may not be sent, such as a private group's or a recipient-only kind's, out of the negentropy set. ([#247](https://github.com/ohstr/nmilat/pull/247))
 - Fixes `POST /events` taking the IP's Event token only after verifying the event, so forged events spent nothing; it now takes it before, as the WebSocket does. ([#247](https://github.com/ohstr/nmilat/pull/247))
 - Fixes `GroupsService.SetModerationPolicy` leaving each group's kind 39001 listing the admins of the old policy: it now republishes 39001 with 39003, as does relay startup, skipping any that are unchanged. ([#245](https://github.com/ohstr/nmilat/pull/245))

@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/ohstr/nmilat/nip01"
@@ -85,6 +86,37 @@ func TestSetModerationPolicy_RepublishesRoles(t *testing.T) {
 		if roles["moderator"] != "keeps the peace" || roles["admin"] == "" || len(roles) != 2 {
 			t.Fatalf("%s roles = %v", id, roles)
 		}
+	}
+}
+
+// SetModerationPolicy keeps its own copy: changing the caller's map or
+// slices afterwards changes nothing CanPerform allows. (The startup
+// option, WithGroupsModerationPolicy, stores through the same setPolicy.)
+func TestSetModerationPolicy_CopiesThePolicy(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	sendEventAndAwaitOKForSession(t, sess, createGroupEvent(t, groupA))
+	if _, err := sess.groups.UpsertMember(groupA, GroupMember{Pubkey: memberA, Roles: []string{"moderator"}}); err != nil {
+		t.Fatal(err)
+	}
+	policy := nip29.ModerationPolicy{
+		"admin":     slices.Clone(defaultGroupModerationPolicy["admin"]),
+		"moderator": {nip29.KindDeleteEvent},
+	}
+	sess.groups.SetModerationPolicy(policy)
+
+	policy["moderator"][0] = nip29.KindPutUser
+	policy["moderator"] = append(policy["moderator"], nip29.KindRemoveUser)
+	delete(policy, "admin")
+
+	g := sess.groups
+	if !g.CanPerform(groupA, memberA, nip29.KindDeleteEvent) {
+		t.Fatal("changing the caller's slice took the moderator's kind 9005 away")
+	}
+	if g.CanPerform(groupA, memberA, nip29.KindPutUser) || g.CanPerform(groupA, memberA, nip29.KindRemoveUser) {
+		t.Fatal("changing the caller's policy gave the moderator kind 9000 or 9001")
+	}
+	if !g.CanPerform(groupA, authTestPubKey, nip29.KindDeleteGroup) {
+		t.Fatal("deleting the caller's admin role took the creator's kind 9008 away")
 	}
 }
 

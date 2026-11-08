@@ -283,8 +283,14 @@ func (g *GroupsService) SetModerationPolicy(policy nip29.ModerationPolicy) {
 	g.publishAllAdmins(context.Background())
 }
 
+// setPolicy stores a copy of policy, so a caller changing its map or
+// slices afterwards changes nothing CanPerform reads.
 func (g *GroupsService) setPolicy(policy nip29.ModerationPolicy) {
-	g.policy.Store(&policy)
+	cp := make(nip29.ModerationPolicy, len(policy))
+	for role, kinds := range policy {
+		cp[role] = slices.Clone(kinds)
+	}
+	g.policy.Store(&cp)
 }
 
 // SetModerationLog turns the moderation log on or off. On, every accepted
