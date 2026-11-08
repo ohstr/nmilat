@@ -178,20 +178,17 @@ type GroupsService struct {
 	// outside a session (a policy change, startup); see setSigner.
 	signer atomic.Pointer[groupsSigner]
 
-	// linkMu serializes NIP-29 "Subgroups" cross-group mutation: a
-	// reparent touches up to three records (the group itself, its old
-	// parent, its new parent), and a delete cascades over every one of
-	// the deleted group's own children. groupsCache's own writeMu keeps
-	// each *individual* Get/put memory-safe, but gives no atomicity
-	// across that multi-record sequence -- two concurrent reparents of
-	// the same child to two different new parents could otherwise both
-	// successfully addChild on their own target, leaving the "losing"
-	// parent's Children listing a child whose own Parent no longer
-	// points back at it. Held for the whole validate-then-mutate
-	// sequence in handleEditMetadata's reparent path and
-	// handleDeleteGroup's cascade, never for a same-group-only edit
-	// (which groupsCache's own synchronization already covers alone).
-	linkMu sync.Mutex
+	// mu serializes every change to hosted groups: each mutator's
+	// read-modify-write of a record, and each moderation event's checks
+	// together with the change they allow (handle holds it across the
+	// whole handler), including the multi-record sequences of a NIP-29
+	// reparent (the group, its old parent, its new parent) and a delete's
+	// cascade over its children. Without it two concurrent roster changes
+	// each copy the same record and the later write drops the earlier's
+	// member, and a write racing a group's deletion recreates it. Group
+	// writes already queue on the store's single write transaction, so one
+	// lock for every group costs no throughput; readers never take it.
+	mu sync.Mutex
 }
 
 // Count returns the number of hosted groups, from the in-memory cache.
@@ -557,6 +554,12 @@ func (g *GroupsService) Create(rec *GroupRecord) error {
 	if g == nil {
 		return nil
 	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.createLocked(rec)
+}
+
+func (g *GroupsService) createLocked(rec *GroupRecord) error {
 	if err := g.store.PutGroup(rec); err != nil {
 		return err
 	}
@@ -574,6 +577,12 @@ func (g *GroupsService) Delete(id string) (*GroupRecord, error) {
 	if g == nil {
 		return nil, nil
 	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.deleteLocked(id)
+}
+
+func (g *GroupsService) deleteLocked(id string) (*GroupRecord, error) {
 	rec := g.cache.Get(id)
 	if err := g.store.DeleteGroup(id); err != nil {
 		return nil, err
@@ -601,18 +610,17 @@ func (g *GroupsService) List() ([]*GroupRecord, error) {
 	return g.store.ListGroups()
 }
 
-// UpsertMember adds member to group id's roster, or replaces its existing
-// entry if member.Pubkey already holds one (kind:9000 put-user). Returns
-// the updated record, or (nil, nil) if id names no known group.
-func (g *GroupsService) UpsertMember(id string, member GroupMember) (*GroupRecord, error) {
-	if g == nil {
-		return nil, nil
-	}
+// updateLocked is every single-record mutator's read-modify-write: it
+// reads group id's current record, builds the next one with change, and
+// stores it. g.mu must be held, so no concurrent change to the group is
+// lost and a group deleted meanwhile stays deleted. Returns (nil, nil) if
+// id names no known group.
+func (g *GroupsService) updateLocked(id string, change func(*GroupRecord) *GroupRecord) (*GroupRecord, error) {
 	cur := g.cache.Get(id)
 	if cur == nil {
 		return nil, nil
 	}
-	next := cur.withMember(member)
+	next := change(cur)
 	if err := g.store.PutGroup(next); err != nil {
 		return nil, err
 	}
@@ -620,23 +628,44 @@ func (g *GroupsService) UpsertMember(id string, member GroupMember) (*GroupRecor
 	return next, nil
 }
 
+// update is updateLocked taking g.mu itself, for the exported mutators.
+func (g *GroupsService) update(id string, change func(*GroupRecord) *GroupRecord) (*GroupRecord, error) {
+	if g == nil {
+		return nil, nil
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.updateLocked(id, change)
+}
+
+// UpsertMember adds member to group id's roster, or replaces its existing
+// entry if member.Pubkey already holds one (kind:9000 put-user). Returns
+// the updated record, or (nil, nil) if id names no known group.
+func (g *GroupsService) UpsertMember(id string, member GroupMember) (*GroupRecord, error) {
+	return g.update(id, withMember(member))
+}
+
+func (g *GroupsService) upsertMemberLocked(id string, member GroupMember) (*GroupRecord, error) {
+	return g.updateLocked(id, withMember(member))
+}
+
+func withMember(member GroupMember) func(*GroupRecord) *GroupRecord {
+	return func(cur *GroupRecord) *GroupRecord { return cur.withMember(member) }
+}
+
 // RemoveMember removes pubkey's roster entry from group id (kind:9001
 // remove-user, or a kind:9022 self-leave). Returns the updated record, or
 // (nil, nil) if id names no known group.
 func (g *GroupsService) RemoveMember(id, pubkey string) (*GroupRecord, error) {
-	if g == nil {
-		return nil, nil
-	}
-	cur := g.cache.Get(id)
-	if cur == nil {
-		return nil, nil
-	}
-	next := cur.withoutMember(pubkey)
-	if err := g.store.PutGroup(next); err != nil {
-		return nil, err
-	}
-	g.cache.put(next)
-	return next, nil
+	return g.update(id, withoutMember(pubkey))
+}
+
+func (g *GroupsService) removeMemberLocked(id, pubkey string) (*GroupRecord, error) {
+	return g.updateLocked(id, withoutMember(pubkey))
+}
+
+func withoutMember(pubkey string) func(*GroupRecord) *GroupRecord {
+	return func(cur *GroupRecord) *GroupRecord { return cur.withoutMember(pubkey) }
 }
 
 // SetMetadata replaces group id's metadata wholesale (kind:9002
@@ -644,39 +673,37 @@ func (g *GroupsService) RemoveMember(id, pubkey string) (*GroupRecord, error) {
 // convention kind:9010's pin list uses). Returns the updated record, or
 // (nil, nil) if id names no known group.
 func (g *GroupsService) SetMetadata(id string, fields GroupMetadataFields) (*GroupRecord, error) {
-	if g == nil {
-		return nil, nil
+	return g.update(id, withMetadata(fields))
+}
+
+func (g *GroupsService) setMetadataLocked(id string, fields GroupMetadataFields) (*GroupRecord, error) {
+	return g.updateLocked(id, withMetadata(fields))
+}
+
+func withMetadata(fields GroupMetadataFields) func(*GroupRecord) *GroupRecord {
+	return func(cur *GroupRecord) *GroupRecord {
+		next := *cur
+		next.Metadata = fields
+		return &next
 	}
-	cur := g.cache.Get(id)
-	if cur == nil {
-		return nil, nil
-	}
-	next := *cur
-	next.Metadata = fields
-	if err := g.store.PutGroup(&next); err != nil {
-		return nil, err
-	}
-	g.cache.put(&next)
-	return &next, nil
 }
 
 // SetPins replaces group id's pinned list wholesale (kind:9010). Returns
 // the updated record, or (nil, nil) if id names no known group.
 func (g *GroupsService) SetPins(id string, pins GroupPins) (*GroupRecord, error) {
-	if g == nil {
-		return nil, nil
+	return g.update(id, withPins(pins))
+}
+
+func (g *GroupsService) setPinsLocked(id string, pins GroupPins) (*GroupRecord, error) {
+	return g.updateLocked(id, withPins(pins))
+}
+
+func withPins(pins GroupPins) func(*GroupRecord) *GroupRecord {
+	return func(cur *GroupRecord) *GroupRecord {
+		next := *cur
+		next.Pins = pins
+		return &next
 	}
-	cur := g.cache.Get(id)
-	if cur == nil {
-		return nil, nil
-	}
-	next := *cur
-	next.Pins = pins
-	if err := g.store.PutGroup(&next); err != nil {
-		return nil, err
-	}
-	g.cache.put(&next)
-	return &next, nil
 }
 
 // SetChildren replaces group id's ordered subgroup-id list wholesale
@@ -690,20 +717,19 @@ func (g *GroupsService) SetPins(id string, pins GroupPins) (*GroupRecord, error)
 // being updated -- exactly the footgun this helper exists to make
 // structurally impossible.
 func (g *GroupsService) SetChildren(id string, children []string) (*GroupRecord, error) {
-	if g == nil {
-		return nil, nil
+	return g.update(id, withChildren(children))
+}
+
+func (g *GroupsService) setChildrenLocked(id string, children []string) (*GroupRecord, error) {
+	return g.updateLocked(id, withChildren(children))
+}
+
+func withChildren(children []string) func(*GroupRecord) *GroupRecord {
+	return func(cur *GroupRecord) *GroupRecord {
+		next := *cur
+		next.Metadata.Children = children
+		return &next
 	}
-	cur := g.cache.Get(id)
-	if cur == nil {
-		return nil, nil
-	}
-	next := *cur
-	next.Metadata.Children = children
-	if err := g.store.PutGroup(&next); err != nil {
-		return nil, err
-	}
-	g.cache.put(&next)
-	return &next, nil
 }
 
 // SetParent replaces group id's own parent reference (empty string
@@ -712,51 +738,45 @@ func (g *GroupsService) SetChildren(id string, children []string) (*GroupRecord,
 // single-field mutator so a reparent or a delete-cascade can't
 // accidentally wipe the rest of the group's metadata.
 func (g *GroupsService) SetParent(id string, parent string) (*GroupRecord, error) {
-	if g == nil {
-		return nil, nil
+	return g.update(id, withParent(parent))
+}
+
+func (g *GroupsService) setParentLocked(id string, parent string) (*GroupRecord, error) {
+	return g.updateLocked(id, withParent(parent))
+}
+
+func withParent(parent string) func(*GroupRecord) *GroupRecord {
+	return func(cur *GroupRecord) *GroupRecord {
+		next := *cur
+		next.Metadata.Parent = parent
+		return &next
 	}
-	cur := g.cache.Get(id)
-	if cur == nil {
-		return nil, nil
-	}
-	next := *cur
-	next.Metadata.Parent = parent
-	if err := g.store.PutGroup(&next); err != nil {
-		return nil, err
-	}
-	g.cache.put(&next)
-	return &next, nil
 }
 
 // removeChild drops childID from parentID's Children list, if present.
 // Returns the updated parent record, or (nil, nil) if parentID names no
-// known group.
+// known group. g.mu must be held.
 func (g *GroupsService) removeChild(parentID, childID string) (*GroupRecord, error) {
-	parent := g.cache.Get(parentID)
-	if parent == nil {
-		return nil, nil
-	}
-	children := make([]string, 0, len(parent.Metadata.Children))
-	for _, id := range parent.Metadata.Children {
-		if id != childID {
-			children = append(children, id)
+	return g.updateLocked(parentID, func(cur *GroupRecord) *GroupRecord {
+		children := make([]string, 0, len(cur.Metadata.Children))
+		for _, id := range cur.Metadata.Children {
+			if id != childID {
+				children = append(children, id)
+			}
 		}
-	}
-	return g.SetChildren(parentID, children)
+		return withChildren(children)(cur)
+	})
 }
 
 // addChild appends childID to parentID's Children list. Returns the
 // updated parent record, or (nil, nil) if parentID names no known group.
 // Callers are responsible for not calling this with a childID already
 // present (handleEditMetadata's own validation is what actually decides
-// whether an addition is allowed at all).
+// whether an addition is allowed at all). g.mu must be held.
 func (g *GroupsService) addChild(parentID, childID string) (*GroupRecord, error) {
-	parent := g.cache.Get(parentID)
-	if parent == nil {
-		return nil, nil
-	}
-	children := append(append([]string{}, parent.Metadata.Children...), childID)
-	return g.SetChildren(parentID, children)
+	return g.updateLocked(parentID, func(cur *GroupRecord) *GroupRecord {
+		return withChildren(append(append([]string{}, cur.Metadata.Children...), childID))(cur)
+	})
 }
 
 // createsCycle reports whether setting groupID's parent to startParent

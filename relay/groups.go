@@ -30,27 +30,39 @@ func (g *GroupsService) HandleEvent(ctx context.Context, s *Session, ev *nip01.E
 		})
 		return
 	}
+	s.reply(g.handle(ctx, s, ev))
+}
+
+// handle runs ev's handler holding g.mu, so the checks an event passes and
+// the change they allow are one step against every other group write: a
+// role or roster read for a check can't be stale by the time it's acted
+// on, and a group deleted meanwhile is "no such group", never recreated.
+// The OK goes out after the lock is released, so a slow client never
+// holds up other groups' writes.
+func (g *GroupsService) handle(ctx context.Context, s *Session, ev *nip01.Event) *wire.OkSubscriptionResponse {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	switch ev.Kind {
 	case nip29.KindCreateGroup:
-		g.handleCreate(ctx, s, ev)
+		return g.handleCreate(ctx, s, ev)
 	case nip29.KindDeleteGroup:
-		g.handleDeleteGroup(ctx, s, ev)
+		return g.handleDeleteGroup(ctx, s, ev)
 	case nip29.KindPutUser:
-		g.handlePutUser(ctx, s, ev)
+		return g.handlePutUser(ctx, s, ev)
 	case nip29.KindRemoveUser:
-		g.handleRemoveUser(ctx, s, ev)
+		return g.handleRemoveUser(ctx, s, ev)
 	case nip29.KindEditMetadata:
-		g.handleEditMetadata(ctx, s, ev)
+		return g.handleEditMetadata(ctx, s, ev)
 	case nip29.KindDeleteEvent:
-		g.handleDeleteEvent(ctx, s, ev)
+		return g.handleDeleteEvent(ctx, s, ev)
 	case nip29.KindCreateInvite:
-		g.handleCreateInvite(ctx, s, ev)
+		return g.handleCreateInvite(ctx, s, ev)
 	case nip29.KindUpdatePinList:
-		g.handleUpdatePinList(ctx, s, ev)
+		return g.handleUpdatePinList(ctx, s, ev)
 	case nip29.KindJoinRequest:
-		g.handleJoinRequest(ctx, s, ev)
+		return g.handleJoinRequest(ctx, s, ev)
 	case nip29.KindLeaveRequest:
-		g.handleLeaveRequest(ctx, s, ev)
+		return g.handleLeaveRequest(ctx, s, ev)
 	default:
 		// A moderation kind inside 9000-9020 this build doesn't give any
 		// specific meaning to (see nip29.IsModerationKind's own doc
@@ -59,11 +71,11 @@ func (g *GroupsService) HandleEvent(ctx context.Context, s *Session, ev *nip01.E
 		// every currently-specified kind, so reaching here means either a
 		// future NIP-29 revision or a client mistake -- either way, still
 		// answered explicitly rather than silently dropped.
-		s.reply(&wire.OkSubscriptionResponse{
+		return &wire.OkSubscriptionResponse{
 			EventID:  ev.ID,
 			Accepted: false,
 			Message:  "restricted: unsupported NIP-29 event kind",
-		})
+		}
 	}
 }
 
@@ -74,33 +86,30 @@ func (g *GroupsService) HandleEvent(ctx context.Context, s *Session, ev *nip01.E
 // handleCreate implements kind:9007. Decision 1 (docs/specs/nip29-groups-plan.md):
 // group creation requires no prior NIP-43 relay membership -- anyone may
 // create a group, so there is deliberately no membership/role check here.
-func (g *GroupsService) handleCreate(ctx context.Context, s *Session, ev *nip01.Event) {
+func (g *GroupsService) handleCreate(ctx context.Context, s *Session, ev *nip01.Event) *wire.OkSubscriptionResponse {
 	// Structural validation (h tag present) already ran via
 	// nip29/relayreg's RegisterEventValidator hook before processEvent ever
 	// reached this point, when that package is blank-imported -- this
 	// re-parse is defensive either way, not expected to fail in practice.
 	groupID, err := nip29.GroupIDFromTags(ev.Tags)
 	if err != nil {
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: " + err.Error()})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: " + err.Error()}
 	}
 
 	if g.Exists(groupID) {
 		// Accepted only as its own admin's idempotent retry; anyone else's
 		// create changed nothing and must not read as success.
-		s.reply(&wire.OkSubscriptionResponse{
+		return &wire.OkSubscriptionResponse{
 			EventID:  ev.ID,
 			Accepted: g.IsAdmin(groupID, ev.PubKey),
 			Message:  "duplicate: a group with that id already exists.",
-		})
-		return
+		}
 	}
 
 	rec := newGroupRecord(groupID, ev.PubKey)
-	if err := g.Create(rec); err != nil {
+	if err := g.createLocked(rec); err != nil {
 		s.config.Logger.Error().Err(err).Str("group", groupID).Msg("failed to persist new group")
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not store group"})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not store group"}
 	}
 
 	publishGroupMetadataMirror(ctx, s, rec)
@@ -111,11 +120,11 @@ func (g *GroupsService) handleCreate(ctx context.Context, s *Session, ev *nip01.
 	}
 	g.recordModeration(ctx, s, ev)
 
-	s.reply(&wire.OkSubscriptionResponse{
+	return &wire.OkSubscriptionResponse{
 		EventID:  ev.ID,
 		Accepted: true,
 		Message:  fmt.Sprintf("info: group %s created.", groupID),
-	})
+	}
 }
 
 // handleDeleteGroup implements kind:9008: teardown by whoever CanPerform
@@ -129,39 +138,31 @@ func (g *GroupsService) handleCreate(ctx context.Context, s *Session, ev *nip01.
 // immediately before removal, so its own Children list -- the parent's
 // reverse index, already paid for by the reparent bookkeeping below --
 // is exactly what needs detaching; no scan over every other group.
-func (g *GroupsService) handleDeleteGroup(ctx context.Context, s *Session, ev *nip01.Event) {
+func (g *GroupsService) handleDeleteGroup(ctx context.Context, s *Session, ev *nip01.Event) *wire.OkSubscriptionResponse {
 	groupID, err := nip29.GroupIDFromTags(ev.Tags)
 	if err != nil {
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: " + err.Error()})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: " + err.Error()}
 	}
 
 	if !g.Exists(groupID) {
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: no such group."})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: no such group."}
 	}
 
 	if !g.CanPerform(groupID, ev.PubKey, nip29.KindDeleteGroup) {
-		s.reply(&wire.OkSubscriptionResponse{
+		return &wire.OkSubscriptionResponse{
 			EventID:  ev.ID,
 			Accepted: false,
 			Message:  "restricted: only a group admin may delete this group.",
-		})
-		return
+		}
 	}
 
-	// See GroupsService.linkMu's own doc comment: Delete reads this
-	// group's own Children before removing it, then this function
-	// mutates each of them -- the same kind of multi-record sequence a
+	// handle holds g.mu: delete reads this group's own Children before
+	// removing it, then this function mutates each of them, a sequence a
 	// concurrent reparent elsewhere must not interleave with.
-	g.linkMu.Lock()
-	defer g.linkMu.Unlock()
-
-	deleted, err := g.Delete(groupID)
+	deleted, err := g.deleteLocked(groupID)
 	if err != nil {
 		s.config.Logger.Error().Err(err).Str("group", groupID).Msg("failed to delete group")
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not delete group"})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not delete group"}
 	}
 
 	purgeGroupEvents(ctx, s, groupID)
@@ -184,7 +185,7 @@ func (g *GroupsService) handleDeleteGroup(ctx context.Context, s *Session, ev *n
 		}
 	}
 	for _, childID := range children {
-		child, err := g.SetParent(childID, "")
+		child, err := g.setParentLocked(childID, "")
 		if err != nil {
 			s.config.Logger.Error().Err(err).Str("group", groupID).Str("child", childID).
 				Msg("failed to promote child to root after parent deletion")
@@ -195,11 +196,11 @@ func (g *GroupsService) handleDeleteGroup(ctx context.Context, s *Session, ev *n
 		}
 	}
 
-	s.reply(&wire.OkSubscriptionResponse{
+	return &wire.OkSubscriptionResponse{
 		EventID:  ev.ID,
 		Accepted: true,
 		Message:  fmt.Sprintf("info: group %s deleted.", groupID),
-	})
+	}
 }
 
 // purgeGroupEvents removes a deleted group's stored events: the relay's own
@@ -232,31 +233,26 @@ func purgeGroupEvents(ctx context.Context, s *Session, groupID string) {
 
 // handlePutUser implements kind:9000: an admin (per ModerationPolicy) adds
 // pubkey to the group's roster, optionally with roles.
-func (g *GroupsService) handlePutUser(ctx context.Context, s *Session, ev *nip01.Event) {
+func (g *GroupsService) handlePutUser(ctx context.Context, s *Session, ev *nip01.Event) *wire.OkSubscriptionResponse {
 	action, err := nip29.ParseModerationAction(ev)
 	if err != nil {
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: " + err.Error()})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: " + err.Error()}
 	}
 	if !g.Exists(action.GroupID) {
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: no such group."})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: no such group."}
 	}
 	if !g.CanPerform(action.GroupID, ev.PubKey, nip29.KindPutUser) {
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: you may not add members to this group."})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: you may not add members to this group."}
 	}
 	if msg := g.grantCeilingPutUser(action.GroupID, ev.PubKey, action.Pubkey, action.Roles); msg != "" {
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: msg})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: msg}
 	}
 
 	wasMember := g.IsMember(action.GroupID, action.Pubkey)
-	rec, err := g.UpsertMember(action.GroupID, GroupMember{Pubkey: action.Pubkey, Roles: action.Roles})
+	rec, err := g.upsertMemberLocked(action.GroupID, GroupMember{Pubkey: action.Pubkey, Roles: action.Roles})
 	if err != nil {
 		s.config.Logger.Error().Err(err).Str("group", action.GroupID).Msg("failed to add group member")
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not update group roster"})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not update group roster"}
 	}
 
 	g.publishGroupRosterMirrors(ctx, s, rec)
@@ -265,36 +261,31 @@ func (g *GroupsService) handlePutUser(ctx context.Context, s *Session, ev *nip01
 	}
 	g.clearPendingJoins(ctx, s, action.GroupID, action.Pubkey)
 	g.recordModeration(ctx, s, ev)
-	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: member added."})
+	return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: member added."}
 }
 
 // handleRemoveUser implements kind:9001: an admin (per ModerationPolicy)
 // removes pubkey from the group's roster.
-func (g *GroupsService) handleRemoveUser(ctx context.Context, s *Session, ev *nip01.Event) {
+func (g *GroupsService) handleRemoveUser(ctx context.Context, s *Session, ev *nip01.Event) *wire.OkSubscriptionResponse {
 	action, err := nip29.ParseModerationAction(ev)
 	if err != nil {
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: " + err.Error()})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: " + err.Error()}
 	}
 	if !g.Exists(action.GroupID) {
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: no such group."})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: no such group."}
 	}
 	if !g.CanPerform(action.GroupID, ev.PubKey, nip29.KindRemoveUser) {
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: you may not remove members from this group."})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: you may not remove members from this group."}
 	}
 	if msg := g.grantCeilingRemoveUser(action.GroupID, ev.PubKey, action.Pubkey); msg != "" {
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: msg})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: msg}
 	}
 
 	wasMember := g.IsMember(action.GroupID, action.Pubkey)
-	rec, err := g.RemoveMember(action.GroupID, action.Pubkey)
+	rec, err := g.removeMemberLocked(action.GroupID, action.Pubkey)
 	if err != nil {
 		s.config.Logger.Error().Err(err).Str("group", action.GroupID).Msg("failed to remove group member")
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not update group roster"})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not update group roster"}
 	}
 
 	g.publishGroupRosterMirrors(ctx, s, rec)
@@ -303,7 +294,7 @@ func (g *GroupsService) handleRemoveUser(ctx context.Context, s *Session, ev *ni
 	}
 	g.clearPendingJoins(ctx, s, action.GroupID, action.Pubkey)
 	g.recordModeration(ctx, s, ev)
-	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: member removed."})
+	return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: member removed."}
 }
 
 /////////////////////////////////////////////////////////////////////
@@ -322,28 +313,21 @@ func (g *GroupsService) handleRemoveUser(ctx context.Context, s *Session, ev *ni
 // parent" and "may I reorder my own children" (both fields on the record
 // ev's own "h" tag names); only the *new* parent side of a reparent needs
 // an extra check, because that group isn't the one ev names.
-func (g *GroupsService) handleEditMetadata(ctx context.Context, s *Session, ev *nip01.Event) {
+func (g *GroupsService) handleEditMetadata(ctx context.Context, s *Session, ev *nip01.Event) *wire.OkSubscriptionResponse {
 	action, err := nip29.ParseModerationAction(ev)
 	if err != nil {
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: " + err.Error()})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: " + err.Error()}
 	}
 	if !g.Exists(action.GroupID) {
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: no such group."})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: no such group."}
 	}
 	if !g.CanPerform(action.GroupID, ev.PubKey, nip29.KindEditMetadata) {
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: only a group admin may edit this group's metadata."})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: only a group admin may edit this group's metadata."}
 	}
 
-	// Held for the rest of this call: a reparent reads and mutates up to
-	// three records (this group, its old parent, its new parent), and
-	// that whole sequence needs to run as one unit against a concurrent
-	// edit elsewhere -- see GroupsService.linkMu's own doc comment.
-	g.linkMu.Lock()
-	defer g.linkMu.Unlock()
-
+	// handle holds g.mu: a reparent reads and mutates up to three records
+	// (this group, its old parent, its new parent), and that whole
+	// sequence runs as one unit against a concurrent edit elsewhere.
 	current := g.cache.Get(action.GroupID)
 	var oldParent string
 	if current != nil {
@@ -355,17 +339,13 @@ func (g *GroupsService) handleEditMetadata(ctx context.Context, s *Session, ev *
 	if reparenting && newParent != "" {
 		switch {
 		case newParent == action.GroupID:
-			s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: a group cannot be its own parent."})
-			return
+			return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: a group cannot be its own parent."}
 		case !g.Exists(newParent):
-			s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: the named parent group does not exist."})
-			return
+			return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: the named parent group does not exist."}
 		case g.createsCycle(newParent, action.GroupID):
-			s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: that parent assignment would create a cycle."})
-			return
+			return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: that parent assignment would create a cycle."}
 		case !g.CanPerform(newParent, ev.PubKey, nip29.KindEditMetadata):
-			s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: you must also be an admin of the new parent group."})
-			return
+			return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: you must also be an admin of the new parent group."}
 		case action.Metadata.Private != g.IsPrivate(newParent):
 			// A kind:39000 mirror is self-signed once and cached, so its
 			// tags can't be redacted per viewer -- a public parent's
@@ -374,8 +354,7 @@ func (g *GroupsService) handleEditMetadata(ctx context.Context, s *Session, ev *
 			// the visible side, regardless of their own membership. Both
 			// groups must share the same Private setting before they can
 			// be linked.
-			s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: cannot link groups with different privacy settings."})
-			return
+			return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: cannot link groups with different privacy settings."}
 		}
 	}
 
@@ -384,8 +363,7 @@ func (g *GroupsService) handleEditMetadata(ctx context.Context, s *Session, ev *
 	// subgroup left with the other setting. Refuse it; the admin detaches
 	// first, flips, then relinks.
 	if current != nil && action.Metadata.Private != current.Metadata.Private && g.linkedAcrossPrivacy(newParent, current.Metadata.Children, action.Metadata.Private) {
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: cannot change the privacy of a linked group; its parent and subgroups must share the same setting, so detach it first."})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: cannot change the privacy of a linked group; its parent and subgroups must share the same setting, so detach it first."}
 	}
 
 	// Children-list completeness + no-unilateral-annexation. Unconditional
@@ -406,20 +384,18 @@ func (g *GroupsService) handleEditMetadata(ctx context.Context, s *Session, ev *
 	fields.Children = g.liveGroups(action.Metadata.Children)
 	if current != nil {
 		if !isPermutation(g.liveGroups(current.Metadata.Children), fields.Children) {
-			s.reply(&wire.OkSubscriptionResponse{
+			return &wire.OkSubscriptionResponse{
 				EventID:  ev.ID,
 				Accepted: false,
 				Message:  "restricted: this edit must re-list every current subgroup; none may be added or omitted here.",
-			})
-			return
+			}
 		}
 	}
 
-	rec, err := g.SetMetadata(action.GroupID, fields)
+	rec, err := g.setMetadataLocked(action.GroupID, fields)
 	if err != nil {
 		s.config.Logger.Error().Err(err).Str("group", action.GroupID).Msg("failed to update group metadata")
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not update group metadata"})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not update group metadata"}
 	}
 	publishGroupMetadataMirror(ctx, s, rec)
 
@@ -443,7 +419,7 @@ func (g *GroupsService) handleEditMetadata(ctx context.Context, s *Session, ev *
 	}
 
 	g.recordModeration(ctx, s, ev)
-	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: group metadata updated."})
+	return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: group metadata updated."}
 }
 
 // linkedAcrossPrivacy reports whether parent (if any) or any of children
@@ -528,51 +504,43 @@ func groupMetadataFieldsFromAction(m *nip29.GroupMetadata) GroupMetadataFields {
 // authorship gate is scope: the target event must itself carry this
 // group's own id in its "h" tag, so an admin can only delete events that
 // belong to their own group.
-func (g *GroupsService) handleDeleteEvent(ctx context.Context, s *Session, ev *nip01.Event) {
+func (g *GroupsService) handleDeleteEvent(ctx context.Context, s *Session, ev *nip01.Event) *wire.OkSubscriptionResponse {
 	action, err := nip29.ParseModerationAction(ev)
 	if err != nil {
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: " + err.Error()})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: " + err.Error()}
 	}
 	if !g.Exists(action.GroupID) {
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: no such group."})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: no such group."}
 	}
 	if !g.CanPerform(action.GroupID, ev.PubKey, nip29.KindDeleteEvent) {
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: only a group admin may delete group events."})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: only a group admin may delete group events."}
 	}
 
 	targets, err := s.store.QueryEvents(ctx, &nip01.SubscriptionFilter{IDs: []string{action.EventID}, Limit: 1})
 	if err != nil {
 		s.config.Logger.Error().Err(err).Str("event", action.EventID).Msg("failed to look up event for group moderator delete")
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not look up that event"})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not look up that event"}
 	}
 	if len(targets) == 0 {
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: no such event."})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: no such event."}
 	}
 	targetGroupID, err := nip29.GroupIDFromTags(targets[0].Tags)
 	if err != nil || targetGroupID != action.GroupID {
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: that event does not belong to this group."})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: that event does not belong to this group."}
 	}
 
 	pes, err := s.store.FindEvents(ctx, &nip01.SubscriptionFilter{IDs: []string{action.EventID}, Limit: 1})
 	if err != nil {
 		s.config.Logger.Error().Err(err).Str("event", action.EventID).Msg("failed to resolve event for group moderator delete")
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not delete that event"})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not delete that event"}
 	}
 	if err := s.store.DeleteAll(pes); err != nil {
 		s.config.Logger.Error().Err(err).Str("event", action.EventID).Msg("failed to delete group event")
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not delete that event"})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not delete that event"}
 	}
 
 	g.recordModeration(ctx, s, ev)
-	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: event deleted."})
+	return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: event deleted."}
 }
 
 /////////////////////////////////////////////////////////////////////
@@ -582,29 +550,25 @@ func (g *GroupsService) handleDeleteEvent(ctx context.Context, s *Session, ev *n
 // handleCreateInvite implements kind:9009: an admin (per ModerationPolicy)
 // creates a group-scoped invite code, stored separately from NIP-43's own
 // invite claims (relay/store_groups.go's indexGroupInvites).
-func (g *GroupsService) handleCreateInvite(ctx context.Context, s *Session, ev *nip01.Event) {
+func (g *GroupsService) handleCreateInvite(ctx context.Context, s *Session, ev *nip01.Event) *wire.OkSubscriptionResponse {
 	action, err := nip29.ParseModerationAction(ev)
 	if err != nil {
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: " + err.Error()})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: " + err.Error()}
 	}
 	if !g.Exists(action.GroupID) {
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: no such group."})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: no such group."}
 	}
 	if !g.CanPerform(action.GroupID, ev.PubKey, nip29.KindCreateInvite) {
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: only a group admin may create invites."})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: only a group admin may create invites."}
 	}
 
 	if err := g.store.PutGroupInvite(&GroupInvite{GroupID: action.GroupID, Code: action.Code, CreatedAt: time.Now().Unix()}); err != nil {
 		s.config.Logger.Error().Err(err).Str("group", action.GroupID).Msg("failed to persist group invite")
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not store invite"})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not store invite"}
 	}
 
 	g.recordModeration(ctx, s, ev)
-	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: invite created."})
+	return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: invite created."}
 }
 
 // handleJoinRequest implements kind:9021 -- NIP-29's own group-scoped join
@@ -614,37 +578,32 @@ func (g *GroupsService) handleCreateInvite(ctx context.Context, s *Session, ev *
 // tag. Without a code, a closed group refuses the join -- or, with
 // SetPendingJoins on, stores it for the group's admins to answer with a
 // kind:9000 (accept) or kind:9001 (decline).
-func (g *GroupsService) handleJoinRequest(ctx context.Context, s *Session, ev *nip01.Event) {
+func (g *GroupsService) handleJoinRequest(ctx context.Context, s *Session, ev *nip01.Event) *wire.OkSubscriptionResponse {
 	jr, err := nip29.ParseJoinRequest(ev)
 	if err != nil {
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: " + err.Error()})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: " + err.Error()}
 	}
 	if !g.Exists(jr.GroupID) {
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: no such group."})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: no such group."}
 	}
 	if g.IsMember(jr.GroupID, ev.PubKey) {
-		s.reply(&wire.OkSubscriptionResponse{
+		return &wire.OkSubscriptionResponse{
 			EventID:  ev.ID,
 			Accepted: true,
 			Message:  nip29.DuplicateErrorPrefix + "you are already a member of this group.",
-		})
-		return
+		}
 	}
 
 	if g.IsClosed(jr.GroupID) {
 		if jr.Code == "" {
 			if g.pendingJoins.Load() {
-				g.storePendingJoin(ctx, s, jr.GroupID, ev)
-				return
+				return g.storePendingJoin(ctx, s, jr.GroupID, ev)
 			}
-			s.reply(&wire.OkSubscriptionResponse{
+			return &wire.OkSubscriptionResponse{
 				EventID:  ev.ID,
 				Accepted: false,
 				Message:  "restricted: this group is closed; an invite code or admin approval is required.",
-			})
-			return
+			}
 		}
 		if _, err := s.store.ConsumeGroupInvite(jr.GroupID, jr.Code); err != nil {
 			msg := "restricted: that is an invalid invite code."
@@ -652,69 +611,62 @@ func (g *GroupsService) handleJoinRequest(ctx context.Context, s *Session, ev *n
 				s.config.Logger.Error().Err(err).Str("group", jr.GroupID).Msg("failed to consume group invite claim")
 				msg = "error: could not validate invite code"
 			}
-			s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: msg})
-			return
+			return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: msg}
 		}
 	}
 
-	rec, err := g.UpsertMember(jr.GroupID, GroupMember{Pubkey: ev.PubKey})
+	rec, err := g.upsertMemberLocked(jr.GroupID, GroupMember{Pubkey: ev.PubKey})
 	if err != nil {
 		s.config.Logger.Error().Err(err).Str("group", jr.GroupID).Msg("failed to add joining member")
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not store membership"})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not store membership"}
 	}
 
 	g.publishGroupRosterMirrors(ctx, s, rec)
 	g.publishMemberNotice(ctx, s, jr.GroupID, ev.PubKey, ev.PubKey, ev.ID, true)
 	g.clearPendingJoins(ctx, s, jr.GroupID, ev.PubKey)
-	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: welcome to the group!"})
+	return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: welcome to the group!"}
 }
 
 // handleLeaveRequest implements kind:9022 -- NIP-29's own group-scoped
 // leave request, distinct from NIP-43's relay-wide kind:28936.
-func (g *GroupsService) handleLeaveRequest(ctx context.Context, s *Session, ev *nip01.Event) {
+func (g *GroupsService) handleLeaveRequest(ctx context.Context, s *Session, ev *nip01.Event) *wire.OkSubscriptionResponse {
 	lr, err := nip29.ParseLeaveRequest(ev)
 	if err != nil {
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: " + err.Error()})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: " + err.Error()}
 	}
 	if !g.Exists(lr.GroupID) {
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: no such group."})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: no such group."}
 	}
 	if !g.IsMember(lr.GroupID, ev.PubKey) {
 		// Leaving withdraws a pending join request, if any.
 		g.clearPendingJoins(ctx, s, lr.GroupID, ev.PubKey)
-		s.reply(&wire.OkSubscriptionResponse{
+		return &wire.OkSubscriptionResponse{
 			EventID:  ev.ID,
 			Accepted: true,
 			Message:  nip29.DuplicateErrorPrefix + "you are not a member of this group.",
-		})
-		return
+		}
 	}
 
-	rec, err := g.RemoveMember(lr.GroupID, ev.PubKey)
+	rec, err := g.removeMemberLocked(lr.GroupID, ev.PubKey)
 	if err != nil {
 		s.config.Logger.Error().Err(err).Str("group", lr.GroupID).Msg("failed to remove leaving member")
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not update membership"})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not update membership"}
 	}
 
 	g.publishGroupRosterMirrors(ctx, s, rec)
 	g.publishMemberNotice(ctx, s, lr.GroupID, ev.PubKey, ev.PubKey, ev.ID, false)
-	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: you have left the group."})
+	return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: you have left the group."}
 }
 
 // storePendingJoin keeps a closed group's codeless join request for its
 // admins, replacing any earlier one from the same pubkey.
-func (g *GroupsService) storePendingJoin(ctx context.Context, s *Session, groupID string, ev *nip01.Event) {
+func (g *GroupsService) storePendingJoin(ctx context.Context, s *Session, groupID string, ev *nip01.Event) *wire.OkSubscriptionResponse {
 	g.clearPendingJoins(ctx, s, groupID, ev.PubKey)
 	if err := s.store.InsertEvents(ctx, []*nip01.Event{ev}); err != nil {
 		s.config.Logger.Error().Err(err).Str("group", groupID).Msg("failed to store pending join request")
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not store join request"})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not store join request"}
 	}
-	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: your join request is pending admin approval."})
+	return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: your join request is pending admin approval."}
 }
 
 // clearPendingJoins drops pubkey's stored join requests to groupID: it was
@@ -751,31 +703,27 @@ func isKnownGroupInviteError(err error) bool {
 // replaces the group's pinned list wholesale -- zero references is
 // legitimate (nip29.ParseModerationAction's own doc comment: "an empty
 // list clears every pin").
-func (g *GroupsService) handleUpdatePinList(ctx context.Context, s *Session, ev *nip01.Event) {
+func (g *GroupsService) handleUpdatePinList(ctx context.Context, s *Session, ev *nip01.Event) *wire.OkSubscriptionResponse {
 	action, err := nip29.ParseModerationAction(ev)
 	if err != nil {
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: " + err.Error()})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: " + err.Error()}
 	}
 	if !g.Exists(action.GroupID) {
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: no such group."})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: no such group."}
 	}
 	if !g.CanPerform(action.GroupID, ev.PubKey, nip29.KindUpdatePinList) {
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: only a group admin may update this group's pinned list."})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: only a group admin may update this group's pinned list."}
 	}
 
-	rec, err := g.SetPins(action.GroupID, GroupPins{Events: action.PinnedEvents, Addresses: action.PinnedAddresses})
+	rec, err := g.setPinsLocked(action.GroupID, GroupPins{Events: action.PinnedEvents, Addresses: action.PinnedAddresses})
 	if err != nil {
 		s.config.Logger.Error().Err(err).Str("group", action.GroupID).Msg("failed to update group pins")
-		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not update pinned list"})
-		return
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "error: could not update pinned list"}
 	}
 
 	publishGroupPinsMirror(ctx, s, rec)
 	g.recordModeration(ctx, s, ev)
-	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: pinned list updated."})
+	return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: pinned list updated."}
 }
 
 /////////////////////////////////////////////////////////////////////
