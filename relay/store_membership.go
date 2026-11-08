@@ -216,6 +216,59 @@ func (s *EventStore) DeleteInviteClaim(code string) error {
 	})
 }
 
+// PruneExpiredInviteClaims deletes claims whose ExpiresAt is before now,
+// reading at most maxScan claims in key order from the first key after
+// after ("" starts at the beginning). It returns how many it deleted and
+// the key to pass as after next time, "" once the scan reached the end of
+// the bucket, so repeated calls sweep every claim with bounded work each.
+// maxScan <= 0 reads every claim.
+func (s *EventStore) PruneExpiredInviteClaims(now int64, after string, maxScan int) (removed int, next string, err error) {
+	err = s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(indexInviteClaims)
+		if b == nil {
+			return nil
+		}
+		var expired [][]byte
+		c := b.Cursor()
+		k, v := c.First()
+		if after != "" {
+			k, v = c.Seek([]byte(after))
+			if k != nil && string(k) == after {
+				k, v = c.Next()
+			}
+		}
+		scanned := 0
+		for ; k != nil; k, v = c.Next() {
+			if maxScan > 0 && scanned == maxScan {
+				break
+			}
+			scanned++
+			next = string(k)
+			var claim InviteClaim
+			if json.Unmarshal(v, &claim) != nil {
+				continue
+			}
+			if claim.ExpiresAt > 0 && now > claim.ExpiresAt {
+				expired = append(expired, append([]byte(nil), k...))
+			}
+		}
+		if k == nil {
+			next = ""
+		}
+		for _, key := range expired {
+			if err := b.Delete(key); err != nil {
+				return err
+			}
+		}
+		removed = len(expired)
+		return nil
+	})
+	if err != nil {
+		return 0, after, err
+	}
+	return removed, next, nil
+}
+
 // ConsumeInviteClaim atomically loads, validates, increments Uses, and
 // persists code's claim in a single bbolt transaction -- avoiding a
 // check-then-act race between concurrent Join Requests racing to use the
