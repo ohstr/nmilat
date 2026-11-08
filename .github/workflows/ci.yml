@@ -15,6 +15,12 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      # The MinIO the "Start MinIO" step runs, for the nipB7/server S3 tests.
+      NIPB7_S3_ENDPOINT: 127.0.0.1:9000
+      NIPB7_S3_BUCKET: nipb7-test
+      NIPB7_S3_ACCESS_KEY: nmilat-test
+      NIPB7_S3_SECRET_KEY: nmilat-test-secret
     steps:
       - uses: actions/checkout@v4
 
@@ -42,9 +48,38 @@ jobs:
           go mod tidy
           git diff --exit-code go.mod go.sum
 
+      - name: Start MinIO
+        # Object storage for the nipB7/server S3 tests. A docker run step,
+        # not a service container: the image needs "server /data" as its
+        # command, which services cannot pass. MinIO no longer publishes
+        # pullable images on Docker Hub or Quay, so this is Chainguard's
+        # build, pinned by digest.
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER="$NIPB7_S3_ACCESS_KEY" \
+            -e MINIO_ROOT_PASSWORD="$NIPB7_S3_SECRET_KEY" \
+            cgr.dev/chainguard/minio@sha256:a1ac4589a5f8136b616e667b48a0bea9719bb10bd45799ea946f24bbedfafde4 \
+            server /data
+          for i in $(seq 1 30); do
+            curl -fsS "http://$NIPB7_S3_ENDPOINT/minio/health/ready" && break
+            sleep 1
+          done
+          curl -fsS "http://$NIPB7_S3_ENDPOINT/minio/health/ready"
+          curl -fsS --aws-sigv4 "aws:amz:us-east-1:s3" \
+            --user "$NIPB7_S3_ACCESS_KEY:$NIPB7_S3_SECRET_KEY" \
+            -X PUT "http://$NIPB7_S3_ENDPOINT/$NIPB7_S3_BUCKET"
+
       - name: Test
         # relay alone takes ~9m under -race; go test's default is 10m
         run: go test -race -timeout 20m ./...
+
+      - name: S3 tests ran
+        # The S3 tests skip without NIPB7_S3_ENDPOINT; make sure they did not.
+        run: |
+          out="$(go test -count=1 -run S3 -v ./nipB7/server/)"
+          echo "$out"
+          grep -q -- '--- PASS: TestS3StoreContract' <<<"$out"
+          grep -q -- '--- PASS: TestServerOverS3' <<<"$out"
 
   lint:
     runs-on: ubuntu-latest
