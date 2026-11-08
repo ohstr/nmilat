@@ -425,6 +425,14 @@ type groupAuthorizer func(groupID, pubkey string, kind int) bool
 // kind 9009 lets a key read the group's logged invite codes, and kind
 // 9000 or 9001 its pending join requests. nil removes it. A no-op on a
 // nil *GroupsService.
+//
+// fn runs while the group it is asked about is locked, and may be asked
+// while every group is (a reparent, or a linked group's deletion). It
+// must not call any GroupsService method that changes groups (the
+// mutators, SetModerationPolicy, SetRoleDescriptions), which would wait
+// on that lock forever, and should answer without blocking: a slow
+// answer holds up every write to the group. It must be safe for
+// concurrent use.
 func (g *GroupsService) SetAuthorizer(fn func(groupID, pubkey string, kind int) bool) {
 	if g == nil {
 		return
