@@ -33,15 +33,15 @@ func (g *GroupsService) HandleEvent(ctx context.Context, s *Session, ev *nip01.E
 	s.reply(g.handle(ctx, s, ev))
 }
 
-// handle runs ev's handler holding g.mu, so the checks an event passes and
-// the change they allow are one step against every other group write: a
-// role or roster read for a check can't be stale by the time it's acted
-// on, and a group deleted meanwhile is "no such group", never recreated.
-// The OK goes out after the lock is released, so a slow client never
-// holds up other groups' writes.
+// handle runs ev's handler holding its group's lock (lockFor), so the
+// checks an event passes and the change they allow are one step against
+// every other write to that group: a role or roster read for a check
+// can't be stale by the time it's acted on, and a group deleted meanwhile
+// is "no such group", never recreated. Writes to other groups run
+// alongside. The OK goes out after the lock is released, so a slow client
+// never holds up other writes.
 func (g *GroupsService) handle(ctx context.Context, s *Session, ev *nip01.Event) *wire.OkSubscriptionResponse {
-	g.mu.Lock()
-	defer g.mu.Unlock()
+	defer g.lockFor(ev)()
 	switch ev.Kind {
 	case nip29.KindCreateGroup:
 		return g.handleCreate(ctx, s, ev)
@@ -77,6 +77,43 @@ func (g *GroupsService) handle(ctx context.Context, s *Session, ev *nip01.Event)
 			Message:  "restricted: unsupported NIP-29 event kind",
 		}
 	}
+}
+
+// lockFor takes the locks ev's handler needs and returns the function that
+// releases them: its group's own (lockGroup), or every group's (lockAll)
+// when the handler may read or write other groups too -- a reparent, or
+// the deletion or edit of a group linked to a parent or subgroups -- or
+// names no group. A group's links change only under lockAll or its own
+// lock, so the check made once the group's lock is held stays true until
+// it is released.
+func (g *GroupsService) lockFor(ev *nip01.Event) (unlock func()) {
+	id, err := nip29.GroupIDFromTags(ev.Tags)
+	if err != nil || g.touchesOtherGroups(ev, id) {
+		return g.lockAll()
+	}
+	unlock = g.lockGroup(id)
+	if !g.touchesOtherGroups(ev, id) {
+		return unlock
+	}
+	unlock()
+	return g.lockAll()
+}
+
+// touchesOtherGroups reports whether ev's handler may read or write a
+// group other than id, the one it names: a kind:9008 or kind:9002 on a
+// group with a parent or subgroups, or a kind:9002 naming a parent.
+func (g *GroupsService) touchesOtherGroups(ev *nip01.Event, id string) bool {
+	if ev.Kind != nip29.KindDeleteGroup && ev.Kind != nip29.KindEditMetadata {
+		return false
+	}
+	if rec := g.cache.Get(id); rec != nil && (rec.Metadata.Parent != "" || len(rec.Metadata.Children) > 0) {
+		return true
+	}
+	if ev.Kind == nip29.KindEditMetadata {
+		action, err := nip29.ParseModerationAction(ev)
+		return err == nil && action.Metadata != nil && action.Metadata.Parent != ""
+	}
+	return false
 }
 
 /////////////////////////////////////////////////////////////////////
@@ -156,9 +193,10 @@ func (g *GroupsService) handleDeleteGroup(ctx context.Context, s *Session, ev *n
 		}
 	}
 
-	// handle holds g.mu: delete reads this group's own Children before
-	// removing it, then this function mutates each of them, a sequence a
-	// concurrent reparent elsewhere must not interleave with.
+	// A group with a parent or subgroups is deleted under lockAll
+	// (lockFor): delete reads this group's own Children before removing
+	// it, then this function mutates its parent and each of them, a
+	// sequence a concurrent reparent elsewhere must not interleave with.
 	deleted, err := g.deleteLocked(groupID)
 	if err != nil {
 		s.config.Logger.Error().Err(err).Str("group", groupID).Msg("failed to delete group")
@@ -325,9 +363,10 @@ func (g *GroupsService) handleEditMetadata(ctx context.Context, s *Session, ev *
 		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: only a group admin may edit this group's metadata."}
 	}
 
-	// handle holds g.mu: a reparent reads and mutates up to three records
-	// (this group, its old parent, its new parent), and that whole
-	// sequence runs as one unit against a concurrent edit elsewhere.
+	// A reparent, or any edit of a linked group, runs under lockAll
+	// (lockFor): it reads and mutates up to three records (this group,
+	// its old parent, its new parent), and that whole sequence runs as one
+	// unit against a concurrent edit elsewhere.
 	current := g.cache.Get(action.GroupID)
 	var oldParent string
 	if current != nil {

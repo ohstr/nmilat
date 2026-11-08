@@ -336,13 +336,13 @@ func NewEventStore(path string, limitation *nip11.Limitation, opts ...EventStore
 	return es, nil
 }
 
-// TaskQueueDepth returns the number of write tasks waiting for a worker.
 // has reports whether an event with idHex is stored; false on any error.
 func (s *EventStore) has(idHex string) bool {
 	_, found, err := s.resolveEvsidByID(nil, idHex)
 	return err == nil && found
 }
 
+// TaskQueueDepth returns the number of write tasks waiting for a worker.
 func (s *EventStore) TaskQueueDepth() int { return len(s.taskQueue) }
 
 // TaskQueueCapacity returns the write task queue's size.

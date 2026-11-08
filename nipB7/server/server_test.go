@@ -310,6 +310,11 @@ func TestBlobCSPIsSandboxed(t *testing.T) {
 }
 
 func TestExtension(t *testing.T) {
+	for ctype, ext := range preferredExt {
+		if !blobPath.MatchString(strings.Repeat("0", 64) + ext) {
+			t.Errorf("preferredExt[%q] = %q, which blobPath does not serve", ctype, ext)
+		}
+	}
 	for ctype, want := range map[string]string{
 		"image/gif":        ".gif",
 		"image/webp":       ".webp",
@@ -319,6 +324,18 @@ func TestExtension(t *testing.T) {
 		"application/json": ".json",
 		"IMAGE/PNG":        ".png",
 		"not a type":       ".bin",
+		// Fixed whatever the host's MIME table says.
+		"text/html":                ".html",
+		"text/html; charset=utf-8": ".html",
+		"application/xhtml+xml":    ".xhtml",
+		"image/svg+xml":            ".svg",
+		"text/css":                 ".css",
+		"application/javascript":   ".js",
+		"text/javascript":          ".js",
+		"text/markdown":            ".md",
+		"image/avif":               ".avif",
+		"audio/ogg":                ".ogg",
+		"video/webm":               ".webm",
 	} {
 		if got := extension(ctype); got != want {
 			t.Errorf("extension(%q) = %q, want %q", ctype, got, want)

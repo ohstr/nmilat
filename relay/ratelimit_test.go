@@ -450,6 +450,39 @@ func TestRateLimitedEventsHandlerPerIP(t *testing.T) {
 	}
 }
 
+// A forged event spends its IP's Event budget before its signature is
+// checked, as over the WebSocket.
+func TestRateLimitedEventsHandlerForgedEventsSpendTheIPBudget(t *testing.T) {
+	lim, _ := newLimiter(t, ratelimit.Config{
+		Event: ratelimit.Limit{PerIP: ratelimit.Rate{Events: 2, Per: time.Hour}},
+	})
+	store := newStore(t)
+	srv := httptest.NewServer(NewEventsHandler(store, nil, nil, "", WithEventsRateLimiter(lim)))
+	t.Cleanup(srv.Close)
+	for i := range 2 {
+		ev := CreateEvents(t, 1, 1)[0]
+		last := "0"
+		if strings.HasSuffix(ev.Sig, "0") {
+			last = "1"
+		}
+		ev.Sig = ev.Sig[:len(ev.Sig)-1] + last
+		body, err := json.Marshal(ev)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp := postEvent(t, srv.URL, body, queryTestPrivKey); resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("forged event %d: status %d, want 400", i, resp.StatusCode)
+		}
+	}
+	body, err := json.Marshal(CreateEvents(t, 1, 1)[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp := postEvent(t, srv.URL, body, queryTestPrivKey); resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("valid event after two forged: status %d, want 429", resp.StatusCode)
+	}
+}
+
 func TestEventsHandlerReplayDoesNotSpendTheAuthorsBudget(t *testing.T) {
 	lim, _ := newLimiter(t, ratelimit.Config{
 		Event: ratelimit.Limit{PerPubkey: ratelimit.Rate{Events: 1, Per: time.Hour}},
