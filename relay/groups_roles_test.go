@@ -107,3 +107,68 @@ func TestNewSessionHandler_PublishesMissingRoles(t *testing.T) {
 		t.Fatalf("startup kind:39003 = %+v", ev)
 	}
 }
+
+// With WithGroupsModerationPolicy, startup publishes kind:39001 and
+// kind:39003 under that policy only: a group whose stored ones already
+// follow it gets nothing new, never a default-policy 39001 dropping its
+// moderator.
+func TestNewSessionHandler_WithGroupsModerationPolicy(t *testing.T) {
+	policy := nip29.ModerationPolicy{
+		"admin":     defaultGroupModerationPolicy["admin"],
+		"moderator": {nip29.KindDeleteEvent},
+	}
+	descriptions := map[string]string{"moderator": "keeps the peace"}
+	store := newStore(t)
+	g := NewGroupsService(store)
+	g.setPolicy(policy)
+	g.setRoleDescriptions(descriptions)
+	g.setSigner(authTestPubKey, authTestPrivKey)
+	if err := g.Create(newGroupRecord(groupA, authTestPubKey)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.UpsertMember(groupA, GroupMember{Pubkey: memberA, Roles: []string{"moderator"}}); err != nil {
+		t.Fatal(err)
+	}
+	g.publishAllAdmins(context.Background())
+	g.publishAllRoles(context.Background())
+	admins, roles := storedAdmins(t, store, groupA), storedRoles(t, store, groupA)
+	if admins == nil || roles == nil {
+		t.Fatal("no kind:39001 or kind:39003 before startup")
+	}
+
+	NewSessionHandler(store, &nip11.Metadata{Self: authTestPubKey}, nil,
+		WithSessionPrivKey(authTestPrivKey), WithLogger(testlogger.New(t)),
+		WithGroupsModerationPolicy(policy), WithGroupsRoleDescriptions(descriptions))
+
+	if after := storedAdmins(t, store, groupA); after.ID != admins.ID {
+		t.Fatalf("startup republished kind:39001: %v", after.Tags)
+	}
+	if after := storedRoles(t, store, groupA); after.ID != roles.ID {
+		t.Fatalf("startup republished kind:39003: %v", after.Tags)
+	}
+
+	// Without the option, startup's default policy drops the moderator.
+	NewSessionHandler(store, &nip11.Metadata{Self: authTestPubKey}, nil,
+		WithSessionPrivKey(authTestPrivKey), WithLogger(testlogger.New(t)))
+	if after := storedAdmins(t, store, groupA); after.ID == admins.ID {
+		t.Fatal("startup under the default policy kept the moderator's kind:39001")
+	}
+}
+
+// storedAdmins returns group id's stored kind:39001, or nil.
+func storedAdmins(t *testing.T, store *EventStore, id string) *nip01.Event {
+	t.Helper()
+	evs, err := store.QueryEvents(context.Background(), &nip01.SubscriptionFilter{
+		Kinds: []int{nip29.KindGroupAdmins}, Tags: map[string][]string{"d": {id}}, Limit: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) > 1 {
+		t.Fatalf("%d kind:39001 events stored for %s, want at most 1", len(evs), id)
+	}
+	if len(evs) == 0 {
+		return nil
+	}
+	return evs[0]
+}

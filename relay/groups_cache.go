@@ -271,13 +271,20 @@ func NewGroupsService(store *EventStore) *GroupsService {
 // republishes every hosted group's kind:39003, and its kind:39001 (which
 // lists only members holding a role the policy gives a moderation kind),
 // to match. A no-op on a nil *GroupsService.
+//
+// To start with a policy, without first publishing under the default one,
+// pass WithGroupsModerationPolicy to NewSessionHandler instead.
 func (g *GroupsService) SetModerationPolicy(policy nip29.ModerationPolicy) {
 	if g == nil {
 		return
 	}
-	g.policy.Store(&policy)
+	g.setPolicy(policy)
 	g.publishAllRoles(context.Background())
 	g.publishAllAdmins(context.Background())
+}
+
+func (g *GroupsService) setPolicy(policy nip29.ModerationPolicy) {
+	g.policy.Store(&policy)
 }
 
 // SetModerationLog turns the moderation log on or off. On, every accepted
@@ -313,12 +320,16 @@ func (g *GroupsService) SetRoleDescriptions(descriptions map[string]string) {
 	if g == nil {
 		return
 	}
+	g.setRoleDescriptions(descriptions)
+	g.publishAllRoles(context.Background())
+}
+
+func (g *GroupsService) setRoleDescriptions(descriptions map[string]string) {
 	d := make(map[string]string, len(descriptions))
 	for k, v := range descriptions {
 		d[k] = v
 	}
 	g.roleDescriptions.Store(&d)
-	g.publishAllRoles(context.Background())
 }
 
 // Roles returns the roles this relay advertises in kind:39003: the

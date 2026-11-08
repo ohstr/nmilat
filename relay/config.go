@@ -5,6 +5,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/ohstr/nmilat/nip29"
 	"github.com/ohstr/nmilat/relay/ratelimit"
 	"github.com/rs/zerolog"
 )
@@ -159,6 +160,16 @@ type SessionConfig struct {
 
 	// Verification tunes NIP-05/LUD-16/picture checks.
 	Verification VerificationConfig
+
+	// GroupsModerationPolicy, when set, is the hosted NIP-29 groups'
+	// moderation policy from the start, so the kind:39001 and kind:39003
+	// NewSessionHandler republishes at startup already follow it. nil keeps
+	// the default policy. See WithGroupsModerationPolicy.
+	GroupsModerationPolicy nip29.ModerationPolicy
+
+	// GroupsRoleDescriptions, when set, describe the policy's roles in
+	// kind:39003 from the start. See WithGroupsRoleDescriptions.
+	GroupsRoleDescriptions map[string]string
 }
 
 // DefaultMaxStatsTargets is the default MaxStatsTargets.
@@ -396,6 +407,26 @@ func WithSessionAllowedOrigins(origins ...string) SessionOption {
 func WithRateLimiter(l *ratelimit.Limiter) SessionOption {
 	return func(target *SessionConfig) {
 		target.RateLimiter = l
+	}
+}
+
+// WithGroupsModerationPolicy sets SessionConfig.GroupsModerationPolicy:
+// the hosted groups' moderation policy before NewSessionHandler republishes
+// any group's kind:39001 or kind:39003, so none is ever published under the
+// default policy first. GroupsService.SetModerationPolicy still changes it
+// at runtime.
+func WithGroupsModerationPolicy(policy nip29.ModerationPolicy) SessionOption {
+	return func(target *SessionConfig) {
+		target.GroupsModerationPolicy = policy
+	}
+}
+
+// WithGroupsRoleDescriptions sets SessionConfig.GroupsRoleDescriptions: the
+// role descriptions kind:39003 carries from the startup republish on.
+// GroupsService.SetRoleDescriptions still changes them at runtime.
+func WithGroupsRoleDescriptions(descriptions map[string]string) SessionOption {
+	return func(target *SessionConfig) {
+		target.GroupsRoleDescriptions = descriptions
 	}
 }
 
