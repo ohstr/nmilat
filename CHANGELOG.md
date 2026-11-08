@@ -1017,6 +1017,7 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes NIP-29 invite codes (logged kind 9009) and pending join requests being readable by any member holding a role, even one the moderation policy gives nothing: they now follow `CanPerform` for kind 9009, and for kind 9000 or 9001.
 - Fixes `nipB7/server` serving blobs with only the uploader's type, or one guessed from the url's extension, on the host's origin: every blob response now carries `nosniff` and a sandboxing CSP, a blob without a type is `application/octet-stream`, and anything but images, audio, video and plain text is an attachment.
 - Fixes `nipB7/server` blob descriptor URLs having no file extension, which
   BUD-02 requires: the url now ends in one for the blob's type (`.png`,

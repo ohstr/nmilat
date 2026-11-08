@@ -934,14 +934,13 @@ func (g *GroupsService) anyIdentityIsMember(s groupReader, groupID string) bool 
 	return false
 }
 
-// anyIdentityIsAdmin is anyIdentityIsMember for admins (relay admins
-// included), and for anyone CanPerform allows one of kinds -- so a key the
-// host's authorizer lets act on something also sees it.
-func (g *GroupsService) anyIdentityIsAdmin(s groupReader, groupID string, kinds ...int) bool {
+// anyIdentityCanPerform reports whether CanPerform allows any identity
+// authenticated on s one of kinds in groupID: a relay admin, a role the
+// policy gives one of them, or the host's authorizer. Holding a role is
+// not enough -- a role the policy gives nothing (a "vip" badge) must not
+// read what only those who act on it may.
+func (g *GroupsService) anyIdentityCanPerform(s groupReader, groupID string, kinds ...int) bool {
 	for _, pk := range s.readerPubkeys() {
-		if g.IsAdmin(groupID, pk) {
-			return true
-		}
 		for _, k := range kinds {
 			if g.CanPerform(groupID, pk, k) {
 				return true
@@ -965,20 +964,21 @@ func (g *GroupsService) recordModeration(ctx context.Context, s *Session, ev *ni
 
 // deniedModerationEvent reports whether a stored moderation event (the
 // moderation log) is withheld from s: it is for the group's members, and
-// an invite, which carries its code, for its admins.
+// an invite, which carries its code, for those who may create one.
 func (g *GroupsService) deniedModerationEvent(s groupReader, ev *nip01.Event) bool {
 	id, err := nip29.GroupIDFromTags(ev.Tags)
 	if err != nil || !g.Exists(id) {
 		return true
 	}
 	if ev.Kind == nip29.KindCreateInvite {
-		return !g.anyIdentityIsAdmin(s, id, nip29.KindCreateInvite)
+		return !g.anyIdentityCanPerform(s, id, nip29.KindCreateInvite)
 	}
 	return !g.anyIdentityIsMember(s, id)
 }
 
 // deniedPendingJoin reports whether a stored join request is withheld from
-// s: only the group's admins and the requester see it.
+// s: only the requester and those who may answer it (kind 9000 or 9001)
+// see it.
 func (g *GroupsService) deniedPendingJoin(s groupReader, ev *nip01.Event) bool {
 	id, err := nip29.GroupIDFromTags(ev.Tags)
 	if err != nil || !g.Exists(id) {
@@ -989,7 +989,7 @@ func (g *GroupsService) deniedPendingJoin(s groupReader, ev *nip01.Event) bool {
 			return false
 		}
 	}
-	return !g.anyIdentityIsAdmin(s, id, nip29.KindPutUser, nip29.KindRemoveUser)
+	return !g.anyIdentityCanPerform(s, id, nip29.KindPutUser, nip29.KindRemoveUser)
 }
 
 // groupReader is whoever a group-visibility check is for: a WebSocket

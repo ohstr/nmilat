@@ -224,9 +224,9 @@ func (g *GroupsService) SetModerationPolicy(policy nip29.ModerationPolicy) {
 
 // SetModerationLog turns the moderation log on or off. On, every accepted
 // moderation event except a group's deletion (kinds 9000-9020) is stored,
-// readable by the group's members; an invite (9009) only by its admins.
-// Off, the default, they are commands and nothing is kept. A deleted
-// group's log goes with its other events.
+// readable by the group's members; an invite (9009) only by those
+// CanPerform allows kind 9009. Off, the default, they are commands and
+// nothing is kept. A deleted group's log goes with its other events.
 func (g *GroupsService) SetModerationLog(on bool) {
 	if g == nil {
 		return
@@ -236,9 +236,10 @@ func (g *GroupsService) SetModerationLog(on bool) {
 
 // SetPendingJoins turns pending join requests on or off. On, a closed
 // group's join request without an invite code is stored instead of
-// refused, readable by the group's admins and the requester, until an
-// admin answers it with kind:9000 (accept) or kind:9001 (decline), the
-// requester joins another way or leaves, or an admin deletes it (9005).
+// refused, readable by the requester and those CanPerform allows kind
+// 9000 or 9001, until an admin answers it with kind:9000 (accept) or
+// kind:9001 (decline), the requester joins another way or leaves, or an
+// admin deletes it (9005).
 // Off, the default, such a request is refused.
 func (g *GroupsService) SetPendingJoins(on bool) {
 	if g == nil {
