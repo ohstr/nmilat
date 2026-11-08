@@ -137,8 +137,22 @@ type Config struct {
 	// ("fe80::1%eth0") is ignored.
 	TrustedProxies []string
 
-	// MaxKeys bounds how many pubkeys or IPs each limit tracks at once; the
-	// least recently seen is forgotten first. 0 means DefaultMaxKeys.
+	// MaxKeys bounds how many pubkeys or IPs each limit tracks at once. 0
+	// means DefaultMaxKeys.
+	//
+	// A key whose bucket has refilled is forgotten as soon as it is the
+	// least recently seen, since a fresh bucket equals it. When a table is
+	// full of keys still limited, the least recently seen is forgotten
+	// anyway, starting it over with a full bucket: the memory bound wins
+	// over the limit. A client that can present more than MaxKeys keys can
+	// so reset others' buckets; an IPv6 client is keyed by its /64, so a
+	// /48 holds 65,536 keys.
+	//
+	// Each tracked key costs about 175 B (measured: 136 B of bookkeeping
+	// plus the key itself, more for a 64-character pubkey), and each of
+	// the ten per-pubkey and per-IP limits keeps its own table, so the
+	// worst case is about 10 × MaxKeys × 175 B: some 175 MB at the
+	// default.
 	MaxKeys int
 
 	// Now is the clock; nil means time.Now. For tests.
@@ -473,11 +487,17 @@ func (t *table) refund(k string) {
 	}
 }
 
+// evictScan bounds how many buckets one evict looks at.
+const evictScan = 8
+
 // evict forgets buckets that are full again, which a fresh one would
-// equal, from the least recently used end, and past maxKeys the oldest
-// even if not. Each call does a bounded amount of work.
+// equal, from the least recently used end. Past maxKeys it forgets the
+// least recently used full one among the oldest evictScan, else the least
+// recently used of all, still limited or not (see Config.MaxKeys). The
+// bucket just taken from, at the front, is never forgotten. Each call does
+// a bounded amount of work.
 func (t *table) evict(now time.Time) {
-	for range 8 {
+	for range evictScan {
 		e := t.lru.Back()
 		if e == nil || e == t.lru.Front() || e.Value.(*bucket).full.After(now) {
 			break
@@ -485,7 +505,14 @@ func (t *table) evict(now time.Time) {
 		t.remove(e)
 	}
 	for len(t.keys) > t.maxKeys {
-		t.remove(t.lru.Back())
+		victim := t.lru.Back()
+		for i, e := 0, victim; i < evictScan && e != nil && e != t.lru.Front(); i, e = i+1, e.Prev() {
+			if !e.Value.(*bucket).full.After(now) {
+				victim = e
+				break
+			}
+		}
+		t.remove(victim)
 	}
 }
 

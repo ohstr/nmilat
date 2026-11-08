@@ -230,6 +230,37 @@ func TestEvictionIsBounded(t *testing.T) {
 	}
 }
 
+func TestFullTableForgetsRefilledBucketsFirst(t *testing.T) {
+	l, c := newLimiter(t, Config{Read: Limit{PerIP: Rate{Events: 1, Per: time.Minute, Burst: 2}}, MaxKeys: 2})
+	tab := l.ip[Read]
+	// "limited" spends its whole burst first, so it is the least recently
+	// seen; "refilled" spends one token after it and is full again first.
+	l.Allow(Read, "limited", "")
+	l.Allow(Read, "limited", "")
+	c.advance(time.Second)
+	l.Allow(Read, "refilled", "")
+	c.advance(time.Minute)
+	l.Allow(Read, "new", "")
+	if _, ok := tab.keys["limited"]; !ok {
+		t.Fatal("a still-limited bucket was forgotten while a refilled one was there")
+	}
+	if _, ok := tab.keys["refilled"]; ok {
+		t.Fatal("the refilled bucket was kept")
+	}
+	if n := tab.size(); n != 2 {
+		t.Fatalf("%d keys, want 2", n)
+	}
+
+	// With every bucket still limited, the least recently seen goes.
+	l2, _ := newLimiter(t, Config{Read: Limit{PerIP: Rate{Events: 1, Per: time.Hour}}, MaxKeys: 2})
+	l2.Allow(Read, "a", "")
+	l2.Allow(Read, "b", "")
+	l2.Allow(Read, "c", "")
+	if _, ok := l2.Allow(Read, "a", ""); !ok {
+		t.Fatal("the least recently seen key was not the one forgotten")
+	}
+}
+
 func TestRefilledBucketsAreForgotten(t *testing.T) {
 	l, c := newLimiter(t, Config{Read: Limit{PerIP: Rate{Events: 10, Per: time.Second}}})
 	tab := l.ip[Read]
