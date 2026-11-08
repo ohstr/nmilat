@@ -8,8 +8,10 @@ import (
 
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip11"
+	"github.com/ohstr/nmilat/nip29"
 	"github.com/ohstr/nmilat/nip43"
 	"github.com/ohstr/nmilat/nip98"
+	"github.com/ohstr/nmilat/relay/ratelimit"
 )
 
 // MaxEventsBodyBytes caps a POST /events request body. A single signed
@@ -46,10 +48,16 @@ const MaxEventsBodyBytes = 1 << 20
 //     delegated credential, and there is no connection to have offered one
 //     at AUTH time the way NIP-AA requires. Matches NewQueryHandler's own
 //     documented membership-check scope.
-//   - NIP-43 join/leave requests (kind 9021/9022) are rejected outright:
+//   - NIP-43 join/leave requests (kind 28934/28936) are rejected outright:
 //     MembershipService.HandleEvent is wired to a live *Session for its
 //     reply/broadcast side effects, which an HTTP POST has none of. Use the
 //     relay's membership management API (ncli relay members) instead.
+//   - NIP-29 moderation events and group requests (kinds 9000-9022) are
+//     rejected outright for the same reason: over the WebSocket they are
+//     commands GroupsService applies, never stored as sent. Send them over
+//     a WebSocket. Group content goes through the same members-only write
+//     gate as over the WebSocket when the handler has the relay's groups
+//     (WithEventsGroups).
 func NewEventsHandler(store *EventStore, limitation *nip11.Limitation, membership *MembershipService, selfPubkey string, opts ...EventsHandlerOption) http.Handler {
 	h := &eventsHandler{store: store, limitation: limitation, membership: membership, selfPubkey: selfPubkey}
 	for _, opt := range opts {
@@ -75,7 +83,26 @@ func WithEventsRelayAuthoredKinds(kinds ...int) EventsHandlerOption {
 	return func(h *eventsHandler) { h.relayAuthored = append([]int(nil), kinds...) }
 }
 
+// WithEventsRateLimiter counts every POST /events against l's HTTP limits
+// (client IP, then NIP-98 signer) and the event against its Event limits:
+// the client IP's, and, for an event the relay does not already have, the
+// author's, so an author's writes share one budget with the WebSocket. A
+// refusal is a 429 with Retry-After.
+func WithEventsRateLimiter(l *ratelimit.Limiter) EventsHandlerOption {
+	return func(h *eventsHandler) { h.limiter = l }
+}
+
+// WithEventsGroups gives the handler the relay's hosted NIP-29 groups
+// (SessionHandler.Groups), so an event tagged into a private, closed or
+// restricted group is refused unless its author is a member, as over the
+// WebSocket. A relay hosting groups should always pass it.
+func WithEventsGroups(g *GroupsService) EventsHandlerOption {
+	return func(h *eventsHandler) { h.groups = g }
+}
+
 type eventsHandler struct {
+	groups        *GroupsService
+	limiter       *ratelimit.Limiter
 	store         *EventStore
 	limitation    *nip11.Limitation
 	membership    *MembershipService
@@ -88,6 +115,11 @@ func (h *eventsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ip := h.limiter.ClientIP(r)
+	if wait, ok := h.limiter.Allow(ratelimit.HTTP, ip, ""); !ok {
+		ratelimit.Refuse(w, ratelimit.HTTP, wait)
 		return
 	}
 
@@ -104,6 +136,10 @@ func (h *eventsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	signerPubkey, err := nip98.VerifyAnyPubkey(r, nip98.Options{Body: body, NormalizeRootPath: true})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+	if wait, ok := h.limiter.Allow(ratelimit.HTTP, "", signerPubkey); !ok {
+		ratelimit.Refuse(w, ratelimit.HTTP, wait)
 		return
 	}
 
@@ -123,6 +159,10 @@ func (h *eventsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if ev.Kind == nip43.KindJoinRequest || ev.Kind == nip43.KindLeaveRequest {
 		http.Error(w, "restricted: join/leave requests are not accepted via /events -- use the relay's membership management API", http.StatusBadRequest)
+		return
+	}
+	if nip29.IsModerationKind(ev.Kind) || nip29.IsUserRequestKind(ev.Kind) {
+		http.Error(w, "restricted: use a WebSocket to send group moderation events and requests", http.StatusBadRequest)
 		return
 	}
 
@@ -152,6 +192,13 @@ func (h *eventsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The IP's Event budget, as an EVENT over the WebSocket takes first;
+	// the author's comes later, for a new event only.
+	if wait, ok := h.limiter.Allow(ratelimit.Event, ip, ""); !ok {
+		ratelimit.Refuse(w, ratelimit.Event, wait)
+		return
+	}
+
 	if err := runEventValidators(r.Context(), &ev); err != nil {
 		http.Error(w, rejectMessage(err), http.StatusBadRequest)
 		return
@@ -164,9 +211,26 @@ func (h *eventsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// NIP-29 content: only members post into a private, closed or
+	// restricted group, as processEvent checks.
+	if msg := h.groups.deniedGroupWrite(&ev); msg != "" {
+		http.Error(w, msg, http.StatusForbidden)
+		return
+	}
+
 	if h.limitation != nil && h.limitation.MembershipRequired && !nip43.IsRelayAuthoredKind(ev.Kind) {
 		if h.membership == nil || !h.membership.IsMember(ev.PubKey) {
 			http.Error(w, "restricted: valid NIP-43 membership required", http.StatusForbidden)
+			return
+		}
+	}
+
+	// The author's Event budget, shared with the WebSocket. The NIP-98
+	// signer is the author here, but a replay of an event the relay
+	// already has costs the author nothing, as over the WebSocket.
+	if h.limiter != nil && !h.store.has(ev.ID) {
+		if wait, ok := h.limiter.Allow(ratelimit.Event, "", ev.PubKey); !ok {
+			ratelimit.Refuse(w, ratelimit.Event, wait)
 			return
 		}
 	}

@@ -5,6 +5,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/ohstr/nmilat/relay/ratelimit"
 	"github.com/rs/zerolog"
 )
 
@@ -67,6 +68,13 @@ type SessionConfig struct {
 	// MembershipInviteMaxUses caps how many times a single invite claim
 	// may be consumed via a Join Request (kind 28934). 0 means unlimited.
 	MembershipInviteMaxUses int
+
+	// InviteRequestAuthorizer, when set, is asked before a kind:28935 REQ
+	// is given an invite code; an error refuses it. Nil keeps the old
+	// behaviour, a code for every connection that passes the read gate,
+	// which is deprecated: upstream NIP-43 replaced this REQ flow with
+	// NIP-86's createclaim. See WithInviteRequestAuthorizer.
+	InviteRequestAuthorizer InviteRequestAuthorizer
 
 	// MembershipPublishAddRemove, if true, makes the relay also publish a
 	// signed kind:8000/8001 event whenever NIP-43 membership changes via
@@ -143,6 +151,11 @@ type SessionConfig struct {
 
 	// Observer receives activity for metrics. nil discards it.
 	Observer Observer
+
+	// RateLimiter, when set, limits EVENTs, REQs, COUNTs, NEG-OPENs and
+	// AUTHs, the HTTP bridge (QueryHandler, CountHandler) and connections
+	// per IP. nil (the default) limits nothing. See WithRateLimiter.
+	RateLimiter *ratelimit.Limiter
 
 	// Verification tunes NIP-05/LUD-16/picture checks.
 	Verification VerificationConfig
@@ -247,6 +260,16 @@ func WithSessionConfig(cfg SessionConfig) SessionOption {
 func WithRequestHandler(handlers ...RequestHandler) SessionOption {
 	return func(cfg *SessionConfig) {
 		cfg.RequestHandlers = append(cfg.RequestHandlers, handlers...)
+	}
+}
+
+// WithInviteRequestAuthorizer sets SessionConfig.InviteRequestAuthorizer:
+// fn decides which connections a kind:28935 REQ may issue an invite code
+// to. Setting this alone, unlike WithSessionConfig, does not discard any
+// other configured defaults.
+func WithInviteRequestAuthorizer(fn InviteRequestAuthorizer) SessionOption {
+	return func(target *SessionConfig) {
+		target.InviteRequestAuthorizer = fn
 	}
 }
 
@@ -358,6 +381,21 @@ func WithSessionDelegation(d *DelegationConfig) SessionOption {
 func WithSessionAllowedOrigins(origins ...string) SessionOption {
 	return func(target *SessionConfig) {
 		target.AllowedOrigins = origins
+	}
+}
+
+// WithRateLimiter sets SessionConfig.RateLimiter. An EVENT takes from its
+// IP's Event budget, and from its author's only when the author has
+// authenticated on the connection and the event is new; REQ, COUNT and
+// NEG-OPEN take from Read, and AUTH from the IP's Read. A refused EVENT or
+// AUTH is answered OK false, a REQ or COUNT CLOSED and a NEG-OPEN NEG-ERR,
+// all "rate-limited:"; a connection over MaxConnsPerIP is refused 429
+// before the upgrade. Share l with NewEventsHandler (WithEventsRateLimiter) and
+// nipB7/server (Options.RateLimit = l.AllowBlossom) to count each client
+// once across them.
+func WithRateLimiter(l *ratelimit.Limiter) SessionOption {
+	return func(target *SessionConfig) {
+		target.RateLimiter = l
 	}
 }
 

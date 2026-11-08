@@ -3,6 +3,7 @@ package relay
 import (
 	"context"
 	"github.com/ohstr/nmilat/nip01"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -149,6 +150,14 @@ type GroupsService struct {
 	// the relay master key or by group admins". Set by SetRelayAdmins.
 	relayAdmins atomic.Pointer[map[string]bool]
 
+	// authorizer, when set, grants a moderation kind beyond the policy;
+	// see SetAuthorizer.
+	authorizer atomic.Pointer[groupAuthorizer]
+
+	// grantCeiling, when set, keeps role changes within the sender's own
+	// powers; see SetGrantCeiling.
+	grantCeiling atomic.Bool
+
 	// memberNotices, when set, are the kinds of the seat notices the
 	// relay signs; see SetMemberNotices.
 	memberNotices atomic.Pointer[MemberNoticeKinds]
@@ -169,20 +178,17 @@ type GroupsService struct {
 	// outside a session (a policy change, startup); see setSigner.
 	signer atomic.Pointer[groupsSigner]
 
-	// linkMu serializes NIP-29 "Subgroups" cross-group mutation: a
-	// reparent touches up to three records (the group itself, its old
-	// parent, its new parent), and a delete cascades over every one of
-	// the deleted group's own children. groupsCache's own writeMu keeps
-	// each *individual* Get/put memory-safe, but gives no atomicity
-	// across that multi-record sequence -- two concurrent reparents of
-	// the same child to two different new parents could otherwise both
-	// successfully addChild on their own target, leaving the "losing"
-	// parent's Children listing a child whose own Parent no longer
-	// points back at it. Held for the whole validate-then-mutate
-	// sequence in handleEditMetadata's reparent path and
-	// handleDeleteGroup's cascade, never for a same-group-only edit
-	// (which groupsCache's own synchronization already covers alone).
-	linkMu sync.Mutex
+	// mu serializes every change to hosted groups: each mutator's
+	// read-modify-write of a record, and each moderation event's checks
+	// together with the change they allow (handle holds it across the
+	// whole handler), including the multi-record sequences of a NIP-29
+	// reparent (the group, its old parent, its new parent) and a delete's
+	// cascade over its children. Without it two concurrent roster changes
+	// each copy the same record and the later write drops the earlier's
+	// member, and a write racing a group's deletion recreates it. Group
+	// writes already queue on the store's single write transaction, so one
+	// lock for every group costs no throughput; readers never take it.
+	mu sync.Mutex
 }
 
 // Count returns the number of hosted groups, from the in-memory cache.
@@ -203,21 +209,23 @@ func NewGroupsService(store *EventStore) *GroupsService {
 }
 
 // SetModerationPolicy replaces the policy CanPerform consults, and
-// republishes every hosted group's kind:39003 to match. A no-op on a nil
-// *GroupsService.
+// republishes every hosted group's kind:39003, and its kind:39001 (which
+// lists only members holding a role the policy gives a moderation kind),
+// to match. A no-op on a nil *GroupsService.
 func (g *GroupsService) SetModerationPolicy(policy nip29.ModerationPolicy) {
 	if g == nil {
 		return
 	}
 	g.policy.Store(&policy)
 	g.publishAllRoles(context.Background())
+	g.publishAllAdmins(context.Background())
 }
 
 // SetModerationLog turns the moderation log on or off. On, every accepted
 // moderation event except a group's deletion (kinds 9000-9020) is stored,
-// readable by the group's members; an invite (9009) only by its admins.
-// Off, the default, they are commands and nothing is kept. A deleted
-// group's log goes with its other events.
+// readable by the group's members; an invite (9009) only by those
+// CanPerform allows kind 9009. Off, the default, they are commands and
+// nothing is kept. A deleted group's log goes with its other events.
 func (g *GroupsService) SetModerationLog(on bool) {
 	if g == nil {
 		return
@@ -227,9 +235,10 @@ func (g *GroupsService) SetModerationLog(on bool) {
 
 // SetPendingJoins turns pending join requests on or off. On, a closed
 // group's join request without an invite code is stored instead of
-// refused, readable by the group's admins and the requester, until an
-// admin answers it with kind:9000 (accept) or kind:9001 (decline), the
-// requester joins another way or leaves, or an admin deletes it (9005).
+// refused, readable by the requester and those CanPerform allows kind
+// 9000 or 9001, until an admin answers it with kind:9000 (accept) or
+// kind:9001 (decline), the requester joins another way or leaves, or an
+// admin deletes it (9005).
 // Off, the default, such a request is refused.
 func (g *GroupsService) SetPendingJoins(on bool) {
 	if g == nil {
@@ -335,11 +344,58 @@ func (g *GroupsService) IsMember(id, pubkey string) bool {
 	return rec != nil && rec.IsMember(pubkey)
 }
 
-// CanPerform reports whether pubkey's own roles in group id let it perform
-// a moderation action of kind, per GroupsService's ModerationPolicy. A
-// pubkey with no roster entry, or holding no roles, can never perform any
-// moderation action -- AllowsAny(nil, kind) is always false. A relay admin
-// (SetRelayAdmins) may perform any action in any hosted group.
+// groupAuthorizer is the function SetAuthorizer installs.
+type groupAuthorizer func(groupID, pubkey string, kind int) bool
+
+// SetAuthorizer installs a host's own answer to "may pubkey perform a
+// moderation action of kind in group groupID", consulted by CanPerform
+// after the relay admins and the ModerationPolicy -- e.g. relay-wide roles
+// that carry NIP-29 powers in every hosted group. It can only grant, never
+// take away what the policy allows. What it grants also widens reads:
+// kind 9009 lets a key read the group's logged invite codes, and kind
+// 9000 or 9001 its pending join requests. nil removes it. A no-op on a
+// nil *GroupsService.
+func (g *GroupsService) SetAuthorizer(fn func(groupID, pubkey string, kind int) bool) {
+	if g == nil {
+		return
+	}
+	if fn == nil {
+		g.authorizer.Store(nil)
+		return
+	}
+	a := groupAuthorizer(fn)
+	g.authorizer.Store(&a)
+}
+
+// SetGrantCeiling turns the grant ceiling on or off. On, a kind:9000 may
+// only give a member roles whose every kind the sender may perform itself,
+// and may only take roles from -- like a kind:9001 may only remove -- a
+// member holding no moderation kind the sender lacks. Holding a kind means
+// CanPerform, so a relay admin, or a key holding every kind, is never
+// limited, and the creator's "admin" role can be given or taken only by
+// someone holding all of its kinds. Off, the default, anyone allowed
+// kind:9000/9001 may give or take any role.
+//
+// A role's kinds, for a grant, are read from the ModerationPolicy alone.
+// A host authorizer (SetAuthorizer) that grants powers by role name, to a
+// role the policy gives nothing, is therefore not seen: anyone allowed
+// kind:9000 may give that role, and with it the authorizer's powers. Such
+// a host should name those kinds in the policy too, or decide by
+// something other than the role. Taking and removing are not affected:
+// they compare what CanPerform, authorizer included, allows each side.
+func (g *GroupsService) SetGrantCeiling(on bool) {
+	if g == nil {
+		return
+	}
+	g.grantCeiling.Store(on)
+}
+
+// CanPerform reports whether pubkey may perform a moderation action of kind
+// in group id: a relay admin (SetRelayAdmins) may perform any action in
+// any hosted group; anyone else needs one of their own roles to allow it
+// per GroupsService's ModerationPolicy, or the host's authorizer
+// (SetAuthorizer) to. A pubkey with no roster entry, or holding no roles,
+// gets nothing from the policy -- AllowsAny(nil, kind) is always false.
 func (g *GroupsService) CanPerform(id, pubkey string, kind int) bool {
 	if g == nil {
 		return false
@@ -351,11 +407,109 @@ func (g *GroupsService) CanPerform(id, pubkey string, kind int) bool {
 	if g.isRelayAdmin(pubkey) {
 		return true
 	}
+	if policy := g.policy.Load(); policy != nil && policy.AllowsAny(rec.RolesFor(pubkey), kind) {
+		return true
+	}
+	if a := g.authorizer.Load(); a != nil && (*a)(id, pubkey, kind) {
+		return true
+	}
+	return false
+}
+
+// moderationKinds returns every kind a pubkey could hold: the moderation
+// kinds this build implements plus any other the policy names.
+func (g *GroupsService) moderationKinds() []int {
+	seen := map[int]bool{}
+	var kinds []int
+	add := func(ks []int) {
+		for _, k := range ks {
+			if !seen[k] {
+				seen[k] = true
+				kinds = append(kinds, k)
+			}
+		}
+	}
+	add(defaultGroupModerationPolicy["admin"])
+	if policy := g.policy.Load(); policy != nil {
+		for _, ks := range *policy {
+			add(ks)
+		}
+	}
+	return kinds
+}
+
+// outranks reports whether target holds a moderation kind in group id that
+// sender doesn't.
+func (g *GroupsService) outranks(id, target, sender string) bool {
+	for _, k := range g.moderationKinds() {
+		if g.CanPerform(id, target, k) && !g.CanPerform(id, sender, k) {
+			return true
+		}
+	}
+	return false
+}
+
+// grantCeilingPutUser returns why the grant ceiling refuses sender's
+// kind:9000 setting target's roles in group id to roles, or "" if it
+// allows it (or is off). A role target already holds is not a grant; one
+// it loses is taken.
+func (g *GroupsService) grantCeilingPutUser(id, sender, target string, roles []string) string {
+	if !g.grantCeiling.Load() {
+		return ""
+	}
+	rec := g.cache.Get(id)
+	if rec == nil {
+		return ""
+	}
+	current := rec.RolesFor(target)
+	var policy nip29.ModerationPolicy
+	if p := g.policy.Load(); p != nil {
+		policy = *p
+	}
+	for _, role := range roles {
+		if slices.Contains(current, role) {
+			continue
+		}
+		for _, k := range policy[role] {
+			if !g.CanPerform(id, sender, k) {
+				return "restricted: you may not grant a role with powers you do not hold."
+			}
+		}
+	}
+	for _, role := range current {
+		if !slices.Contains(roles, role) && g.outranks(id, target, sender) {
+			return "restricted: you may not take roles from a member with powers you do not hold."
+		}
+	}
+	return ""
+}
+
+// grantCeilingRemoveUser returns why the grant ceiling refuses sender's
+// kind:9001 removing target from group id, or "" if it allows it (or is
+// off).
+func (g *GroupsService) grantCeilingRemoveUser(id, sender, target string) string {
+	if !g.grantCeiling.Load() || !g.IsMember(id, target) {
+		return ""
+	}
+	if g.outranks(id, target, sender) {
+		return "restricted: you may not remove a member with powers you do not hold."
+	}
+	return ""
+}
+
+// hasPrivilege reports whether any of roles may perform at least one
+// moderation action under the policy -- who kind:39001 lists.
+func (g *GroupsService) hasPrivilege(roles []string) bool {
 	policy := g.policy.Load()
 	if policy == nil {
 		return false
 	}
-	return policy.AllowsAny(rec.RolesFor(pubkey), kind)
+	for _, role := range roles {
+		if len((*policy)[role]) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // IsPrivate reports whether id names a currently-hosted group whose
@@ -412,6 +566,12 @@ func (g *GroupsService) Create(rec *GroupRecord) error {
 	if g == nil {
 		return nil
 	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.createLocked(rec)
+}
+
+func (g *GroupsService) createLocked(rec *GroupRecord) error {
 	if err := g.store.PutGroup(rec); err != nil {
 		return err
 	}
@@ -429,6 +589,12 @@ func (g *GroupsService) Delete(id string) (*GroupRecord, error) {
 	if g == nil {
 		return nil, nil
 	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.deleteLocked(id)
+}
+
+func (g *GroupsService) deleteLocked(id string) (*GroupRecord, error) {
 	rec := g.cache.Get(id)
 	if err := g.store.DeleteGroup(id); err != nil {
 		return nil, err
@@ -456,18 +622,17 @@ func (g *GroupsService) List() ([]*GroupRecord, error) {
 	return g.store.ListGroups()
 }
 
-// UpsertMember adds member to group id's roster, or replaces its existing
-// entry if member.Pubkey already holds one (kind:9000 put-user). Returns
-// the updated record, or (nil, nil) if id names no known group.
-func (g *GroupsService) UpsertMember(id string, member GroupMember) (*GroupRecord, error) {
-	if g == nil {
-		return nil, nil
-	}
+// updateLocked is every single-record mutator's read-modify-write: it
+// reads group id's current record, builds the next one with change, and
+// stores it. g.mu must be held, so no concurrent change to the group is
+// lost and a group deleted meanwhile stays deleted. Returns (nil, nil) if
+// id names no known group.
+func (g *GroupsService) updateLocked(id string, change func(*GroupRecord) *GroupRecord) (*GroupRecord, error) {
 	cur := g.cache.Get(id)
 	if cur == nil {
 		return nil, nil
 	}
-	next := cur.withMember(member)
+	next := change(cur)
 	if err := g.store.PutGroup(next); err != nil {
 		return nil, err
 	}
@@ -475,23 +640,44 @@ func (g *GroupsService) UpsertMember(id string, member GroupMember) (*GroupRecor
 	return next, nil
 }
 
+// update is updateLocked taking g.mu itself, for the exported mutators.
+func (g *GroupsService) update(id string, change func(*GroupRecord) *GroupRecord) (*GroupRecord, error) {
+	if g == nil {
+		return nil, nil
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.updateLocked(id, change)
+}
+
+// UpsertMember adds member to group id's roster, or replaces its existing
+// entry if member.Pubkey already holds one (kind:9000 put-user). Returns
+// the updated record, or (nil, nil) if id names no known group.
+func (g *GroupsService) UpsertMember(id string, member GroupMember) (*GroupRecord, error) {
+	return g.update(id, withMember(member))
+}
+
+func (g *GroupsService) upsertMemberLocked(id string, member GroupMember) (*GroupRecord, error) {
+	return g.updateLocked(id, withMember(member))
+}
+
+func withMember(member GroupMember) func(*GroupRecord) *GroupRecord {
+	return func(cur *GroupRecord) *GroupRecord { return cur.withMember(member) }
+}
+
 // RemoveMember removes pubkey's roster entry from group id (kind:9001
 // remove-user, or a kind:9022 self-leave). Returns the updated record, or
 // (nil, nil) if id names no known group.
 func (g *GroupsService) RemoveMember(id, pubkey string) (*GroupRecord, error) {
-	if g == nil {
-		return nil, nil
-	}
-	cur := g.cache.Get(id)
-	if cur == nil {
-		return nil, nil
-	}
-	next := cur.withoutMember(pubkey)
-	if err := g.store.PutGroup(next); err != nil {
-		return nil, err
-	}
-	g.cache.put(next)
-	return next, nil
+	return g.update(id, withoutMember(pubkey))
+}
+
+func (g *GroupsService) removeMemberLocked(id, pubkey string) (*GroupRecord, error) {
+	return g.updateLocked(id, withoutMember(pubkey))
+}
+
+func withoutMember(pubkey string) func(*GroupRecord) *GroupRecord {
+	return func(cur *GroupRecord) *GroupRecord { return cur.withoutMember(pubkey) }
 }
 
 // SetMetadata replaces group id's metadata wholesale (kind:9002
@@ -499,39 +685,37 @@ func (g *GroupsService) RemoveMember(id, pubkey string) (*GroupRecord, error) {
 // convention kind:9010's pin list uses). Returns the updated record, or
 // (nil, nil) if id names no known group.
 func (g *GroupsService) SetMetadata(id string, fields GroupMetadataFields) (*GroupRecord, error) {
-	if g == nil {
-		return nil, nil
+	return g.update(id, withMetadata(fields))
+}
+
+func (g *GroupsService) setMetadataLocked(id string, fields GroupMetadataFields) (*GroupRecord, error) {
+	return g.updateLocked(id, withMetadata(fields))
+}
+
+func withMetadata(fields GroupMetadataFields) func(*GroupRecord) *GroupRecord {
+	return func(cur *GroupRecord) *GroupRecord {
+		next := *cur
+		next.Metadata = fields
+		return &next
 	}
-	cur := g.cache.Get(id)
-	if cur == nil {
-		return nil, nil
-	}
-	next := *cur
-	next.Metadata = fields
-	if err := g.store.PutGroup(&next); err != nil {
-		return nil, err
-	}
-	g.cache.put(&next)
-	return &next, nil
 }
 
 // SetPins replaces group id's pinned list wholesale (kind:9010). Returns
 // the updated record, or (nil, nil) if id names no known group.
 func (g *GroupsService) SetPins(id string, pins GroupPins) (*GroupRecord, error) {
-	if g == nil {
-		return nil, nil
+	return g.update(id, withPins(pins))
+}
+
+func (g *GroupsService) setPinsLocked(id string, pins GroupPins) (*GroupRecord, error) {
+	return g.updateLocked(id, withPins(pins))
+}
+
+func withPins(pins GroupPins) func(*GroupRecord) *GroupRecord {
+	return func(cur *GroupRecord) *GroupRecord {
+		next := *cur
+		next.Pins = pins
+		return &next
 	}
-	cur := g.cache.Get(id)
-	if cur == nil {
-		return nil, nil
-	}
-	next := *cur
-	next.Pins = pins
-	if err := g.store.PutGroup(&next); err != nil {
-		return nil, err
-	}
-	g.cache.put(&next)
-	return &next, nil
 }
 
 // SetChildren replaces group id's ordered subgroup-id list wholesale
@@ -545,20 +729,15 @@ func (g *GroupsService) SetPins(id string, pins GroupPins) (*GroupRecord, error)
 // being updated -- exactly the footgun this helper exists to make
 // structurally impossible.
 func (g *GroupsService) SetChildren(id string, children []string) (*GroupRecord, error) {
-	if g == nil {
-		return nil, nil
+	return g.update(id, withChildren(children))
+}
+
+func withChildren(children []string) func(*GroupRecord) *GroupRecord {
+	return func(cur *GroupRecord) *GroupRecord {
+		next := *cur
+		next.Metadata.Children = children
+		return &next
 	}
-	cur := g.cache.Get(id)
-	if cur == nil {
-		return nil, nil
-	}
-	next := *cur
-	next.Metadata.Children = children
-	if err := g.store.PutGroup(&next); err != nil {
-		return nil, err
-	}
-	g.cache.put(&next)
-	return &next, nil
 }
 
 // SetParent replaces group id's own parent reference (empty string
@@ -567,51 +746,45 @@ func (g *GroupsService) SetChildren(id string, children []string) (*GroupRecord,
 // single-field mutator so a reparent or a delete-cascade can't
 // accidentally wipe the rest of the group's metadata.
 func (g *GroupsService) SetParent(id string, parent string) (*GroupRecord, error) {
-	if g == nil {
-		return nil, nil
+	return g.update(id, withParent(parent))
+}
+
+func (g *GroupsService) setParentLocked(id string, parent string) (*GroupRecord, error) {
+	return g.updateLocked(id, withParent(parent))
+}
+
+func withParent(parent string) func(*GroupRecord) *GroupRecord {
+	return func(cur *GroupRecord) *GroupRecord {
+		next := *cur
+		next.Metadata.Parent = parent
+		return &next
 	}
-	cur := g.cache.Get(id)
-	if cur == nil {
-		return nil, nil
-	}
-	next := *cur
-	next.Metadata.Parent = parent
-	if err := g.store.PutGroup(&next); err != nil {
-		return nil, err
-	}
-	g.cache.put(&next)
-	return &next, nil
 }
 
 // removeChild drops childID from parentID's Children list, if present.
 // Returns the updated parent record, or (nil, nil) if parentID names no
-// known group.
+// known group. g.mu must be held.
 func (g *GroupsService) removeChild(parentID, childID string) (*GroupRecord, error) {
-	parent := g.cache.Get(parentID)
-	if parent == nil {
-		return nil, nil
-	}
-	children := make([]string, 0, len(parent.Metadata.Children))
-	for _, id := range parent.Metadata.Children {
-		if id != childID {
-			children = append(children, id)
+	return g.updateLocked(parentID, func(cur *GroupRecord) *GroupRecord {
+		children := make([]string, 0, len(cur.Metadata.Children))
+		for _, id := range cur.Metadata.Children {
+			if id != childID {
+				children = append(children, id)
+			}
 		}
-	}
-	return g.SetChildren(parentID, children)
+		return withChildren(children)(cur)
+	})
 }
 
 // addChild appends childID to parentID's Children list. Returns the
 // updated parent record, or (nil, nil) if parentID names no known group.
 // Callers are responsible for not calling this with a childID already
 // present (handleEditMetadata's own validation is what actually decides
-// whether an addition is allowed at all).
+// whether an addition is allowed at all). g.mu must be held.
 func (g *GroupsService) addChild(parentID, childID string) (*GroupRecord, error) {
-	parent := g.cache.Get(parentID)
-	if parent == nil {
-		return nil, nil
-	}
-	children := append(append([]string{}, parent.Metadata.Children...), childID)
-	return g.SetChildren(parentID, children)
+	return g.updateLocked(parentID, func(cur *GroupRecord) *GroupRecord {
+		return withChildren(append(append([]string{}, cur.Metadata.Children...), childID))(cur)
+	})
 }
 
 // createsCycle reports whether setting groupID's parent to startParent
@@ -676,12 +849,44 @@ func (g *GroupsService) groupRolesEvent(selfPubkey, id string) *nip01.Event {
 }
 
 // publishRoles signs and stores group id's kind:39003, unless the stored
-// one already lists the same roles. Its created_at is strictly newer than
-// the stored one's, so a same-second republish can't lose the tie.
+// one already lists the same roles.
 func (g *GroupsService) publishRoles(ctx context.Context, pubkey, privkey, id string) {
-	ev := g.groupRolesEvent(pubkey, id)
+	g.publishIfChanged(ctx, privkey, id, g.groupRolesEvent(pubkey, id))
+}
+
+// publishAdmins signs and stores rec's kind:39001, unless the stored one
+// already lists the same admins.
+func (g *GroupsService) publishAdmins(ctx context.Context, pubkey, privkey string, rec *GroupRecord) {
+	g.publishIfChanged(ctx, privkey, rec.ID, g.groupAdminsEvent(pubkey, rec))
+}
+
+// publishAllAdmins republishes every hosted group's kind:39001 with the
+// signer from setSigner (a no-op until one is set), so a policy change
+// that gives a role powers, or takes them away, lists or drops its
+// holders. It holds g.mu, so no roster change publishes in between.
+func (g *GroupsService) publishAllAdmins(ctx context.Context) {
+	sg := g.signer.Load()
+	if sg == nil {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	snap := g.cache.snap.Load()
+	if snap == nil {
+		return
+	}
+	for _, rec := range snap.groups {
+		g.publishAdmins(ctx, sg.pubkey, sg.privkey, rec)
+	}
+}
+
+// publishIfChanged signs and stores ev, a relay-authored addressable
+// event for group id, unless the stored one has the same tags. Its
+// created_at is strictly newer than the stored one's, so a same-second
+// republish can't lose the tie.
+func (g *GroupsService) publishIfChanged(ctx context.Context, privkey, id string, ev *nip01.Event) {
 	prev, err := g.store.QueryEvents(ctx, &nip01.SubscriptionFilter{
-		Kinds: []int{nip29.KindGroupRoles}, Authors: []string{pubkey}, Tags: map[string][]string{"d": {id}}, Limit: 1,
+		Kinds: []int{ev.Kind}, Authors: []string{ev.PubKey}, Tags: map[string][]string{"d": {id}}, Limit: 1,
 	})
 	if err == nil && len(prev) == 1 {
 		if tagsEqual(prev[0].Tags, ev.Tags) {

@@ -168,7 +168,16 @@ type MembershipService struct {
 	// onChange, if set, runs after a Join or Leave changed the member set
 	// (the relay republishes its kind:13534 list).
 	onChange func()
+
+	// pruneMu guards pruneCursor, where the expired-claim sweep IssueInvite
+	// runs resumes next time.
+	pruneMu     sync.Mutex
+	pruneCursor string
 }
+
+// invitePruneBatch caps how many stored claims one IssueInvite reads while
+// sweeping expired ones, so issuing stays cheap however many are stored.
+const invitePruneBatch = 256
 
 // NewMembershipService constructs a MembershipService backed by store.
 // Call LoadFromStore once, at relay construction, to pre-populate the
@@ -298,7 +307,20 @@ func (m *MembershipService) IssueInvite(ttl time.Duration, maxUses int, roles []
 	if err := m.store.PutInviteClaim(rec); err != nil {
 		return nil, err
 	}
+	m.pruneExpiredInvites(now.Unix())
 	return rec, nil
+}
+
+// pruneExpiredInvites deletes expired claims from the next
+// invitePruneBatch stored ones, picking up where the last sweep stopped, so
+// claims nobody redeems don't pile up. A failure is left for the next
+// sweep: issuing a code never depends on it.
+func (m *MembershipService) pruneExpiredInvites(now int64) {
+	m.pruneMu.Lock()
+	defer m.pruneMu.Unlock()
+	if _, next, err := m.store.PruneExpiredInviteClaims(now, m.pruneCursor, invitePruneBatch); err == nil {
+		m.pruneCursor = next
+	}
 }
 
 // ReplaceFromEvent re-derives the authoritative member set from a

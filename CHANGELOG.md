@@ -8,6 +8,10 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `SessionConfig.InviteRequestAuthorizer` and `WithInviteRequestAuthorizer`, so the host decides which connections a NIP-43 kind 28935 invite request may issue a code to; a refused request is closed `restricted:`, or `auth-required:` before AUTH. Leaving it unset keeps issuing codes as before, which is deprecated now that NIP-43 moved invites to NIP-86 `createclaim`. ([#241](https://github.com/ohstr/nmilat/pull/241))
+- Adds `GroupsService.SetAuthorizer`: a host function that may allow a moderation kind to a pubkey in a hosted group beyond the moderation policy, such as relay-wide roles. Every NIP-29 moderation check, `CanPerform`, consults it after relay admins and the policy, so it also widens who reads a group's logged invites and pending join requests. ([#242](https://github.com/ohstr/nmilat/pull/242), [#245](https://github.com/ohstr/nmilat/pull/245))
+- Adds `GroupsService.SetGrantCeiling`, off by default: on, a kind 9000 may only give roles whose every kind the sender holds, and may not take roles from, nor a kind 9001 remove, a member holding a kind the sender lacks. A role's kinds come from the policy alone, so powers an authorizer grants by role name are not checked when that role is given. ([#242](https://github.com/ohstr/nmilat/pull/242), [#245](https://github.com/ohstr/nmilat/pull/245))
+- Adds `relay/ratelimit`: opt-in token buckets per pubkey and per IP for EVENTs, reads, the HTTP bridge and Blossom, plus a cap on connections per IP, set through `WithRateLimiter` (WebSocket, `/query`, `/count`), `WithEventsRateLimiter` (`/events`) and `nipB7/server` `Options.RateLimit`. A limit left unset is no limit; refusals are `rate-limited:` or 429 with Retry-After. ([#237](https://github.com/ohstr/nmilat/pull/237))
 - Adds option details to `nippf` (NIP-PF `detail` tags): `Option.Detail` on forms, where two for one option make the form invalid, and `PollExtras.Detail` on NIP-88 polls, where two give none. Shown with the option, never counted. ([#232](https://github.com/ohstr/nmilat/pull/232))
 - Adds `nipB7/server`, a Blossom blob server a relay can mount on its own origin, storing blobs in a directory or S3-compatible storage such as MinIO. Uploads need a kind 24242 token naming the server and the blob's hash. ([#231](https://github.com/ohstr/nmilat/pull/231))
 - Adds presence snapshots (`WithPresenceQueryKind`): `POST /query` for kind 40902 and a list of authors answers one relay-signed kind 20001 each, online or offline. Nothing is stored. ([#231](https://github.com/ohstr/nmilat/pull/231))
@@ -679,6 +683,7 @@ privacy and performance fixes.
 
 ### Changed
 
+- Changes `testlogger` to drop log lines written after the test's cleanup has run, such as from a goroutine the test left behind, rather than pass them to `t.Log`, which races the test's completion and can fail or panic. ([#244](https://github.com/ohstr/nmilat/pull/244))
 - Changes `Replace` to re-place a withdrawal automatically only while its
   quote holds at `ReplaceOptions.ChainTip`, showing it (`quote_unchecked`,
   `quote_expired`) otherwise, so callers must now pass the tip; to refuse,
@@ -1013,6 +1018,19 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes `GroupsService.SetModerationPolicy` leaving each group's kind 39001 listing the admins of the old policy: it now republishes 39001 with 39003, as does relay startup, skipping any that are unchanged. ([#245](https://github.com/ohstr/nmilat/pull/245))
+- Fixes `POST /events` skipping the NIP-29 rules the WebSocket applies: it now refuses kinds 9000-9022 (send them over a WebSocket), and with the new `WithEventsGroups` refuses a non-member's event in a private, closed or restricted group. ([#245](https://github.com/ohstr/nmilat/pull/245))
+- Fixes concurrent NIP-29 group writes losing changes, such as members added at once leaving only one, and a write racing a group's deletion recreating it: every `GroupsService` mutator, and each moderation event's checks with the change they allow, now run under one lock. ([#245](https://github.com/ohstr/nmilat/pull/245))
+- Fixes NIP-29 invite codes (logged kind 9009) and pending join requests being readable by any member holding a role, even one the moderation policy gives nothing: they now follow `CanPerform` for kind 9009, and for kind 9000 or 9001. ([#245](https://github.com/ohstr/nmilat/pull/245))
+- Fixes `nipB7/server` serving blobs with only the uploader's type, or one guessed from the url's extension, on the host's origin: every blob response now carries `nosniff` and a sandboxing CSP, a blob without a type is `application/octet-stream`, and anything but images, audio, video and plain text is an attachment. ([#245](https://github.com/ohstr/nmilat/pull/245))
+- Fixes `nipB7/server` blob descriptor URLs having no file extension, which
+  BUD-02 requires: the url now ends in one for the blob's type (`.png`,
+  `.jpg`, ...), or `.bin` when the type is unknown.
+  ([#240](https://github.com/ohstr/nmilat/pull/240))
+- Fixes a REQ that names kind 28935 beside other kinds being answered as a NIP-43 invite request; only a REQ whose filters all ask for kind 28935 alone is one now. ([#241](https://github.com/ohstr/nmilat/pull/241))
+- Prunes expired NIP-43 invite claims as new ones are issued, a bounded batch at a time and writing only when one has expired, so claims nobody redeems no longer pile up in the store. ([#241](https://github.com/ohstr/nmilat/pull/241), [#245](https://github.com/ohstr/nmilat/pull/245))
+- Fixes kind 39001 listing members whose roles grant no moderation kind; as NIP-29 asks, it now lists only members holding a role with a privilege. ([#242](https://github.com/ohstr/nmilat/pull/242))
+- Fixes linking a group under a parent with only some role there: the sender now needs kind 9002 in the new parent, as `CanPerform` decides. ([#242](https://github.com/ohstr/nmilat/pull/242))
 - Fixes a no-chain-view `Replace` re-placing a withdrawal refused `quote_invalid`
   with the same quote; like `quote_expired` it is now shown, so its user can get a
   new quote.

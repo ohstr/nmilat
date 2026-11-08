@@ -8,16 +8,19 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/ohstr/nmilat/nipB7"
+	"github.com/ohstr/nmilat/relay/ratelimit"
 )
 
 // Options configure a Server. Store, PublicURL and at least one UploadPath
@@ -50,6 +53,12 @@ type Options struct {
 	MaxUploads int
 	// TempDir holds uploads while they are hashed. "" means os.TempDir().
 	TempDir string
+	// RateLimit, when set, is asked before each request is served: once
+	// with pubkey "" (to count the client's IP), and for an authorized
+	// request again with the signer. upload is true for a PUT upload. A
+	// false answer refuses the request 429 with Retry-After. Nil limits
+	// nothing; ratelimit.Limiter.AllowBlossom fits it.
+	RateLimit func(r *http.Request, upload bool, pubkey string) (retryAfter time.Duration, ok bool)
 }
 
 // meta is the JSON document a Store keeps beside each blob.
@@ -123,6 +132,25 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("HEAD "+prefix, s.cors(s.download))
 	mux.HandleFunc("DELETE "+prefix, s.cors(s.delete))
 	mux.HandleFunc("OPTIONS "+prefix, s.cors(preflight))
+}
+
+// limited reports whether RateLimit refuses r for pubkey, having written
+// the 429.
+func (s *Server) limited(w http.ResponseWriter, r *http.Request, upload bool, pubkey string) bool {
+	if s.opt.RateLimit == nil {
+		return false
+	}
+	wait, ok := s.opt.RateLimit(r, upload, pubkey)
+	if ok {
+		return false
+	}
+	action := ratelimit.Download
+	if upload {
+		action = ratelimit.Upload
+	}
+	w.Header().Set("Retry-After", strconv.Itoa(ratelimit.RetryAfterSeconds(wait)))
+	nipB7.WriteError(w, http.StatusTooManyRequests, ratelimit.Message(action))
+	return true
 }
 
 // cors adds the headers BUD-01 asks every response to carry.
@@ -247,9 +275,50 @@ func (s *Server) saveMeta(ctx context.Context, sha string, m *meta) error {
 	return s.opt.Store.PutMeta(ctx, sha, b)
 }
 
+// preferredExt names the extension for common types where the system's
+// MIME table lists several (image/jpeg has .jfif, .jpe, .jpeg and .jpg)
+// or may have none.
+var preferredExt = map[string]string{
+	"image/jpeg":       ".jpg",
+	"image/png":        ".png",
+	"image/gif":        ".gif",
+	"image/webp":       ".webp",
+	"video/mp4":        ".mp4",
+	"audio/mpeg":       ".mp3",
+	"application/pdf":  ".pdf",
+	"text/plain":       ".txt",
+	"application/json": ".json",
+	// Unknown bytes: never one of the many binary formats the system's
+	// table may list under it.
+	"application/octet-stream": ".bin",
+}
+
+// extension returns the file extension for a blob of MIME type ctype, as
+// BUD-02 requires in a descriptor's url: the preferred one for a common
+// type, else the first the system knows, else ".bin" (BUD-01's example
+// for a type it cannot name) for application/octet-stream or a type it
+// does not know. It always
+// matches blobPath, so the url it ends is one the server serves.
+func extension(ctype string) string {
+	t, _, err := mime.ParseMediaType(ctype)
+	if err != nil {
+		return ".bin"
+	}
+	if ext, ok := preferredExt[t]; ok {
+		return ext
+	}
+	exts, _ := mime.ExtensionsByType(t)
+	for _, ext := range exts {
+		if blobPath.MatchString(strings.Repeat("0", 64) + ext) {
+			return ext
+		}
+	}
+	return ".bin"
+}
+
 func (s *Server) descriptor(sha string, m *meta) nipB7.BlobDescriptor {
 	return nipB7.BlobDescriptor{
-		URL:      s.opt.PublicURL + s.opt.BlobPrefix + "/" + sha,
+		URL:      s.opt.PublicURL + s.opt.BlobPrefix + "/" + sha + extension(m.Type),
 		Sha256:   sha,
 		Size:     m.Size,
 		Type:     m.Type,
@@ -258,9 +327,15 @@ func (s *Server) descriptor(sha string, m *meta) nipB7.BlobDescriptor {
 }
 
 func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
+	if s.limited(w, r, true, "") {
+		return
+	}
 	auth, status, reason := s.authorize(r, nipB7.VerbUpload, "", false)
 	if auth == nil {
 		nipB7.WriteError(w, status, reason)
+		return
+	}
+	if s.limited(w, r, true, auth.PubKey) {
 		return
 	}
 	if len(auth.Hashes) == 0 {
@@ -341,6 +416,13 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) download(w http.ResponseWriter, r *http.Request) {
+	// Blobs share the host's origin, so nothing served here may run as a
+	// page of it; see blobCSP.
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", blobCSP)
+	if s.limited(w, r, false, "") {
+		return
+	}
 	sha, ext, ok := s.parseBlob(r)
 	if !ok {
 		nipB7.WriteError(w, http.StatusNotFound, "not a blob path")
@@ -350,6 +432,9 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 		auth, status, reason := s.authorize(r, nipB7.VerbGet, sha, false)
 		if auth == nil {
 			nipB7.WriteError(w, status, reason)
+			return
+		}
+		if s.limited(w, r, false, auth.PubKey) {
 			return
 		}
 		if !s.opt.MayDownload(auth.PubKey) {
@@ -378,15 +463,56 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = blob.Close() }()
 
-	if m.Type != "" {
-		w.Header().Set("Content-Type", m.Type)
+	ctype, inline := servedType(m.Type)
+	w.Header().Set("Content-Type", ctype)
+	if !inline {
+		w.Header().Set("Content-Disposition", "attachment")
 	}
 	w.Header().Set("ETag", `"`+sha+`"`)
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	http.ServeContent(w, r, sha+ext, time.Unix(m.Uploaded, 0), blob)
 }
 
+// blobCSP is the Content-Security-Policy on every blob response. Blobs
+// are served on the host's origin, which may hold other apps and their
+// storage, and their type is whatever the uploader said: sandbox gives a
+// blob opened directly an opaque origin and no scripts, and the sources
+// allow only what an image, audio or video document needs.
+const blobCSP = "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'"
+
+// servedType returns the Content-Type a blob stored with type stored is
+// served as, and whether a browser may show it inline. A blob stored
+// without a type, or with one that does not parse, is
+// application/octet-stream (BUD-01), never a type guessed from the
+// requested extension. Only images, audio, video and plain text are
+// inline; anything else (HTML, SVG, XML, scripts, PDF, ...) is an
+// attachment, so opening its url downloads it rather than rendering it on
+// the host's origin.
+func servedType(stored string) (ctype string, inline bool) {
+	t, params, err := mime.ParseMediaType(stored)
+	if err != nil {
+		return "application/octet-stream", false
+	}
+	if ctype = mime.FormatMediaType(t, params); ctype == "" {
+		ctype = t
+	}
+	major, sub, _ := strings.Cut(t, "/")
+	switch {
+	case t == "text/plain":
+		inline = true
+	case major == "image":
+		// SVG, like any XML image, can carry script.
+		inline = !strings.HasSuffix(sub, "+xml")
+	case major == "audio", major == "video":
+		inline = true
+	}
+	return ctype, inline
+}
+
 func (s *Server) delete(w http.ResponseWriter, r *http.Request) {
+	if s.limited(w, r, false, "") {
+		return
+	}
 	sha, _, ok := s.parseBlob(r)
 	if !ok {
 		nipB7.WriteError(w, http.StatusNotFound, "not a blob path")
@@ -395,6 +521,9 @@ func (s *Server) delete(w http.ResponseWriter, r *http.Request) {
 	auth, status, reason := s.authorize(r, nipB7.VerbDelete, sha, true)
 	if auth == nil {
 		nipB7.WriteError(w, status, reason)
+		return
+	}
+	if s.limited(w, r, false, auth.PubKey) {
 		return
 	}
 

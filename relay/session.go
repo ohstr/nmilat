@@ -23,6 +23,7 @@ import (
 	"github.com/ohstr/nmilat/nip43"
 	"github.com/ohstr/nmilat/nip77"
 	"github.com/ohstr/nmilat/nipOA"
+	"github.com/ohstr/nmilat/relay/ratelimit"
 	"github.com/ohstr/nmilat/search"
 	"github.com/ohstr/nmilat/utils"
 	"github.com/ohstr/nmilat/wire"
@@ -210,6 +211,14 @@ func NewSessionContext(store *EventStore, info *ClientInfo, cfg *nip11.Metadata,
 			closeCh:  make(chan interface{}),
 		},
 	}
+}
+
+// clientIP is the connection's rate-limit key, "" when it has none.
+func (sc *SessionContext) clientIP() string {
+	if sc.info == nil {
+		return ""
+	}
+	return sc.info.IP
 }
 
 func (sc *SessionContext) executeStoreTask(ctx context.Context, task Task) {
@@ -706,6 +715,9 @@ func (s *Session) awaitPeerClose() error {
 
 type ClientInfo struct {
 	RemoteAddr string
+	// IP is the client's rate-limit key (ratelimit.Limiter.ClientIP), set
+	// only when SessionConfig.RateLimiter is.
+	IP string
 
 	HTTP struct {
 		UserAgent string
@@ -779,9 +791,11 @@ func NewSessionHandler(store *EventStore, relayMetadata *nip11.Metadata, searchS
 	}
 	if relayMetadata != nil {
 		// Groups created before roles were published, or under another
-		// policy, get a current kind:39003; unchanged ones are skipped.
+		// policy, get a current kind:39003 and kind:39001; unchanged ones
+		// are skipped.
 		groups.setSigner(relayMetadata.Self, cfg.PrivKey)
 		groups.publishAllRoles(context.Background())
+		groups.publishAllAdmins(context.Background())
 	}
 
 	// Not fatal: a relay that only ever hosts public groups works fine
@@ -832,6 +846,17 @@ func (sh *SessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var clientIP string
+	if lim := sh.config.RateLimiter; lim != nil {
+		clientIP = lim.ClientIP(r)
+		release, ok := lim.OpenConn(clientIP)
+		if !ok {
+			http.Error(w, ratelimit.ConnMessage, http.StatusTooManyRequests)
+			return
+		}
+		defer release()
+	}
+
 	upgrader := websocket.Upgrader{
 		ReadBufferSize:  wsReadBuffer,
 		WriteBufferSize: wsWriteBuffer,
@@ -849,6 +874,7 @@ func (sh *SessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	info := &ClientInfo{
 		RemoteAddr: ws.RemoteAddr().String(),
+		IP:         clientIP,
 		HTTP: struct {
 			UserAgent string
 			Origin    string

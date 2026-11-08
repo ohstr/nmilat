@@ -23,14 +23,16 @@ func newFx(t *testing.T) *fx {
 	f.minterPriv, f.minterX = cashtest.Keypair(t)
 	f.senderPriv, f.sender = cashtest.Keypair(t)
 	f.recipPriv, f.recip = cashtest.Keypair(t)
-	var err error
-	f.note, err = nip01.NewSignedEvent(1, "a note", f.recipPriv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.article, err = nip01.NewSignedEvent(30023, "an article", f.recipPriv, []string{"d", "my:slug"})
-	if err != nil {
-		t.Fatal(err)
+	// Both targets share one created_at: built from two clock reads they
+	// could straddle a second boundary, and the default issued_at (the later
+	// target's created_at + 60) would then drift from note.CreatedAt + 60.
+	f.note = nip01.NewEvent(1, "a note")
+	f.article = nip01.NewEvent(30023, "an article", []string{"d", "my:slug"})
+	f.article.CreatedAt = f.note.CreatedAt
+	for _, ev := range []*nip01.Event{f.note, f.article} {
+		if err := ev.Sign(f.recipPriv); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return f
 }
