@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ohstr/nmilat/nip01"
+	"github.com/ohstr/nmilat/nip11"
 	"github.com/ohstr/nmilat/nip77"
 	"github.com/ohstr/nmilat/wire"
 )
@@ -32,8 +33,9 @@ func TestNegOpenPacket_Integration(t *testing.T) {
 	}
 	session := &Session{
 		SessionContext: &SessionContext{
-			store:   store,
-			replyer: replyer,
+			store:      store,
+			replyer:    replyer,
+			limitation: &nip11.Limitation{},
 		},
 		negentropySessions: make(map[string]*nip77.Negentropy),
 	}

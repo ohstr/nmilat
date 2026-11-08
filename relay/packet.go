@@ -827,15 +827,32 @@ func (s *Session) processNegOpen(ctx context.Context, p *wire.NegOpenPacket) err
 		return nil
 	}
 
-	// Recipient-only kinds: the same rule as REQ, since an id list is a
-	// read too. NIP-77 has no CLOSED, so the refusal is a NEG-ERR.
-	if s.AuthedPubkey() == "" && s.config.namesRecipientOnlyKind(p.Filter) {
-		s.reply(&wire.NegErrPacket{SubscriptionID: p.SubscriptionID, Code: recipientOnlyRefusal(s.config.RecipientOnlyKinds)})
+	// The same gates as REQ, since an id list is a read too: the
+	// connection-level read gate, a private group named by "d"/"h", and
+	// recipient-only kinds. NIP-77 has no CLOSED, so the refusal is a
+	// NEG-ERR carrying REQ's reason.
+	if msg := s.readGate(); msg != "" {
+		s.refuseNeg(p.SubscriptionID, msg)
 		return nil
 	}
-	var skip func(*PotentialEvent) bool
-	if s.config.mayMatchRecipientOnlyKind(p.Filter) {
-		skip = func(pe *PotentialEvent) bool { return s.config.deniedRecipientOnlyPotentialEvent(s, pe) }
+	filters := nip01.NewSubscriptionFilterGroup(p.Filter)
+	if groupID, denied := s.groups.deniedPrivateGroupFilter(s, filters); denied {
+		s.refuseNeg(p.SubscriptionID, groupRefusal(s, groupID))
+		return nil
+	}
+	if s.AuthedPubkey() == "" && s.config.namesRecipientOnlyKind(p.Filter) {
+		s.refuseNeg(p.SubscriptionID, recipientOnlyRefusal(s.config.RecipientOnlyKinds))
+		return nil
+	}
+
+	// And the same per-event visibility as REQ's delivery: an event the
+	// reader may not be sent is left out of the set, so neither its id nor
+	// its created_at reaches them.
+	checkGroups := s.groups != nil
+	checkRecipient := s.config.mayMatchRecipientOnlyKind(p.Filter)
+	skip := func(pe *PotentialEvent) bool {
+		return (checkGroups && s.groups.deniedPrivateGroupPotentialEvent(s, pe)) ||
+			(checkRecipient && s.config.deniedRecipientOnlyPotentialEvent(s, pe))
 	}
 
 	items, err := s.store.queryNip77Items(ctx, p.Filter, skip)
@@ -879,6 +896,12 @@ func (s *Session) processNegOpen(ctx context.Context, p *wire.NegOpenPacket) err
 	})
 
 	return nil
+}
+
+// refuseNeg answers a NEG-OPEN the relay won't serve with NEG-ERR msg.
+func (s *Session) refuseNeg(subID, msg string) {
+	s.config.observer().ReadRefused(ParseRejectReason(msg))
+	s.reply(&wire.NegErrPacket{SubscriptionID: subID, Code: msg})
 }
 
 /////////////////////////////////////////////////////////////////////
