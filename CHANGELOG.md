@@ -8,6 +8,8 @@ privacy and performance fixes.
 
 ### Added
 
+- Adds `GroupsService.SetAuthorizer`: a host function that may allow a moderation kind to a pubkey in a hosted group beyond the moderation policy, such as relay-wide roles. Every NIP-29 moderation check, `CanPerform`, consults it after relay admins and the policy.
+- Adds `GroupsService.SetGrantCeiling`, off by default: on, a kind 9000 may only give roles whose every kind the sender holds, and may not take roles from, nor a kind 9001 remove, a member holding a kind the sender lacks.
 - Adds option details to `nippf` (NIP-PF `detail` tags): `Option.Detail` on forms, where two for one option make the form invalid, and `PollExtras.Detail` on NIP-88 polls, where two give none. Shown with the option, never counted. ([#232](https://github.com/ohstr/nmilat/pull/232))
 - Adds `nipB7/server`, a Blossom blob server a relay can mount on its own origin, storing blobs in a directory or S3-compatible storage such as MinIO. Uploads need a kind 24242 token naming the server and the blob's hash. ([#231](https://github.com/ohstr/nmilat/pull/231))
 - Adds presence snapshots (`WithPresenceQueryKind`): `POST /query` for kind 40902 and a list of authors answers one relay-signed kind 20001 each, online or offline. Nothing is stored. ([#231](https://github.com/ohstr/nmilat/pull/231))
@@ -1013,6 +1015,8 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes kind 39001 listing members whose roles grant no moderation kind; as NIP-29 asks, it now lists only members holding a role with a privilege.
+- Fixes linking a group under a parent with only some role there: the sender now needs kind 9002 in the new parent, as `CanPerform` decides.
 - Fixes a no-chain-view `Replace` re-placing a withdrawal refused `quote_invalid`
   with the same quote; like `quote_expired` it is now shown, so its user can get a
   new quote.
