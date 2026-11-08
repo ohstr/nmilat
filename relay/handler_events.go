@@ -176,6 +176,15 @@ func (h *eventsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The IP's Event budget, taken after the cheap checks above and before
+	// the event's signature is verified, so a flood of forged events spends
+	// it as it does over the WebSocket, which takes it before any work on an
+	// EVENT. The author's comes later, for a new event only.
+	if wait, ok := h.limiter.Allow(ratelimit.Event, ip, ""); !ok {
+		ratelimit.Refuse(w, ratelimit.Event, wait)
+		return
+	}
+
 	var verifyOpts []nip01.VerifyOption
 	if h.limitation == nil || !h.limitation.StrictPow {
 		verifyOpts = append(verifyOpts, nip01.WithoutPowCheck())
@@ -189,13 +198,6 @@ func (h *eventsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		http.Error(w, "invalid: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	// The IP's Event budget, as an EVENT over the WebSocket takes first;
-	// the author's comes later, for a new event only.
-	if wait, ok := h.limiter.Allow(ratelimit.Event, ip, ""); !ok {
-		ratelimit.Refuse(w, ratelimit.Event, wait)
 		return
 	}
 
