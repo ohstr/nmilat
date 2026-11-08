@@ -75,11 +75,14 @@ jobs:
 
       - name: S3 tests ran
         # The S3 tests skip without NIPB7_S3_ENDPOINT; make sure they did not.
+        # tee prints the output before pipefail fails the step on a failed
+        # test; a skipped one leaves no PASS line for grep to find.
         run: |
-          out="$(go test -count=1 -run S3 -v ./nipB7/server/)"
-          echo "$out"
-          grep -q -- '--- PASS: TestS3StoreContract' <<<"$out"
-          grep -q -- '--- PASS: TestServerOverS3' <<<"$out"
+          out="$RUNNER_TEMP/s3.out"
+          go test -count=1 -run S3 -v ./nipB7/server/ 2>&1 | tee "$out"
+          for t in TestS3StoreContract TestServerOverS3; do
+            grep -q -- "--- PASS: $t" "$out" || { echo "::error::$t did not pass"; exit 1; }
+          done
 
   lint:
     runs-on: ubuntu-latest
