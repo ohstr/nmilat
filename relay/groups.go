@@ -835,14 +835,16 @@ func publishGroupMetadataMirror(ctx context.Context, s *Session, rec *GroupRecor
 }
 
 // publishGroupRosterMirrors self-signs+stores rec's current roster as a
-// kind:39001 (every member holding at least one role) and kind:39002
-// (every member) event.
+// kind:39001 (every member holding a role with at least one moderation
+// kind in the policy -- NIP-29's "any roles that have any privilege";
+// a role the policy gives nothing is not listed) and kind:39002 (every
+// member) event.
 func (g *GroupsService) publishGroupRosterMirrors(ctx context.Context, s *Session, rec *GroupRecord) {
 	var admins []nip29.Admin
 	members := make([]string, 0, len(rec.Members))
 	for _, m := range rec.Members {
 		members = append(members, m.Pubkey)
-		if len(m.Roles) > 0 {
+		if g.hasPrivilege(m.Roles) {
 			admins = append(admins, nip29.Admin{Pubkey: m.Pubkey, Roles: m.Roles})
 		}
 	}

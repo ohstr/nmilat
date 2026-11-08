@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"context"
 	"testing"
 
 	"github.com/ohstr/nmilat/nip01"
@@ -287,5 +288,33 @@ func TestGrantCeiling(t *testing.T) {
 	sendEventAndAwaitOKForSession(t, sess, putUserEvent(t, groupA, mod(t), secondTestPrivKey, "admin"))
 	if roles := rolesOf(t, sess, mod(t)); len(roles) != 1 || roles[0] != "moderator" {
 		t.Fatalf("moderator's roles after a refused self-grant = %v", roles)
+	}
+}
+
+// kind:39001 lists the members whose roles carry a moderation kind, not
+// one holding only a role the policy gives nothing.
+func TestGroupAdmins_ListsOnlyPrivilegedRoles(t *testing.T) {
+	sess := newCeilingSession(t, false)
+	vip := pubkeyOfPrivKey(t, thirdTestPrivKey)
+	if resp := sendEventAndAwaitOKForSession(t, sess, putUserEvent(t, groupA, vip, authTestPrivKey, "vip")); !resp.Accepted {
+		t.Fatal(resp.Message)
+	}
+
+	evs, err := sess.store.QueryEvents(context.Background(), &nip01.SubscriptionFilter{
+		Kinds: []int{nip29.KindGroupAdmins}, Tags: map[string][]string{"d": {groupA}}, Limit: 1,
+	})
+	if err != nil || len(evs) != 1 {
+		t.Fatalf("kind:39001 = %d events, err %v", len(evs), err)
+	}
+	admins, err := nip29.ParseGroupAdmins(evs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, a := range admins.Admins {
+		got[a.Pubkey] = true
+	}
+	if !got[authTestPubKey] || !got[secondTestPubKey(t)] || got[vip] || len(got) != 2 {
+		t.Fatalf("kind:39001 lists %v, want the admin and the moderator only", got)
 	}
 }

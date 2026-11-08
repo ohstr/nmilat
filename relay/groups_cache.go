@@ -487,6 +487,21 @@ func (g *GroupsService) grantCeilingRemoveUser(id, sender, target string) string
 	return ""
 }
 
+// hasPrivilege reports whether any of roles may perform at least one
+// moderation action under the policy -- who kind:39001 lists.
+func (g *GroupsService) hasPrivilege(roles []string) bool {
+	policy := g.policy.Load()
+	if policy == nil {
+		return false
+	}
+	for _, role := range roles {
+		if len((*policy)[role]) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // IsPrivate reports whether id names a currently-hosted group whose
 // metadata marks it private. An id naming no known group is not private --
 // there is nothing to protect behind an id with no group behind it, so the
