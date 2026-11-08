@@ -8,7 +8,7 @@ privacy and performance fixes.
 
 ### Added
 
-- Adds `SessionConfig.InviteRequestAuthorizer` and `WithInviteRequestAuthorizer`, so the host decides which connections a NIP-43 kind 28935 invite request may issue a code to; a refused request is closed `restricted:`, or `auth-required:` before AUTH. Leaving it unset keeps issuing codes as before, which is deprecated now that NIP-43 moved invites to NIP-86 `createclaim`.
+- Adds `SessionConfig.InviteRequestAuthorizer` and `WithInviteRequestAuthorizer`, so the host decides which connections a NIP-43 kind 28935 invite request may issue a code to; a refused request is closed `restricted:`, or `auth-required:` before AUTH. Leaving it unset keeps issuing codes as before, which is deprecated now that NIP-43 moved invites to NIP-86 `createclaim`. ([#241](https://github.com/ohstr/nmilat/pull/241))
 - Adds option details to `nippf` (NIP-PF `detail` tags): `Option.Detail` on forms, where two for one option make the form invalid, and `PollExtras.Detail` on NIP-88 polls, where two give none. Shown with the option, never counted. ([#232](https://github.com/ohstr/nmilat/pull/232))
 - Adds `nipB7/server`, a Blossom blob server a relay can mount on its own origin, storing blobs in a directory or S3-compatible storage such as MinIO. Uploads need a kind 24242 token naming the server and the blob's hash. ([#231](https://github.com/ohstr/nmilat/pull/231))
 - Adds presence snapshots (`WithPresenceQueryKind`): `POST /query` for kind 40902 and a list of authors answers one relay-signed kind 20001 each, online or offline. Nothing is stored. ([#231](https://github.com/ohstr/nmilat/pull/231))
@@ -1014,8 +1014,8 @@ privacy and performance fixes.
 
 ### Fixed
 
-- Fixes a REQ that names kind 28935 beside other kinds being answered as a NIP-43 invite request; only a REQ whose filters all ask for kind 28935 alone is one now.
-- Prunes expired NIP-43 invite claims as new ones are issued, a bounded batch at a time, so claims nobody redeems no longer pile up in the store.
+- Fixes a REQ that names kind 28935 beside other kinds being answered as a NIP-43 invite request; only a REQ whose filters all ask for kind 28935 alone is one now. ([#241](https://github.com/ohstr/nmilat/pull/241))
+- Prunes expired NIP-43 invite claims as new ones are issued, a bounded batch at a time, so claims nobody redeems no longer pile up in the store. ([#241](https://github.com/ohstr/nmilat/pull/241))
 - Fixes a no-chain-view `Replace` re-placing a withdrawal refused `quote_invalid`
   with the same quote; like `quote_expired` it is now shown, so its user can get a
   new quote.
