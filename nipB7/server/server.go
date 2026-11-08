@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -247,9 +248,50 @@ func (s *Server) saveMeta(ctx context.Context, sha string, m *meta) error {
 	return s.opt.Store.PutMeta(ctx, sha, b)
 }
 
+// preferredExt names the extension for common types where the system's
+// MIME table lists several (image/jpeg has .jfif, .jpe, .jpeg and .jpg)
+// or may have none.
+var preferredExt = map[string]string{
+	"image/jpeg":       ".jpg",
+	"image/png":        ".png",
+	"image/gif":        ".gif",
+	"image/webp":       ".webp",
+	"video/mp4":        ".mp4",
+	"audio/mpeg":       ".mp3",
+	"application/pdf":  ".pdf",
+	"text/plain":       ".txt",
+	"application/json": ".json",
+	// Unknown bytes: never one of the many binary formats the system's
+	// table may list under it.
+	"application/octet-stream": ".bin",
+}
+
+// extension returns the file extension for a blob of MIME type ctype, as
+// BUD-02 requires in a descriptor's url: the preferred one for a common
+// type, else the first the system knows, else ".bin" (BUD-01's example
+// for a type it cannot name) for application/octet-stream or a type it
+// does not know. It always
+// matches blobPath, so the url it ends is one the server serves.
+func extension(ctype string) string {
+	t, _, err := mime.ParseMediaType(ctype)
+	if err != nil {
+		return ".bin"
+	}
+	if ext, ok := preferredExt[t]; ok {
+		return ext
+	}
+	exts, _ := mime.ExtensionsByType(t)
+	for _, ext := range exts {
+		if blobPath.MatchString(strings.Repeat("0", 64) + ext) {
+			return ext
+		}
+	}
+	return ".bin"
+}
+
 func (s *Server) descriptor(sha string, m *meta) nipB7.BlobDescriptor {
 	return nipB7.BlobDescriptor{
-		URL:      s.opt.PublicURL + s.opt.BlobPrefix + "/" + sha,
+		URL:      s.opt.PublicURL + s.opt.BlobPrefix + "/" + sha + extension(m.Type),
 		Sha256:   sha,
 		Size:     m.Size,
 		Type:     m.Type,
