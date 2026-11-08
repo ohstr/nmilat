@@ -69,18 +69,31 @@ func buildItem(id, target, connSecret, method string, wireParams any, cred Crede
 		NotAfter:   b.NotAfter,
 	}
 
-	// The BILL proof, first and unconditional. Every item carries one, whatever the
-	// bill's identity mode: it says the sender holds this bill's token, which is a
-	// different claim from the slice proof below and the only one a hub can safely
-	// act on when deciding whether to answer about the bill at all.
-	if connSecret == "" {
-		return transport.Item{}, fmt.Errorf("nipcash: item %q needs the bill's connection secret to prove possession", id)
+	// A delegate acting under a Pre-Authorisation grant attaches the grant here, in
+	// place of a bill proof (NIP-CASH §Pre-Authorisation). The grant was signed by
+	// the bill's connection secret and names this delegate; the slice proof built
+	// below, signed by the delegate, is what the hub binds it to. Only a grant
+	// credential exposes one, so every other credential falls through to the bill
+	// proof unchanged.
+	if gp, ok := cred.(grantProvider); ok {
+		item.Grant = gp.grantBytes()
 	}
-	billProof, err := transport.BuildBillProof(connSecret, binding)
-	if err != nil {
-		return transport.Item{}, fmt.Errorf("nipcash: build bill proof: %w", err)
+
+	// The BILL proof, otherwise unconditional. Every item that is not acting under a
+	// grant carries one, whatever the bill's identity mode: it says the sender holds
+	// this bill's token, which is a different claim from the slice proof below and
+	// the only one a hub can safely act on when deciding whether to answer about the
+	// bill at all. Exactly one of the two — grant or bill proof — is ever attached.
+	if !item.HasGrant() {
+		if connSecret == "" {
+			return transport.Item{}, fmt.Errorf("nipcash: item %q needs the bill's connection secret or a pre-auth grant to prove possession", id)
+		}
+		billProof, err := transport.BuildBillProof(connSecret, binding)
+		if err != nil {
+			return transport.Item{}, fmt.Errorf("nipcash: build bill proof: %w", err)
+		}
+		item.BillProof = billProof
 	}
-	item.BillProof = billProof
 
 	privKeyHex, cashSecret, err := cred.itemAuthorization()
 	if err != nil {
