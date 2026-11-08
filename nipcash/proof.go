@@ -139,6 +139,39 @@ func (c signingCredential) itemAuthorization() (privKeyHex, cashSecret string, e
 	return c.privKeyHex, "", nil
 }
 
+// --- BySigningGrant: pre-authorisation grant credential ---
+
+// grantProvider is the optional interface a Credential implements when it acts
+// under a Pre-Authorisation grant instead of the bill's connection secret. The
+// transport type-asserts it, so the bearer-secret, signing and connection-key
+// credentials are untouched — only a grant credential is ever asked for a grant.
+type grantProvider interface {
+	grantBytes() json.RawMessage
+}
+
+// grantCredential is a delegate acting under a Pre-Authorisation grant. It is a
+// signing identity — the delegate's own key signs the item's kind-23192 slice
+// proof, which is what the hub matches against the grant's named delegate (the
+// one load-bearing rule) — plus the grant itself, which the transport attaches to
+// the item IN PLACE OF a bill proof. It embeds signingCredential so the delegate
+// signs and decrypts exactly as a plain signing identity does.
+type grantCredential struct {
+	signingCredential
+	grant json.RawMessage
+}
+
+// BySigningGrant proves limited, delegated authority over a bill. delegatePrivKeyHex
+// is the key the grant authorises: it signs the item's slice proof. grant is a
+// kind-23200 event built by transport.BuildGrant and signed by the bill's connection
+// secret. The item carries the grant instead of a bill proof, and the hub accepts it
+// only while the slice-proof signer equals the grant's delegate — without that, a
+// leaked grant would be a second bearer secret (NIP-CASH §Pre-Authorisation).
+func BySigningGrant(delegatePrivKeyHex string, grant json.RawMessage) Credential {
+	return grantCredential{signingCredential: signingCredential{privKeyHex: delegatePrivKeyHex}, grant: grant}
+}
+
+func (c grantCredential) grantBytes() json.RawMessage { return c.grant }
+
 // --- BySigningConnectionKey: connection_key credential ---
 
 type connectionKeyCredential struct {

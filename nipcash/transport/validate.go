@@ -132,8 +132,10 @@ func (e Envelope) Validate(hubXOnly string, now time.Time) error {
 		// this item actually implies. Reusing it — rather than re-deriving the
 		// comparisons — is what guarantees local validation and remote acceptance
 		// cannot drift apart.
+		var proofSigner string
 		if item.HasProof() {
-			if _, err := VerifyItemProof(item.Proof, binding, now); err != nil {
+			signer, err := VerifyItemProof(item.Proof, binding, now)
+			if err != nil {
 				// ErrProofWrongHub here means either a foreign hub or a mixed envelope.
 				// Reported as the mixed-hub error because that is the actionable
 				// diagnosis: the caller assembled items that cannot travel together.
@@ -142,19 +144,44 @@ func (e Envelope) Validate(hubXOnly string, now time.Time) error {
 				}
 				return fmt.Errorf("item %q: %w", item.ID, err)
 			}
+			proofSigner = signer
 		}
 
-		// Every item, cash-mode included, carries a bill proof bound to the same
-		// six fields (NIP-CASH §Bill Proofs). Its signer is the bill's connection
-		// key, which only the Hub can match, so only the binding is checked here.
-		if !item.HasBillProof() {
-			return fmt.Errorf("%w: item %q has no bill proof", ErrEnvelopeMalformed, item.ID)
-		}
-		if _, err := VerifyBillProof(item.BillProof, binding, now); err != nil {
-			if errors.Is(err, ErrProofWrongHub) {
-				return fmt.Errorf("%w: item %q: bill proof: %v", ErrEnvelopeMixedHubs, item.ID, err)
+		// Possession of the bill, by exactly one of two means (NIP-CASH §Bill Proofs,
+		// §Pre-Authorisation). Normally a BILL proof bound to the same six fields; its
+		// signer is the bill's connection key, which only the Hub can match, so only
+		// the binding is checked here. A delegate carries a grant instead: it is bound
+		// to target/hub/method and must name the slice-proof signer as its delegate —
+		// the one rule that stops a leaked grant being a second bearer secret. The Hub
+		// is authoritative (it also checks the grant's signer is a live connection of
+		// the bill); this is the client-side coherence mirror.
+		switch {
+		case item.HasGrant():
+			// Grant XOR bill proof — the same shape checkItem enforces, kept in step
+			// here so the two validators never disagree on what an item may carry.
+			if item.HasBillProof() {
+				return fmt.Errorf("%w: item %q carries both a bill proof and a grant", ErrEnvelopeMalformed, item.ID)
 			}
-			return fmt.Errorf("item %q: bill proof: %w", item.ID, err)
+			info, err := VerifyGrant(item.Grant, GrantBinding{Target: item.Target, HubXOnly: hubXOnly, Method: item.Method}, now)
+			if err != nil {
+				return fmt.Errorf("item %q: grant: %w", item.ID, err)
+			}
+			if proofSigner == "" {
+				return fmt.Errorf("%w: item %q has a grant but no slice proof to bind it", ErrEnvelopeMalformed, item.ID)
+			}
+			if info.Delegate != proofSigner {
+				return fmt.Errorf("%w: item %q grant authorises %q but its slice proof is signed by %q", ErrEnvelopeMalformed, item.ID, info.Delegate, proofSigner)
+			}
+		default:
+			if !item.HasBillProof() {
+				return fmt.Errorf("%w: item %q has no bill proof", ErrEnvelopeMalformed, item.ID)
+			}
+			if _, err := VerifyBillProof(item.BillProof, binding, now); err != nil {
+				if errors.Is(err, ErrProofWrongHub) {
+					return fmt.Errorf("%w: item %q: bill proof: %v", ErrEnvelopeMixedHubs, item.ID, err)
+				}
+				return fmt.Errorf("item %q: bill proof: %w", item.ID, err)
+			}
 		}
 	}
 	return nil

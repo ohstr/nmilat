@@ -349,8 +349,10 @@ func writeCanonicalString(buf *bytes.Buffer, s string) {
 // not be able to make the hub spend a second of secp256k1 time and only then be
 // told the envelope was over budget.
 func (i Item) VerificationCost() int {
-	// Every item carries a kind-23193 bill proof, whatever its identity mode, so
-	// that signature is unconditional.
+	// Every item carries one possession signature the hub must verify: a kind-23193
+	// bill proof normally, or a kind-23200 pre-auth grant in its place for a
+	// delegate. Either way it is exactly one signature, so this base cost is
+	// unconditional whichever of the two the item carries.
 	cost := 1
 	if i.HasProof() {
 		cost++ // the kind-23192 item proof
@@ -791,14 +793,27 @@ func checkItem(i int, item Item, limits Limits) (string, error) {
 		return "", fmt.Errorf("%w: item %q has a proof and cash_secret combination %s refuses",
 			ErrEnvelopeMalformed, item.ID, item.Method)
 	}
-	// A BILL proof is required unconditionally — cash-mode included. The slice
-	// proof above says which slice; this says the sender holds the bill at all,
-	// and no identity mode exempts an item from it.
+	// Possession of the bill, by exactly one of two means. Normally a BILL proof,
+	// required whatever the identity mode — the slice proof above says which slice,
+	// this says the sender holds the bill at all. A delegate acting under a
+	// Pre-Authorisation grant (NIP-CASH §Pre-Authorisation) carries the grant
+	// INSTEAD: it is signed by the bill's connection key and names a delegate, and
+	// the item's slice proof must be signed by that delegate for the grant to mean
+	// anything. So a grant with no slice proof to bind it authorises nothing, and an
+	// item carrying both a bill proof and a grant is incoherent.
 	//
-	// Same caveat as above: client-side coherence only. The hub verifies this
-	// itself and omits anything that fails, because a client-side check cannot
-	// be an authorization boundary.
-	if !item.HasBillProof() {
+	// Same caveat as above: client-side coherence only. The hub verifies possession
+	// itself and omits anything that fails, because a client-side check cannot be an
+	// authorization boundary.
+	switch {
+	case item.HasGrant():
+		if item.HasBillProof() {
+			return "", fmt.Errorf("%w: item %q carries both a bill proof and a grant", ErrEnvelopeMalformed, item.ID)
+		}
+		if !item.HasProof() {
+			return "", fmt.Errorf("%w: item %q has a grant but no slice proof to bind it", ErrEnvelopeMalformed, item.ID)
+		}
+	case !item.HasBillProof():
 		return "", fmt.Errorf("%w: item %q has no bill proof", ErrEnvelopeMalformed, item.ID)
 	}
 	if sources := item.SourceCount(); sources > limits.MaxConsolidateSources {
