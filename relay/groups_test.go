@@ -17,7 +17,7 @@ import (
 // GroupsService wired in, the relay's own selfPubkey set to authTestPubKey
 // (so relay-authored mirror events can be signed with authTestPrivKey), and
 // PrivKey configured for the same reason.
-func newGroupsEnabledTestSession(t *testing.T, opts ...EventStoreOption) *Session {
+func newGroupsEnabledTestSession(t testing.TB, opts ...EventStoreOption) *Session {
 	t.Helper()
 	store := newStore(t, opts...)
 	cfg := defaultSessionConfig()
@@ -29,7 +29,7 @@ func newGroupsEnabledTestSession(t *testing.T, opts ...EventStoreOption) *Sessio
 	return &Session{SessionContext: sc}
 }
 
-func createGroupEvent(t *testing.T, groupID string) *nip01.Event {
+func createGroupEvent(t testing.TB, groupID string) *nip01.Event {
 	t.Helper()
 	ev := nip29.NewCreateGroup("", groupID)
 	if err := ev.Sign(authTestPrivKey); err != nil {
@@ -591,7 +591,7 @@ func secondTestPubKey(t *testing.T) string {
 	return ev.PubKey
 }
 
-func putUserEvent(t *testing.T, groupID, memberPubkey, privKey string, roles ...string) *nip01.Event {
+func putUserEvent(t testing.TB, groupID, memberPubkey, privKey string, roles ...string) *nip01.Event {
 	t.Helper()
 	ev := nip29.NewPutUser("", groupID, memberPubkey, roles...)
 	if err := ev.Sign(privKey); err != nil {

@@ -178,17 +178,76 @@ type GroupsService struct {
 	// outside a session (a policy change, startup); see setSigner.
 	signer atomic.Pointer[groupsSigner]
 
-	// mu serializes every change to hosted groups: each mutator's
-	// read-modify-write of a record, and each moderation event's checks
-	// together with the change they allow (handle holds it across the
-	// whole handler), including the multi-record sequences of a NIP-29
-	// reparent (the group, its old parent, its new parent) and a delete's
-	// cascade over its children. Without it two concurrent roster changes
-	// each copy the same record and the later write drops the earlier's
-	// member, and a write racing a group's deletion recreates it. Group
-	// writes already queue on the store's single write transaction, so one
-	// lock for every group costs no throughput; readers never take it.
-	mu sync.Mutex
+	// mu and groupLocks serialize changes to hosted groups. A change to
+	// one group -- each mutator's read-modify-write of its record, and each
+	// moderation event's checks together with the change they allow and
+	// the mirrors it publishes (handle holds them across the whole
+	// handler) -- holds mu shared and that group's own lock, so writes to
+	// different groups run side by side while two to the same group, or a
+	// write racing its group's deletion, take turns. A change that reads or
+	// writes linked groups -- a NIP-29 reparent (the group, its old parent,
+	// its new parent), a linked group's deletion cascading over its parent
+	// and children -- holds mu exclusively, ordered against every other
+	// group write. Without them two concurrent roster changes each copy the
+	// same record and the later write drops the earlier's member, and a
+	// write racing a group's deletion recreates it. Readers take neither.
+	mu         sync.RWMutex
+	groupLocks keyedMutex
+}
+
+// keyedMutex is a mutex per key, each kept only while someone holds or
+// waits for it.
+type keyedMutex struct {
+	mu    sync.Mutex
+	locks map[string]*keyedLock
+}
+
+type keyedLock struct {
+	sync.Mutex
+	refs int
+}
+
+// lock locks key's mutex and returns the function that unlocks it.
+func (k *keyedMutex) lock(key string) (unlock func()) {
+	k.mu.Lock()
+	if k.locks == nil {
+		k.locks = map[string]*keyedLock{}
+	}
+	l := k.locks[key]
+	if l == nil {
+		l = &keyedLock{}
+		k.locks[key] = l
+	}
+	l.refs++
+	k.mu.Unlock()
+
+	l.Lock()
+	return func() {
+		l.Unlock()
+		k.mu.Lock()
+		if l.refs--; l.refs == 0 {
+			delete(k.locks, key)
+		}
+		k.mu.Unlock()
+	}
+}
+
+// lockGroup holds g.mu shared and group id's own lock, for a change to
+// that group alone. It returns the function that releases both.
+func (g *GroupsService) lockGroup(id string) (unlock func()) {
+	g.mu.RLock()
+	unlockGroup := g.groupLocks.lock(id)
+	return func() {
+		unlockGroup()
+		g.mu.RUnlock()
+	}
+}
+
+// lockAll holds g.mu exclusively, for a change that touches more than one
+// group. It returns the function that releases it.
+func (g *GroupsService) lockAll() (unlock func()) {
+	g.mu.Lock()
+	return g.mu.Unlock
 }
 
 // Count returns the number of hosted groups, from the in-memory cache.
@@ -566,8 +625,7 @@ func (g *GroupsService) Create(rec *GroupRecord) error {
 	if g == nil {
 		return nil
 	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
+	defer g.lockGroup(rec.ID)()
 	return g.createLocked(rec)
 }
 
@@ -589,8 +647,7 @@ func (g *GroupsService) Delete(id string) (*GroupRecord, error) {
 	if g == nil {
 		return nil, nil
 	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
+	defer g.lockGroup(id)()
 	return g.deleteLocked(id)
 }
 
@@ -624,8 +681,9 @@ func (g *GroupsService) List() ([]*GroupRecord, error) {
 
 // updateLocked is every single-record mutator's read-modify-write: it
 // reads group id's current record, builds the next one with change, and
-// stores it. g.mu must be held, so no concurrent change to the group is
-// lost and a group deleted meanwhile stays deleted. Returns (nil, nil) if
+// stores it. The group must be locked (lockGroup, or lockAll), so no
+// concurrent change to it is lost and a group deleted meanwhile stays
+// deleted. Returns (nil, nil) if
 // id names no known group.
 func (g *GroupsService) updateLocked(id string, change func(*GroupRecord) *GroupRecord) (*GroupRecord, error) {
 	cur := g.cache.Get(id)
@@ -640,13 +698,23 @@ func (g *GroupsService) updateLocked(id string, change func(*GroupRecord) *Group
 	return next, nil
 }
 
-// update is updateLocked taking g.mu itself, for the exported mutators.
+// update is updateLocked locking group id itself, for the exported
+// mutators.
 func (g *GroupsService) update(id string, change func(*GroupRecord) *GroupRecord) (*GroupRecord, error) {
 	if g == nil {
 		return nil, nil
 	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
+	defer g.lockGroup(id)()
+	return g.updateLocked(id, change)
+}
+
+// updateLinks is updateLocked holding every group's lock, for the
+// mutators that change how groups link to each other.
+func (g *GroupsService) updateLinks(id string, change func(*GroupRecord) *GroupRecord) (*GroupRecord, error) {
+	if g == nil {
+		return nil, nil
+	}
+	defer g.lockAll()()
 	return g.updateLocked(id, change)
 }
 
@@ -729,7 +797,7 @@ func withPins(pins GroupPins) func(*GroupRecord) *GroupRecord {
 // being updated -- exactly the footgun this helper exists to make
 // structurally impossible.
 func (g *GroupsService) SetChildren(id string, children []string) (*GroupRecord, error) {
-	return g.update(id, withChildren(children))
+	return g.updateLinks(id, withChildren(children))
 }
 
 func withChildren(children []string) func(*GroupRecord) *GroupRecord {
@@ -746,7 +814,7 @@ func withChildren(children []string) func(*GroupRecord) *GroupRecord {
 // single-field mutator so a reparent or a delete-cascade can't
 // accidentally wipe the rest of the group's metadata.
 func (g *GroupsService) SetParent(id string, parent string) (*GroupRecord, error) {
-	return g.update(id, withParent(parent))
+	return g.updateLinks(id, withParent(parent))
 }
 
 func (g *GroupsService) setParentLocked(id string, parent string) (*GroupRecord, error) {
@@ -763,7 +831,7 @@ func withParent(parent string) func(*GroupRecord) *GroupRecord {
 
 // removeChild drops childID from parentID's Children list, if present.
 // Returns the updated parent record, or (nil, nil) if parentID names no
-// known group. g.mu must be held.
+// known group. lockAll must be held.
 func (g *GroupsService) removeChild(parentID, childID string) (*GroupRecord, error) {
 	return g.updateLocked(parentID, func(cur *GroupRecord) *GroupRecord {
 		children := make([]string, 0, len(cur.Metadata.Children))
@@ -780,7 +848,7 @@ func (g *GroupsService) removeChild(parentID, childID string) (*GroupRecord, err
 // updated parent record, or (nil, nil) if parentID names no known group.
 // Callers are responsible for not calling this with a childID already
 // present (handleEditMetadata's own validation is what actually decides
-// whether an addition is allowed at all). g.mu must be held.
+// whether an addition is allowed at all). lockAll must be held.
 func (g *GroupsService) addChild(parentID, childID string) (*GroupRecord, error) {
 	return g.updateLocked(parentID, func(cur *GroupRecord) *GroupRecord {
 		return withChildren(append(append([]string{}, cur.Metadata.Children...), childID))(cur)
@@ -863,20 +931,41 @@ func (g *GroupsService) publishAdmins(ctx context.Context, pubkey, privkey strin
 // publishAllAdmins republishes every hosted group's kind:39001 with the
 // signer from setSigner (a no-op until one is set), so a policy change
 // that gives a role powers, or takes them away, lists or drops its
-// holders. It holds g.mu, so no roster change publishes in between.
+// holders. Each group is locked only while its own is published, so no
+// roster change to it publishes in between, and writes to other groups
+// carry on.
 func (g *GroupsService) publishAllAdmins(ctx context.Context) {
 	sg := g.signer.Load()
 	if sg == nil {
 		return
 	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
+	for _, id := range g.groupIDs() {
+		g.withGroupLocked(id, func(rec *GroupRecord) {
+			g.publishAdmins(ctx, sg.pubkey, sg.privkey, rec)
+		})
+	}
+}
+
+// groupIDs returns every hosted group's id, sorted.
+func (g *GroupsService) groupIDs() []string {
 	snap := g.cache.snap.Load()
 	if snap == nil {
-		return
+		return nil
 	}
-	for _, rec := range snap.groups {
-		g.publishAdmins(ctx, sg.pubkey, sg.privkey, rec)
+	ids := make([]string, 0, len(snap.groups))
+	for id := range snap.groups {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	return ids
+}
+
+// withGroupLocked runs fn with group id locked and its current record,
+// unless id no longer names a group.
+func (g *GroupsService) withGroupLocked(id string, fn func(*GroupRecord)) {
+	defer g.lockGroup(id)()
+	if rec := g.cache.Get(id); rec != nil {
+		fn(rec)
 	}
 }
 
@@ -903,18 +992,17 @@ func (g *GroupsService) publishIfChanged(ctx context.Context, privkey, id string
 }
 
 // publishAllRoles republishes every hosted group's kind:39003 with the
-// signer from setSigner; a no-op until one is set.
+// signer from setSigner; a no-op until one is set. Like publishAllAdmins
+// it locks one group at a time.
 func (g *GroupsService) publishAllRoles(ctx context.Context) {
 	sg := g.signer.Load()
 	if sg == nil {
 		return
 	}
-	snap := g.cache.snap.Load()
-	if snap == nil {
-		return
-	}
-	for id := range snap.groups {
-		g.publishRoles(ctx, sg.pubkey, sg.privkey, id)
+	for _, id := range g.groupIDs() {
+		g.withGroupLocked(id, func(rec *GroupRecord) {
+			g.publishRoles(ctx, sg.pubkey, sg.privkey, rec.ID)
+		})
 	}
 }
 
