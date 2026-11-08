@@ -140,7 +140,7 @@ func TestUploadAndDownload(t *testing.T) {
 	if err := d.Validate(); err != nil || d.Sha256 != hashOf(blob) || d.Size != int64(len(blob)) || d.Type != "text/plain" {
 		t.Fatalf("descriptor %+v (%v)", d, err)
 	}
-	if d.URL != f.ts.URL+"/media/"+d.Sha256 {
+	if d.URL != f.ts.URL+"/media/"+d.Sha256+".txt" {
 		t.Fatalf("url %s", d.URL)
 	}
 
@@ -177,6 +177,69 @@ func TestUploadAndDownload(t *testing.T) {
 	wantStatus(t, f.upload(adminPriv, blob), http.StatusOK)
 	if n := len(f.srv.locks); n != 0 {
 		t.Fatalf("%d blob locks left after the requests finished", n)
+	}
+}
+
+// TestDescriptorURLExtension checks BUD-02's file extension on a
+// descriptor's url, and that the url serves the blob.
+func TestDescriptorURLExtension(t *testing.T) {
+	f := newFixture(t, nil)
+	for _, c := range []struct {
+		ctype, ext string
+	}{
+		{"image/png", ".png"},
+		{"image/jpeg", ".jpg"},
+		{"text/plain; charset=utf-8", ".txt"},
+		{"application/octet-stream", ".bin"},
+		{"application/x-nmilat-unknown", ".bin"},
+		{"", ".bin"},
+	} {
+		blob := []byte("blob of type " + c.ctype)
+		auth := f.token(memberPriv, nipB7.VerbUpload, []string{hashOf(blob)}, nil, time.Now().Add(time.Minute))
+		header := map[string]string{}
+		if c.ctype != "" {
+			header["Content-Type"] = c.ctype
+		}
+		resp := f.do(http.MethodPut, "/upload", auth, bytes.NewReader(blob), header)
+		wantStatus(t, resp, http.StatusOK)
+		var d nipB7.BlobDescriptor
+		if err := json.NewDecoder(resp.Body).Decode(&d); err != nil {
+			t.Fatal(err)
+		}
+		if want := f.ts.URL + "/media/" + hashOf(blob) + c.ext; d.URL != want {
+			t.Fatalf("type %q: url %s, want %s", c.ctype, d.URL, want)
+		}
+
+		get, err := http.Get(d.URL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantStatus(t, get, http.StatusOK)
+		got, _ := io.ReadAll(get.Body)
+		_ = get.Body.Close()
+		if !bytes.Equal(got, blob) {
+			t.Fatalf("type %q: downloaded %q", c.ctype, got)
+		}
+		if c.ctype != "" && get.Header.Get("Content-Type") != c.ctype {
+			t.Fatalf("type %q: served as %q", c.ctype, get.Header.Get("Content-Type"))
+		}
+	}
+}
+
+func TestExtension(t *testing.T) {
+	for ctype, want := range map[string]string{
+		"image/gif":        ".gif",
+		"image/webp":       ".webp",
+		"video/mp4":        ".mp4",
+		"audio/mpeg":       ".mp3",
+		"application/pdf":  ".pdf",
+		"application/json": ".json",
+		"IMAGE/PNG":        ".png",
+		"not a type":       ".bin",
+	} {
+		if got := extension(ctype); got != want {
+			t.Errorf("extension(%q) = %q, want %q", ctype, got, want)
+		}
 	}
 }
 
