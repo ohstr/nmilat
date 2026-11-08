@@ -275,19 +275,50 @@ func (s *Server) saveMeta(ctx context.Context, sha string, m *meta) error {
 	return s.opt.Store.PutMeta(ctx, sha, b)
 }
 
-// preferredExt names the extension for common types where the system's
-// MIME table lists several (image/jpeg has .jfif, .jpe, .jpeg and .jpg)
-// or may have none.
+// preferredExt names the extension for common types, so a descriptor's
+// url is the same on every host: the system's MIME table may list several
+// for one type (image/jpeg has .jfif, .jpe, .jpeg and .jpg), list them in
+// another order (text/html as .ehtml), or have none.
 var preferredExt = map[string]string{
-	"image/jpeg":       ".jpg",
-	"image/png":        ".png",
-	"image/gif":        ".gif",
-	"image/webp":       ".webp",
-	"video/mp4":        ".mp4",
-	"audio/mpeg":       ".mp3",
-	"application/pdf":  ".pdf",
-	"text/plain":       ".txt",
-	"application/json": ".json",
+	"image/jpeg":               ".jpg",
+	"image/png":                ".png",
+	"image/gif":                ".gif",
+	"image/webp":               ".webp",
+	"image/avif":               ".avif",
+	"image/svg+xml":            ".svg",
+	"image/bmp":                ".bmp",
+	"image/x-icon":             ".ico",
+	"image/vnd.microsoft.icon": ".ico",
+	"image/heic":               ".heic",
+	"video/mp4":                ".mp4",
+	"video/webm":               ".webm",
+	"video/quicktime":          ".mov",
+	"video/ogg":                ".ogv",
+	"audio/mpeg":               ".mp3",
+	"audio/ogg":                ".ogg",
+	"audio/opus":               ".opus",
+	"audio/wav":                ".wav",
+	"audio/x-wav":              ".wav",
+	"audio/webm":               ".weba",
+	"audio/aac":                ".aac",
+	"audio/mp4":                ".m4a",
+	"audio/flac":               ".flac",
+	"application/pdf":          ".pdf",
+	"text/plain":               ".txt",
+	"text/html":                ".html",
+	"application/xhtml+xml":    ".xhtml",
+	"text/css":                 ".css",
+	"text/javascript":          ".js",
+	"application/javascript":   ".js",
+	"text/markdown":            ".md",
+	"text/csv":                 ".csv",
+	"application/json":         ".json",
+	"application/xml":          ".xml",
+	"text/xml":                 ".xml",
+	"application/zip":          ".zip",
+	"application/gzip":         ".gz",
+	"font/woff":                ".woff",
+	"font/woff2":               ".woff2",
 	// Unknown bytes: never one of the many binary formats the system's
 	// table may list under it.
 	"application/octet-stream": ".bin",
