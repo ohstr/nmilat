@@ -68,6 +68,13 @@ type SessionConfig struct {
 	// may be consumed via a Join Request (kind 28934). 0 means unlimited.
 	MembershipInviteMaxUses int
 
+	// InviteRequestAuthorizer, when set, is asked before a kind:28935 REQ
+	// is given an invite code; an error refuses it. Nil keeps the old
+	// behaviour, a code for every connection that passes the read gate,
+	// which is deprecated: upstream NIP-43 replaced this REQ flow with
+	// NIP-86's createclaim. See WithInviteRequestAuthorizer.
+	InviteRequestAuthorizer InviteRequestAuthorizer
+
 	// MembershipPublishAddRemove, if true, makes the relay also publish a
 	// signed kind:8000/8001 event whenever NIP-43 membership changes via
 	// Join/Leave Request. Off by default -- the authoritative state lives
@@ -247,6 +254,16 @@ func WithSessionConfig(cfg SessionConfig) SessionOption {
 func WithRequestHandler(handlers ...RequestHandler) SessionOption {
 	return func(cfg *SessionConfig) {
 		cfg.RequestHandlers = append(cfg.RequestHandlers, handlers...)
+	}
+}
+
+// WithInviteRequestAuthorizer sets SessionConfig.InviteRequestAuthorizer:
+// fn decides which connections a kind:28935 REQ may issue an invite code
+// to. Setting this alone, unlike WithSessionConfig, does not discard any
+// other configured defaults.
+func WithInviteRequestAuthorizer(fn InviteRequestAuthorizer) SessionOption {
+	return func(target *SessionConfig) {
+		target.InviteRequestAuthorizer = fn
 	}
 }
 
