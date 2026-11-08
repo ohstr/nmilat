@@ -1016,6 +1016,7 @@ privacy and performance fixes.
 - Fixes `nipB7/server` blob descriptor URLs having no file extension, which
   BUD-02 requires: the url now ends in one for the blob's type (`.png`,
   `.jpg`, ...), or `.bin` when the type is unknown.
+  ([#240](https://github.com/ohstr/nmilat/pull/240))
 - Fixes a no-chain-view `Replace` re-placing a withdrawal refused `quote_invalid`
   with the same quote; like `quote_expired` it is now shown, so its user can get a
   new quote.
