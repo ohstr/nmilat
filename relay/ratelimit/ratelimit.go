@@ -127,6 +127,14 @@ type Config struct {
 	// TrustedProxies are the CIDRs (or bare IPs) of reverse proxies whose
 	// X-Forwarded-For and X-Real-IP headers name the client. Empty trusts
 	// no header: the client is the connection's remote address.
+	//
+	// Such a proxy must set or append X-Forwarded-For with the address it
+	// received the request from: the client is the rightmost hop that is
+	// not itself a trusted proxy, so a proxy that passes the header through
+	// untouched lets a client choose its own key. X-Real-IP is read only
+	// when no X-Forwarded-For is present. An IPv4-mapped entry
+	// ("::ffff:10.0.0.0/104") matches as its IPv4 form, and a zone
+	// ("fe80::1%eth0") is ignored.
 	TrustedProxies []string
 
 	// MaxKeys bounds how many pubkeys or IPs each limit tracks at once; the
@@ -189,17 +197,34 @@ func New(cfg Config) (*Limiter, error) {
 	return l, nil
 }
 
+// parsePrefix reads a TrustedProxies entry in the form ClientIP compares
+// against: unmapped and without a zone, so "::ffff:10.0.0.0/104" is
+// 10.0.0.0/8 and "fe80::1%eth0" is fe80::1.
 func parsePrefix(s string) (netip.Prefix, error) {
-	if strings.Contains(s, "/") {
-		p, err := netip.ParsePrefix(s)
-		return p.Masked(), err
+	s = strings.TrimSpace(s)
+	addr, bits, hasBits := strings.Cut(s, "/")
+	if host, _, zoned := strings.Cut(addr, "%"); zoned {
+		addr = host
 	}
-	a, err := netip.ParseAddr(s)
+	a, err := netip.ParseAddr(addr)
 	if err != nil {
 		return netip.Prefix{}, err
 	}
-	a = a.Unmap()
-	return netip.PrefixFrom(a, a.BitLen()), nil
+	if !hasBits {
+		a = a.Unmap()
+		return netip.PrefixFrom(a, a.BitLen()), nil
+	}
+	p, err := netip.ParsePrefix(addr + "/" + bits)
+	if err != nil {
+		return netip.Prefix{}, err
+	}
+	if a.Is4In6() {
+		if p.Bits() < 96 {
+			return netip.Prefix{}, fmt.Errorf("an IPv4-mapped prefix needs at least 96 bits")
+		}
+		p = netip.PrefixFrom(a.Unmap(), p.Bits()-96)
+	}
+	return p.Masked(), nil
 }
 
 // Allow takes one token for action from ip's bucket and pubkey's, skipping
@@ -289,18 +314,18 @@ func (l *Limiter) OpenConn(ip string) (release func(), ok bool) {
 
 // ClientIP is the key r is counted under: its remote address, or, when
 // that is a trusted proxy, the client the proxy names (the rightmost
-// X-Forwarded-For hop that isn't itself a trusted proxy, else X-Real-IP).
-// An IPv6 client is keyed by its /64, the block one host usually holds.
+// X-Forwarded-For hop that isn't itself a trusted proxy; X-Real-IP only
+// when there is no X-Forwarded-For). An IPv6 client is keyed by its /64,
+// the block one host usually holds.
 func (l *Limiter) ClientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
 	}
-	addr, err := netip.ParseAddr(host)
-	if err != nil {
+	addr, ok := parseHop(host)
+	if !ok {
 		return host
 	}
-	addr = addr.Unmap()
 	if l != nil && l.trusted(addr) {
 		if a, ok := l.forwarded(r); ok {
 			addr = a
@@ -318,26 +343,49 @@ func (l *Limiter) trusted(a netip.Addr) bool {
 	return false
 }
 
-// forwarded reads the client a trusted proxy names.
+// forwarded reads the client a trusted proxy names: walking
+// X-Forwarded-For from the right, past trusted proxies and hops that
+// aren't an address (such as "unknown"), to the first that is neither.
+// X-Real-IP counts only when there is no X-Forwarded-For at all, since a
+// proxy that appends to one may pass a client's own X-Real-IP through.
 func (l *Limiter) forwarded(r *http.Request) (netip.Addr, bool) {
+	values := r.Header.Values("X-Forwarded-For")
+	if len(values) == 0 {
+		return parseHop(r.Header.Get("X-Real-IP"))
+	}
 	var hops []string
-	for _, v := range r.Header.Values("X-Forwarded-For") {
+	for _, v := range values {
 		hops = append(hops, strings.Split(v, ",")...)
 	}
 	for i := len(hops) - 1; i >= 0; i-- {
-		a, err := netip.ParseAddr(strings.TrimSpace(hops[i]))
-		if err != nil {
-			break
-		}
-		a = a.Unmap()
-		if !l.trusted(a) {
+		a, ok := parseHop(hops[i])
+		if ok && !l.trusted(a) {
 			return a, true
 		}
 	}
-	if a, err := netip.ParseAddr(strings.TrimSpace(r.Header.Get("X-Real-IP"))); err == nil {
-		return a.Unmap(), true
-	}
 	return netip.Addr{}, false
+}
+
+// parseHop reads one address as proxies write it: bare, with a port
+// ("1.2.3.4:5678", "[2001:db8::1]:443") or bracketed ("[2001:db8::1]"),
+// unmapped and without a zone.
+func parseHop(s string) (netip.Addr, bool) {
+	s = strings.TrimSpace(s)
+	a, err := netip.ParseAddr(s)
+	if err != nil {
+		ap, perr := netip.ParseAddrPort(s)
+		switch {
+		case perr == nil:
+			a = ap.Addr()
+		case len(s) > 2 && s[0] == '[' && s[len(s)-1] == ']':
+			if a, err = netip.ParseAddr(s[1 : len(s)-1]); err != nil {
+				return netip.Addr{}, false
+			}
+		default:
+			return netip.Addr{}, false
+		}
+	}
+	return a.Unmap().WithZone(""), true
 }
 
 func key(a netip.Addr) string {

@@ -293,6 +293,15 @@ func TestClientIP(t *testing.T) {
 		{"ipv6 keyed by /64", "[2001:db8:1:2:3:4:5:6]:443", nil, "2001:db8:1:2::/64"},
 		{"trusted ipv6 loopback", "[::1]:443", map[string]string{"X-Real-IP": "4.4.4.4"}, "4.4.4.4"},
 		{"mapped ipv4", "[::ffff:192.0.2.1]:1", nil, "192.0.2.1"},
+		{"X-Real-IP ignored beside X-Forwarded-For", "10.1.2.3:80", map[string]string{"X-Forwarded-For": "1.1.1.1", "X-Real-IP": "2.2.2.2"}, "1.1.1.1"},
+		{"X-Real-IP ignored when every hop is trusted", "10.1.2.3:80", map[string]string{"X-Forwarded-For": "10.9.9.9", "X-Real-IP": "2.2.2.2"}, "10.1.2.3"},
+		{"hop with a port", "10.1.2.3:80", map[string]string{"X-Forwarded-For": "1.2.3.4:5678"}, "1.2.3.4"},
+		{"bracketed ipv6 hop", "10.1.2.3:80", map[string]string{"X-Forwarded-For": "[2001:db8::1]"}, "2001:db8::/64"},
+		{"bracketed ipv6 hop with a port", "10.1.2.3:80", map[string]string{"X-Forwarded-For": " [2001:db8::1]:443 "}, "2001:db8::/64"},
+		{"malformed hop skipped", "10.1.2.3:80", map[string]string{"X-Forwarded-For": "5.5.5.5, unknown"}, "5.5.5.5"},
+		{"malformed hop past a trusted one", "10.1.2.3:80", map[string]string{"X-Forwarded-For": "5.5.5.5, unknown, 10.8.8.8"}, "5.5.5.5"},
+		{"nothing usable falls back", "10.1.2.3:80", map[string]string{"X-Forwarded-For": "unknown, garbage"}, "10.1.2.3"},
+		{"zoned remote", "[fe80::1%eth0]:80", nil, "fe80::/64"},
 	}
 	for _, c := range cases {
 		if got := l.ClientIP(req(c.remote, c.h)); got != c.want {
@@ -301,6 +310,33 @@ func TestClientIP(t *testing.T) {
 	}
 	if _, err := New(Config{TrustedProxies: []string{"not-an-ip"}}); err == nil {
 		t.Fatal("a malformed trusted proxy was accepted")
+	}
+}
+
+func TestTrustedProxyForms(t *testing.T) {
+	cases := []struct {
+		proxy, remote string
+	}{
+		{"::ffff:10.0.0.0/104", "10.1.2.3:80"},
+		{"::ffff:10.1.2.3", "10.1.2.3:80"},
+		{"fe80::1%eth0", "[fe80::1%eth0]:80"},
+		{"fe80::1%eth0/128", "[fe80::1]:80"},
+		{" 10.0.0.0/8 ", "10.1.2.3:80"},
+	}
+	for _, c := range cases {
+		l, err := New(Config{TrustedProxies: []string{c.proxy}})
+		if err != nil {
+			t.Fatalf("%s: %v", c.proxy, err)
+		}
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		r.RemoteAddr = c.remote
+		r.Header.Set("X-Forwarded-For", "1.1.1.1")
+		if got := l.ClientIP(r); got != "1.1.1.1" {
+			t.Errorf("proxy %s, remote %s: %q, want the forwarded client", c.proxy, c.remote, got)
+		}
+	}
+	if _, err := New(Config{TrustedProxies: []string{"::ffff:0.0.0.0/80"}}); err == nil {
+		t.Fatal("an IPv4-mapped prefix wider than IPv4 was accepted")
 	}
 }
 
