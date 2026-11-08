@@ -5,11 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -207,13 +209,32 @@ func TestUploadTooLarge(t *testing.T) {
 
 // holdUpload starts an upload of blob signed by priv and holds it in flight,
 // part of the body sent, until the returned finish sends the rest and
-// returns the response.
+// returns the response; finish may be called more than once. A test that
+// ends while the upload is held, a failed assertion included, aborts it
+// before the server closes, so closing the server does not wait on it.
 func (f *fixture) holdUpload(priv string, blob []byte) (finish func() *http.Response) {
 	f.t.Helper()
 	auth := f.token(priv, nipB7.VerbUpload, []string{hashOf(blob)}, nil, time.Now().Add(time.Minute))
 	before := len(f.srv.slots)
 	pr, pw := io.Pipe()
 	done := make(chan *http.Response, 1)
+	var (
+		once sync.Once
+		resp *http.Response
+	)
+	// Registered after newFixture's ts.Close, so it runs before it.
+	f.t.Cleanup(func() {
+		_ = pw.CloseWithError(errors.New("test ended"))
+		once.Do(func() {
+			select {
+			case r := <-done:
+				if r != nil {
+					_ = r.Body.Close()
+				}
+			case <-time.After(5 * time.Second):
+			}
+		})
+	})
 	go func() {
 		req, _ := http.NewRequest(http.MethodPut, f.ts.URL+"/upload", pr)
 		req.Header.Set("Authorization", auth)
@@ -233,13 +254,17 @@ func (f *fixture) holdUpload(priv string, blob []byte) (finish func() *http.Resp
 	}
 	return func() *http.Response {
 		f.t.Helper()
-		_, _ = pw.Write(blob[1:])
-		_ = pw.Close()
-		resp := <-done
+		once.Do(func() {
+			_, _ = pw.Write(blob[1:])
+			_ = pw.Close()
+			resp = <-done
+			if resp != nil {
+				f.t.Cleanup(func() { _ = resp.Body.Close() })
+			}
+		})
 		if resp == nil {
 			f.t.Fatal("held upload failed")
 		}
-		f.t.Cleanup(func() { _ = resp.Body.Close() })
 		return resp
 	}
 }
