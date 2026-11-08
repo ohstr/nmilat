@@ -152,7 +152,9 @@ type Config struct {
 	// Such a proxy must set or append X-Forwarded-For with the address it
 	// received the request from: the client is the rightmost hop that is
 	// not itself a trusted proxy, so a proxy that passes the header through
-	// untouched lets a client choose its own key. X-Real-IP is read only
+	// untouched lets a client choose its own key. When that hop is not an
+	// address ("unknown"), the remote address is the key; hops further
+	// left are never read. X-Real-IP is read only
 	// when no X-Forwarded-For is present. An IPv4-mapped entry
 	// ("::ffff:10.0.0.0/104") matches as its IPv4 form, and a zone
 	// ("fe80::1%eth0") is ignored.
@@ -391,10 +393,13 @@ func (l *Limiter) trusted(a netip.Addr) bool {
 }
 
 // forwarded reads the client a trusted proxy names: walking
-// X-Forwarded-For from the right, past trusted proxies and hops that
-// aren't an address (such as "unknown"), to the first that is neither.
-// X-Real-IP counts only when there is no X-Forwarded-For at all, since a
-// proxy that appends to one may pass a client's own X-Real-IP through.
+// X-Forwarded-For from the right past trusted proxies, the first hop that
+// is not one is the client. When that hop isn't an address (such as
+// "unknown") there is no client to name: everything further left is the
+// client's own to write, so it is never read, and the remote address
+// counts instead. X-Real-IP counts only when there is no X-Forwarded-For
+// at all, since a proxy that appends to one may pass a client's own
+// X-Real-IP through.
 func (l *Limiter) forwarded(r *http.Request) (netip.Addr, bool) {
 	values := r.Header.Values("X-Forwarded-For")
 	if len(values) == 0 {
@@ -406,7 +411,10 @@ func (l *Limiter) forwarded(r *http.Request) (netip.Addr, bool) {
 	}
 	for i := len(hops) - 1; i >= 0; i-- {
 		a, ok := parseHop(hops[i])
-		if ok && !l.trusted(a) {
+		if !ok {
+			return netip.Addr{}, false
+		}
+		if !l.trusted(a) {
 			return a, true
 		}
 	}

@@ -329,8 +329,9 @@ func TestClientIP(t *testing.T) {
 		{"hop with a port", "10.1.2.3:80", map[string]string{"X-Forwarded-For": "1.2.3.4:5678"}, "1.2.3.4"},
 		{"bracketed ipv6 hop", "10.1.2.3:80", map[string]string{"X-Forwarded-For": "[2001:db8::1]"}, "2001:db8::/64"},
 		{"bracketed ipv6 hop with a port", "10.1.2.3:80", map[string]string{"X-Forwarded-For": " [2001:db8::1]:443 "}, "2001:db8::/64"},
-		{"malformed hop skipped", "10.1.2.3:80", map[string]string{"X-Forwarded-For": "5.5.5.5, unknown"}, "5.5.5.5"},
-		{"malformed hop past a trusted one", "10.1.2.3:80", map[string]string{"X-Forwarded-For": "5.5.5.5, unknown, 10.8.8.8"}, "5.5.5.5"},
+		{"malformed client hop falls back", "10.1.2.3:80", map[string]string{"X-Forwarded-For": "5.5.5.5, unknown"}, "10.1.2.3"},
+		{"malformed client hop past a trusted one falls back", "10.1.2.3:80", map[string]string{"X-Forwarded-For": "5.5.5.5, unknown, 10.8.8.8"}, "10.1.2.3"},
+		{"malformed hop left of the client never read", "10.1.2.3:80", map[string]string{"X-Forwarded-For": "unknown, 5.5.5.5, 10.8.8.8"}, "5.5.5.5"},
 		{"nothing usable falls back", "10.1.2.3:80", map[string]string{"X-Forwarded-For": "unknown, garbage"}, "10.1.2.3"},
 		{"zoned remote", "[fe80::1%eth0]:80", nil, "fe80::/64"},
 	}
