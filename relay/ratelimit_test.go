@@ -12,6 +12,8 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip11"
+	"github.com/ohstr/nmilat/nip42"
+	"github.com/ohstr/nmilat/nip77"
 	"github.com/ohstr/nmilat/relay/ratelimit"
 	"github.com/ohstr/nmilat/testlogger"
 	"github.com/ohstr/nmilat/wire"
@@ -367,6 +369,44 @@ func TestReplayDoesNotSpendTheAuthorsBudget(t *testing.T) {
 	_ = json.Unmarshal(raw[2], &accepted)
 	if accepted {
 		t.Fatal("a third new event was accepted past a budget of 2")
+	}
+}
+
+// TestRateLimitNegOpenAndAuthCountAsReads: NEG-OPEN is a read like REQ,
+// and AUTH (one signature check) is counted against the IP's Read budget.
+func TestRateLimitNegOpenAndAuthCountAsReads(t *testing.T) {
+	lim, _ := newLimiter(t, ratelimit.Config{
+		Read: ratelimit.Limit{PerIP: ratelimit.Rate{Events: 2, Per: time.Hour}},
+	})
+	_, url := newLimitedRelay(t, lim)
+	c := dialAuthed(t, url, recipientPrivKey) // the first Read token
+	if _, closed := c.req("s1", map[string]any{"kinds": []int{1}}); closed != "" {
+		t.Fatalf("REQ within the budget closed: %s", closed)
+	}
+
+	neg := nip77.New(nil)
+	h, err := neg.Initiate().ToHex()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.send("NEG-OPEN", "n1", map[string]any{"kinds": []int{1}}, h)
+	_, raw := c.until("NEG-ERR")
+	var code string
+	_ = json.Unmarshal(raw[2], &code)
+	if !strings.HasPrefix(code, "rate-limited: ") {
+		t.Fatalf("NEG-ERR %q, want rate-limited", code)
+	}
+
+	ev := nip42.NewAuthEvent(c.challenge, c.url)
+	if err := ev.Sign(strangerPrivKey); err != nil {
+		t.Fatal(err)
+	}
+	c.send("AUTH", ev)
+	_, raw = c.until("OK")
+	var msg string
+	_ = json.Unmarshal(raw[3], &msg)
+	if !strings.HasPrefix(msg, "rate-limited: ") {
+		t.Fatalf("AUTH past the Read budget: %q, want rate-limited", msg)
 	}
 }
 

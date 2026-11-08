@@ -99,14 +99,21 @@ func (s *Session) refuse(subID, msg string) {
 // readLimited refuses subID when the connection's IP or its authenticated
 // pubkey is over the Read limit, reporting whether it did.
 func (s *Session) readLimited(subID string) bool {
-	if s.config.RateLimiter == nil {
+	if !s.overReadLimit() {
 		return false
 	}
-	if _, ok := s.config.RateLimiter.Allow(ratelimit.Read, s.clientIP(), s.AuthedPubkey()); !ok {
-		s.refuse(subID, ratelimit.Message(ratelimit.Read))
-		return true
+	s.refuse(subID, ratelimit.Message(ratelimit.Read))
+	return true
+}
+
+// overReadLimit takes a Read token from the connection's IP and its
+// authenticated pubkey, reporting whether either was spent.
+func (s *Session) overReadLimit() bool {
+	if s.config == nil || s.config.RateLimiter == nil {
+		return false
 	}
-	return false
+	_, ok := s.config.RateLimiter.Allow(ratelimit.Read, s.clientIP(), s.AuthedPubkey())
+	return !ok
 }
 
 func (s *Session) processRequest(ctx context.Context, rp *wire.RequestPacket) error {
@@ -218,6 +225,15 @@ func (s *Session) processAuth(parent context.Context, ap *wire.AuthPacket) error
 	// tautology.
 	if err := nip42.ValidateAuthEvent(ap.Event.Kind, ap.Event.Tags, ap.Event.CreatedAt, s.challenge, s.relayURL); err != nil {
 		return s.rejectAuth(ap.Event.ID, fmt.Sprintf("auth-error: %s", err.Error()))
+	}
+
+	// An AUTH costs a signature check, as an EVENT does, but writes
+	// nothing; it is the step before a client reads, so it takes from the
+	// IP's Read budget. Only the IP's: the pubkey is not proven yet.
+	if lim := s.config.RateLimiter; lim != nil {
+		if _, ok := lim.Allow(ratelimit.Read, s.clientIP(), ""); !ok {
+			return s.rejectAuth(ap.Event.ID, ratelimit.Message(ratelimit.Read))
+		}
 	}
 
 	if err := ap.Event.Verify(); err != nil {
@@ -802,6 +818,14 @@ func (r *replyer) reply(sr wire.SubscriptionResponse) {
 /////////////////////////////////////////////////////////////////////
 
 func (s *Session) processNegOpen(ctx context.Context, p *wire.NegOpenPacket) error {
+
+	// A NEG-OPEN scans the store like a REQ, so it takes from the same
+	// Read budget.
+	if s.overReadLimit() {
+		s.config.observer().ReadRefused(ReasonRateLimited)
+		s.reply(&wire.NegErrPacket{SubscriptionID: p.SubscriptionID, Code: ratelimit.Message(ratelimit.Read)})
+		return nil
+	}
 
 	// Recipient-only kinds: the same rule as REQ, since an id list is a
 	// read too. NIP-77 has no CLOSED, so the refusal is a NEG-ERR.
