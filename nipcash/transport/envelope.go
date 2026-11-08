@@ -39,6 +39,12 @@ const (
 	// such bill" depends on it, because without it any such answer confirms a
 	// guessed wallet pubkey exists.
 	KindBillProof = 23193
+
+	// KindPreAuthGrant is a Pre-Authorisation grant (NIP-CASH §Pre-Authorisation,
+	// proposed): the bill's connection secret delegating limited authority to
+	// another key. Kind 23200, the next free number above the allocated
+	// 23187-23199 block and still inside the ephemeral range. See grant.go.
+	KindPreAuthGrant = 23200
 )
 
 // keyHexLen is the length of a hex-encoded 32-byte value: a pubkey, a nonce, or
@@ -101,6 +107,12 @@ type Item struct {
 	// Same omitempty reasoning as Proof, and the same rule: read HasBillProof, not
 	// the length.
 	BillProof json.RawMessage `json:"bill_proof,omitempty"`
+	// Grant is an optional kind-23200 Pre-Authorisation grant (grant.go). When
+	// present it stands in for the bill proof: a delegate who does not hold the
+	// connection secret attaches a grant signed by it, and the hub accepts it only
+	// if this item's slice Proof is signed by the grant's delegate. Same
+	// null-literal hazard as Proof/BillProof: read HasGrant, not the length.
+	Grant json.RawMessage `json:"grant,omitempty"`
 }
 
 // nullLiteral is what a nil json.RawMessage marshals to when it is not omitted.
@@ -123,6 +135,12 @@ func (i Item) HasProof() bool {
 // Same null-literal hazard as HasProof; see there.
 func (i Item) HasBillProof() bool {
 	return hasRawValue(i.BillProof)
+}
+
+// HasGrant reports whether this item actually carries a kind-23200 pre-auth
+// grant. Same null-literal hazard as HasProof; see there.
+func (i Item) HasGrant() bool {
+	return hasRawValue(i.Grant)
 }
 
 // hasRawValue is HasProof and HasBillProof's shared test, so the two cannot drift
@@ -556,7 +574,7 @@ func ItemShapeOK(raw json.RawMessage) bool {
 // envelopeKeys and itemKeys are the wire names an envelope and an item are read by.
 var (
 	envelopeKeys = []string{"not_after", "nonce", "reply_to", "items", "pad"}
-	itemKeys     = []string{"id", "target", "method", "params", "proof", "bill_proof"}
+	itemKeys     = []string{"id", "target", "method", "params", "proof", "bill_proof", "grant"}
 )
 
 // ErrEnvelopeKeys is an envelope or item object that repeats a key, or carries
@@ -635,7 +653,7 @@ func (i *Item) UnmarshalJSON(data []byte) error {
 			}
 		}
 	}
-	for key, dst := range map[string]*json.RawMessage{"params": &it.Params, "proof": &it.Proof, "bill_proof": &it.BillProof} {
+	for key, dst := range map[string]*json.RawMessage{"params": &it.Params, "proof": &it.Proof, "bill_proof": &it.BillProof, "grant": &it.Grant} {
 		if v, ok := m[key]; ok {
 			*dst = append(json.RawMessage(nil), v...)
 		}
