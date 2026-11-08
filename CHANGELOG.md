@@ -685,7 +685,7 @@ privacy and performance fixes.
 
 ### Changed
 
-- Changes `GroupsService` to lock each group, not every group, for a write: writes to different groups no longer wait on each other, while a reparent or a linked group's edit or deletion still runs alone, and the 39001/39003 republish locks one group at a time. A `SetAuthorizer` function runs with its group locked, so it must not call `GroupsService` mutators or block. ([#247](https://github.com/ohstr/nmilat/pull/247))
+- Changes `GroupsService` to lock each group, not every group, for a write: writes to different groups no longer wait on each other, while a reparent or a linked group's edit or deletion still runs alone, and the 39001/39003 republish locks one group at a time. A `SetAuthorizer` function may run with its group locked, so it must not call `GroupsService` mutators or block, and also runs concurrently from read paths. ([#247](https://github.com/ohstr/nmilat/pull/247))
 - Changes `testlogger` to drop log lines written once its own cleanup has run, such as from a goroutine the test left behind, rather than pass them to `t.Log`, which races the test's completion and can panic; cleanups run last registered first, so lines from a cleanup registered before `New` are dropped too. ([#244](https://github.com/ohstr/nmilat/pull/244))
 - Changes `Replace` to re-place a withdrawal automatically only while its
   quote holds at `ReplaceOptions.ChainTip`, showing it (`quote_unchecked`,
