@@ -8,7 +8,7 @@ privacy and performance fixes.
 
 ### Added
 
-- Adds `relay/ratelimit` and `WithRateLimiter`: opt-in token buckets per pubkey and per IP for EVENTs, REQ/COUNT, the HTTP bridge (`WithEventsRateLimiter`) and Blossom (`nipB7/server` `Options.RateLimit`), plus a cap on connections per IP. A limit left unset is no limit; refusals are `rate-limited:` or 429 with Retry-After. ([#237](https://github.com/ohstr/nmilat/pull/237))
+- Adds `relay/ratelimit`: opt-in token buckets per pubkey and per IP for EVENTs, reads, the HTTP bridge and Blossom, plus a cap on connections per IP, set through `WithRateLimiter` (WebSocket, `/query`, `/count`), `WithEventsRateLimiter` (`/events`) and `nipB7/server` `Options.RateLimit`. A limit left unset is no limit; refusals are `rate-limited:` or 429 with Retry-After. ([#237](https://github.com/ohstr/nmilat/pull/237))
 - Adds option details to `nippf` (NIP-PF `detail` tags): `Option.Detail` on forms, where two for one option make the form invalid, and `PollExtras.Detail` on NIP-88 polls, where two give none. Shown with the option, never counted. ([#232](https://github.com/ohstr/nmilat/pull/232))
 - Adds `nipB7/server`, a Blossom blob server a relay can mount on its own origin, storing blobs in a directory or S3-compatible storage such as MinIO. Uploads need a kind 24242 token naming the server and the blob's hash. ([#231](https://github.com/ohstr/nmilat/pull/231))
 - Adds presence snapshots (`WithPresenceQueryKind`): `POST /query` for kind 40902 and a list of authors answers one relay-signed kind 20001 each, online or offline. Nothing is stored. ([#231](https://github.com/ohstr/nmilat/pull/231))
