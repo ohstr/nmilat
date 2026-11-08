@@ -107,6 +107,27 @@ var actionNames = [numActions]string{"events", "requests", "requests", "uploads"
 // limitNames are Config's field names, for errors.
 var limitNames = [numActions]string{"Event", "Read", "HTTP", "Upload", "Download"}
 
+var actionStrings = [numActions]string{"event", "read", "http", "upload", "download"}
+
+// String is the action's name as OnRefuse reports it: "event", "read",
+// "http", "upload" or "download".
+func (a Action) String() string {
+	if a >= numActions {
+		return "unknown"
+	}
+	return actionStrings[a]
+}
+
+// ConnAction is OnRefuse's action for a connection refused for
+// MaxConnsPerIP.
+const ConnAction = "connection"
+
+func (l *Limiter) refused(action, by string) {
+	if l.cfg.OnRefuse != nil {
+		l.cfg.OnRefuse(action, by)
+	}
+}
+
 // Config sets a Limiter's limits. The zero value limits nothing.
 type Config struct {
 	Event    Limit
@@ -154,6 +175,14 @@ type Config struct {
 	// worst case is about 10 × MaxKeys × 175 B: some 175 MB at the
 	// default.
 	MaxKeys int
+
+	// OnRefuse, when set, is told of every refusal, wherever it was asked
+	// (EVENT, REQ, COUNT, NEG-OPEN, AUTH, the HTTP bridge, Blossom, a
+	// connection), for metrics: action is an Action's String or ConnAction,
+	// and by is "ip" or "pubkey", whichever bucket was empty. It is called
+	// on the request's goroutine with no lock held, so it must be cheap and
+	// safe for concurrent use.
+	OnRefuse func(action, by string)
 
 	// Now is the clock; nil means time.Now. For tests.
 	Now func() time.Time
@@ -256,6 +285,7 @@ func (l *Limiter) Allow(action Action, ip, pubkey string) (retryAfter time.Durat
 	}
 	if ipt != nil {
 		if wait, ok := ipt.take(ip, now); !ok {
+			l.refused(actionStrings[action], "ip")
 			return wait, false
 		}
 	}
@@ -268,6 +298,7 @@ func (l *Limiter) Allow(action Action, ip, pubkey string) (retryAfter time.Durat
 			if ipt != nil {
 				ipt.refund(ip)
 			}
+			l.refused(actionStrings[action], "pubkey")
 			return wait, false
 		}
 	}
@@ -309,11 +340,13 @@ func (l *Limiter) OpenConn(ip string) (release func(), ok bool) {
 		return func() {}, true
 	}
 	l.connMu.Lock()
-	defer l.connMu.Unlock()
 	if l.conns[ip] >= l.cfg.MaxConnsPerIP {
+		l.connMu.Unlock()
+		l.refused(ConnAction, "ip")
 		return nil, false
 	}
 	l.conns[ip]++
+	l.connMu.Unlock()
 	var once sync.Once
 	return func() {
 		once.Do(func() {

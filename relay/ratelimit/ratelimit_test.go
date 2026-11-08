@@ -371,6 +371,34 @@ func TestTrustedProxyForms(t *testing.T) {
 	}
 }
 
+func TestOnRefuseReportsEveryRefusal(t *testing.T) {
+	var mu sync.Mutex
+	got := map[string]int{}
+	l, _ := newLimiter(t, Config{
+		Event:         Limit{PerPubkey: Rate{Events: 1, Per: time.Hour}},
+		HTTP:          Limit{PerIP: Rate{Events: 1, Per: time.Hour}},
+		Upload:        Limit{PerIP: Rate{Events: 1, Per: time.Hour}},
+		MaxConnsPerIP: 1,
+		OnRefuse: func(action, by string) {
+			mu.Lock()
+			got[action+"/"+by]++
+			mu.Unlock()
+		},
+	})
+	allowed(l, Event, "1.1.1.1", "pk", 3)
+	allowed(l, HTTP, "1.1.1.1", "", 2)
+	r := httptest.NewRequest(http.MethodPut, "/upload", nil)
+	r.RemoteAddr = "1.1.1.1:1"
+	l.AllowBlossom(r, true, "")
+	l.AllowBlossom(r, true, "")
+	l.OpenConn("1.1.1.1")
+	l.OpenConn("1.1.1.1")
+	want := map[string]int{"event/pubkey": 2, "http/ip": 1, "upload/ip": 1, ConnAction + "/ip": 1}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("refusals %v, want %v", got, want)
+	}
+}
+
 func TestRefuseWritesRetryAfter(t *testing.T) {
 	w := httptest.NewRecorder()
 	Refuse(w, HTTP, 1500*time.Millisecond)
