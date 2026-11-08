@@ -70,8 +70,8 @@ jobs:
             -X PUT "http://$NIPB7_S3_ENDPOINT/$NIPB7_S3_BUCKET"
 
       - name: Test
-        # relay alone takes ~9m under -race; go test's default is 10m
-        run: go test -race -timeout 20m ./...
+        # relay alone takes ~11m under -race; go test's default is 10m
+        run: go test -race -timeout 40m ./...
 
       - name: S3 tests ran
         # The S3 tests skip without NIPB7_S3_ENDPOINT; make sure they did not.
