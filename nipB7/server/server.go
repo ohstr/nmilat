@@ -416,6 +416,10 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) download(w http.ResponseWriter, r *http.Request) {
+	// Blobs share the host's origin, so nothing served here may run as a
+	// page of it; see blobCSP.
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", blobCSP)
 	if s.limited(w, r, false, "") {
 		return
 	}
@@ -459,12 +463,50 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = blob.Close() }()
 
-	if m.Type != "" {
-		w.Header().Set("Content-Type", m.Type)
+	ctype, inline := servedType(m.Type)
+	w.Header().Set("Content-Type", ctype)
+	if !inline {
+		w.Header().Set("Content-Disposition", "attachment")
 	}
 	w.Header().Set("ETag", `"`+sha+`"`)
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	http.ServeContent(w, r, sha+ext, time.Unix(m.Uploaded, 0), blob)
+}
+
+// blobCSP is the Content-Security-Policy on every blob response. Blobs
+// are served on the host's origin, which may hold other apps and their
+// storage, and their type is whatever the uploader said: sandbox gives a
+// blob opened directly an opaque origin and no scripts, and the sources
+// allow only what an image, audio or video document needs.
+const blobCSP = "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'"
+
+// servedType returns the Content-Type a blob stored with type stored is
+// served as, and whether a browser may show it inline. A blob stored
+// without a type, or with one that does not parse, is
+// application/octet-stream (BUD-01), never a type guessed from the
+// requested extension. Only images, audio, video and plain text are
+// inline; anything else (HTML, SVG, XML, scripts, PDF, ...) is an
+// attachment, so opening its url downloads it rather than rendering it on
+// the host's origin.
+func servedType(stored string) (ctype string, inline bool) {
+	t, params, err := mime.ParseMediaType(stored)
+	if err != nil {
+		return "application/octet-stream", false
+	}
+	if ctype = mime.FormatMediaType(t, params); ctype == "" {
+		ctype = t
+	}
+	major, sub, _ := strings.Cut(t, "/")
+	switch {
+	case t == "text/plain":
+		inline = true
+	case major == "image":
+		// SVG, like any XML image, can carry script.
+		inline = !strings.HasSuffix(sub, "+xml")
+	case major == "audio", major == "video":
+		inline = true
+	}
+	return ctype, inline
 }
 
 func (s *Server) delete(w http.ResponseWriter, r *http.Request) {

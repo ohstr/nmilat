@@ -220,9 +220,92 @@ func TestDescriptorURLExtension(t *testing.T) {
 		if !bytes.Equal(got, blob) {
 			t.Fatalf("type %q: downloaded %q", c.ctype, got)
 		}
-		if c.ctype != "" && get.Header.Get("Content-Type") != c.ctype {
-			t.Fatalf("type %q: served as %q", c.ctype, get.Header.Get("Content-Type"))
+		want := c.ctype
+		if want == "" {
+			want = "application/octet-stream"
 		}
+		if got := get.Header.Get("Content-Type"); got != want {
+			t.Fatalf("type %q: served as %q, want %q", c.ctype, got, want)
+		}
+	}
+}
+
+// TestBlobResponseHeaders checks that a blob can't run as a page of the
+// host's origin: every GET/HEAD carries nosniff and a sandboxing CSP, a
+// type that can carry script is an attachment, and a blob stored without
+// a type is octet-stream whatever extension the url asks for.
+func TestBlobResponseHeaders(t *testing.T) {
+	f := newFixture(t, nil)
+	for _, c := range []struct {
+		stored, path, served string
+		inline               bool
+	}{
+		{"image/png", ".png", "image/png", true},
+		{"image/jpeg", "", "image/jpeg", true},
+		{"video/mp4", ".mp4", "video/mp4", true},
+		{"audio/mpeg", ".mp3", "audio/mpeg", true},
+		{"text/plain; charset=utf-8", ".txt", "text/plain; charset=utf-8", true},
+		{"text/html", ".html", "text/html", false},
+		{"TEXT/HTML; charset=utf-8", "", "text/html; charset=utf-8", false},
+		{"application/xhtml+xml", ".xhtml", "application/xhtml+xml", false},
+		{"image/svg+xml", ".svg", "image/svg+xml", false},
+		{"application/javascript", ".js", "application/javascript", false},
+		{"text/javascript", ".js", "text/javascript", false},
+		{"application/xml", ".xml", "application/xml", false},
+		{"text/xml", ".xml", "text/xml", false},
+		{"application/pdf", ".pdf", "application/pdf", false},
+		{"application/json", ".json", "application/json", false},
+		{"", ".html", "application/octet-stream", false},
+		{"", ".svg", "application/octet-stream", false},
+		{"not a type", ".html", "application/octet-stream", false},
+	} {
+		blob := []byte("<html><script>alert(1)</script></html> as " + c.stored + c.path)
+		auth := f.token(memberPriv, nipB7.VerbUpload, []string{hashOf(blob)}, nil, time.Now().Add(time.Minute))
+		header := map[string]string{}
+		if c.stored != "" {
+			header["Content-Type"] = c.stored
+		}
+		wantStatus(t, f.do(http.MethodPut, "/upload", auth, bytes.NewReader(blob), header), http.StatusOK)
+
+		for _, method := range []string{http.MethodGet, http.MethodHead} {
+			resp := f.do(method, "/media/"+hashOf(blob)+c.path, "", nil, nil)
+			wantStatus(t, resp, http.StatusOK)
+			h := resp.Header
+			if got := h.Get("Content-Type"); got != c.served {
+				t.Errorf("%s stored %q as %q: Content-Type %q, want %q", method, c.stored, c.path, got, c.served)
+			}
+			if got := h.Get("X-Content-Type-Options"); got != "nosniff" {
+				t.Errorf("%s stored %q: X-Content-Type-Options %q", method, c.stored, got)
+			}
+			if got := h.Get("Content-Security-Policy"); got != blobCSP {
+				t.Errorf("%s stored %q: Content-Security-Policy %q", method, c.stored, got)
+			}
+			disposition := h.Get("Content-Disposition")
+			if c.inline && disposition != "" {
+				t.Errorf("%s stored %q: Content-Disposition %q, want none", method, c.stored, disposition)
+			}
+			if !c.inline && disposition != "attachment" {
+				t.Errorf("%s stored %q: Content-Disposition %q, want attachment", method, c.stored, disposition)
+			}
+		}
+	}
+
+	// A refusal carries the same guard headers.
+	miss := f.do(http.MethodGet, "/media/"+hashOf([]byte("absent")), "", nil, nil)
+	wantStatus(t, miss, http.StatusNotFound)
+	if miss.Header.Get("X-Content-Type-Options") != "nosniff" || miss.Header.Get("Content-Security-Policy") != blobCSP {
+		t.Error("a 404 lacks nosniff or the CSP")
+	}
+}
+
+func TestBlobCSPIsSandboxed(t *testing.T) {
+	for _, directive := range []string{"sandbox", "default-src 'none'"} {
+		if !strings.Contains(blobCSP, directive) {
+			t.Errorf("blobCSP %q lacks %q", blobCSP, directive)
+		}
+	}
+	if strings.Contains(blobCSP, "script-src") || strings.Contains(blobCSP, "allow-scripts") {
+		t.Errorf("blobCSP %q allows scripts", blobCSP)
 	}
 }
 
