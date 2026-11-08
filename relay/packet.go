@@ -476,7 +476,7 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 	start := time.Now()
 
 	// The client IP's budget comes first, before any work is spent on the
-	// event; the signer's is taken once its signature is verified.
+	// event; the author's is taken later, by authorLimited.
 	if _, ok := s.config.RateLimiter.Allow(ratelimit.Event, s.clientIP(), ""); !ok {
 		s.finishEvent(ep.Event, start, false, ratelimit.Message(ratelimit.Event))
 		return nil
@@ -566,13 +566,6 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 		return nil
 	}
 
-	// The signer's own budget, counted only once the signature holds, so
-	// nobody can spend another pubkey's.
-	if _, ok := s.config.RateLimiter.Allow(ratelimit.Event, "", ep.Event.PubKey); !ok {
-		s.finishEvent(ep.Event, start, false, ratelimit.Message(ratelimit.Event))
-		return nil
-	}
-
 	if err := runEventValidators(ctx, ep.Event); err != nil {
 		s.config.Logger.Debug().Err(err).Str("id", ep.Event.ID).Int("kind", ep.Event.Kind).Msg("event rejected: kind validation failed")
 
@@ -606,6 +599,11 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 			s.finishEvent(ep.Event, start, false, message)
 			return nil
 		}
+	}
+
+	if s.authorLimited(ep.Event) {
+		s.finishEvent(ep.Event, start, false, ratelimit.Message(ratelimit.Event))
+		return nil
 	}
 
 	// NIP-43: Join/Leave requests are fully owned by MembershipService from
@@ -740,6 +738,28 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 	s.executeStoreTask(ctx, task)
 	return nil
 
+}
+
+// authorLimited takes one of ev's author's Event tokens, reporting whether
+// the author's budget is spent. A valid signature proves who wrote ev, not
+// who is sending it: anyone can replay a signed event, and a mirror relays
+// others' events as a matter of course. So the author is charged only when
+// it has authenticated on this connection, and only for an event the relay
+// does not already have; any other sender pays from its IP's budget alone
+// (taken first thing in processEvent).
+func (s *Session) authorLimited(ev *nip01.Event) bool {
+	lim := s.config.RateLimiter
+	if lim == nil {
+		return false
+	}
+	if _, authed := s.IdentityMembership(ev.PubKey); !authed {
+		return false
+	}
+	if s.store.has(ev.ID) {
+		return false
+	}
+	_, ok := lim.Allow(ratelimit.Event, "", ev.PubKey)
+	return !ok
 }
 
 // finishEvent sends an EVENT's OK and reports its outcome.

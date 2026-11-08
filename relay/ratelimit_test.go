@@ -48,7 +48,17 @@ func newLimitedRelay(t *testing.T, lim *ratelimit.Limiter, opts ...SessionOption
 	// Runs after every dialRelay's close (cleanups are LIFO), before
 	// srv.Close: see createWS.
 	t.Cleanup(func() { waitForSessionCount(t, handler, 0) })
+	metadata.URL = "ws" + strings.TrimPrefix(srv.URL, "http")
 	return handler, srv.URL
+}
+
+// dialAuthed opens a connection to url that has authenticated (NIP-42) as
+// priv.
+func dialAuthed(t *testing.T, url, priv string) *roClient {
+	t.Helper()
+	c := dialRO(t, nil, "ws"+strings.TrimPrefix(url, "http"))
+	c.auth(priv)
+	return c
 }
 
 func dialRelay(t *testing.T, url string) *websocket.Conn {
@@ -113,7 +123,7 @@ func TestRateLimitedEventBurst(t *testing.T) {
 	})
 	obs := &recordingObserver{}
 	_, url := newLimitedRelay(t, lim, WithObserver(obs))
-	conn := dialRelay(t, url)
+	conn := dialAuthed(t, url, recipientPrivKey).conn
 
 	events := CreateEvents(t, 300, 1)
 	oks := publish(t, conn, events)
@@ -312,10 +322,91 @@ func TestRateLimitExemptPubkey(t *testing.T) {
 		Exempt: func(pk string) bool { return pk == publicKey },
 	})
 	_, url := newLimitedRelay(t, lim)
-	conn := dialRelay(t, url)
+	conn := dialAuthed(t, url, recipientPrivKey).conn
 	for id, ok := range publish(t, conn, CreateEvents(t, 20, 1)) {
 		if !ok.Accepted {
 			t.Fatalf("%s from an exempt pubkey refused: %q", id, ok.Message)
+		}
+	}
+}
+
+// TestReplayDoesNotSpendTheAuthorsBudget: anyone can replay a signed
+// event, so a replay (or a mirror relaying others' events) must not drain
+// the author's Event budget.
+func TestReplayDoesNotSpendTheAuthorsBudget(t *testing.T) {
+	lim, _ := newLimiter(t, ratelimit.Config{
+		Event: ratelimit.Limit{PerPubkey: ratelimit.Rate{Events: 2, Per: time.Hour}},
+	})
+	_, url := newLimitedRelay(t, lim)
+	victim := dialAuthed(t, url, recipientPrivKey)
+	events := CreateEvents(t, 2, 1)
+	victim.publish(events[0])
+
+	// Unauthenticated, and authenticated as someone else.
+	stranger := dialAuthed(t, url, strangerPrivKey).conn
+	for _, conn := range []*websocket.Conn{dialRelay(t, url), stranger} {
+		for range 20 {
+			if err := conn.WriteJSON([]any{"EVENT", events[0]}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for range 20 {
+			awaitResponse(t, conn, func(r wire.SubscriptionResponse) bool {
+				_, ok := r.(*wire.OkSubscriptionResponse)
+				return ok
+			})
+		}
+	}
+	// The victim replaying its own stored event is not charged either.
+	victim.publish(events[0])
+
+	victim.publish(events[1])
+	victim.send("EVENT", CreateEvents(t, 1, 1)[0])
+	_, raw := victim.until("OK")
+	var accepted bool
+	_ = json.Unmarshal(raw[2], &accepted)
+	if accepted {
+		t.Fatal("a third new event was accepted past a budget of 2")
+	}
+}
+
+func TestRateLimitedEventsHandlerPerIP(t *testing.T) {
+	lim, _ := newLimiter(t, ratelimit.Config{
+		Event: ratelimit.Limit{PerIP: ratelimit.Rate{Events: 2, Per: time.Hour}},
+	})
+	store := newStore(t)
+	srv := httptest.NewServer(NewEventsHandler(store, nil, nil, "", WithEventsRateLimiter(lim)))
+	t.Cleanup(srv.Close)
+	for i := range 3 {
+		body, err := json.Marshal(CreateEvents(t, 1, 1)[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp := postEvent(t, srv.URL, body, queryTestPrivKey)
+		if want := http.StatusOK; i == 2 {
+			if resp.StatusCode != http.StatusTooManyRequests {
+				t.Fatalf("third event from one IP: status %d, want 429", resp.StatusCode)
+			}
+		} else if resp.StatusCode != want {
+			t.Fatalf("event %d: status %d", i, resp.StatusCode)
+		}
+	}
+}
+
+func TestEventsHandlerReplayDoesNotSpendTheAuthorsBudget(t *testing.T) {
+	lim, _ := newLimiter(t, ratelimit.Config{
+		Event: ratelimit.Limit{PerPubkey: ratelimit.Rate{Events: 1, Per: time.Hour}},
+	})
+	store := newStore(t)
+	srv := httptest.NewServer(NewEventsHandler(store, nil, nil, "", WithEventsRateLimiter(lim)))
+	t.Cleanup(srv.Close)
+	body, err := json.Marshal(CreateEvents(t, 1, 1)[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 3 {
+		if resp := postEvent(t, srv.URL, body, queryTestPrivKey); resp.StatusCode != http.StatusOK {
+			t.Fatalf("post %d of one event: status %d", i, resp.StatusCode)
 		}
 	}
 }

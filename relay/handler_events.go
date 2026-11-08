@@ -77,9 +77,10 @@ func WithEventsRelayAuthoredKinds(kinds ...int) EventsHandlerOption {
 }
 
 // WithEventsRateLimiter counts every POST /events against l's HTTP limits
-// (client IP, then NIP-98 signer) and the event against its Event limits,
-// so an author's writes share one budget with the WebSocket. A refusal is
-// a 429 with Retry-After.
+// (client IP, then NIP-98 signer) and the event against its Event limits:
+// the client IP's, and, for an event the relay does not already have, the
+// author's, so an author's writes share one budget with the WebSocket. A
+// refusal is a 429 with Retry-After.
 func WithEventsRateLimiter(l *ratelimit.Limiter) EventsHandlerOption {
 	return func(h *eventsHandler) { h.limiter = l }
 }
@@ -171,8 +172,9 @@ func (h *eventsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The same Event budget an EVENT over the WebSocket takes from.
-	if wait, ok := h.limiter.Allow(ratelimit.Event, ip, ev.PubKey); !ok {
+	// The IP's Event budget, as an EVENT over the WebSocket takes first;
+	// the author's comes later, for a new event only.
+	if wait, ok := h.limiter.Allow(ratelimit.Event, ip, ""); !ok {
 		ratelimit.Refuse(w, ratelimit.Event, wait)
 		return
 	}
@@ -192,6 +194,16 @@ func (h *eventsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.limitation != nil && h.limitation.MembershipRequired && !nip43.IsRelayAuthoredKind(ev.Kind) {
 		if h.membership == nil || !h.membership.IsMember(ev.PubKey) {
 			http.Error(w, "restricted: valid NIP-43 membership required", http.StatusForbidden)
+			return
+		}
+	}
+
+	// The author's Event budget, shared with the WebSocket. The NIP-98
+	// signer is the author here, but a replay of an event the relay
+	// already has costs the author nothing, as over the WebSocket.
+	if h.limiter != nil && !h.store.has(ev.ID) {
+		if wait, ok := h.limiter.Allow(ratelimit.Event, "", ev.PubKey); !ok {
+			ratelimit.Refuse(w, ratelimit.Event, wait)
 			return
 		}
 	}

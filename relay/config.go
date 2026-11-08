@@ -367,10 +367,12 @@ func WithSessionAllowedOrigins(origins ...string) SessionOption {
 	}
 }
 
-// WithRateLimiter sets SessionConfig.RateLimiter. A refused EVENT is
-// answered OK false and a refused REQ or COUNT CLOSED, both
-// "rate-limited:"; a connection over MaxConnsPerIP is refused 429 before
-// the upgrade. Share l with NewEventsHandler (WithEventsRateLimiter) and
+// WithRateLimiter sets SessionConfig.RateLimiter. An EVENT takes from its
+// IP's Event budget, and from its author's only when the author has
+// authenticated on the connection and the event is new; REQ and COUNT
+// take from Read. A refused EVENT is answered OK false and a refused REQ
+// or COUNT CLOSED, both "rate-limited:"; a connection over MaxConnsPerIP
+// is refused 429 before the upgrade. Share l with NewEventsHandler (WithEventsRateLimiter) and
 // nipB7/server (Options.RateLimit = l.AllowBlossom) to count each client
 // once across them.
 func WithRateLimiter(l *ratelimit.Limiter) SessionOption {
