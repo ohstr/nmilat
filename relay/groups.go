@@ -41,7 +41,11 @@ func (g *GroupsService) HandleEvent(ctx context.Context, s *Session, ev *nip01.E
 // alongside. The OK goes out after the lock is released, so a slow client
 // never holds up other writes.
 func (g *GroupsService) handle(ctx context.Context, s *Session, ev *nip01.Event) *wire.OkSubscriptionResponse {
-	defer g.lockFor(ev)()
+	unlock, denied := g.lockFor(ev)
+	defer unlock()
+	if denied != nil {
+		return denied
+	}
 	switch ev.Kind {
 	case nip29.KindCreateGroup:
 		return g.handleCreate(ctx, s, ev)
@@ -86,17 +90,82 @@ func (g *GroupsService) handle(ctx context.Context, s *Session, ev *nip01.Event)
 // names no group. A group's links change only under lockAll or its own
 // lock, so the check made once the group's lock is held stays true until
 // it is released.
-func (g *GroupsService) lockFor(ev *nip01.Event) (unlock func()) {
+//
+// Only a sender who may make such a change gets lockAll: one who may not
+// (otherGroupsDenial) gets its group's lock and the refusal, returned as
+// denied without running the handler, so a stream of refused events can't
+// stall every group's writes. The check is made first without a lock, to
+// skip lockGroup for a sender who may, then again under the group's lock;
+// the handler makes its own checks again under lockAll.
+func (g *GroupsService) lockFor(ev *nip01.Event) (unlock func(), denied *wire.OkSubscriptionResponse) {
 	id, err := nip29.GroupIDFromTags(ev.Tags)
-	if err != nil || g.touchesOtherGroups(ev, id) {
-		return g.lockAll()
+	if err != nil {
+		return g.lockAll(), nil
+	}
+	if g.touchesOtherGroups(ev, id) && g.otherGroupsDenial(ev, id) == nil {
+		return g.lockAll(), nil
 	}
 	unlock = g.lockGroup(id)
 	if !g.touchesOtherGroups(ev, id) {
-		return unlock
+		return unlock, nil
+	}
+	if denied := g.otherGroupsDenial(ev, id); denied != nil {
+		return unlock, denied
 	}
 	unlock()
-	return g.lockAll()
+	return g.lockAll(), nil
+}
+
+// The refusals of a kind:9008 or kind:9002 from a sender who may not
+// perform it in the group, or (9002) in the parent it names.
+const (
+	msgNotGroupAdminDelete = "restricted: only a group admin may delete this group."
+	msgNotGroupAdminEdit   = "restricted: only a group admin may edit this group's metadata."
+	msgNotNewParentAdmin   = "restricted: you must also be an admin of the new parent group."
+)
+
+// otherGroupsDenial returns the refusal ev's handler would give before it
+// reads or writes another group because the sender may not make the
+// change -- no such group, not an admin of it, or (a reparent) not an
+// admin of the new parent -- or nil when the handler should decide. It
+// makes the same checks, in the same order, as handleDeleteGroup and
+// handleEditMetadata, and changes nothing.
+func (g *GroupsService) otherGroupsDenial(ev *nip01.Event, id string) *wire.OkSubscriptionResponse {
+	refuse := func(msg string) *wire.OkSubscriptionResponse {
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: msg}
+	}
+	var action *nip29.ModerationAction
+	if ev.Kind == nip29.KindEditMetadata {
+		a, err := nip29.ParseModerationAction(ev)
+		if err != nil {
+			return refuse("restricted: " + err.Error())
+		}
+		action = a
+	}
+	if !g.Exists(id) {
+		return refuse("restricted: no such group.")
+	}
+	if !g.CanPerform(id, ev.PubKey, ev.Kind) {
+		if ev.Kind == nip29.KindDeleteGroup {
+			return refuse(msgNotGroupAdminDelete)
+		}
+		return refuse(msgNotGroupAdminEdit)
+	}
+	if action == nil || action.Metadata == nil {
+		return nil
+	}
+	newParent := action.Metadata.Parent
+	var oldParent string
+	if rec := g.cache.Get(id); rec != nil {
+		oldParent = rec.Metadata.Parent
+	}
+	if newParent == "" || newParent == oldParent || newParent == id || !g.Exists(newParent) || g.createsCycle(newParent, id) {
+		return nil
+	}
+	if !g.CanPerform(newParent, ev.PubKey, nip29.KindEditMetadata) {
+		return refuse(msgNotNewParentAdmin)
+	}
+	return nil
 }
 
 // touchesOtherGroups reports whether ev's handler may read or write a
@@ -189,7 +258,7 @@ func (g *GroupsService) handleDeleteGroup(ctx context.Context, s *Session, ev *n
 		return &wire.OkSubscriptionResponse{
 			EventID:  ev.ID,
 			Accepted: false,
-			Message:  "restricted: only a group admin may delete this group.",
+			Message:  msgNotGroupAdminDelete,
 		}
 	}
 
@@ -360,7 +429,7 @@ func (g *GroupsService) handleEditMetadata(ctx context.Context, s *Session, ev *
 		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: no such group."}
 	}
 	if !g.CanPerform(action.GroupID, ev.PubKey, nip29.KindEditMetadata) {
-		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: only a group admin may edit this group's metadata."}
+		return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: msgNotGroupAdminEdit}
 	}
 
 	// A reparent, or any edit of a linked group, runs under lockAll
@@ -384,7 +453,7 @@ func (g *GroupsService) handleEditMetadata(ctx context.Context, s *Session, ev *
 		case g.createsCycle(newParent, action.GroupID):
 			return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: that parent assignment would create a cycle."}
 		case !g.CanPerform(newParent, ev.PubKey, nip29.KindEditMetadata):
-			return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: you must also be an admin of the new parent group."}
+			return &wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: msgNotNewParentAdmin}
 		case action.Metadata.Private != g.IsPrivate(newParent):
 			// A kind:39000 mirror is self-signed once and cached, so its
 			// tags can't be redacted per viewer -- a public parent's

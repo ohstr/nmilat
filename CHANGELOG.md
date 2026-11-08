@@ -685,7 +685,7 @@ privacy and performance fixes.
 
 ### Changed
 
-- Changes `GroupsService` to lock each group, not every group, for a write: writes to different groups no longer wait on each other, while a reparent or a linked group's edit or deletion still runs alone, and the 39001/39003 republish locks one group at a time. A `SetAuthorizer` function runs with its group locked, so it must not call `GroupsService` mutators or block. ([#247](https://github.com/ohstr/nmilat/pull/247))
+- Changes `GroupsService` to lock each group, not every group, for a write: writes to different groups no longer wait on each other, while a reparent or a linked group's edit or deletion still runs alone, and the 39001/39003 republish locks one group at a time. A `SetAuthorizer` function may run with its group locked, so it must not call `GroupsService` mutators or block, and also runs concurrently from read paths. ([#247](https://github.com/ohstr/nmilat/pull/247), [#250](https://github.com/ohstr/nmilat/pull/250))
 - Changes `testlogger` to drop log lines written once its own cleanup has run, such as from a goroutine the test left behind, rather than pass them to `t.Log`, which races the test's completion and can panic; cleanups run last registered first, so lines from a cleanup registered before `New` are dropped too. ([#244](https://github.com/ohstr/nmilat/pull/244))
 - Changes `Replace` to re-place a withdrawal automatically only while its
   quote holds at `ReplaceOptions.ChainTip`, showing it (`quote_unchecked`,
@@ -1021,6 +1021,8 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes anyone stalling every NIP-29 group write with kind 9002 events naming a parent, or kind 9008 or 9002 on a linked group: a sender who may not make the change is now refused holding its own group's lock, never every group's. ([#250](https://github.com/ohstr/nmilat/pull/250))
+- Fixes `SetModerationPolicy` and `WithGroupsModerationPolicy` keeping the caller's map: they now store a copy, so changing the map or its slices afterwards no longer changes what `CanPerform` allows. ([#250](https://github.com/ohstr/nmilat/pull/250))
 - Fixes NEG-OPEN skipping the read gates REQ applies: it now refuses as REQ does where NIP-42 authentication or NIP-43 membership is required and for a private group named by `d` or `h`, and leaves events the reader may not be sent, such as a private group's or a recipient-only kind's, out of the negentropy set. ([#247](https://github.com/ohstr/nmilat/pull/247))
 - Fixes `POST /events` taking the IP's Event token only after verifying the event, so forged events spent nothing; it now takes it before, as the WebSocket does. ([#247](https://github.com/ohstr/nmilat/pull/247))
 - Fixes `GroupsService.SetModerationPolicy` leaving each group's kind 39001 listing the admins of the old policy: it now republishes 39001 with 39003, as does relay startup, skipping any that are unchanged. ([#245](https://github.com/ohstr/nmilat/pull/245))

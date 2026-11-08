@@ -9,6 +9,7 @@ import (
 
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip29"
+	"github.com/ohstr/nmilat/wire"
 )
 
 // putUsersOnGroups creates n groups and returns one kind 9000 for each.
@@ -126,5 +127,58 @@ func TestGroupsService_ReparentsRacingSingleGroupWrites(t *testing.T) {
 			t.Fatalf("%s still has parent %q after it was deleted", child, rec.Metadata.Parent)
 		}
 		wantRoster(t, sess.groups, child, 3)
+	}
+}
+
+// A kind:9008 or kind:9002 that would change other groups too is refused
+// under its own group's lock when the sender may not make it, never
+// waiting for (or taking) every group's lock: with another group's lock
+// held, which lockAll would wait on, each refusal still comes back at once.
+func TestGroupsService_RefusedCrossGroupWritesDoNotLockAll(t *testing.T) {
+	sess := newGroupsEnabledTestSession(t)
+	handleAll(t, sess, []*nip01.Event{createGroupEvent(t, groupA), createGroupEvent(t, "linked"), createGroupEvent(t, "loose")})
+	handleAll(t, sess, []*nip01.Event{editMetadataEvent(t, "linked", authTestPrivKey, nip29.GroupMetadataParams{Parent: groupA, Private: true, Closed: true})})
+
+	unlockBusy := sess.groups.lockGroup("busy")
+	refused := []struct {
+		ev   *nip01.Event
+		want string
+	}{
+		{editMetadataEvent(t, "loose", strangerPrivKey, nip29.GroupMetadataParams{Parent: groupA, Private: true, Closed: true}), msgNotGroupAdminEdit},
+		{editMetadataEvent(t, "missing", strangerPrivKey, nip29.GroupMetadataParams{Parent: groupA}), "restricted: no such group."},
+		{editMetadataEvent(t, "linked", strangerPrivKey, nip29.GroupMetadataParams{Parent: groupA, Private: true, Closed: true}), msgNotGroupAdminEdit},
+		{deleteGroupEvent(t, "linked", strangerPrivKey), msgNotGroupAdminDelete},
+	}
+	for _, r := range refused {
+		done := make(chan string, 1)
+		go func() { done <- sess.groups.handle(context.Background(), sess, r.ev).Message }()
+		select {
+		case got := <-done:
+			if got != r.want {
+				t.Errorf("kind %d: got %q, want %q", r.ev.Kind, got, r.want)
+			}
+		case <-time.After(5 * time.Second):
+			unlockBusy()
+			t.Fatalf("kind %d from a non-admin waited on another group's lock", r.ev.Kind)
+		}
+	}
+
+	// An admin's deletion of the linked group does take every group's
+	// lock: it waits until the other group's is released, then succeeds.
+	del := deleteGroupEvent(t, "linked", authTestPrivKey)
+	resp := make(chan *wire.OkSubscriptionResponse, 1)
+	go func() { resp <- sess.groups.handle(context.Background(), sess, del) }()
+	select {
+	case r := <-resp:
+		unlockBusy()
+		t.Fatalf("admin's deletion of a linked group returned (%q) while another group was locked", r.Message)
+	case <-time.After(100 * time.Millisecond):
+	}
+	unlockBusy()
+	if r := <-resp; !r.Accepted {
+		t.Fatalf("admin's deletion refused: %s", r.Message)
+	}
+	if sess.groups.Exists("linked") {
+		t.Fatal("linked group still exists after its admin deleted it")
 	}
 }
