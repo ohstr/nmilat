@@ -3,6 +3,7 @@ package relay
 import (
 	"context"
 	"github.com/ohstr/nmilat/nip01"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -148,6 +149,14 @@ type GroupsService struct {
 	// whatever its roster says: NIP-29 expects moderation events "sent by
 	// the relay master key or by group admins". Set by SetRelayAdmins.
 	relayAdmins atomic.Pointer[map[string]bool]
+
+	// authorizer, when set, grants a moderation kind beyond the policy;
+	// see SetAuthorizer.
+	authorizer atomic.Pointer[groupAuthorizer]
+
+	// grantCeiling, when set, keeps role changes within the sender's own
+	// powers; see SetGrantCeiling.
+	grantCeiling atomic.Bool
 
 	// memberNotices, when set, are the kinds of the seat notices the
 	// relay signs; see SetMemberNotices.
@@ -335,11 +344,48 @@ func (g *GroupsService) IsMember(id, pubkey string) bool {
 	return rec != nil && rec.IsMember(pubkey)
 }
 
-// CanPerform reports whether pubkey's own roles in group id let it perform
-// a moderation action of kind, per GroupsService's ModerationPolicy. A
-// pubkey with no roster entry, or holding no roles, can never perform any
-// moderation action -- AllowsAny(nil, kind) is always false. A relay admin
-// (SetRelayAdmins) may perform any action in any hosted group.
+// groupAuthorizer is the function SetAuthorizer installs.
+type groupAuthorizer func(groupID, pubkey string, kind int) bool
+
+// SetAuthorizer installs a host's own answer to "may pubkey perform a
+// moderation action of kind in group groupID", consulted by CanPerform
+// after the relay admins and the ModerationPolicy -- e.g. relay-wide roles
+// that carry NIP-29 powers in every hosted group. It can only grant, never
+// take away what the policy allows. nil removes it. A no-op on a nil
+// *GroupsService.
+func (g *GroupsService) SetAuthorizer(fn func(groupID, pubkey string, kind int) bool) {
+	if g == nil {
+		return
+	}
+	if fn == nil {
+		g.authorizer.Store(nil)
+		return
+	}
+	a := groupAuthorizer(fn)
+	g.authorizer.Store(&a)
+}
+
+// SetGrantCeiling turns the grant ceiling on or off. On, a kind:9000 may
+// only give a member roles whose every kind the sender may perform itself,
+// and may only take roles from -- like a kind:9001 may only remove -- a
+// member holding no moderation kind the sender lacks. Holding a kind means
+// CanPerform, so a relay admin, or a key holding every kind, is never
+// limited, and the creator's "admin" role can be given or taken only by
+// someone holding all of its kinds. Off, the default, anyone allowed
+// kind:9000/9001 may give or take any role.
+func (g *GroupsService) SetGrantCeiling(on bool) {
+	if g == nil {
+		return
+	}
+	g.grantCeiling.Store(on)
+}
+
+// CanPerform reports whether pubkey may perform a moderation action of kind
+// in group id: a relay admin (SetRelayAdmins) may perform any action in
+// any hosted group; anyone else needs one of their own roles to allow it
+// per GroupsService's ModerationPolicy, or the host's authorizer
+// (SetAuthorizer) to. A pubkey with no roster entry, or holding no roles,
+// gets nothing from the policy -- AllowsAny(nil, kind) is always false.
 func (g *GroupsService) CanPerform(id, pubkey string, kind int) bool {
 	if g == nil {
 		return false
@@ -351,11 +397,109 @@ func (g *GroupsService) CanPerform(id, pubkey string, kind int) bool {
 	if g.isRelayAdmin(pubkey) {
 		return true
 	}
+	if policy := g.policy.Load(); policy != nil && policy.AllowsAny(rec.RolesFor(pubkey), kind) {
+		return true
+	}
+	if a := g.authorizer.Load(); a != nil && (*a)(id, pubkey, kind) {
+		return true
+	}
+	return false
+}
+
+// moderationKinds returns every kind a pubkey could hold: the moderation
+// kinds this build implements plus any other the policy names.
+func (g *GroupsService) moderationKinds() []int {
+	seen := map[int]bool{}
+	var kinds []int
+	add := func(ks []int) {
+		for _, k := range ks {
+			if !seen[k] {
+				seen[k] = true
+				kinds = append(kinds, k)
+			}
+		}
+	}
+	add(defaultGroupModerationPolicy["admin"])
+	if policy := g.policy.Load(); policy != nil {
+		for _, ks := range *policy {
+			add(ks)
+		}
+	}
+	return kinds
+}
+
+// outranks reports whether target holds a moderation kind in group id that
+// sender doesn't.
+func (g *GroupsService) outranks(id, target, sender string) bool {
+	for _, k := range g.moderationKinds() {
+		if g.CanPerform(id, target, k) && !g.CanPerform(id, sender, k) {
+			return true
+		}
+	}
+	return false
+}
+
+// grantCeilingPutUser returns why the grant ceiling refuses sender's
+// kind:9000 setting target's roles in group id to roles, or "" if it
+// allows it (or is off). A role target already holds is not a grant; one
+// it loses is taken.
+func (g *GroupsService) grantCeilingPutUser(id, sender, target string, roles []string) string {
+	if !g.grantCeiling.Load() {
+		return ""
+	}
+	rec := g.cache.Get(id)
+	if rec == nil {
+		return ""
+	}
+	current := rec.RolesFor(target)
+	var policy nip29.ModerationPolicy
+	if p := g.policy.Load(); p != nil {
+		policy = *p
+	}
+	for _, role := range roles {
+		if slices.Contains(current, role) {
+			continue
+		}
+		for _, k := range policy[role] {
+			if !g.CanPerform(id, sender, k) {
+				return "restricted: you may not grant a role with powers you do not hold."
+			}
+		}
+	}
+	for _, role := range current {
+		if !slices.Contains(roles, role) && g.outranks(id, target, sender) {
+			return "restricted: you may not take roles from a member with powers you do not hold."
+		}
+	}
+	return ""
+}
+
+// grantCeilingRemoveUser returns why the grant ceiling refuses sender's
+// kind:9001 removing target from group id, or "" if it allows it (or is
+// off).
+func (g *GroupsService) grantCeilingRemoveUser(id, sender, target string) string {
+	if !g.grantCeiling.Load() || !g.IsMember(id, target) {
+		return ""
+	}
+	if g.outranks(id, target, sender) {
+		return "restricted: you may not remove a member with powers you do not hold."
+	}
+	return ""
+}
+
+// hasPrivilege reports whether any of roles may perform at least one
+// moderation action under the policy -- who kind:39001 lists.
+func (g *GroupsService) hasPrivilege(roles []string) bool {
 	policy := g.policy.Load()
 	if policy == nil {
 		return false
 	}
-	return policy.AllowsAny(rec.RolesFor(pubkey), kind)
+	for _, role := range roles {
+		if len((*policy)[role]) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // IsPrivate reports whether id names a currently-hosted group whose

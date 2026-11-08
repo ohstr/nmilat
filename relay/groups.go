@@ -104,7 +104,7 @@ func (g *GroupsService) handleCreate(ctx context.Context, s *Session, ev *nip01.
 	}
 
 	publishGroupMetadataMirror(ctx, s, rec)
-	publishGroupRosterMirrors(ctx, s, rec)
+	g.publishGroupRosterMirrors(ctx, s, rec)
 	g.publishMemberNotice(ctx, s, groupID, ev.PubKey, ev.PubKey, ev.ID, true)
 	if s.config.PrivKey != "" {
 		g.publishRoles(ctx, s.selfPubkey, s.config.PrivKey, rec.ID)
@@ -118,9 +118,11 @@ func (g *GroupsService) handleCreate(ctx context.Context, s *Session, ev *nip01.
 	})
 }
 
-// handleDeleteGroup implements kind:9008: admin-gated teardown, checked
-// against the group's own roster (not relay-wide NIP-43 role) -- a
-// relay-wide admin with no role in this specific group may not delete it.
+// handleDeleteGroup implements kind:9008: teardown by whoever CanPerform
+// allows it -- a member whose roles in this group carry kind 9008, a relay
+// admin (SetRelayAdmins) even with no roster entry here, or a key the
+// host's authorizer (SetAuthorizer) allows. A NIP-43 relay role alone
+// grants nothing unless the authorizer maps it.
 //
 // NIP-29 "Subgroups": when a parent is deleted, its remaining children
 // automatically become roots. Delete returns the record as it stood
@@ -244,6 +246,10 @@ func (g *GroupsService) handlePutUser(ctx context.Context, s *Session, ev *nip01
 		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: you may not add members to this group."})
 		return
 	}
+	if msg := g.grantCeilingPutUser(action.GroupID, ev.PubKey, action.Pubkey, action.Roles); msg != "" {
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: msg})
+		return
+	}
 
 	wasMember := g.IsMember(action.GroupID, action.Pubkey)
 	rec, err := g.UpsertMember(action.GroupID, GroupMember{Pubkey: action.Pubkey, Roles: action.Roles})
@@ -253,7 +259,7 @@ func (g *GroupsService) handlePutUser(ctx context.Context, s *Session, ev *nip01
 		return
 	}
 
-	publishGroupRosterMirrors(ctx, s, rec)
+	g.publishGroupRosterMirrors(ctx, s, rec)
 	if !wasMember {
 		g.publishMemberNotice(ctx, s, action.GroupID, action.Pubkey, ev.PubKey, ev.ID, true)
 	}
@@ -278,6 +284,10 @@ func (g *GroupsService) handleRemoveUser(ctx context.Context, s *Session, ev *ni
 		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: you may not remove members from this group."})
 		return
 	}
+	if msg := g.grantCeilingRemoveUser(action.GroupID, ev.PubKey, action.Pubkey); msg != "" {
+		s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: msg})
+		return
+	}
 
 	wasMember := g.IsMember(action.GroupID, action.Pubkey)
 	rec, err := g.RemoveMember(action.GroupID, action.Pubkey)
@@ -287,7 +297,7 @@ func (g *GroupsService) handleRemoveUser(ctx context.Context, s *Session, ev *ni
 		return
 	}
 
-	publishGroupRosterMirrors(ctx, s, rec)
+	g.publishGroupRosterMirrors(ctx, s, rec)
 	if wasMember {
 		g.publishMemberNotice(ctx, s, action.GroupID, action.Pubkey, ev.PubKey, ev.ID, false)
 	}
@@ -353,7 +363,7 @@ func (g *GroupsService) handleEditMetadata(ctx context.Context, s *Session, ev *
 		case g.createsCycle(newParent, action.GroupID):
 			s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: that parent assignment would create a cycle."})
 			return
-		case !g.IsAdmin(newParent, ev.PubKey):
+		case !g.CanPerform(newParent, ev.PubKey, nip29.KindEditMetadata):
 			s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: false, Message: "restricted: you must also be an admin of the new parent group."})
 			return
 		case action.Metadata.Private != g.IsPrivate(newParent):
@@ -654,7 +664,7 @@ func (g *GroupsService) handleJoinRequest(ctx context.Context, s *Session, ev *n
 		return
 	}
 
-	publishGroupRosterMirrors(ctx, s, rec)
+	g.publishGroupRosterMirrors(ctx, s, rec)
 	g.publishMemberNotice(ctx, s, jr.GroupID, ev.PubKey, ev.PubKey, ev.ID, true)
 	g.clearPendingJoins(ctx, s, jr.GroupID, ev.PubKey)
 	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: welcome to the group!"})
@@ -690,7 +700,7 @@ func (g *GroupsService) handleLeaveRequest(ctx context.Context, s *Session, ev *
 		return
 	}
 
-	publishGroupRosterMirrors(ctx, s, rec)
+	g.publishGroupRosterMirrors(ctx, s, rec)
 	g.publishMemberNotice(ctx, s, lr.GroupID, ev.PubKey, ev.PubKey, ev.ID, false)
 	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: true, Message: "info: you have left the group."})
 }
@@ -825,14 +835,16 @@ func publishGroupMetadataMirror(ctx context.Context, s *Session, rec *GroupRecor
 }
 
 // publishGroupRosterMirrors self-signs+stores rec's current roster as a
-// kind:39001 (every member holding at least one role) and kind:39002
-// (every member) event.
-func publishGroupRosterMirrors(ctx context.Context, s *Session, rec *GroupRecord) {
+// kind:39001 (every member holding a role with at least one moderation
+// kind in the policy -- NIP-29's "any roles that have any privilege";
+// a role the policy gives nothing is not listed) and kind:39002 (every
+// member) event.
+func (g *GroupsService) publishGroupRosterMirrors(ctx context.Context, s *Session, rec *GroupRecord) {
 	var admins []nip29.Admin
 	members := make([]string, 0, len(rec.Members))
 	for _, m := range rec.Members {
 		members = append(members, m.Pubkey)
-		if len(m.Roles) > 0 {
+		if g.hasPrivilege(m.Roles) {
 			admins = append(admins, nip29.Admin{Pubkey: m.Pubkey, Roles: m.Roles})
 		}
 	}
@@ -923,11 +935,17 @@ func (g *GroupsService) anyIdentityIsMember(s groupReader, groupID string) bool 
 }
 
 // anyIdentityIsAdmin is anyIdentityIsMember for admins (relay admins
-// included).
-func (g *GroupsService) anyIdentityIsAdmin(s groupReader, groupID string) bool {
+// included), and for anyone CanPerform allows one of kinds -- so a key the
+// host's authorizer lets act on something also sees it.
+func (g *GroupsService) anyIdentityIsAdmin(s groupReader, groupID string, kinds ...int) bool {
 	for _, pk := range s.readerPubkeys() {
 		if g.IsAdmin(groupID, pk) {
 			return true
+		}
+		for _, k := range kinds {
+			if g.CanPerform(groupID, pk, k) {
+				return true
+			}
 		}
 	}
 	return false
@@ -954,7 +972,7 @@ func (g *GroupsService) deniedModerationEvent(s groupReader, ev *nip01.Event) bo
 		return true
 	}
 	if ev.Kind == nip29.KindCreateInvite {
-		return !g.anyIdentityIsAdmin(s, id)
+		return !g.anyIdentityIsAdmin(s, id, nip29.KindCreateInvite)
 	}
 	return !g.anyIdentityIsMember(s, id)
 }
@@ -971,7 +989,7 @@ func (g *GroupsService) deniedPendingJoin(s groupReader, ev *nip01.Event) bool {
 			return false
 		}
 	}
-	return !g.anyIdentityIsAdmin(s, id)
+	return !g.anyIdentityIsAdmin(s, id, nip29.KindPutUser, nip29.KindRemoveUser)
 }
 
 // groupReader is whoever a group-visibility check is for: a WebSocket
