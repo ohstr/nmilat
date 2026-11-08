@@ -732,10 +732,6 @@ func (g *GroupsService) SetChildren(id string, children []string) (*GroupRecord,
 	return g.update(id, withChildren(children))
 }
 
-func (g *GroupsService) setChildrenLocked(id string, children []string) (*GroupRecord, error) {
-	return g.updateLocked(id, withChildren(children))
-}
-
 func withChildren(children []string) func(*GroupRecord) *GroupRecord {
 	return func(cur *GroupRecord) *GroupRecord {
 		next := *cur
