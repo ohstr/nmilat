@@ -255,7 +255,7 @@
         "maxAmountMillis": 1,
         "now": 1760000000
       },
-      "error": "nipcash: item \"join\" needs the bill's connection secret to prove possession"
+      "error": "nipcash: item \"join\" needs the bill's connection secret or a pre-auth grant to prove possession"
     },
     {
       "name": "no connection key",
