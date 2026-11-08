@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -20,6 +19,7 @@ import (
 	"time"
 
 	"github.com/ohstr/nmilat/nipB7"
+	"github.com/ohstr/nmilat/relay/ratelimit"
 )
 
 // Options configure a Server. Store, PublicURL and at least one UploadPath
@@ -143,12 +143,12 @@ func (s *Server) limited(w http.ResponseWriter, r *http.Request, upload bool, pu
 	if ok {
 		return false
 	}
-	secs := int(math.Ceil(wait.Seconds()))
-	if secs < 1 {
-		secs = 1
+	action := ratelimit.Download
+	if upload {
+		action = ratelimit.Upload
 	}
-	w.Header().Set("Retry-After", strconv.Itoa(secs))
-	nipB7.WriteError(w, http.StatusTooManyRequests, "rate-limited: too many requests, slow down")
+	w.Header().Set("Retry-After", strconv.Itoa(ratelimit.RetryAfterSeconds(wait)))
+	nipB7.WriteError(w, http.StatusTooManyRequests, ratelimit.Message(action))
 	return true
 }
 

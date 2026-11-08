@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ohstr/nmilat/nipB7"
 	"github.com/ohstr/nmilat/relay/ratelimit"
 )
 
@@ -59,7 +60,7 @@ func TestRateLimitRefusesWith429(t *testing.T) {
 		o.RateLimit = func(*http.Request, bool, string) (time.Duration, bool) { return 2500 * time.Millisecond, false }
 	})
 	blob := []byte("refused")
-	for _, resp := range []*http.Response{
+	for i, resp := range []*http.Response{
 		f.upload(memberPriv, blob),
 		f.do(http.MethodGet, "/media/"+hashOf(blob), "", nil, nil),
 		f.do(http.MethodDelete, "/media/"+hashOf(blob), "", nil, nil),
@@ -67,6 +68,13 @@ func TestRateLimitRefusesWith429(t *testing.T) {
 		wantStatus(t, resp, http.StatusTooManyRequests)
 		if got := resp.Header.Get("Retry-After"); got != "3" {
 			t.Fatalf("Retry-After %q, want 3", got)
+		}
+		want := ratelimit.Message(ratelimit.Download)
+		if i == 0 {
+			want = ratelimit.Message(ratelimit.Upload)
+		}
+		if got := resp.Header.Get(nipB7.HeaderReason); got != want {
+			t.Fatalf("reason %q, want %q", got, want)
 		}
 	}
 }
