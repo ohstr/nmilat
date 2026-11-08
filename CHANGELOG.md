@@ -1017,6 +1017,7 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes `POST /events` skipping the NIP-29 rules the WebSocket applies: it now refuses kinds 9000-9022 (send them over a WebSocket), and with the new `WithEventsGroups` refuses a non-member's event in a private, closed or restricted group.
 - Fixes concurrent NIP-29 group writes losing changes, such as members added at once leaving only one, and a write racing a group's deletion recreating it: every `GroupsService` mutator, and each moderation event's checks with the change they allow, now run under one lock.
 - Fixes NIP-29 invite codes (logged kind 9009) and pending join requests being readable by any member holding a role, even one the moderation policy gives nothing: they now follow `CanPerform` for kind 9009, and for kind 9000 or 9001.
 - Fixes `nipB7/server` serving blobs with only the uploader's type, or one guessed from the url's extension, on the host's origin: every blob response now carries `nosniff` and a sandboxing CSP, a blob without a type is `application/octet-stream`, and anything but images, audio, video and plain text is an attachment.

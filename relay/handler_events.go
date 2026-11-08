@@ -8,6 +8,7 @@ import (
 
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip11"
+	"github.com/ohstr/nmilat/nip29"
 	"github.com/ohstr/nmilat/nip43"
 	"github.com/ohstr/nmilat/nip98"
 	"github.com/ohstr/nmilat/relay/ratelimit"
@@ -47,10 +48,16 @@ const MaxEventsBodyBytes = 1 << 20
 //     delegated credential, and there is no connection to have offered one
 //     at AUTH time the way NIP-AA requires. Matches NewQueryHandler's own
 //     documented membership-check scope.
-//   - NIP-43 join/leave requests (kind 9021/9022) are rejected outright:
+//   - NIP-43 join/leave requests (kind 28934/28936) are rejected outright:
 //     MembershipService.HandleEvent is wired to a live *Session for its
 //     reply/broadcast side effects, which an HTTP POST has none of. Use the
 //     relay's membership management API (ncli relay members) instead.
+//   - NIP-29 moderation events and group requests (kinds 9000-9022) are
+//     rejected outright for the same reason: over the WebSocket they are
+//     commands GroupsService applies, never stored as sent. Send them over
+//     a WebSocket. Group content goes through the same members-only write
+//     gate as over the WebSocket when the handler has the relay's groups
+//     (WithEventsGroups).
 func NewEventsHandler(store *EventStore, limitation *nip11.Limitation, membership *MembershipService, selfPubkey string, opts ...EventsHandlerOption) http.Handler {
 	h := &eventsHandler{store: store, limitation: limitation, membership: membership, selfPubkey: selfPubkey}
 	for _, opt := range opts {
@@ -85,7 +92,16 @@ func WithEventsRateLimiter(l *ratelimit.Limiter) EventsHandlerOption {
 	return func(h *eventsHandler) { h.limiter = l }
 }
 
+// WithEventsGroups gives the handler the relay's hosted NIP-29 groups
+// (SessionHandler.Groups), so an event tagged into a private, closed or
+// restricted group is refused unless its author is a member, as over the
+// WebSocket. A relay hosting groups should always pass it.
+func WithEventsGroups(g *GroupsService) EventsHandlerOption {
+	return func(h *eventsHandler) { h.groups = g }
+}
+
 type eventsHandler struct {
+	groups        *GroupsService
 	limiter       *ratelimit.Limiter
 	store         *EventStore
 	limitation    *nip11.Limitation
@@ -145,6 +161,10 @@ func (h *eventsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "restricted: join/leave requests are not accepted via /events -- use the relay's membership management API", http.StatusBadRequest)
 		return
 	}
+	if nip29.IsModerationKind(ev.Kind) || nip29.IsUserRequestKind(ev.Kind) {
+		http.Error(w, "restricted: use a WebSocket to send group moderation events and requests", http.StatusBadRequest)
+		return
+	}
 
 	if ok, msg := CheckSelfAuthored(&ev, h.selfPubkey, h.relayAuthored...); !ok {
 		http.Error(w, msg, http.StatusForbidden)
@@ -189,6 +209,13 @@ func (h *eventsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, msg, http.StatusForbidden)
 			return
 		}
+	}
+
+	// NIP-29 content: only members post into a private, closed or
+	// restricted group, as processEvent checks.
+	if msg := h.groups.deniedGroupWrite(&ev); msg != "" {
+		http.Error(w, msg, http.StatusForbidden)
+		return
 	}
 
 	if h.limitation != nil && h.limitation.MembershipRequired && !nip43.IsRelayAuthoredKind(ev.Kind) {
