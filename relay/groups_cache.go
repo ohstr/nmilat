@@ -351,8 +351,10 @@ type groupAuthorizer func(groupID, pubkey string, kind int) bool
 // moderation action of kind in group groupID", consulted by CanPerform
 // after the relay admins and the ModerationPolicy -- e.g. relay-wide roles
 // that carry NIP-29 powers in every hosted group. It can only grant, never
-// take away what the policy allows. nil removes it. A no-op on a nil
-// *GroupsService.
+// take away what the policy allows. What it grants also widens reads:
+// kind 9009 lets a key read the group's logged invite codes, and kind
+// 9000 or 9001 its pending join requests. nil removes it. A no-op on a
+// nil *GroupsService.
 func (g *GroupsService) SetAuthorizer(fn func(groupID, pubkey string, kind int) bool) {
 	if g == nil {
 		return
@@ -373,6 +375,14 @@ func (g *GroupsService) SetAuthorizer(fn func(groupID, pubkey string, kind int) 
 // limited, and the creator's "admin" role can be given or taken only by
 // someone holding all of its kinds. Off, the default, anyone allowed
 // kind:9000/9001 may give or take any role.
+//
+// A role's kinds, for a grant, are read from the ModerationPolicy alone.
+// A host authorizer (SetAuthorizer) that grants powers by role name, to a
+// role the policy gives nothing, is therefore not seen: anyone allowed
+// kind:9000 may give that role, and with it the authorizer's powers. Such
+// a host should name those kinds in the policy too, or decide by
+// something other than the role. Taking and removing are not affected:
+// they compare what CanPerform, authorizer included, allows each side.
 func (g *GroupsService) SetGrantCeiling(on bool) {
 	if g == nil {
 		return

@@ -154,10 +154,12 @@ type Config struct {
 	// not itself a trusted proxy, so a proxy that passes the header through
 	// untouched lets a client choose its own key. When that hop is not an
 	// address ("unknown"), the remote address is the key; hops further
-	// left are never read. X-Real-IP is read only
-	// when no X-Forwarded-For is present. An IPv4-mapped entry
-	// ("::ffff:10.0.0.0/104") matches as its IPv4 form, and a zone
-	// ("fe80::1%eth0") is ignored.
+	// left are never read. X-Real-IP is read only when no X-Forwarded-For
+	// is present, so a proxy that sets only X-Real-IP must also strip or
+	// overwrite the client's own X-Forwarded-For: passed through, that
+	// header is read instead and the client chooses its key. An
+	// IPv4-mapped entry ("::ffff:10.0.0.0/104") matches as its IPv4 form,
+	// and a zone ("fe80::1%eth0") is ignored.
 	TrustedProxies []string
 
 	// MaxKeys bounds how many pubkeys or IPs each limit tracks at once. 0

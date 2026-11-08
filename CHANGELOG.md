@@ -9,8 +9,8 @@ privacy and performance fixes.
 ### Added
 
 - Adds `SessionConfig.InviteRequestAuthorizer` and `WithInviteRequestAuthorizer`, so the host decides which connections a NIP-43 kind 28935 invite request may issue a code to; a refused request is closed `restricted:`, or `auth-required:` before AUTH. Leaving it unset keeps issuing codes as before, which is deprecated now that NIP-43 moved invites to NIP-86 `createclaim`. ([#241](https://github.com/ohstr/nmilat/pull/241))
-- Adds `GroupsService.SetAuthorizer`: a host function that may allow a moderation kind to a pubkey in a hosted group beyond the moderation policy, such as relay-wide roles. Every NIP-29 moderation check, `CanPerform`, consults it after relay admins and the policy. ([#242](https://github.com/ohstr/nmilat/pull/242))
-- Adds `GroupsService.SetGrantCeiling`, off by default: on, a kind 9000 may only give roles whose every kind the sender holds, and may not take roles from, nor a kind 9001 remove, a member holding a kind the sender lacks. ([#242](https://github.com/ohstr/nmilat/pull/242))
+- Adds `GroupsService.SetAuthorizer`: a host function that may allow a moderation kind to a pubkey in a hosted group beyond the moderation policy, such as relay-wide roles. Every NIP-29 moderation check, `CanPerform`, consults it after relay admins and the policy, so it also widens who reads a group's logged invites and pending join requests. ([#242](https://github.com/ohstr/nmilat/pull/242))
+- Adds `GroupsService.SetGrantCeiling`, off by default: on, a kind 9000 may only give roles whose every kind the sender holds, and may not take roles from, nor a kind 9001 remove, a member holding a kind the sender lacks. A role's kinds come from the policy alone, so powers an authorizer grants by role name are not checked when that role is given. ([#242](https://github.com/ohstr/nmilat/pull/242))
 - Adds `relay/ratelimit`: opt-in token buckets per pubkey and per IP for EVENTs, reads, the HTTP bridge and Blossom, plus a cap on connections per IP, set through `WithRateLimiter` (WebSocket, `/query`, `/count`), `WithEventsRateLimiter` (`/events`) and `nipB7/server` `Options.RateLimit`. A limit left unset is no limit; refusals are `rate-limited:` or 429 with Retry-After. ([#237](https://github.com/ohstr/nmilat/pull/237))
 - Adds option details to `nippf` (NIP-PF `detail` tags): `Option.Detail` on forms, where two for one option make the form invalid, and `PollExtras.Detail` on NIP-88 polls, where two give none. Shown with the option, never counted. ([#232](https://github.com/ohstr/nmilat/pull/232))
 - Adds `nipB7/server`, a Blossom blob server a relay can mount on its own origin, storing blobs in a directory or S3-compatible storage such as MinIO. Uploads need a kind 24242 token naming the server and the blob's hash. ([#231](https://github.com/ohstr/nmilat/pull/231))
@@ -683,6 +683,7 @@ privacy and performance fixes.
 
 ### Changed
 
+- Changes `testlogger` to drop log lines written after the test's cleanup has run, such as from a goroutine the test left behind, rather than pass them to `t.Log`, which races the test's completion and can fail or panic.
 - Changes `Replace` to re-place a withdrawal automatically only while its
   quote holds at `ReplaceOptions.ChainTip`, showing it (`quote_unchecked`,
   `quote_expired`) otherwise, so callers must now pass the tip; to refuse,
