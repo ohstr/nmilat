@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -204,13 +205,15 @@ func TestUploadTooLarge(t *testing.T) {
 	wantStatus(t, f.upload(memberPriv, []byte("more than eight bytes")), http.StatusRequestEntityTooLarge)
 }
 
-func TestUploadsInFlightPerSigner(t *testing.T) {
-	f := newFixture(t, func(o *Options) { o.MaxUploadsPerSigner = 1 })
-	blob := []byte("slow upload")
-	auth := f.token(memberPriv, nipB7.VerbUpload, []string{hashOf(blob)}, nil, time.Now().Add(time.Minute))
-
+// holdUpload starts an upload of blob signed by priv and holds it in flight,
+// part of the body sent, until the returned finish sends the rest and
+// returns the response.
+func (f *fixture) holdUpload(priv string, blob []byte) (finish func() *http.Response) {
+	f.t.Helper()
+	auth := f.token(priv, nipB7.VerbUpload, []string{hashOf(blob)}, nil, time.Now().Add(time.Minute))
+	before := len(f.srv.slots)
 	pr, pw := io.Pipe()
-	done := make(chan *http.Response)
+	done := make(chan *http.Response, 1)
 	go func() {
 		req, _ := http.NewRequest(http.MethodPut, f.ts.URL+"/upload", pr)
 		req.Header.Set("Authorization", auth)
@@ -221,32 +224,111 @@ func TestUploadsInFlightPerSigner(t *testing.T) {
 		}
 		done <- resp
 	}()
-	_, _ = pw.Write(blob[:4])
-	member := pub(t, memberPriv)
-	for deadline := time.Now().Add(5 * time.Second); ; {
-		f.srv.mu.Lock()
-		n := f.srv.inFlight[member]
-		f.srv.mu.Unlock()
-		if n == 1 {
-			break
-		}
+	_, _ = pw.Write(blob[:1])
+	for deadline := time.Now().Add(5 * time.Second); len(f.srv.slots) == before; {
 		if time.Now().After(deadline) {
-			t.Fatal("first upload never started")
+			f.t.Fatal("held upload never started")
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-
-	wantStatus(t, f.upload(memberPriv, []byte("second")), http.StatusTooManyRequests)
-
-	_, _ = pw.Write(blob[4:])
-	_ = pw.Close()
-	first := <-done
-	if first == nil {
-		t.Fatal("first upload failed")
+	return func() *http.Response {
+		f.t.Helper()
+		_, _ = pw.Write(blob[1:])
+		_ = pw.Close()
+		resp := <-done
+		if resp == nil {
+			f.t.Fatal("held upload failed")
+		}
+		f.t.Cleanup(func() { _ = resp.Body.Close() })
+		return resp
 	}
-	defer func() { _ = first.Body.Close() }()
-	wantStatus(t, first, http.StatusOK)
+}
+
+func wantTooManyUploads(t *testing.T, resp *http.Response) {
+	t.Helper()
+	wantStatus(t, resp, http.StatusTooManyRequests)
+	if got := resp.Header.Get(nipB7.HeaderReason); got != "too many uploads in flight" {
+		t.Fatalf("reason %q", got)
+	}
+}
+
+func TestUploadsInFlightPerSigner(t *testing.T) {
+	f := newFixture(t, func(o *Options) { o.MaxUploadsPerSigner = 1 })
+	finish := f.holdUpload(memberPriv, []byte("slow upload"))
+
+	wantTooManyUploads(t, f.upload(memberPriv, []byte("second")))
+
+	wantStatus(t, finish(), http.StatusOK)
 	wantStatus(t, f.upload(memberPriv, []byte("third")), http.StatusOK)
+}
+
+func TestUploadsInFlightOverall(t *testing.T) {
+	f := newFixture(t, func(o *Options) { o.MaxUploads = 1 })
+	finish := f.holdUpload(memberPriv, []byte("slow upload"))
+
+	// Another signer, under its own per-signer cap, still finds no slot.
+	wantTooManyUploads(t, f.upload(adminPriv, []byte("second")))
+	f.srv.mu.Lock()
+	n := f.srv.inFlight[pub(t, adminPriv)]
+	f.srv.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("refused upload left %d in flight for its signer", n)
+	}
+
+	wantStatus(t, finish(), http.StatusOK)
+	wantStatus(t, f.upload(adminPriv, []byte("third")), http.StatusOK)
+}
+
+// TestDefaultLimits checks the caps Options gets when it leaves them 0:
+// 100 MiB a blob, 2 uploads in flight per signer, 8 overall.
+func TestDefaultLimits(t *testing.T) {
+	f := newFixture(t, func(o *Options) { o.MayUpload = nil })
+
+	// A declared length over 100 MiB is refused before any body is sent:
+	// the body never yields a byte, so reading it would hang.
+	auth := f.token(memberPriv, nipB7.VerbUpload, []string{hashOf([]byte("big"))}, nil, time.Now().Add(time.Minute))
+	pr, pw := io.Pipe()
+	defer func() { _ = pw.Close() }()
+	req, err := http.NewRequest(http.MethodPut, f.ts.URL+"/upload", pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.ContentLength = 100<<20 + 1
+	req.Header.Set("Authorization", auth)
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	wantStatus(t, resp, http.StatusRequestEntityTooLarge)
+	if got := resp.Header.Get(nipB7.HeaderReason); got != fmt.Sprintf("blobs are limited to %d bytes", 100<<20) {
+		t.Fatalf("reason %q", got)
+	}
+
+	// Two in flight per signer.
+	privs := []string{memberPriv, strangerPriv, adminPriv, "0000000000000000000000000000000000000000000000000000000000000004", "0000000000000000000000000000000000000000000000000000000000000005"}
+	var finishes []func() *http.Response
+	hold := func(priv string, i int) {
+		finishes = append(finishes, f.holdUpload(priv, []byte(fmt.Sprintf("held %s %d", priv[len(priv)-1:], i))))
+	}
+	hold(privs[0], 0)
+	hold(privs[0], 1)
+	wantTooManyUploads(t, f.upload(privs[0], []byte("third from one signer")))
+
+	// Eight in flight overall, across signers each under their own cap.
+	for _, priv := range privs[1:4] {
+		hold(priv, 0)
+		hold(priv, 1)
+	}
+	if n := len(f.srv.slots); n != 8 {
+		t.Fatalf("%d uploads in flight, want 8", n)
+	}
+	wantTooManyUploads(t, f.upload(privs[4], []byte("ninth overall")))
+
+	for _, finish := range finishes {
+		wantStatus(t, finish(), http.StatusOK)
+	}
+	wantStatus(t, f.upload(privs[4], []byte("after the others")), http.StatusOK)
 }
 
 func TestMembersOnlyDownload(t *testing.T) {
