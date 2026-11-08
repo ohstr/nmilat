@@ -15,6 +15,7 @@ import (
 	"github.com/ohstr/nmilat/nip70"
 	"github.com/ohstr/nmilat/nip77"
 	"github.com/ohstr/nmilat/nipAA"
+	"github.com/ohstr/nmilat/relay/ratelimit"
 	"github.com/ohstr/nmilat/wire"
 )
 
@@ -95,7 +96,31 @@ func (s *Session) refuse(subID, msg string) {
 	s.reply(&wire.ClosedSubscriptionResponse{SubscriptionID: subID, Message: msg})
 }
 
+// readLimited refuses subID when the connection's IP or its authenticated
+// pubkey is over the Read limit, reporting whether it did.
+func (s *Session) readLimited(subID string) bool {
+	if !s.overReadLimit() {
+		return false
+	}
+	s.refuse(subID, ratelimit.Message(ratelimit.Read))
+	return true
+}
+
+// overReadLimit takes a Read token from the connection's IP and its
+// authenticated pubkey, reporting whether either was spent.
+func (s *Session) overReadLimit() bool {
+	if s.config == nil || s.config.RateLimiter == nil {
+		return false
+	}
+	_, ok := s.config.RateLimiter.Allow(ratelimit.Read, s.clientIP(), s.AuthedPubkey())
+	return !ok
+}
+
 func (s *Session) processRequest(ctx context.Context, rp *wire.RequestPacket) error {
+
+	if s.readLimited(rp.SubscriptionID) {
+		return nil
+	}
 
 	if msg := s.readGate(); msg != "" {
 		s.refuse(rp.SubscriptionID, msg)
@@ -202,6 +227,15 @@ func (s *Session) processAuth(parent context.Context, ap *wire.AuthPacket) error
 		return s.rejectAuth(ap.Event.ID, fmt.Sprintf("auth-error: %s", err.Error()))
 	}
 
+	// An AUTH costs a signature check, as an EVENT does, but writes
+	// nothing; it is the step before a client reads, so it takes from the
+	// IP's Read budget. Only the IP's: the pubkey is not proven yet.
+	if lim := s.config.RateLimiter; lim != nil {
+		if _, ok := lim.Allow(ratelimit.Read, s.clientIP(), ""); !ok {
+			return s.rejectAuth(ap.Event.ID, ratelimit.Message(ratelimit.Read))
+		}
+	}
+
 	if err := ap.Event.Verify(); err != nil {
 		return s.rejectAuth(ap.Event.ID, "auth-error: invalid signature")
 	}
@@ -299,6 +333,9 @@ func (s *Session) rejectAuth(eventID, message string) error {
 func (s *Session) processCount(parent context.Context, cp *wire.CountPacket) error {
 
 	// Same gates as REQ: a count is a read too.
+	if s.readLimited(cp.SubscriptionID) {
+		return nil
+	}
 	if msg := s.readGate(); msg != "" {
 		s.refuse(cp.SubscriptionID, msg)
 		return nil
@@ -454,6 +491,13 @@ func runEventValidators(ctx context.Context, ev *nip01.Event) error {
 func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error {
 	start := time.Now()
 
+	// The client IP's budget comes first, before any work is spent on the
+	// event; the author's is taken later, by authorLimited.
+	if _, ok := s.config.RateLimiter.Allow(ratelimit.Event, s.clientIP(), ""); !ok {
+		s.finishEvent(ep.Event, start, false, ratelimit.Message(ratelimit.Event))
+		return nil
+	}
+
 	if s.limitation.AuthRequired && s.AuthedPubkey() == "" {
 		s.finishEvent(ep.Event, start, false, "auth-required: valid NIP-42 authentication required")
 		return nil
@@ -571,6 +615,11 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 			s.finishEvent(ep.Event, start, false, message)
 			return nil
 		}
+	}
+
+	if s.authorLimited(ep.Event) {
+		s.finishEvent(ep.Event, start, false, ratelimit.Message(ratelimit.Event))
+		return nil
 	}
 
 	// NIP-43: Join/Leave requests are fully owned by MembershipService from
@@ -707,6 +756,28 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 
 }
 
+// authorLimited takes one of ev's author's Event tokens, reporting whether
+// the author's budget is spent. A valid signature proves who wrote ev, not
+// who is sending it: anyone can replay a signed event, and a mirror relays
+// others' events as a matter of course. So the author is charged only when
+// it has authenticated on this connection, and only for an event the relay
+// does not already have; any other sender pays from its IP's budget alone
+// (taken first thing in processEvent).
+func (s *Session) authorLimited(ev *nip01.Event) bool {
+	lim := s.config.RateLimiter
+	if lim == nil {
+		return false
+	}
+	if _, authed := s.IdentityMembership(ev.PubKey); !authed {
+		return false
+	}
+	if s.store.has(ev.ID) {
+		return false
+	}
+	_, ok := lim.Allow(ratelimit.Event, "", ev.PubKey)
+	return !ok
+}
+
 // finishEvent sends an EVENT's OK and reports its outcome.
 func (s *Session) finishEvent(ev *nip01.Event, start time.Time, accepted bool, msg string) {
 	s.reply(&wire.OkSubscriptionResponse{EventID: ev.ID, Accepted: accepted, Message: msg})
@@ -747,6 +818,14 @@ func (r *replyer) reply(sr wire.SubscriptionResponse) {
 /////////////////////////////////////////////////////////////////////
 
 func (s *Session) processNegOpen(ctx context.Context, p *wire.NegOpenPacket) error {
+
+	// A NEG-OPEN scans the store like a REQ, so it takes from the same
+	// Read budget.
+	if s.overReadLimit() {
+		s.config.observer().ReadRefused(ReasonRateLimited)
+		s.reply(&wire.NegErrPacket{SubscriptionID: p.SubscriptionID, Code: ratelimit.Message(ratelimit.Read)})
+		return nil
+	}
 
 	// Recipient-only kinds: the same rule as REQ, since an id list is a
 	// read too. NIP-77 has no CLOSED, so the refusal is a NEG-ERR.

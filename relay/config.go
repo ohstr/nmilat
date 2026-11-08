@@ -5,6 +5,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/ohstr/nmilat/relay/ratelimit"
 	"github.com/rs/zerolog"
 )
 
@@ -150,6 +151,11 @@ type SessionConfig struct {
 
 	// Observer receives activity for metrics. nil discards it.
 	Observer Observer
+
+	// RateLimiter, when set, limits EVENTs, REQs, COUNTs, NEG-OPENs and
+	// AUTHs, the HTTP bridge (QueryHandler, CountHandler) and connections
+	// per IP. nil (the default) limits nothing. See WithRateLimiter.
+	RateLimiter *ratelimit.Limiter
 
 	// Verification tunes NIP-05/LUD-16/picture checks.
 	Verification VerificationConfig
@@ -375,6 +381,21 @@ func WithSessionDelegation(d *DelegationConfig) SessionOption {
 func WithSessionAllowedOrigins(origins ...string) SessionOption {
 	return func(target *SessionConfig) {
 		target.AllowedOrigins = origins
+	}
+}
+
+// WithRateLimiter sets SessionConfig.RateLimiter. An EVENT takes from its
+// IP's Event budget, and from its author's only when the author has
+// authenticated on the connection and the event is new; REQ, COUNT and
+// NEG-OPEN take from Read, and AUTH from the IP's Read. A refused EVENT or
+// AUTH is answered OK false, a REQ or COUNT CLOSED and a NEG-OPEN NEG-ERR,
+// all "rate-limited:"; a connection over MaxConnsPerIP is refused 429
+// before the upgrade. Share l with NewEventsHandler (WithEventsRateLimiter) and
+// nipB7/server (Options.RateLimit = l.AllowBlossom) to count each client
+// once across them.
+func WithRateLimiter(l *ratelimit.Limiter) SessionOption {
+	return func(target *SessionConfig) {
+		target.RateLimiter = l
 	}
 }
 

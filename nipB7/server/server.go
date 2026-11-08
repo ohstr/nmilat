@@ -14,11 +14,13 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/ohstr/nmilat/nipB7"
+	"github.com/ohstr/nmilat/relay/ratelimit"
 )
 
 // Options configure a Server. Store, PublicURL and at least one UploadPath
@@ -51,6 +53,12 @@ type Options struct {
 	MaxUploads int
 	// TempDir holds uploads while they are hashed. "" means os.TempDir().
 	TempDir string
+	// RateLimit, when set, is asked before each request is served: once
+	// with pubkey "" (to count the client's IP), and for an authorized
+	// request again with the signer. upload is true for a PUT upload. A
+	// false answer refuses the request 429 with Retry-After. Nil limits
+	// nothing; ratelimit.Limiter.AllowBlossom fits it.
+	RateLimit func(r *http.Request, upload bool, pubkey string) (retryAfter time.Duration, ok bool)
 }
 
 // meta is the JSON document a Store keeps beside each blob.
@@ -124,6 +132,25 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("HEAD "+prefix, s.cors(s.download))
 	mux.HandleFunc("DELETE "+prefix, s.cors(s.delete))
 	mux.HandleFunc("OPTIONS "+prefix, s.cors(preflight))
+}
+
+// limited reports whether RateLimit refuses r for pubkey, having written
+// the 429.
+func (s *Server) limited(w http.ResponseWriter, r *http.Request, upload bool, pubkey string) bool {
+	if s.opt.RateLimit == nil {
+		return false
+	}
+	wait, ok := s.opt.RateLimit(r, upload, pubkey)
+	if ok {
+		return false
+	}
+	action := ratelimit.Download
+	if upload {
+		action = ratelimit.Upload
+	}
+	w.Header().Set("Retry-After", strconv.Itoa(ratelimit.RetryAfterSeconds(wait)))
+	nipB7.WriteError(w, http.StatusTooManyRequests, ratelimit.Message(action))
+	return true
 }
 
 // cors adds the headers BUD-01 asks every response to carry.
@@ -300,9 +327,15 @@ func (s *Server) descriptor(sha string, m *meta) nipB7.BlobDescriptor {
 }
 
 func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
+	if s.limited(w, r, true, "") {
+		return
+	}
 	auth, status, reason := s.authorize(r, nipB7.VerbUpload, "", false)
 	if auth == nil {
 		nipB7.WriteError(w, status, reason)
+		return
+	}
+	if s.limited(w, r, true, auth.PubKey) {
 		return
 	}
 	if len(auth.Hashes) == 0 {
@@ -383,6 +416,9 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) download(w http.ResponseWriter, r *http.Request) {
+	if s.limited(w, r, false, "") {
+		return
+	}
 	sha, ext, ok := s.parseBlob(r)
 	if !ok {
 		nipB7.WriteError(w, http.StatusNotFound, "not a blob path")
@@ -392,6 +428,9 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 		auth, status, reason := s.authorize(r, nipB7.VerbGet, sha, false)
 		if auth == nil {
 			nipB7.WriteError(w, status, reason)
+			return
+		}
+		if s.limited(w, r, false, auth.PubKey) {
 			return
 		}
 		if !s.opt.MayDownload(auth.PubKey) {
@@ -429,6 +468,9 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) delete(w http.ResponseWriter, r *http.Request) {
+	if s.limited(w, r, false, "") {
+		return
+	}
 	sha, _, ok := s.parseBlob(r)
 	if !ok {
 		nipB7.WriteError(w, http.StatusNotFound, "not a blob path")
@@ -437,6 +479,9 @@ func (s *Server) delete(w http.ResponseWriter, r *http.Request) {
 	auth, status, reason := s.authorize(r, nipB7.VerbDelete, sha, true)
 	if auth == nil {
 		nipB7.WriteError(w, status, reason)
+		return
+	}
+	if s.limited(w, r, false, auth.PubKey) {
 		return
 	}
 

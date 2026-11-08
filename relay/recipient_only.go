@@ -141,7 +141,7 @@ func (sh *SessionHandler) QueryHandler() http.Handler {
 	if sh.relayMetadata != nil {
 		limitation = &sh.relayMetadata.Limitation
 	}
-	h := &queryHandler{store: sh.store, limitation: limitation, membership: sh.membership, groups: sh.groups, recipientOnly: sh.config}
+	h := &queryHandler{store: sh.store, limitation: limitation, membership: sh.membership, groups: sh.groups, recipientOnly: sh.config, limiter: sh.config.RateLimiter}
 	if kind := sh.config.PresenceQueryKind; kind != 0 {
 		h.presence = &presenceSnapshot{kind: kind, status: sh.PresenceStatus, privKey: sh.config.PrivKey}
 	}
