@@ -410,6 +410,23 @@ func TestRateLimitNegOpenAndAuthCountAsReads(t *testing.T) {
 	}
 }
 
+func TestConnectionSlotReleasedWhenUpgradeFails(t *testing.T) {
+	lim, _ := newLimiter(t, ratelimit.Config{MaxConnsPerIP: 1})
+	_, url := newLimitedRelay(t, lim)
+	for range 3 {
+		// A plain GET is no WebSocket handshake: the upgrade fails.
+		resp, err := http.Get(url)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode == http.StatusTooManyRequests {
+			t.Fatal("a failed upgrade kept its connection slot")
+		}
+	}
+	dialRelay(t, url)
+}
+
 func TestRateLimitedEventsHandlerPerIP(t *testing.T) {
 	lim, _ := newLimiter(t, ratelimit.Config{
 		Event: ratelimit.Limit{PerIP: ratelimit.Rate{Events: 2, Per: time.Hour}},
