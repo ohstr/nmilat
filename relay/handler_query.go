@@ -9,6 +9,7 @@ import (
 	"github.com/ohstr/nmilat/nip01"
 	"github.com/ohstr/nmilat/nip11"
 	"github.com/ohstr/nmilat/nip98"
+	"github.com/ohstr/nmilat/relay/ratelimit"
 )
 
 // MaxQueryBodyBytes caps a POST /query request body. A client sends a
@@ -61,6 +62,8 @@ type queryHandler struct {
 	count bool
 	// presence, when set, answers presence snapshot queries.
 	presence *presenceSnapshot
+	// limiter, when set, counts each request against ratelimit.HTTP.
+	limiter *ratelimit.Limiter
 }
 
 // NewCountHandler is NewQueryHandler for POST /count (NIP-45): the same
@@ -133,6 +136,10 @@ func (h *queryHandler) admit(w http.ResponseWriter, r *http.Request) (pubkeyRead
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return pubkeyReader{}, nil, false
 	}
+	if wait, ok := h.limiter.Allow(ratelimit.HTTP, h.limiter.ClientIP(r), ""); !ok {
+		ratelimit.Refuse(w, ratelimit.HTTP, wait)
+		return pubkeyReader{}, nil, false
+	}
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, MaxQueryBodyBytes+1))
 	if err != nil {
@@ -147,6 +154,10 @@ func (h *queryHandler) admit(w http.ResponseWriter, r *http.Request) (pubkeyRead
 	pubkey, err := nip98.VerifyAnyPubkey(r, nip98.Options{Body: body, NormalizeRootPath: true})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return pubkeyReader{}, nil, false
+	}
+	if wait, ok := h.limiter.Allow(ratelimit.HTTP, "", pubkey); !ok {
+		ratelimit.Refuse(w, ratelimit.HTTP, wait)
 		return pubkeyReader{}, nil, false
 	}
 

@@ -15,6 +15,7 @@ import (
 	"github.com/ohstr/nmilat/nip70"
 	"github.com/ohstr/nmilat/nip77"
 	"github.com/ohstr/nmilat/nipAA"
+	"github.com/ohstr/nmilat/relay/ratelimit"
 	"github.com/ohstr/nmilat/wire"
 )
 
@@ -95,7 +96,24 @@ func (s *Session) refuse(subID, msg string) {
 	s.reply(&wire.ClosedSubscriptionResponse{SubscriptionID: subID, Message: msg})
 }
 
+// readLimited refuses subID when the connection's IP or its authenticated
+// pubkey is over the Read limit, reporting whether it did.
+func (s *Session) readLimited(subID string) bool {
+	if s.config.RateLimiter == nil {
+		return false
+	}
+	if _, ok := s.config.RateLimiter.Allow(ratelimit.Read, s.clientIP(), s.AuthedPubkey()); !ok {
+		s.refuse(subID, ratelimit.Message(ratelimit.Read))
+		return true
+	}
+	return false
+}
+
 func (s *Session) processRequest(ctx context.Context, rp *wire.RequestPacket) error {
+
+	if s.readLimited(rp.SubscriptionID) {
+		return nil
+	}
 
 	if msg := s.readGate(); msg != "" {
 		s.refuse(rp.SubscriptionID, msg)
@@ -299,6 +317,9 @@ func (s *Session) rejectAuth(eventID, message string) error {
 func (s *Session) processCount(parent context.Context, cp *wire.CountPacket) error {
 
 	// Same gates as REQ: a count is a read too.
+	if s.readLimited(cp.SubscriptionID) {
+		return nil
+	}
 	if msg := s.readGate(); msg != "" {
 		s.refuse(cp.SubscriptionID, msg)
 		return nil
@@ -454,6 +475,13 @@ func runEventValidators(ctx context.Context, ev *nip01.Event) error {
 func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error {
 	start := time.Now()
 
+	// The client IP's budget comes first, before any work is spent on the
+	// event; the signer's is taken once its signature is verified.
+	if _, ok := s.config.RateLimiter.Allow(ratelimit.Event, s.clientIP(), ""); !ok {
+		s.finishEvent(ep.Event, start, false, ratelimit.Message(ratelimit.Event))
+		return nil
+	}
+
 	if s.limitation.AuthRequired && s.AuthedPubkey() == "" {
 		s.finishEvent(ep.Event, start, false, "auth-required: valid NIP-42 authentication required")
 		return nil
@@ -535,6 +563,13 @@ func (s *Session) processEvent(ctx context.Context, ep *wire.EventPacket) error 
 
 		s.finishEvent(ep.Event, start, false, fmt.Sprintf("invalid: %s", err.Error()))
 
+		return nil
+	}
+
+	// The signer's own budget, counted only once the signature holds, so
+	// nobody can spend another pubkey's.
+	if _, ok := s.config.RateLimiter.Allow(ratelimit.Event, "", ep.Event.PubKey); !ok {
+		s.finishEvent(ep.Event, start, false, ratelimit.Message(ratelimit.Event))
 		return nil
 	}
 

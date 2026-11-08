@@ -10,6 +10,7 @@ import (
 	"github.com/ohstr/nmilat/nip11"
 	"github.com/ohstr/nmilat/nip43"
 	"github.com/ohstr/nmilat/nip98"
+	"github.com/ohstr/nmilat/relay/ratelimit"
 )
 
 // MaxEventsBodyBytes caps a POST /events request body. A single signed
@@ -75,7 +76,16 @@ func WithEventsRelayAuthoredKinds(kinds ...int) EventsHandlerOption {
 	return func(h *eventsHandler) { h.relayAuthored = append([]int(nil), kinds...) }
 }
 
+// WithEventsRateLimiter counts every POST /events against l's HTTP limits
+// (client IP, then NIP-98 signer) and the event against its Event limits,
+// so an author's writes share one budget with the WebSocket. A refusal is
+// a 429 with Retry-After.
+func WithEventsRateLimiter(l *ratelimit.Limiter) EventsHandlerOption {
+	return func(h *eventsHandler) { h.limiter = l }
+}
+
 type eventsHandler struct {
+	limiter       *ratelimit.Limiter
 	store         *EventStore
 	limitation    *nip11.Limitation
 	membership    *MembershipService
@@ -88,6 +98,11 @@ func (h *eventsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ip := h.limiter.ClientIP(r)
+	if wait, ok := h.limiter.Allow(ratelimit.HTTP, ip, ""); !ok {
+		ratelimit.Refuse(w, ratelimit.HTTP, wait)
 		return
 	}
 
@@ -104,6 +119,10 @@ func (h *eventsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	signerPubkey, err := nip98.VerifyAnyPubkey(r, nip98.Options{Body: body, NormalizeRootPath: true})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+	if wait, ok := h.limiter.Allow(ratelimit.HTTP, "", signerPubkey); !ok {
+		ratelimit.Refuse(w, ratelimit.HTTP, wait)
 		return
 	}
 
@@ -149,6 +168,12 @@ func (h *eventsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		http.Error(w, "invalid: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// The same Event budget an EVENT over the WebSocket takes from.
+	if wait, ok := h.limiter.Allow(ratelimit.Event, ip, ev.PubKey); !ok {
+		ratelimit.Refuse(w, ratelimit.Event, wait)
 		return
 	}
 

@@ -198,6 +198,9 @@ func Message(action Action) string {
 	return "rate-limited: too many " + actionNames[action] + ", slow down"
 }
 
+// ConnMessage is the body of a connection refused for MaxConnsPerIP.
+const ConnMessage = "rate-limited: too many connections from this address"
+
 // RetryAfterSeconds is wait as a Retry-After value: whole seconds, at
 // least 1.
 func RetryAfterSeconds(wait time.Duration) int {
