@@ -221,14 +221,16 @@ func (s *EventStore) DeleteInviteClaim(code string) error {
 // after ("" starts at the beginning). It returns how many it deleted and
 // the key to pass as after next time, "" once the scan reached the end of
 // the bucket, so repeated calls sweep every claim with bounded work each.
-// maxScan <= 0 reads every claim.
+// maxScan <= 0 reads every claim. The scan is a read transaction; a write
+// transaction is opened only when it found an expired claim, so a sweep
+// with nothing to delete costs no write.
 func (s *EventStore) PruneExpiredInviteClaims(now int64, after string, maxScan int) (removed int, next string, err error) {
-	err = s.db.Update(func(tx *bolt.Tx) error {
+	var expired [][]byte
+	err = s.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(indexInviteClaims)
 		if b == nil {
 			return nil
 		}
-		var expired [][]byte
 		c := b.Cursor()
 		k, v := c.First()
 		if after != "" {
@@ -244,29 +246,55 @@ func (s *EventStore) PruneExpiredInviteClaims(now int64, after string, maxScan i
 			}
 			scanned++
 			next = string(k)
-			var claim InviteClaim
-			if json.Unmarshal(v, &claim) != nil {
-				continue
-			}
-			if claim.ExpiresAt > 0 && now > claim.ExpiresAt {
+			if inviteClaimExpired(v, now) {
 				expired = append(expired, append([]byte(nil), k...))
 			}
 		}
 		if k == nil {
 			next = ""
 		}
+		return nil
+	})
+	if err != nil {
+		return 0, after, err
+	}
+	if len(expired) == 0 {
+		return 0, next, nil
+	}
+	err = s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(indexInviteClaims)
+		if b == nil {
+			return nil
+		}
+		removed = 0
 		for _, key := range expired {
+			// Read again: the claim may have changed since the scan.
+			if !inviteClaimExpired(b.Get(key), now) {
+				continue
+			}
 			if err := b.Delete(key); err != nil {
 				return err
 			}
+			removed++
 		}
-		removed = len(expired)
 		return nil
 	})
 	if err != nil {
 		return 0, after, err
 	}
 	return removed, next, nil
+}
+
+// inviteClaimExpired reports whether the stored claim v expired before now.
+func inviteClaimExpired(v []byte, now int64) bool {
+	if v == nil {
+		return false
+	}
+	var claim InviteClaim
+	if json.Unmarshal(v, &claim) != nil {
+		return false
+	}
+	return claim.ExpiresAt > 0 && now > claim.ExpiresAt
 }
 
 // ConsumeInviteClaim atomically loads, validates, increments Uses, and

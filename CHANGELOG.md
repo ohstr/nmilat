@@ -1026,7 +1026,7 @@ privacy and performance fixes.
   `.jpg`, ...), or `.bin` when the type is unknown.
   ([#240](https://github.com/ohstr/nmilat/pull/240))
 - Fixes a REQ that names kind 28935 beside other kinds being answered as a NIP-43 invite request; only a REQ whose filters all ask for kind 28935 alone is one now. ([#241](https://github.com/ohstr/nmilat/pull/241))
-- Prunes expired NIP-43 invite claims as new ones are issued, a bounded batch at a time, so claims nobody redeems no longer pile up in the store. ([#241](https://github.com/ohstr/nmilat/pull/241))
+- Prunes expired NIP-43 invite claims as new ones are issued, a bounded batch at a time and writing only when one has expired, so claims nobody redeems no longer pile up in the store. ([#241](https://github.com/ohstr/nmilat/pull/241))
 - Fixes kind 39001 listing members whose roles grant no moderation kind; as NIP-29 asks, it now lists only members holding a role with a privilege. ([#242](https://github.com/ohstr/nmilat/pull/242))
 - Fixes linking a group under a parent with only some role there: the sender now needs kind 9002 in the new parent, as `CanPerform` decides. ([#242](https://github.com/ohstr/nmilat/pull/242))
 - Fixes a no-chain-view `Replace` re-placing a withdrawal refused `quote_invalid`
