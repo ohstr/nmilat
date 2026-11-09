@@ -72,6 +72,30 @@ func TestResolvedConnectionKey_MatchesConnectionKeyWithoutRehashing(t *testing.T
 	}
 }
 
+// The platform is optional for a connection_key target: NIP-CASH's wire carries
+// only identity_value + ia_pubkey, and a bare nconnection need not name one. An
+// empty platform still resolves to a connection_key — not a pubkey — so a lost
+// mint/transfer reply to it stays recoverable and a platform-less nconnection
+// target is addressable. A non-empty platform must still be well-formed.
+func TestResolvedConnectionKey_PlatformOptional(t *testing.T) {
+	key, _ := nipIC.NewConnectionKey("discord", "80351110224678912")
+	ia := "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+
+	id, err := ResolvedConnectionKey(key, "", ia)
+	if err != nil {
+		t.Fatalf("an empty platform must resolve: %v", err)
+	}
+	if id.identityType() != identityTypeConnectionKey {
+		t.Fatalf("identityType = %s, want connection_key (an empty platform must not read as a pubkey)", id.identityType())
+	}
+	if id.identityValue() != string(key) || id.iaPubkey() != ia {
+		t.Fatalf("wire fields: got value=%s ia=%s", id.identityValue(), id.iaPubkey())
+	}
+	if _, err := ResolvedConnectionKey(key, "bad:platform", ia); !errors.Is(err, nipIC.ErrPlatformName) {
+		t.Errorf("a malformed non-empty platform must still be refused: %v", err)
+	}
+}
+
 func TestNewCashTarget_SecretAndCommitmentDiffer(t *testing.T) {
 	bt := mustCashTarget(t)
 	f := Target(bt).(targetFields)
