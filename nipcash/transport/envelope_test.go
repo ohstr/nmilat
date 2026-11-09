@@ -141,6 +141,8 @@ func TestEnvelope_RejectsMalformedShape(t *testing.T) {
 		"spend without proof": {func(e *Envelope) { e.Items[0].Proof, e.Items[0].Method = nil, "cash_redeem" }, ErrEnvelopeMalformed},
 		"item bad target":     {func(e *Envelope) { e.Items[0].Target = "xyz" }, ErrEnvelopeMalformed},
 		"item no method":      {func(e *Envelope) { e.Items[0].Method = "" }, ErrEnvelopeMalformed},
+		"item null params":    {func(e *Envelope) { e.Items[0].Params = []byte("null") }, ErrEnvelopeMalformed},
+		"item array params":   {func(e *Envelope) { e.Items[0].Params = []byte("[1]") }, ErrEnvelopeMalformed},
 	}
 
 	for name, tc := range tests {
