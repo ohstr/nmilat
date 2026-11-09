@@ -34,13 +34,19 @@ type Target interface {
 type namedIdentity struct {
 	identity nipAZ.Identity
 	ia       string // Identity Authority pubkey, "" unless connection_key mode
+	connKey  bool   // set by the connection_key builders; the kind discriminator
 }
 
 func (namedIdentity) recipient() {}
 func (namedIdentity) target()    {}
 
 func (n namedIdentity) identityType() string {
-	if n.identity.WebIdentity() != "" {
+	// The explicit connKey flag discriminates, not the platform label: the
+	// platform is optional and never on the wire, so a platform-less
+	// connection_key (from a bare nconnection) is still a connection_key — and a
+	// connection_key missing its ia_pubkey stays a connection_key so the ia check
+	// still fires, rather than silently reading as a pubkey.
+	if n.connKey {
 		return identityTypeConnectionKey
 	}
 	return identityTypePubkey
@@ -65,7 +71,7 @@ func ConnectionKey(platform nipIC.WebIdentity, typed, iaPubkey string) (namedIde
 	if err != nil {
 		return namedIdentity{}, err
 	}
-	return namedIdentity{identity: id, ia: iaPubkey}, nil
+	return namedIdentity{identity: id, ia: iaPubkey, connKey: true}, nil
 }
 
 // ConnectionKeyFromAttestation builds a Recipient/Target from a recipient's
@@ -103,15 +109,21 @@ func ConnectionKeyFromNConnection(key nipIC.ConnectionKey, platform nipIC.WebIde
 
 // ResolvedConnectionKey builds a Recipient/Target from a ConnectionKey the caller
 // already holds. It never hashes anything; it refuses a key that is not 64
-// lowercase hex and a platform outside nipIC.ValidPlatformName.
+// lowercase hex, and a non-empty platform outside nipIC.ValidPlatformName. The
+// platform is optional — a connection_key target is addressed by its key and
+// ia_pubkey alone — so an empty platform is accepted.
 func ResolvedConnectionKey(key nipIC.ConnectionKey, platform nipIC.WebIdentity, iaPubkey string) (namedIdentity, error) {
 	if _, err := nipIC.ParseConnectionKey(string(key)); err != nil {
 		return namedIdentity{}, err
 	}
-	if !nipIC.ValidPlatformName(platform) {
+	// The platform is optional for a connection_key target: NIP-CASH's wire form
+	// carries only identity_value + ia_pubkey (never the platform), and a bare
+	// nconnection need not name one. An empty platform is allowed; a non-empty
+	// one must still be well-formed.
+	if platform != "" && !nipIC.ValidPlatformName(platform) {
 		return namedIdentity{}, nipIC.ErrPlatformName
 	}
-	return namedIdentity{identity: nipAZ.ResolvedConnection(key, platform), ia: iaPubkey}, nil
+	return namedIdentity{identity: nipAZ.ResolvedConnection(key, platform), ia: iaPubkey, connKey: true}, nil
 }
 
 // CashTarget is a cash-mode identity: a secret the caller generated and its

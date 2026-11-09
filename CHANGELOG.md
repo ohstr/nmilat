@@ -1021,6 +1021,7 @@ privacy and performance fixes.
 
 ### Fixed
 
+- Fixes `ResolvedConnectionKey` rejecting a connection_key target with no platform, and a platform-less one being read as a pubkey: the platform is optional (a NIP-CASH `connection_key` carries only `identity_value` + `ia_pubkey` on the wire, and a bare `nconnection` need not name one), so a connection_key is now addressable — and a lost mint/transfer reply to it recoverable — without a platform.
 - Fixes anyone stalling every NIP-29 group write with kind 9002 events naming a parent, or kind 9008 or 9002 on a linked group: a sender who may not make the change is now refused holding its own group's lock, never every group's. ([#250](https://github.com/ohstr/nmilat/pull/250))
 - Fixes `SetModerationPolicy` and `WithGroupsModerationPolicy` keeping the caller's map: they now store a copy, so changing the map or its slices afterwards no longer changes what `CanPerform` allows. ([#250](https://github.com/ohstr/nmilat/pull/250))
 - Fixes NEG-OPEN skipping the read gates REQ applies: it now refuses as REQ does where NIP-42 authentication or NIP-43 membership is required and for a private group named by `d` or `h`, and leaves events the reader may not be sent, such as a private group's or a recipient-only kind's, out of the negentropy set. ([#247](https://github.com/ohstr/nmilat/pull/247))
