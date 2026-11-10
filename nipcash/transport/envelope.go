@@ -565,8 +565,10 @@ func ItemShapeOK(raw json.RawMessage) bool {
 		}
 	}
 	if p, ok := fields["params"]; ok {
-		t := bytes.TrimSpace(p)
-		if !bytes.Equal(t, nullLiteral) && (len(t) == 0 || t[0] != '{') {
+		// params, when present, is an object (NIP-CASH §Serving I1): a literal null,
+		// string, number or array is refused and the item omitted, so a present
+		// params can never hash inconsistently with the absent/empty case ({}).
+		if t := bytes.TrimSpace(p); len(t) == 0 || t[0] != '{' {
 			return false
 		}
 	}
@@ -772,6 +774,13 @@ func checkItem(i int, item Item, limits Limits) (string, error) {
 	if len(item.ID) > MaxItemIDBytes {
 		return "", fmt.Errorf("%w: item %d has a %d-byte id, over the %d limit",
 			ErrEnvelopeMalformed, i, len(item.ID), MaxItemIDBytes)
+	}
+	// params, when present, is an object (NIP-CASH §Serving I1); a present null,
+	// string, number or array is refused here as it is at serve time (ItemShapeOK),
+	// so a client cannot build an item whose params hash disagrees with the
+	// absent/empty case ({}).
+	if t := bytes.TrimSpace(item.Params); len(t) > 0 && t[0] != '{' {
+		return "", fmt.Errorf("%w: item %q params must be an object", ErrEnvelopeMalformed, item.ID)
 	}
 	paramsHash, err := CanonicalParamsHash(item.Params)
 	if err != nil {
